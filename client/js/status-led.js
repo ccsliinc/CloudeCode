@@ -54,12 +54,25 @@ console.log('[StatusLed Module] Loading...');
      * Notification - it wants attention and is not stopped), and the
      * startup gate feeds `waiting-input` too. See docs/session-status.md.
      *
+     * `idle` and `done` are separate because they answer different
+     * questions about a session at rest. `idle` is READ: a turn ended,
+     * nothing is waiting, the user has already seen it - a NEUTRAL grey,
+     * the calmest colour on the dial. `done` means "there is something
+     * here you have not read yet" and pairs ONLY with the `unread` outer
+     * ring; a session cannot be inner `done` without the halo saying so.
+     * Added 2026-09-09, owner's report verbatim: "i need the lights to go
+     * idle, (i think thats gray) when i click on a tab. there needs to be
+     * a read/idle color." Before this, opening a tab left the inner dot
+     * green (`done`) whether or not it had been read, so the only visible
+     * change was the outer ring - too subtle to register at a glance.
+     *
      * @type {string[]}
      */
     const INNER_STATES = [
         'working',
         'waiting-permission',
         'waiting-input',
+        'idle',
         'done',
         'dead',
         'unknown',
@@ -93,6 +106,7 @@ console.log('[StatusLed Module] Loading...');
         working: 'working',
         'waiting-permission': 'waiting on you - permission',
         'waiting-input': 'waiting on you',
+        idle: 'idle - already read',
         done: 'done',
         dead: 'dead - process exited',
         unknown: 'status not measured',
@@ -258,6 +272,9 @@ console.log('[StatusLed Module] Loading...');
      * Output:
      *   Object - `{inner, outer}`, both members of the vocabularies.
      * Example:
+     *   ledStateFor({activity_status: 'idle'})
+     *   // {inner: 'idle', outer: 'off'}
+     * Example:
      *   ledStateFor({activity_status: 'idle', unread: true})
      *   // {inner: 'done', outer: 'unread'}
      */
@@ -311,8 +328,20 @@ console.log('[StatusLed Module] Loading...');
             return { inner: 'done', outer: 'unread' };
         }
 
+        // READ AND AT REST. `idle` on the server already means "already
+        // seen" (docs/session-status.md), so the ordinary case is the
+        // NEUTRAL grey `idle` dot with the ring fully off - at rest reads
+        // as at rest, not as a dim copy of `done`. The `unread` branch is
+        // defensive rather than reachable from a well-formed row (the
+        // server flips a session to `finished_unread` the moment it goes
+        // unread and back to `idle` only once it is read), but if it ever
+        // arrives contradictory the halo must not be swallowed: it renders
+        // identically to `finished_unread` so the header rollup in
+        // session-status-summary.js cannot disagree with the row under it.
         if (status === 'idle') {
-            return { inner: 'done', outer: unread ? 'unread' : 'steady' };
+            return unread
+                ? { inner: 'done', outer: 'unread' }
+                : { inner: 'idle', outer: 'off' };
         }
 
         // Everything else - `unknown`, an absent field, a state this

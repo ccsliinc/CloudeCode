@@ -133,11 +133,12 @@ test('both vocabularies are exported and non-empty', () => {
     assert.ok(Array.isArray(Led.OUTER_STATES) && Led.OUTER_STATES.length > 0);
 });
 
-test('the inner vocabulary is exactly the six documented states', () => {
+test('the inner vocabulary is exactly the seven documented states', () => {
     assert.deepEqual(plain(Led.INNER_STATES), [
         'working',
         'waiting-permission',
         'waiting-input',
+        'idle',
         'done',
         'dead',
         'unknown',
@@ -245,7 +246,7 @@ test('a startup gate that could not be measured does not claim anything', () => 
     // `awaiting`. Not having looked is not evidence of a prompt.
     assert.deepEqual(
         plain(Led.ledStateFor({ activity_status: 'idle', startup_gate: 'unknown' })),
-        { inner: 'done', outer: 'steady' },
+        { inner: 'idle', outer: 'off' },
     );
 });
 
@@ -318,11 +319,25 @@ test('unread rides the HALO independently of the inner dot', () => {
     assert.deepEqual(plain(rested), { inner: 'done', outer: 'unread' });
 });
 
-test('idle and seen is a steady done', () => {
+test('idle and seen is its OWN gray dot, at rest with no ring at all', () => {
+    // 2026-09-09: idle used to share `done`'s green fill and only the
+    // outer ring moved when a session was read - too subtle to register.
+    // It now gets a distinct inner state, and pairs with outer `off` so
+    // opening a tab reads as visibly calmer, not just differently haloed.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'idle' })), {
-        inner: 'done',
-        outer: 'steady',
+        inner: 'idle',
+        outer: 'off',
     });
+});
+
+test('idle is not done, and not unknown either', () => {
+    // The whole point of the split: a MEASURED at-rest session must not
+    // collapse onto the "finished, unread" green or the "never measured"
+    // grey - it is its own answer.
+    const idle = Led.ledStateFor({ activity_status: 'idle' });
+    assert.notEqual(idle.inner, 'done');
+    assert.notEqual(idle.inner, 'unknown');
+    assert.equal(idle.inner, 'idle');
 });
 
 test('finished_unread is done plus an unread halo', () => {
@@ -395,17 +410,19 @@ test('the ring and the glow are layers of ONE box-shadow on the element', () => 
     );
     assert.ok(
         base.includes(
-            'box-shadow: var(--led-inset-ring), var(--led-ring-layer), var(--led-glow-layer);',
+            'box-shadow: var(--led-inset-ring), var(--led-ring-layer), var(--led-ring-feather-layer),\n' +
+                '        var(--led-glow-layer);',
         ),
-        'the one declaration must be the three named layers, in paint order',
+        'the one declaration must be the four named layers, in paint order',
     );
 });
 
 test('the hard ring is a zero-blur spread shadow, so its outer edge is exact', () => {
     // `0 0 0 <width>` puts the ring's outer diameter at exactly
     // size + 2 * width with no blur to soften where it lands. At the 9px
-    // default that is an integer, 11px, so the ring's edge sits on the
-    // pixel grid whenever the dot's does.
+    // default that is an integer, 12px (2026-09-09: was 11px at the
+    // former 1px width), so the ring's edge sits on the pixel grid
+    // whenever the dot's does.
     assert.ok(
         /--led-ring-layer:\s*0 0 0 var\(--led-ring-width\)/.test(CSS),
         'the ring layer must be 0 0 0 <ring-width>, not a blurred shadow',
@@ -413,15 +430,56 @@ test('the hard ring is a zero-blur spread shadow, so its outer edge is exact', (
     const widthMatch = CSS.match(/--led-ring-width:\s*([\d.]+)px;/);
     assert.ok(widthMatch, '--led-ring-width must be a plain px value');
     const width = Number(widthMatch[1]);
+    assert.equal(width, 1.5, '2026-09-09: the ring widened from 1px to 1.5px, per the owner\'s ask');
     const size = 9;
     const ringDiameter = size + 2 * width;
     assert.ok(
         ringDiameter > size && ringDiameter <= size + 4,
-        `ring diameter ${ringDiameter}px must read as 1-2px larger than the ${size}px dot, per the owner's calibration`,
+        `ring diameter ${ringDiameter}px must read as a little larger than the ${size}px dot, per the owner's calibration`,
     );
     assert.ok(
         Number.isInteger(ringDiameter),
         'the ring diameter must be an integer at the 9px default so it cannot land off-grid',
+    );
+});
+
+test('the ring edge is feathered by a second, blurred layer at the same spread', () => {
+    // 2026-09-09, owner's ask: "can we feather it". A hard `0 0 0 <width>`
+    // shadow alone has a knife-edge; the feather is a second shadow at the
+    // SAME spread as the hard ring (so it sits exactly on the ring's own
+    // edge) with a small blur and a fraction of the ring's alpha.
+    assert.ok(
+        /--led-ring-feather-layer:\s*0 0 var\(--led-ring-feather-blur\) var\(--led-ring-width\)/.test(
+            CSS,
+        ),
+        'the feather layer must share the ring\'s own spread, blurred',
+    );
+    assert.ok(
+        CSS.includes(
+            'color-mix(\n            in srgb,\n            var(--led-ring-ink) calc(var(--led-ring-alpha) * var(--led-ring-feather-fraction)),\n            transparent\n        )',
+        ),
+        'the feather alpha must be a FRACTION of the ring alpha, so it zeroes automatically with the ring',
+    );
+    const blurMatch = CSS.match(/--led-ring-feather-blur:\s*([\d.]+)px;/);
+    const fractionMatch = CSS.match(/--led-ring-feather-fraction:\s*([\d.]+);/);
+    assert.ok(blurMatch, '--led-ring-feather-blur must be a plain px value');
+    assert.ok(fractionMatch, '--led-ring-feather-fraction must be a plain unitless value');
+    const fraction = Number(fractionMatch[1]);
+    assert.ok(fraction > 0 && fraction < 1, `feather fraction ${fraction} must be a real fraction, not the whole ring or none of it`);
+});
+
+test('the whole ring apparatus (hard ring plus feather) stays within about 4px of the dot', () => {
+    // The owner's budget: "a little larger", not a second halo. The
+    // feather shares the ring's own spread, so its visible influence
+    // reaches spread + blur/2 past the border box - the same formula the
+    // glow uses - and that is what must not blow past the ceiling, not
+    // the ring width taken alone.
+    const width = Number(CSS.match(/--led-ring-width:\s*([\d.]+)px;/)[1]);
+    const featherBlur = Number(CSS.match(/--led-ring-feather-blur:\s*([\d.]+)px;/)[1]);
+    const reach = width + featherBlur / 2;
+    assert.ok(
+        reach <= 4,
+        `the ring's feathered edge reaches ${reach}px past the dot, over the owner's ~4px ceiling`,
     );
 });
 
@@ -435,14 +493,22 @@ test('the soft glow is a blurred layer with its own blur and spread tokens', () 
     const blurMatch = CSS.match(/--led-glow-blur:\s*([\d.]+)px;/);
     const spreadMatch = CSS.match(/--led-glow-spread:\s*([\d.]+)px;/);
     assert.ok(blurMatch && spreadMatch, 'both glow tokens must be plain px values');
+    assert.equal(
+        Number(blurMatch[1]),
+        6,
+        '2026-09-09: the glow blur rose from 4px to 6px so the halo reads softer, spread held fixed',
+    );
+    assert.equal(Number(spreadMatch[1]), 1.5, 'the glow spread must stay fixed - only the blur rose');
     // A blurred shadow reaches spread + blur/2 past the border box. The
-    // ::after era reached 16.2px across at the 9px default; this must not
-    // regrow past that, or the "1 or 2px larger" calibration is lost.
+    // ::after era reached 16.2px across at the 9px default; the
+    // 2026-09-09 feathering round raised the ceiling to 18px (blur
+    // 4px -> 6px, spread unchanged) as an accepted, documented cost of
+    // the softer edge - not a silent regrowth.
     const reach = Number(spreadMatch[1]) + Number(blurMatch[1]) / 2;
     const litDiameter = 9 + 2 * reach;
     assert.ok(
-        litDiameter <= 16.2,
-        `lit object ${litDiameter}px must not exceed the 16.2px the ::after halo reached`,
+        litDiameter <= 18,
+        `lit object ${litDiameter}px must not exceed the 18px the 2026-09-09 feathering round settled on`,
     );
 });
 
@@ -525,6 +591,61 @@ test('every inner state has a colour rule', () => {
     }
 });
 
+test('idle has its own fill token, distinct from both unknown and done', () => {
+    const idleBlock = RULES.split(".status-led[data-inner='idle'] {")[1].split(
+        '\n}',
+    )[0];
+    assert.ok(
+        idleBlock.includes('--led-ink: var(--led-color-idle)'),
+        'idle must resolve to its own colour token, not reuse done or unknown',
+    );
+    assert.ok(
+        !idleBlock.includes('var(--led-color-done)'),
+        'idle must not fall back to the done colour',
+    );
+    assert.ok(
+        !idleBlock.includes('var(--led-color-unknown)'),
+        'idle must not fall back to the unknown colour',
+    );
+    // The two greys must actually be different values, or the "own
+    // colour token" is cosmetic. Compared as the literal fallback behind
+    // each var(), since that is what a themeless context resolves to.
+    const idleFallback = CSS.match(/--led-color-idle:\s*var\([^,]+,\s*([^)]+)\)/)[1].trim();
+    const unknownFallback = CSS.match(/--led-color-unknown:\s*var\([^,]+,\s*([^)]+)\)/)[1].trim();
+    assert.notEqual(
+        idleFallback,
+        unknownFallback,
+        'idle and unknown must not resolve to the same literal grey',
+    );
+});
+
+test('idle stays a SOLID dot - unknown is the only hollow one', () => {
+    const idleBlock = RULES.split(".status-led[data-inner='idle'] {")[1].split(
+        '\n}',
+    )[0];
+    assert.ok(
+        !idleBlock.includes('background-color: transparent'),
+        'idle must not go hollow - that shape is reserved for unknown',
+    );
+    assert.ok(
+        !idleBlock.includes('--led-inset-ring:'),
+        'idle must not set the hollow-rim layer',
+    );
+});
+
+test('idle renders through ledHtml with outer off and shows no lit ring', () => {
+    // The owner's ask: clicking a tab should read as calm, at-rest grey -
+    // no ring, no glow. Rendered through the real ledStateFor -> ledHtml
+    // chain, not asserted as a fact about the mapping alone.
+    const state = Led.ledStateFor({ activity_status: 'idle' });
+    assert.deepEqual(plain(state), { inner: 'idle', outer: 'off' });
+    const offBlock = RULES.split(".status-led[data-outer='off'] {")[1].split(
+        '\n}',
+    )[0];
+    assert.ok(offBlock.includes('--led-ring-alpha: 0%'), 'idle\'s outer ring must be fully off');
+    assert.ok(offBlock.includes('--led-glow-alpha: 0%'), 'idle\'s glow must be fully off');
+});
+
 test('every outer state has a rule, and every one of them sets the ring', () => {
     for (const outer of plain(Led.OUTER_STATES)) {
         assert.ok(
@@ -545,11 +666,13 @@ test('every outer state has a rule, and every one of them sets the ring', () => 
     }
 });
 
-test('the five state colours are named tokens in one place', () => {
+test('the state colours are named tokens in one place', () => {
     for (const token of [
         '--led-color-working',
         '--led-color-waiting',
+        '--led-color-permission',
         '--led-color-done',
+        '--led-color-idle',
         '--led-color-dead',
         '--led-color-unknown',
         '--led-color-unread',
@@ -652,6 +775,11 @@ test('the breathing keyframes move the GLOW LAYER and nothing else', () => {
         block.split('var(--led-inset-ring)').length - 1,
         2,
         'both frames must carry the same inset layer, so the layer count never changes mid-animation',
+    );
+    assert.equal(
+        block.split('var(--led-ring-feather-layer)').length - 1,
+        2,
+        'both frames must carry the same feather layer too - it is the ring\'s edge, not the glow',
     );
 });
 

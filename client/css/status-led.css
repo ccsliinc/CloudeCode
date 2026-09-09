@@ -57,7 +57,7 @@
  */
 
 .status-led {
-    /* ---- the one place the six state colours are named --------------
+    /* ---- the one place the seven state colours are named ------------
      * Each is the hue for BOTH rings of that state - the ring is the
      * same colour as the fill, only outside it and softened, which is
      * what makes it read as one lit object rather than two shapes.
@@ -87,6 +87,25 @@
      * rides the ring and could otherwise sit behind it. */
     --led-color-permission: var(--color-status-pending, #ffa500);
     --led-color-done: var(--color-success, #3fb950);
+    /* THE READ/IDLE COLOUR, added 2026-09-09. Owner's report, verbatim:
+     * "i need the lights to go idle, (i think thats gray) when i click on
+     * a tab. there needs to be a read/idle color." Before this, `idle`
+     * (already-seen, at rest) painted the same green fill as `done`
+     * (finished, still unread) - opening a tab only moved the outer ring,
+     * which is too subtle a change to register at a glance.
+     *
+     * A NEUTRAL MID-GREY, DELIBERATELY DIFFERENT FROM `unknown`'s. Both
+     * are "nothing urgent here" greys, but they answer different
+     * questions - `idle` means "measured, and at rest"; `unknown` means
+     * "not measured at all" - and the false-green problem this project
+     * keeps naming is really a false-EQUIVALENCE problem: two different
+     * claims must never render identically. `--color-fg-muted` (#858585)
+     * is lighter than the `--color-fg-subtle` (#666) that `unknown`
+     * resolves to, so the two greys sit at visibly different values, and
+     * `unknown` additionally stays HOLLOW (see --led-inset-ring below)
+     * while `idle` is a solid filled dot - two independent differences,
+     * not one relied on alone. */
+    --led-color-idle: var(--color-fg-muted, #8f8f8f);
     --led-color-dead: var(--color-danger, #ff4444);
     --led-color-unknown: var(--color-fg-subtle, #8b8b8b);
 
@@ -99,32 +118,70 @@
 
     /* ---- geometry ---------------------------------------------------
      * The owner's calibration, verbatim (2026-09-08): "glowing is still
-     * to big. like 1 or 2 px larger than the front circle."
+     * to big. like 1 or 2 px larger than the front circle." Revisited
+     * 2026-09-09, owner's follow-up: "lets make the border a little
+     * larger and can we feather it?"
      *
      * --led-ring-width is the HARD ring: a zero-blur spread shadow, so
-     * the lit ring's outer diameter is exactly size + 2 * ring-width.
-     * At the 9px default every call site actually renders (the sidebar
-     * row and the launchpad card both call dotHtml() with no `size`),
-     * that is 11px - two pixels larger than the dot, the top of the
-     * owner's window, and an INTEGER, so the ring's outer edge lands on
-     * the pixel grid whenever the dot's does.
+     * the lit ring's outer diameter is exactly size + 2 * ring-width. At
+     * the 9px default every call site actually renders (the sidebar row
+     * and the launchpad card both call dotHtml() with no `size`), 1.5px
+     * puts that at 12px - three pixels larger than the dot, still an
+     * INTEGER so the ring's outer edge keeps landing on the pixel grid
+     * whenever the dot's does, the same property the 1px/11px pairing
+     * had.
      *
-     * --led-glow-blur / --led-glow-spread are the soft layer beyond it.
-     * A blurred shadow reaches spread + blur/2 past the border box, so
-     * 1.5 + 2 = 3.5px, and the whole lit object fades out by about 16px
-     * across. That is the same reach the ::after halo had (11.7px box
-     * plus 1.5px spread and 1.5px blur = 16.2px), so this is a rounding
-     * fix and not a resize.
+     * --led-ring-feather-blur / --led-ring-feather-fraction are the NEW
+     * layer that answers "can we feather it". A hard `0 0 0 <width>`
+     * shadow has a knife-edge - it is either fully the ring colour or
+     * fully transparent, one device pixel apart. Feathering means a
+     * SECOND shadow at the SAME spread (so its unblurred edge would sit
+     * exactly on the hard ring's own outer edge) but with a small blur
+     * and a fraction of the ring's alpha, so the transition from solid
+     * ring to nothing happens over a few pixels instead of one. The
+     * fraction multiplies --led-ring-alpha rather than standing alone -
+     * see --led-ring-feather-layer below - so it AUTOMATICALLY goes to
+     * zero wherever the ring itself does (`off`), the same trick
+     * --led-glow-rest already uses for the glow's breathing trough. One
+     * fraction, reused rather than a second copy of the same idea.
+     *
+     * --led-glow-blur / --led-glow-spread are the soft halo beyond both
+     * ring layers. A blurred shadow reaches spread + blur/2 past the
+     * border box; raising the blur alone (spread untouched) spreads the
+     * SAME amount of light over a wider fade, which is what reads as
+     * "softer" rather than "bigger" - a spread increase would have made
+     * the glow read as a larger solid disc instead. At the 9px default
+     * that reach is 1.5 + 3 = 4.5px, putting the lit object at about
+     * 18px across - 1.8px more than the 16.2px the previous round
+     * reached, which is the feathering's cost and was accepted as part
+     * of the same request rather than chased back down.
+     *
+     * THE RING ITSELF (hard ring plus its feather) stays inside the
+     * owner's "1 or 2px larger" budget. The feather layer shares the
+     * ring's own spread (1.5px), not a spread of its own on top of it -
+     * it is the SAME distance from the border box as the hard ring,
+     * blurred, so its visible influence runs from spread - blur/2 to
+     * spread + blur/2 = 1.0px to 2.0px past the dot's edge (the same
+     * "spread + blur/2" reach formula the glow below uses). The whole
+     * ring apparatus therefore fades out by 2.0px past the dot, well
+     * inside the "about 4px past the dot" ceiling. The GLOW is a
+     * separate, already softer halo further out and was never part of
+     * that budget.
      *
      * PRIOR VALUES, for anyone tracing a regression:
+     *   - 1px ring, 4px blur / 1.5px spread glow (the one-element
+     *     rewrite, shipped 2026-09-08) - no feather layer, lit object
+     *     about 16.2px across.
      *   - 1.3x halo scale, 1.5px spread (the ::after era, shipped
      *     2026-09-08) - correct SIZE, but two boxes, hence the drift.
      *   - 1.7x scale, 0.3x spread put the lit object at about 21px.
      *   - 2.6x scale, 0.62x spread put it at about 35px - larger than
      *     the row text, the owner's "breathing is way too big". */
     --led-size: 9px;
-    --led-ring-width: 1px;
-    --led-glow-blur: 4px;
+    --led-ring-width: 1.5px;
+    --led-ring-feather-blur: 1px;
+    --led-ring-feather-fraction: 0.35;
+    --led-glow-blur: 6px;
     --led-glow-spread: 1.5px;
 
     /* The trough of the breath, as a fraction of the glow's resting
@@ -158,13 +215,29 @@
     --led-hollow-width: 2px;
     --led-inset-ring: inset 0 0 0 0 transparent;
 
-    /* The two outer layers, named so the base rule and both keyframes
+    /* The three outer layers, named so the base rule and both keyframes
      * can share one definition instead of restating the whole list three
      * times. A custom property cannot be interpolated by an animation
      * unless it is registered with @property, so the keyframes below
-     * still write a real `box-shadow`; what they write is these vars. */
+     * still write a real `box-shadow`; what they write is these vars.
+     *
+     * --led-ring-feather-layer is the NEW one (2026-09-09): same spread
+     * as the hard ring, so its own unblurred edge coincides with the
+     * ring's outer edge, but blurred and at a FRACTION of the ring's own
+     * alpha - a soft-edged twin sitting exactly on the hard ring's
+     * boundary, which is what reads as that boundary being feathered
+     * rather than as a second, separate ring. The fraction multiplies
+     * --led-ring-alpha rather than carrying its own alpha, so it goes to
+     * zero automatically wherever the ring does (`off`) instead of
+     * needing every outer-state rule updated twice. */
     --led-ring-layer: 0 0 0 var(--led-ring-width)
         color-mix(in srgb, var(--led-ring-ink) var(--led-ring-alpha), transparent);
+    --led-ring-feather-layer: 0 0 var(--led-ring-feather-blur) var(--led-ring-width)
+        color-mix(
+            in srgb,
+            var(--led-ring-ink) calc(var(--led-ring-alpha) * var(--led-ring-feather-fraction)),
+            transparent
+        );
     --led-glow-layer: 0 0 var(--led-glow-blur) var(--led-glow-spread)
         color-mix(in srgb, var(--led-ring-ink) var(--led-glow-alpha), transparent);
     --led-glow-layer-rest: 0 0 var(--led-glow-blur)
@@ -181,13 +254,14 @@
     height: var(--led-size);
     border-radius: var(--radius-full);
     background-color: var(--led-ink);
-    /* THE ONE box-shadow. Three layers, painted back to front: the
+    /* THE ONE box-shadow. Four layers, painted back to front: the
      * optional hollow rim INSIDE the dot, the hard ring just outside it,
-     * and the soft glow beyond that. All three are painted from this
-     * element's own border box, so all three are concentric with the
-     * fill by construction and none of them can round to a different
-     * pixel than it. */
-    box-shadow: var(--led-inset-ring), var(--led-ring-layer), var(--led-glow-layer);
+     * the feather that softens the ring's own edge, and the soft glow
+     * beyond that. All four are painted from this element's own border
+     * box, so all four are concentric with the fill by construction and
+     * none of them can round to a different pixel than it. */
+    box-shadow: var(--led-inset-ring), var(--led-ring-layer), var(--led-ring-feather-layer),
+        var(--led-glow-layer);
 }
 
 /* ---- inner dot: the fill ---------------------------------------------
@@ -209,6 +283,16 @@
     --led-ink: var(--led-color-done);
 }
 
+.status-led[data-inner='idle'] {
+    /* READ AND AT REST. A solid grey fill - unlike `unknown` below, this
+     * is a MEASUREMENT (the session has a Stop event and nobody owes it a
+     * look), not the absence of one, so it stays filled rather than
+     * hollow. Pairs with outer `off` in practice (see ledStateFor), so
+     * this state on its own reads as a plain grey dot with no ring at
+     * all - the calmest thing on the screen, which is the point. */
+    --led-ink: var(--led-color-idle);
+}
+
 .status-led[data-inner='dead'] {
     --led-ink: var(--led-color-dead);
 }
@@ -223,7 +307,13 @@
      * set --radius-full to 0 and turn every dot into a square - and it
      * goes in through --led-inset-ring rather than as its own
      * `box-shadow`, so it composes with the outer ring instead of
-     * replacing it. */
+     * replacing it.
+     *
+     * `idle` above is the other grey and is deliberately NOT this
+     * treatment: it is a measurement (at rest, already read), this is
+     * the absence of one, and hollow-vs-filled is what keeps the two
+     * from reading as the same claim even where a theme sets their
+     * colours close together. */
     background-color: transparent;
     --led-inset-ring: inset 0 0 0 var(--led-hollow-width) var(--led-color-unknown);
     --led-ink: var(--led-color-unknown);
@@ -265,10 +355,14 @@
 }
 
 .status-led[data-outer='off'] {
-    /* Dead. No ring and no glow at all - not dim ones. A corpse must not
-     * glow. Both layers go fully transparent rather than the whole
-     * box-shadow going `none`, because `none` would take the hollow
-     * `unknown` rim with it and make one dimension depend on the other. */
+    /* At rest: a dead pane, or a session that has been read and has
+     * nothing pending. No ring and no glow at all - not dim ones. Both
+     * layers go fully transparent rather than the whole box-shadow going
+     * `none`, because `none` would take the hollow `unknown` rim with it
+     * and make one dimension depend on the other. The feather layer needs
+     * no rule of its own here: it is defined as a FRACTION of
+     * --led-ring-alpha (see --led-ring-feather-layer), so zeroing the
+     * ring already zeroes it. */
     --led-ring-alpha: 0%;
     --led-glow-alpha: 0%;
 }
@@ -346,10 +440,13 @@
  * one-element rewrite bought statically, held across time.
  *
  * The two keyframes differ in exactly one layer, and both restate the
- * whole three-layer list because a box-shadow animation interpolates
+ * whole four-layer list because a box-shadow animation interpolates
  * layer by layer and needs the same count and the same inset flags at
  * both ends. They restate it as the SAME vars the base rule uses, so
- * there is still one definition of each layer. */
+ * there is still one definition of each layer - the feather layer
+ * included, held identical at both ends for the same reason the ring is:
+ * it is the shape of the edge, not the glow, and the glow is the only
+ * thing that breathes. */
 
 .status-led[data-outer='active'],
 .status-led[data-outer='unread'] {
@@ -360,11 +457,11 @@
     0%,
     100% {
         box-shadow: var(--led-inset-ring), var(--led-ring-layer),
-            var(--led-glow-layer-rest);
+            var(--led-ring-feather-layer), var(--led-glow-layer-rest);
     }
     50% {
         box-shadow: var(--led-inset-ring), var(--led-ring-layer),
-            var(--led-glow-layer);
+            var(--led-ring-feather-layer), var(--led-glow-layer);
     }
 }
 

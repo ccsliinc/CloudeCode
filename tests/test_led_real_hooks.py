@@ -160,8 +160,11 @@ def test_answering_the_dialog_fires_session_start_and_opens_the_gate(
         live,
         "SessionStart",
         want_status=("idle", "unknown"),
-        want_inner=("done", "unknown"),
-        want_outer=("steady", "dim"),
+        # 2026-09-09: `idle` (read, at rest) got its own inner state and
+        # dropped the `done` green fill it used to share with
+        # `finished_unread` - see docs/session-status.md.
+        want_inner=("idle", "unknown"),
+        want_outer=("off", "dim"),
         want_gate=("ready",),
     )
 
@@ -319,7 +322,9 @@ def test_binding_a_terminal_clears_the_unread_halo(live: RealHookApp) -> None:
         f"  last led:     {led}\n"
         f"  hooks seen:   {live.ledger.describe()}"
     )
-    assert led["inner"] == "done" and led["outer"] == "steady", (
+    assert led["inner"] == "idle" and led["outer"] == "off", (
+        # 2026-09-09: idle is its own grey inner state, paired with outer
+        # `off` - see docs/session-status.md and client/js/status-led.js.
         f"the light disagrees with the status it was given: {led} from "
         f"{observed}"
     )

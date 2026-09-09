@@ -216,8 +216,8 @@ for (const [name, render] of SURFACES) {
 // ---------------------------------------------------------------------
 
 for (const [name, render] of SURFACES) {
-    await test(`${name}: an idle row with NOTHING waiting stays steady`, () => {
-        assert.equal(outerOf(render(listRow('idle', false))), 'steady',
+    await test(`${name}: an idle row with NOTHING waiting stays off (2026-09-09: idle is at rest, not steady-done)`, () => {
+        assert.equal(outerOf(render(listRow('idle', false))), 'off',
             `${name} claimed unread on a row that is not`);
     });
 

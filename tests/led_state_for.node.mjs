@@ -11,8 +11,8 @@
 // is pure by contract and must keep loading with none of the app around
 // it.
 //
-// Usage:  echo '{"activity_status":"idle","unread":true}' | node tests/led_state_for.node.mjs
-// Prints: {"inner":"done","outer":"unread"}
+// Usage:  echo '{"activity_status":"idle"}' | node tests/led_state_for.node.mjs
+// Prints: {"inner":"idle","outer":"off"}
 // Exits non-zero, with the reason on stderr, if the row cannot be mapped.
 
 import fs from 'node:fs';

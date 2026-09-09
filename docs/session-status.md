@@ -437,12 +437,24 @@ a whole extra state only to say "done, and also unread", and there was no
 way at all to say "working, and also unread". Two rings say both.
 
 **Inner dot** (`data-inner`), the chat's own status:
-`working`, `waiting-permission`, `waiting-input`, `done`, `dead`,
+`working`, `waiting-permission`, `waiting-input`, `idle`, `done`, `dead`,
 `unknown`.
+
+`idle` was added 2026-09-09. Owner's report, verbatim: "i need the lights
+to go idle, (i think thats gray) when i click on a tab. there needs to be
+a read/idle color." Before this, a session that had been read (server
+`activity_status: 'idle'`) painted the same green `done` fill as one that
+had NOT (`finished_unread`) - only the outer ring told them apart, which
+is too subtle to register at a glance. `idle` is a neutral grey
+(`--led-color-idle`), a solid dot (not the hollow `unknown` treatment -
+one is a measurement, the other is the absence of one), and pairs with
+outer `off` so a read session reads as calm and at rest rather than as a
+dimmer copy of `done`.
 
 **Outer ring** (`data-outer`), activity and attention:
 `active` (breathing), `steady` (lit, still), `unread` (its own hue,
-breathing), `off` (dead, no ring at all), `dim` (not measured).
+breathing), `off` (no ring at all - dead, or read-and-at-rest), `dim` (not
+measured).
 
 They are set separately and every combination renders. No rule in the
 stylesheet reads one to decide the other.
@@ -515,7 +527,7 @@ ONE place the server vocabulary becomes a pair of rings.
 | `working` / `working_subagent` / `running` | any | no | `working` | `active` |
 | `working` / `working_subagent` / `running` | any | yes | `working` | `unread` |
 | `finished_unread` | any | any | `done` | `unread` |
-| `idle` | any | no | `done` | `steady` |
+| `idle` | any | no | `idle` | `off` |
 | `idle` | any | yes | `done` | `unread` |
 | `unknown` / absent / unrecognised | any | no | `unknown` | `dim` |
 | `unknown` / absent / unrecognised | any | yes | `unknown` | `unread` |
@@ -523,6 +535,18 @@ ONE place the server vocabulary becomes a pair of rings.
 Order matters: `dead` outranks everything (an unread flag must not paint a
 corpse as something to go and read), then anything blocking on the user,
 then activity. `unread` rides the OUTER RING independently of all of it.
+
+THE `idle` + `unread: true` ROW IS DEFENSIVE, NOT NORMALLY REACHABLE. The
+server flips a session to `finished_unread` the instant it goes unread and
+back to `idle` only once it has been read, so a well-formed row never
+carries both at once. If one ever arrives contradictory, the row renders
+identically to `finished_unread` (`done` / `unread`) rather than the grey
+`idle` dot - the unread flag is the louder, more urgent claim, and
+`session-status-summary.js`'s group rollup depends on this: its `unread`
+bucket always renders as `{inner: 'done', outer: 'unread'}`, so a row that
+disagreed with that fixed pair would make the header lie about its own
+child (`tests/test_status_summary.node.mjs`, "a single-child group renders
+the same LED state as that child").
 
 THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
 `SessionStatusUI.dotHtml(status, signals)` takes `unread` and
@@ -568,16 +592,21 @@ statically, held across time. (It costs a repaint per frame rather than a
 composited transform; the repainted region is about 16px square, and the
 alternative is a second box.)
 
-`steady` is lit and still. `off` has no ring and no glow. Under
+`steady` is lit and still (reachable today only from the group-summary
+rollup's `done` bucket, kept for that fixed pair - see `session-status-
+summary.js` - though not currently produced by a single row through
+`ledStateFor`). `off` has no ring and no glow, for a dead pane or a
+read-and-at-rest one. Under
 `prefers-reduced-motion: reduce` the ring and glow stay and the pulse
 stops - the base rule already paints the full lit value, so killing the
 animation is the whole of it, and the reduced-motion block must NOT restate
 the shadow or the two would drift apart. The active/resting distinction
 lives entirely in the ring and glow alphas.
 
-The six state colours plus the unread hue are named tokens declared
-exactly once, at the top of `status-led.css`. A theme that wants a
-different palette redefines `--led-color-*`, never these rules.
+The seven state colours (`idle` added 2026-09-09) plus the unread hue are
+named tokens declared exactly once, at the top of `status-led.css`. A
+theme that wants a different palette redefines `--led-color-*`, never
+these rules.
 
 ### Sizing
 
@@ -588,34 +617,58 @@ so neither passes a per-instance override.
 
 The ring and glow are FLAT PIXEL VALUES around that dot, not fractions of
 it, because at this size a flat value reads truer than a proportional one.
-`--led-ring-width` (1px) is the hard ring: a zero-blur spread shadow, so
-the lit ring's outer diameter is exactly `size + 2 * width`, which at the
-9px default is 11px - two pixels larger than the dot, the top of the
-owner's window, and an INTEGER, so the ring's outer edge lands on the pixel
-grid whenever the dot's does. `--led-glow-blur` (4px) and
-`--led-glow-spread` (1.5px) are the soft layer beyond it; a blurred shadow
-reaches `spread + blur/2` past the border box, so 3.5px, and the whole lit
-object fades out by about 16px across - the same reach the `::after` halo
-had (an 11.7px box plus 1.5px spread and 1.5px blur is 16.2px). This is a
-rounding fix, not a resize.
+`--led-ring-width` (1.5px, widened from 1px on 2026-09-09 - owner's ask:
+"lets make the border a little larger") is the hard ring: a zero-blur
+spread shadow, so the lit ring's outer diameter is exactly
+`size + 2 * width`, which at the 9px default is 12px (was 11px) - three
+pixels larger than the dot, and still an INTEGER, so the ring's outer edge
+lands on the pixel grid whenever the dot's does.
+
+`--led-ring-feather-blur` (1px) and `--led-ring-feather-fraction` (0.35)
+answer the same request's second half - "can we feather it". A hard
+`0 0 0 <width>` shadow is a knife-edge: fully the ring colour one device
+pixel, fully transparent the next. The feather is a SECOND shadow layer at
+the SAME spread as the hard ring (so its own unblurred edge sits exactly
+on the ring's outer edge) but blurred and at a fraction of the ring's own
+alpha, so the transition happens over a few pixels instead of one. The
+fraction multiplies `--led-ring-alpha` rather than carrying its own value,
+so it goes to zero automatically wherever the ring does (`off`) - the same
+trick `--led-glow-rest` already uses for the breathing trough, reused
+rather than re-invented. The feathered ring's own visible reach is
+`width + feather-blur/2` = 1.5 + 0.5 = 2px past the dot's edge, comfortably
+inside the owner's "about 4px past the dot" ceiling for the ring alone.
+
+`--led-glow-blur` (6px, raised from 4px on 2026-09-09) and
+`--led-glow-spread` (1.5px, held fixed) are the soft halo beyond both ring
+layers; a blurred shadow reaches `spread + blur/2` past the border box, so
+4.5px (was 3.5px), and the whole lit object fades out by about 18px across
+(was 16.2px). Raising the blur alone, with the spread untouched, spreads
+the SAME amount of light over a wider fade - which is what reads as
+"softer", the owner's word, rather than "bigger": a spread increase would
+have made the glow read as a larger solid disc instead. The 1.8px growth
+in the lit object's overall reach is the documented, accepted cost of that
+softer edge, not a silent regrowth of the "glowing is still too big"
+problem this geometry originally fixed.
 
 `--led-halo-scale` and `--led-halo-inset` are RETIRED. They sized and
 positioned a box that no longer exists.
 
-That is the owner's own calibration (2026-09-08): "glowing is still to
-big. like 1 or 2 px larger than the front circle" - the halo ring itself
-reads as only a couple of px bigger than the dot, with the glow adding a
-further 1-2px on top. Two earlier configs are worth knowing if you are
-tracing a regression: 1.7x scale / 0.3x spread (shipped earlier the same
-day) put the lit object at about 21px across, still visibly larger than
-"1 or 2px more"; before that, 2.6x scale / 0.62x spread put it at about
-35px across at the peak - larger than the row text itself and overlapping
-neighbours on the compact sidebar density and on the launchpad cards,
-which is what the owner meant by "the breathing is way too big" the first
-time. The breathing keyframes move the glow's spread between
-`--led-glow-rest` (0.4) and 1 of its resting value - never past it - so the
-geometry tokens above are the true maximum rather than a floor the
-animation overshoots.
+The owner's original calibration (2026-09-08): "glowing is still to big.
+like 1 or 2 px larger than the front circle" - the halo ring itself reads
+as only a couple of px bigger than the dot, with the glow adding a further
+1-2px on top. Two earlier configs are worth knowing if you are tracing a
+regression: 1.7x scale / 0.3x spread (shipped earlier the same day) put
+the lit object at about 21px across, still visibly larger than "1 or 2px
+more"; before that, 2.6x scale / 0.62x spread put it at about 35px across
+at the peak - larger than the row text itself and overlapping neighbours
+on the compact sidebar density and on the launchpad cards, which is what
+the owner meant by "the breathing is way too big" the first time. The
+breathing keyframes move the glow's spread between `--led-glow-rest` (0.4)
+and 1 of its resting value - never past it - so the geometry tokens above
+are the true maximum rather than a floor the animation overshoots. The
+ring and its feather do NOT breathe at all; both are held byte-identical
+across the animation, restated in full at both keyframes because a
+box-shadow animation interpolates layer by layer.
 
 There is one set of geometry tokens, not one per surface, because every
 surface that renders a LED today renders it at the same 9px size. A
@@ -629,7 +682,7 @@ need revisiting if a surface ever shipped at, say, 36px.
 
 `client/js/session-status-summary.js` folds a set of sessions into one LED
 plus an unread count. Priority: **permission > input > working > unread >
-done > dead > unknown**.
+done > idle > dead > unknown**.
 
 `permission` is a session stopped on a yes/no; `input` is one that wants
 the user's eyes (a `notice`, or a startup prompt nobody has answered)
@@ -637,10 +690,14 @@ without being stopped. Permission leads because it is the only bucket
 guaranteed to make no progress at all until a human acts - a header that
 hoisted a chatty notification over a parked session would point the user
 at the wrong row. Both outrank working because they are about the user
-and will stay that way; working resolves on its own. Dead sits BELOW done deliberately -
-a group with one corpse and nine busy sessions must not read as dead. An
-EMPTY group is `unknown`, not `done`: nothing to measure is not the same
-as measured-and-quiet.
+and will stay that way; working resolves on its own. `idle` (added
+2026-09-09) sits below `done` - `done` here means "unread", the louder of
+the two rest states - and above `dead`, so a group with one unread and ten
+read-and-idle sessions still bubbles unread, and a group of nothing but
+idle sessions reads idle rather than falling all the way to unknown. Dead
+sits BELOW both deliberately - a group with one corpse and nine busy
+sessions must not read as dead. An EMPTY group is `unknown`, not `done`:
+nothing to measure is not the same as measured-and-quiet.
 
 Each child is bucketed from the LED state it already resolved to, not from
 its raw `activity_status`, so a header cannot disagree with the rows under

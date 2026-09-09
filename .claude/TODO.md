@@ -4677,3 +4677,109 @@ the owner).
   large delete or the measurement lies. Also, a folder moved into ~/.Trash
   by `mv` from a shell may not appear in Finder until Finder relaunches;
   `ls ~/.Trash` is the truth.
+
+## 2026-09-09: status LED - idle gets its own gray fill, ring widened and feathered
+
+DONE. Owner's report, verbatim: "i need the lights to go idle, (i think
+thats gray) when i click on a tab. there needs to be a read/idle color.
+lets make the border a little larger and can we feather it?"
+
+**ROOT CAUSE.** `idle` (read, at rest) and `finished_unread` (not yet
+read) both painted inner `done` green - only the outer ring moved when a
+tab was opened, too subtle a change at a glance.
+
+**WHAT SHIPPED.**
+- New inner state `idle`: `client/js/status-led.js` INNER_STATES gains
+  `idle` (slotted between `waiting-input` and `done`), a new
+  `--led-color-idle` token in `client/css/status-led.css` (neutral
+  mid-grey, `var(--color-fg-muted, #8f8f8f)` - deliberately different
+  from `unknown`'s `#666`/`#8b8b8b` grey AND from `unknown`'s hollow
+  shape; `idle` stays a solid dot, since it is a measurement and
+  `unknown` is the absence of one).
+- `ledStateFor`: `activity_status === 'idle'` now returns
+  `{inner: 'idle', outer: 'off'}` when NOT unread, and
+  `{inner: 'done', outer: 'unread'}` (unchanged) when the defensive
+  `idle` + `unread: true` combination arrives - kept identical to
+  `finished_unread`'s pair on purpose, because
+  `session-status-summary.js`'s `unread` bucket always renders as
+  `{inner: 'done', outer: 'unread'}` and a row that disagreed would make
+  the group header lie about its own child
+  (`tests/test_status_summary.node.mjs`, "a single-child group renders
+  the same LED state as that child" - this is what caught it).
+- `session-status-summary.js`: `bucketFor` and `SUMMARY_PRIORITY` gain an
+  `idle` bucket/entry, slotted between `done` and `dead`. New priority:
+  **permission > input > working > unread > done > idle > dead >
+  unknown**. A group of all-idle now reads idle instead of falling to
+  unknown; one unread among ten idle still bubbles unread.
+- Geometry, `client/css/status-led.css`: `--led-ring-width` 1px -> 1.5px.
+  New `--led-ring-feather-blur` (1px) and `--led-ring-feather-fraction`
+  (0.35) drive a NEW named layer, `--led-ring-feather-layer` - a second
+  shadow at the SAME spread as the hard ring (so its unblurred edge sits
+  exactly on the ring's own edge), blurred, at a FRACTION of
+  `--led-ring-alpha` (so it zeroes automatically wherever the ring does,
+  e.g. `off` - the same trick `--led-glow-rest` already used for the
+  breathing trough). `--led-glow-blur` 4px -> 6px, `--led-glow-spread`
+  held at 1.5px on purpose: raising blur alone spreads the same light
+  over a wider fade ("softer"), where raising spread would have read as
+  a bigger solid disc ("bigger") - the owner asked for the former. The
+  box-shadow is now FOUR layers (was three): inset-ring, ring, feather,
+  glow - both keyframes restate all four, unchanged except the glow
+  layer, same pattern the ring layer already used.
+- MEASURED FOOTPRINT: ring diameter at the 9px default is now 12px (was
+  11px), still an integer. The ring-plus-feather's own visible reach is
+  `width + feather-blur/2` = 2.0px past the dot - well inside the "about
+  4px past the dot" ceiling. The glow's reach grew from 3.5px to 4.5px
+  (blur 4px -> 6px, spread unchanged), putting the lit object at about
+  18px across (was 16.2px) - an accepted, documented 1.8px cost of the
+  feathering, not a silent regrowth of the "glowing is still too big"
+  problem the previous round fixed.
+- Sidebar clipping checked, not just assumed: `.session-sidebar-row-main`
+  padding is 10px (cozy/detailed) or 8px (compact), `.session-sidebar-list`
+  padding is 8px on top of that, and neither row nor list sets
+  `overflow: hidden` on the row's own box (only text spans do, for
+  ellipsis) - so the new ~9px glow radius from centre has 16-18px of
+  clearance before the list's own scroll edge in every density. No
+  regression.
+
+**TESTS.** `tests/test_status_led.node.mjs`: 52 pass (was 46 pre-2026-09-08
+element rewrite baseline; new tests added for the idle fill token
+distinctness, idle's solid-not-hollow shape, idle rendering outer off with
+no lit ring, the feather layer's presence/fraction/reach, and the ring
+width/glow blur token values). `tests/test_status_summary.node.mjs`: 20
+pass (idle priority slot, all-idle group, one-unread-among-ten-idle,
+idle-beats-dead-loses-to-unread). `tests/test_unread_led_one_field.node.mjs`:
+17 pass (idle+nothing-waiting now asserts outer `off`, not `steady`).
+`tests/led_state_for.node.mjs` docstring example updated (CLI helper, not a
+test - exits non-zero with no stdin by design). `tests/test_led_real_hooks.py`
+(opt-in, `CLOUDE_REAL_HOOK_TESTS=1`, not run this pass - would spend real
+Claude turns) updated at the two spots that asserted `inner: 'done'` /
+`outer: 'steady'` for a session reaching rest, now `idle`/`off`. Full
+`tests/*.node.mjs` sweep run (191 files): zero new failures; the two
+non-green results (`led_state_for.node.mjs` with no stdin,
+`test_archive_full_page_mode.node.mjs`) are both pre-existing/documented,
+per CLAUDE.md. `node --check` clean on every touched JS file.
+
+**GALLERY** (scratchpad, not published):
+`led-gallery.html`'s "Round 3 - single element (shipping)" section now
+inlines the real `status-led.css`/`status-led.js` verbatim (spliced
+programmatically from the shipped files, then verified: brace-balanced
+CSS, the extracted `<script>` block executes under `node -e` and produces
+`INNER_STATES` including `idle` and the correct `{inner:'idle',
+outer:'off'}` mapping). Added an `idle` row to all three inner x outer
+matrix tables (9/12/16px) and to the "every inner state, active outer"
+strips, plus a new plain-English legend row above them: working / waiting
+for permission / waiting for input / done, unread / idle, read / dead /
+unknown, rendered at 20px through the real `ledStateFor()` pairs (not
+hand-picked colours). Round 1 and Round 2 (the retired halo-era
+comparisons) untouched - they predate `idle` and are historical reference
+only. `build-gallery.js`/`page-template.html` in the same scratchpad
+directory are a separate, unused generator for a different page layout
+and were left alone.
+
+**DOCS.** `docs/session-status.md`: inner-dot vocabulary, the
+activity_status -> (inner, outer) mapping table, the geometry/Sizing
+section, and the group-rollup priority line all updated for `idle` and
+the new ring/feather/glow numbers, plus a note on why `idle` + `unread:
+true` is defensive rather than normally reachable. `CLAUDE.md`: the status
+paragraph now says the box-shadow is three ring-side layers (was two) and
+names `--led-color-idle`; the summary-priority line gains `idle`.

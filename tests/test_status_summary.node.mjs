@@ -112,7 +112,7 @@ test('one malformed row cannot blank a whole header', () => {
 test('the documented priority order is the one in the table', () => {
     assert.deepEqual(
         plain(Summary.SUMMARY_PRIORITY).map((e) => e.key),
-        ['permission', 'input', 'working', 'unread', 'done', 'dead', 'unknown'],
+        ['permission', 'input', 'working', 'unread', 'done', 'idle', 'dead', 'unknown'],
     );
 });
 
@@ -181,13 +181,23 @@ test('unread beats done', () => {
     assert.equal(s.outer, 'unread');
 });
 
-test('DEAD SITS BELOW DONE, so one corpse cannot headline nine live sessions', () => {
+test('DEAD SITS BELOW DONE AND IDLE, so one corpse cannot headline nine live sessions', () => {
     const rows = [{ activity_status: 'dead' }];
     for (let i = 0; i < 9; i++) rows.push({ activity_status: 'working' });
     assert.equal(plain(Summary.summarizeStates(rows)).bucket, 'working');
 
+    // A read, at-rest session (`idle`) still outranks a corpse in the same
+    // group - the dead pane is not the headline next to a quiet live one
+    // either.
     const quiet = [{ activity_status: 'dead' }, { activity_status: 'idle' }];
-    assert.equal(plain(Summary.summarizeStates(quiet)).bucket, 'done');
+    assert.equal(plain(Summary.summarizeStates(quiet)).bucket, 'idle');
+
+    // `done` (unread) still outranks dead too.
+    const quietUnread = [
+        { activity_status: 'dead' },
+        { activity_status: 'finished_unread' },
+    ];
+    assert.equal(plain(Summary.summarizeStates(quietUnread)).bucket, 'unread');
 });
 
 test('a group of nothing but dead sessions does say dead', () => {
@@ -208,7 +218,7 @@ test('unknown is last - any measured state is more informative', () => {
             { activity_status: 'idle' },
         ]),
     );
-    assert.equal(s.bucket, 'done');
+    assert.equal(s.bucket, 'idle');
     // ... but a group of only unmeasured sessions stays unmeasured.
     const all = plain(
         Summary.summarizeStates([
@@ -217,6 +227,40 @@ test('unknown is last - any measured state is more informative', () => {
         ]),
     );
     assert.equal(all.bucket, 'unknown');
+});
+
+// ---- idle: added 2026-09-09 --------------------------------------------
+
+test('a group of nothing but idle sessions reads idle, not unknown and not done', () => {
+    const s = plain(
+        Summary.summarizeStates([
+            { activity_status: 'idle' },
+            { activity_status: 'idle' },
+        ]),
+    );
+    assert.equal(s.bucket, 'idle');
+    assert.equal(s.inner, 'idle');
+    assert.equal(s.outer, 'off');
+});
+
+test('one unread among ten idle still bubbles unread', () => {
+    const rows = [{ activity_status: 'finished_unread' }];
+    for (let i = 0; i < 10; i++) rows.push({ activity_status: 'idle' });
+    const s = plain(Summary.summarizeStates(rows));
+    assert.equal(s.bucket, 'unread');
+    assert.equal(s.outer, 'unread');
+});
+
+test('idle beats dead but loses to done (unread)', () => {
+    assert.equal(
+        plain(
+            Summary.summarizeStates([
+                { activity_status: 'idle' },
+                { activity_status: 'finished_unread' },
+            ]),
+        ).bucket,
+        'unread',
+    );
 });
 
 // ---- the unread count --------------------------------------------------

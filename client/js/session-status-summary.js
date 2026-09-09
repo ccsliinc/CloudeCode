@@ -10,7 +10,7 @@
  * THE PRIORITY IS THE PRODUCT DECISION, so it is written down once, as
  * data, in SUMMARY_PRIORITY:
  *
- *   permission > input > working > unread > done > dead > unknown
+ *   permission > input > working > unread > done > idle > dead > unknown
  *
  * Read it as "what is the most interesting thing in this group".
  * `permission` is a session STOPPED on a yes/no; `input` is one that
@@ -23,11 +23,16 @@
  *
  * Both outrank working because they are about the USER and will stay
  * that way until they act; working will resolve on its own. Unread
- * outranks done for the same reason. Dead sits BELOW done deliberately:
- * a dead pane in a group of live ones is not the headline, and hoisting
- * it would make a group with one corpse and nine busy sessions read as
- * dead. Unknown is last because it is the absence of a measurement, and
- * any measured state is more informative than no measurement.
+ * outranks done and idle for the same reason. `idle` (added 2026-09-09,
+ * the gray read/at-rest dot - see status-led.js) sits below `done`
+ * because `done` here means "unread", the louder of the two rest states,
+ * and above `dead`: a group with one unread and ten idle still bubbles
+ * unread, and a group of nothing but idle sessions reads idle rather than
+ * falling all the way to unknown. Dead sits BELOW both deliberately: a
+ * dead pane in a group of live ones is not the headline, and hoisting it
+ * would make a group with one corpse and nine busy sessions read as dead.
+ * Unknown is last because it is the absence of a measurement, and any
+ * measured state is more informative than no measurement.
  *
  * Depends on client/js/status-led.js (for the vocabularies) and nothing
  * else. No DOM, no globals beyond that one.
@@ -47,6 +52,7 @@ console.log('[SessionStatusSummary Module] Loading...');
         { key: 'working', inner: 'working', outer: 'active' },
         { key: 'unread', inner: 'done', outer: 'unread' },
         { key: 'done', inner: 'done', outer: 'steady' },
+        { key: 'idle', inner: 'idle', outer: 'off' },
         { key: 'dead', inner: 'dead', outer: 'off' },
         { key: 'unknown', inner: 'unknown', outer: 'dim' },
     ];
@@ -69,6 +75,8 @@ console.log('[SessionStatusSummary Module] Loading...');
      *   string - one of the SUMMARY_PRIORITY keys.
      * Example:
      *   bucketFor({inner: 'done', outer: 'unread'}) -> 'unread'
+     * Example:
+     *   bucketFor({inner: 'idle', outer: 'off'}) -> 'idle'
      */
     function bucketFor(led) {
         const l = led || {};
@@ -77,6 +85,7 @@ console.log('[SessionStatusSummary Module] Loading...');
         if (l.inner === 'working') return 'working';
         if (l.outer === 'unread') return 'unread';
         if (l.inner === 'done') return 'done';
+        if (l.inner === 'idle') return 'idle';
         if (l.inner === 'dead') return 'dead';
         return 'unknown';
     }
