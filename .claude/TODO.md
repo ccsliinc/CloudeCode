@@ -6636,3 +6636,105 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 `macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
 would want the same ruling.
 
+
+### 2026-09-10 - backend decomposition plan v2, the facade gets a delete date - OPEN
+
+**PLANNING ONLY, no product code.** Rewrite of
+`.claude/notes/backend-decomposition-plan.md` on `docs/backend-plan-v2` off
+`release/1.2.1`. v1 stays on `feat/backend-decomposition` where the five
+shipped slices live; nothing on that branch was touched. Prompted by the
+owner, verbatim: "what are we doing with the monoliths. I think this project
+now has feet and should be first class python".
+
+**THE MEASURED REASON FOR A V2.** `src/core/session_manager.py` went 8,340 to
+8,239 across five shipped slices. 101 net lines. Per-slice `git show --numstat`
+on that one file: S1 -23, S2 -110, S3 -95, S4 **+55**, S5 **+72**. Two of the
+last three slices GREW the file, and that is the design working as specified,
+not drift. An AST walk of the branch head measures the cause: the class carries
+**23 pure forwarding members costing 291 lines**, an average of 12.7 lines to
+forward one call. Methods went 136 to 146, public surface 68 to 76. Extraction
+made the god object bigger in every dimension a reader cares about. Three v1
+rules combine to guarantee it: a permanent facade, a permanently argument-less
+constructor, and the full docstring rule applied to pure delegation.
+
+**THE ASYMMETRY THAT MAKES DELETING THE FACADE AFFORDABLE, and it is the
+finding this whole re-plan rests on.** There is exactly ONE construction site
+in `src/`: `src/main.py:290`, inside a `lifespan` of 547 lines that already
+puts 15 untyped services onto `app.state`. Routes reach the manager 37 times
+through `app.state.session_manager`, 29 of those in `routes.py`. So the source
+side is small and already service-located; it is a container waiting to be
+named. The test side sounds large (102 bare `SessionManager()` in 46 files,
+993 attribute accesses over 96 names) and is CONCENTRATED. Counting only
+accesses through a variable named `manager`, `sm`, `session_manager` or `mgr`:
+themes 4 test files, toasts 13, probe health 3, log buffers 0, sidecars 2,
+owned tmux ledger 9, hook tokens 12. **Retro-fitting all five shipped slices is
+22 test files, not 46 and not 107.**
+
+**VERDICT: the facade becomes a deprecated shim with a delete date and dies a
+cluster at a time.** Rule B is inverted. A slice is not done until nothing
+outside the collaborator's own module and tests calls the manager for that
+cluster; the slice DELETES the forwarders it would otherwise have written. That
+makes every slice a net reduction by construction. `src/core/session_manager.py`
+is DELETED at S9, not emptied.
+
+**DOCSTRING RULING, to be written into CLAUDE.md in the S0 commit.** A pure
+forwarder is exempt from the full docstring rule: it has no behaviour of its
+own, and restating the collaborator's contract creates a second copy that can
+go stale, which is the confidently-wrong-doc trap this repo already named. One
+line naming its replacement and its delete date. The exemption applies ONLY to
+a member marked deprecated with a delete date, so one argument reshaped or one
+default filled in puts the full rule back. Types stay in the signature.
+
+**TARGET.** `src/core/composition.py` holds `AppServices` (frozen dataclass)
+and `build_services(...)`, which is simultaneously the boot path, the test
+fixture and the documentation of what this app is made of. Four Protocols in
+`src/core/sessions/ports.py`: `TmuxReader`, `SessionRecordStore`, `Clock`,
+`SettingsReader`. That last one is a near-miss fix, not a convenience: S2
+nearly wrote to the owner's real `~/.cloude-sessions` during pytest because a
+collaborator reached for the module-level `settings` singleton, which 15
+modules under `src/core/` import today. New package rule, enforced by
+`tests/test_sessions_package_rules.py`: nothing under `src/core/sessions/` may
+import that singleton.
+
+**NINE SLICES, ordered by how loud a failure would be.** S0 composition root,
+ports, fixture, no behaviour moved. S1 retro-fit the five shipped slices and
+delete 23 forwarders, which is the GO/NO-GO: if the file does not drop by
+roughly 291 lines plus the migrated readers, the v2 premise is wrong and we say
+so rather than writing eight more slices on it. S2 `src/models.py` into a
+package. Then S3 owned tmux ledger, S4 registry second half, S5 `src/config.py`,
+S6 the two route tables, S7 hook token authority, S8 adoption and create, S9
+delete the shim.
+
+**STOPPING CONDITION, in numbers.** session_manager 0 (the file does not
+exist); every file under `src/core/sessions/` under 500; routes.py under 500;
+models.py under 200 as a re-export shim; config.py under 300; auth.py under
+500; main.py under 400 with `lifespan` under 80; db_steps.py under 300 plus a
+steps package. Two machine-checked global conditions: zero pure forwarders
+anywhere in `src/`, and zero readers of `app.state.session_manager`. Plus one
+that is not a line count: `build_services` is the only place in `src/` that
+constructs a collaborator.
+
+**TWO FILES DIAGNOSED AS NOT THE PROBLEM.** `src/core/db_models.py` (1,664) has
+zero classes and zero functions; it is an append-only DDL ledger, additive by
+its own invariant, and splitting a ledger to hit a line count fights its reason
+for existing. It stays 1,664 deliberately. `src/models.py` (2,496) is the
+opposite: 75 pydantic classes with no behaviour, a directory that was never
+made, and the cheapest win in the list.
+
+**COORDINATION, checked against live GitHub today.** 53 open issues, 4 open
+PRs and all four are ccsliinc (#18, #19, #22, #23), so nothing is formally
+taken by adoom666 under the draft-PR protocol. Three FREE issues land in files
+this plan restructures, and they are his by subject:
+- **#32** names `session_manager.py` and `_session_info_for` explicitly. That
+  is v1's S8 listing assembly. REMOVED from our plan.
+- **#28** is the tmux launch sequence, so it touches `create_session`. Our S8
+  waits until #28 lands or is declared not taken. Env injection ordering is
+  load-bearing.
+- **#5, p0**, names `tmux_backend.py` `_maybe_rotate`, the tail loop and
+  `pipe_wakeup.py`. The whole tmux_backend split is REMOVED and re-filed after
+  #5 ships. A p0 fix has right of way over a refactor.
+Not colliding: #30, #31, #6. Two of v1's twelve slices left our lane, which is
+the right answer rather than a shortfall.
+
+**Issue #12's Approach section updated** with all of the above, because under
+the work protocol the Approach section is the product.
