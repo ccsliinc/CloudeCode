@@ -1,8 +1,9 @@
 /**
  * Session row ACTION MENU - the definition half.
  * ----------------------------------------------------------------------
- * The vertical three-dot control on a session row, and the five items
- * behind it. This file is PURE: it takes a row payload and returns
+ * The vertical three-dot control on a session row, and the eight items
+ * behind it - seven from the table next door and one from the plugin
+ * registry. This file is PURE: it takes a row payload and returns
  * strings. Nothing here touches the document beyond escaping, so every
  * claim it makes is provable without a browser. Opening, focus and the
  * keyboard live in client/js/session-row-menu-open.js; what each item
@@ -18,6 +19,19 @@
  * it inherits. PIN STAYS INLINE. A dead row is untouched: it keeps its
  * inline restart and remove and gets no menu, because none of these five
  * items is the thing a stopped session needs.
+ *
+ * ONE OF THE ITEMS IS A PLUGIN, AND THE MENU CANNOT TELL. Mark unread
+ * is no longer an entry in the table next door: it is the first
+ * contribution on the compiled tree's `session-card-action` surface
+ * (web/src/lib/plugins/mark-unread/), merged into ITEMS by `itemsFor` and
+ * rendered by `panelHtml` as the same button as its seven neighbours,
+ * with the same shortcut hint and the same place in the focus ring. The
+ * ONE bridge is client/js/session-row-menu-plugins.js; this file names it
+ * once, in `pluginItemsFor`, and there is no hardcoded copy of that item
+ * behind it. The owner's 2026-09-10 superset ruling is unchanged - the
+ * item still sits second, still says the same two sentences, and still
+ * vanishes when `ui.show_mark_unread_control` is off. Only the list it
+ * comes from moved.
  *
  * IDENTITY IS CAPTURED, NOT LOOKED UP. Every fact an item needs - the
  * tmux name, the live session id, the label, ownership, the rename
@@ -77,6 +91,20 @@ console.log('[SessionRowMenu Module] Loading...');
      */
     var ITEMS = (window.SessionRowMenuItems
         && window.SessionRowMenuItems.ITEMS) || [];
+
+    /**
+     * Description: the plugin-contributed menu items for one row, through
+     *   client/js/session-row-menu-plugins.js - THE ONE BRIDGE. This
+     *   module names it here and nowhere else; the module itself is what
+     *   reports an absent bundle, and it has no fallback copy of anything.
+     * Inputs: row (object) - anything carrying `name` and `unread`.
+     * Output: Array<{id, shortcut, label, order}> - empty without a bridge.
+     */
+    function pluginItemsFor(row) {
+        var bridge = window.SessionRowMenuPlugins;
+        if (!bridge || typeof bridge.menuItems !== 'function') return [];
+        return bridge.menuItems(row) || [];
+    }
 
     /**
      * Description: HTML-escape for an attribute, routed through
@@ -173,12 +201,14 @@ console.log('[SessionRowMenu Module] Loading...');
         var restartable = actions.indexOf(
             window.SessionRowActions ? window.SessionRowActions.ACTION_RESTART : 'restart'
         ) !== -1;
-        // ASK THE ONE GATE rather than reading the flag again. An empty
-        // return is how markUnreadHtml hides the control everywhere, so
-        // an empty return is how this item disappears too.
-        var markUnreadAvailable = !!(window.SessionStatusUI
-            && typeof window.SessionStatusUI.markUnreadHtml === 'function'
-            && window.SessionStatusUI.markUnreadHtml(row.name || '', false) !== '');
+        // THE PLUGIN ITEMS THIS ROW OFFERS, CAPTURED LIKE EVERY OTHER
+        // FACT. Which contributions are enabled is decided HERE, at paint
+        // time, and the ids ride the trigger with the rest of the frozen
+        // snapshot - so a menu opened five seconds later offers what the
+        // row was painted with, exactly as `restartable` and `muted` do.
+        var pluginItems = pluginItemsFor(row).map(function (i) {
+            return i.id;
+        }).join(',');
         var groupable = (o.surface || 'sidebar') === 'sidebar'
             && !!window.SessionSidebarGroupActions;
         return {
@@ -190,7 +220,7 @@ console.log('[SessionRowMenu Module] Loading...');
             status: status,
             unread: !!row.unread,
             restartable: restartable,
-            markUnreadAvailable: markUnreadAvailable,
+            pluginItems: pluginItems,
             groupable: groupable,
             renameable: !!o.renameable,
             renameReason: o.renameReason || '',
@@ -229,7 +259,7 @@ console.log('[SessionRowMenu Module] Loading...');
             + 'data-row-menu-status="' + esc(c.status) + '" '
             + 'data-row-menu-unread="' + (c.unread ? '1' : '0') + '" '
             + 'data-row-menu-restartable="' + (c.restartable ? '1' : '0') + '" '
-            + 'data-row-menu-mark-unread="' + (c.markUnreadAvailable ? '1' : '0') + '" '
+            + 'data-row-menu-plugin-items="' + esc(c.pluginItems || '') + '" '
             + 'data-row-menu-groupable="' + (c.groupable ? '1' : '0') + '" '
             + 'data-row-menu-renameable="' + (c.renameable ? '1' : '0') + '" '
             + 'data-row-menu-rename-reason="' + esc(c.renameReason) + '" '
@@ -263,7 +293,7 @@ console.log('[SessionRowMenu Module] Loading...');
             status: attr('data-row-menu-status') || 'unknown',
             unread: attr('data-row-menu-unread') === '1',
             restartable: attr('data-row-menu-restartable') === '1',
-            markUnreadAvailable: attr('data-row-menu-mark-unread') === '1',
+            pluginItems: attr('data-row-menu-plugin-items'),
             groupable: attr('data-row-menu-groupable') === '1',
             renameable: attr('data-row-menu-renameable') === '1',
             renameReason: attr('data-row-menu-rename-reason'),
@@ -281,7 +311,7 @@ console.log('[SessionRowMenu Module] Loading...');
      */
     function itemsFor(ctx) {
         var c = ctx || {};
-        return ITEMS.filter(function (item) {
+        var out = ITEMS.filter(function (item) {
             // An item with no `available` predicate is always rendered,
             // so a new entry cannot vanish by forgetting to write one.
             return typeof item.available !== 'function' || !!item.available(c);
@@ -289,6 +319,7 @@ console.log('[SessionRowMenu Module] Loading...');
             var ok = !!item.enabled(c);
             return {
                 id: item.id,
+                order: item.order,
                 shortcut: item.shortcut,
                 separatorBefore: !!item.separatorBefore,
                 label: item.label(c),
@@ -296,6 +327,39 @@ console.log('[SessionRowMenu Module] Loading...');
                 reason: ok ? '' : (item.reason(c) || ''),
             };
         });
+        // THE MERGE, AND THE ONLY PLACE THE TWO LISTS MEET. A plugin item
+        // is offered when it was captured on the trigger (the frozen
+        // snapshot, `ctx.pluginItems`) AND the registry still reports it
+        // enabled now - the same double check the registry itself does
+        // between describing an action and running it, for the same
+        // reason: a menu can sit open across a poll or a flag change.
+        //
+        // A plugin item is never `separatorBefore` and never disabled.
+        // The separator is the native table's one statement about which
+        // items end a running process, and nothing on this surface does
+        // that; an item that could not run would need a reason sentence,
+        // and a contribution has no way to say one yet.
+        var captured = String(c.pluginItems || '').split(',');
+        pluginItemsFor(c).forEach(function (item) {
+                if (captured.indexOf(item.id) === -1) return;
+                out.push({
+                    id: item.id,
+                    order: item.order,
+                    shortcut: item.shortcut,
+                    separatorBefore: false,
+                    label: item.label,
+                    enabled: true,
+                    reason: '',
+                });
+            });
+        // Sorted on (order, id) so the result is TOTAL: it does not depend
+        // on which list an item came from, on registration sequence, or on
+        // array position here.
+        out.sort(function (a, b) {
+            if (a.order !== b.order) return a.order - b.order;
+            return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
+        });
+        return out;
     }
 
     /**
@@ -305,10 +369,14 @@ console.log('[SessionRowMenu Module] Loading...');
      *   hints and the key would only ever reach the first.
      * Inputs: none. Output: boolean.
      */
-    function uniqueShortcuts() {
+    function uniqueShortcuts(ctx) {
+        // OVER THE MERGED LIST when a context is given, because a
+        // contribution can collide with the native table and a check that
+        // only read ITEMS would never see it.
+        var list = ctx ? itemsFor(ctx) : ITEMS;
         var seen = Object.create(null);
-        for (var i = 0; i < ITEMS.length; i++) {
-            var k = String(ITEMS[i].shortcut).toUpperCase();
+        for (var i = 0; i < list.length; i++) {
+            var k = String(list[i].shortcut).toUpperCase();
             if (seen[k]) return false;
             seen[k] = true;
         }
@@ -364,11 +432,17 @@ console.log('[SessionRowMenu Module] Loading...');
      * Inputs: key (string) - a KeyboardEvent.key value.
      * Output: string|null - an item id.
      */
-    function itemIdForKey(key) {
+    function itemIdForKey(key, ctx) {
         if (typeof key !== 'string' || key.length !== 1) return null;
         var want = key.toUpperCase();
-        for (var i = 0; i < ITEMS.length; i++) {
-            if (ITEMS[i].shortcut === want) return ITEMS[i].id;
+        // THE MERGED LIST, NOT THE NATIVE TABLE. A plugin item's letter is
+        // rendered beside its label by panelHtml, so a key handler reading
+        // only ITEMS would paint a hint it could never honour. With no
+        // context there is nothing to resolve a contribution's label
+        // against, so the native table is all that can be answered for.
+        var list = ctx ? itemsFor(ctx) : ITEMS;
+        for (var i = 0; i < list.length; i++) {
+            if (String(list[i].shortcut).toUpperCase() === want) return list[i].id;
         }
         return null;
     }

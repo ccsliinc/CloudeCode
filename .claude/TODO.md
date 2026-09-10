@@ -6913,3 +6913,71 @@ Owner's answers, verbatim: "1. his. 2. keep, make a setting. 3. mine. 4. yes. 5.
 5. His CI hardening, skip audit and pytest.ini changes are taken; re-baseline the test counts in CLAUDE.md afterwards.
 6. Version: 1.2 must sort above his v1.0.36.
 - [ ] Merge on `release/1.2` (worktree off `v1.1`), then validate, deploy live, tag.
+
+## 2026-09-10 - 1.3: the plugin surface registry, and mark unread as its first plugin
+
+Branch `feat/svelte-1.3` (off `release/1.2`). Owner's decisions taken as
+given and not relitigated: plugins are build-time TypeScript modules on a
+typed registry, no dynamic loading, no manifest schema, no permissions
+system, no marketplace, no settings UI this round; themes are already
+expandable and are NOT rebuilt; the first plugin is the manual mark-unread
+control, keeping `ui.show_mark_unread_control` as its enable toggle.
+
+- [x] `web/src/lib/plugins/types.ts` - four surfaces (`session-card-action`,
+  `launchpad-panel`, `sidebar-item`, `status-source`), one payload type each,
+  `PluginContext` (flags + refresh) and `SessionCardRow` (name + unread, and
+  nothing a reader does not yet exist for). The three unproven surfaces carry
+  the smallest payload their consumer plainly needs and say so in the file.
+- [x] `web/src/lib/plugins/registry.ts`, 143 lines. `createRegistry()` factory
+  so no mutable singleton is exported and a test gets isolation with no
+  test-only `reset()`; order is `order` then `id`, never insertion; a
+  duplicate plugin id or contribution id is refused, logged, and refused ALL
+  OR NOTHING; `surfacesOf` returns a sorted copy.
+- [x] `web/src/lib/plugins/mark-unread/index.ts` - one `session-card-action`.
+  `enabled` reads `show_mark_unread_control` as `!== false`; `run` calls
+  `window.API.setSessionUnread` and then `context.refresh()`; label, glyphs,
+  class list and aria state are the shipped ones.
+- [x] Legacy wiring, no dual path. `client/js/session-row-menu.js` CONCATENATES
+  `window.CloudeWeb.sessionCardActions(row, context)` where the hardcoded
+  `markUnreadHtml` call sat, and routes `[data-plugin-action]` into
+  `window.CloudeWeb.runSessionCardAction`. DELETED in the same commit: that
+  builder call, the `[data-mark-unread]` dispatch branch,
+  `SessionSidebarClicks.onMarkUnreadClick` and its export, the sidebar's
+  `_onMarkUnreadClick` and the list keydown binding - the last two had been
+  unreachable since the control folded into the kebab menu.
+- [x] Slices 2 to 7 of the launchpad carve remain PAUSED. Nothing else moved.
+
+Measured on this branch, 2026-09-10:
+- vitest 88 passed / 0 failed (4 files), 29 of them new: 12 registry blocks,
+  17 surface blocks. svelte-check 0 errors 0 warnings over 269 files.
+- Node 197 suites, 0 failures, count unchanged because the row-menu
+  assertions EXTEND `tests/test_session_sidebar_rows.node.mjs` rather than
+  adding a 198th file. That sandbox now loads the REAL `client/dist/app.js`
+  beside the legacy modules (the emitted bundle has no import or export
+  statement, so it runs in a `vm`), so the mark-unread assertions are about
+  the shipped path and not a fixture.
+- pytest 2 failed / 5634 passed / 19 skipped, identical to this branch's
+  baseline; the two are the known environmental pair (`test_home_write_guard`,
+  `test_version_probe`).
+- Browser, real production CSP via a static server importing
+  `src.security_headers`: flag ON, the item renders from the plugin path,
+  is decorated into `role="menuitem"`, is visible, and a click on a row
+  painted unread called `setSessionUnread('cloude_harness', false)` once and
+  repainted once; flag OFF, the item is absent and the menu's other three
+  items are untouched. ONE CSP violation in the run and it is the deliberate
+  off-origin image negative control, so the collector is proven live.
+
+**Known gaps, recorded rather than papered over:**
+- `client/js/launchpad.js` still draws its own mark-unread through
+  `SessionStatusUI.markUnreadHtml` with its own `_handleMarkUnread`. That
+  screen is not migrated, so it keeps its path this round; the equivalence
+  test is what stops the two copies drifting. Moving it is the launchpad
+  slice's job.
+- Keyboard activation of the mark-unread item inside the row menu did not
+  work before this change and does not now: it is a `role` span in a panel
+  mounted on `document.body`, and the only Enter/Space handler was bound on
+  the sidebar LIST, which never saw it. Unchanged on purpose - this round is
+  a re-seat, not a fix - but it is a real gap and it is now the plugin
+  surface's to close.
+- Three of the four surfaces have no consumer. Their payload types are a
+  best guess and are marked as such in `types.ts`.

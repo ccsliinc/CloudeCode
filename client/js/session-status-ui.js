@@ -331,6 +331,13 @@ console.log('[SessionStatusUI Module] Loading...');
      *   clicked and its CURRENT state, so the handler can send the
      *   opposite value without re-querying the DOM.
      *
+     *   THE COMPILED TREE PAINTS THIS SAME CONTROL FOR THE SIDEBAR ROW
+     *   MENU, from web/src/lib/plugins/mark-unread/. The two are held
+     *   together by web/src/lib/plugins/session-card-actions.test.ts,
+     *   which loads THIS file and compares attribute by attribute. If
+     *   you change the label, the glyph or a class here, that test is
+     *   where it will surface.
+     *
      *   RETURNS '' WHEN `ui.show_mark_unread_control` IS FALSE. The
      *   owner kept this control and asked for a switch rather than the
      *   deletion one line of this project shipped; see
@@ -348,12 +355,15 @@ console.log('[SessionStatusUI Module] Loading...');
      *     '<span class="mark-unread-toggle" role="button" ...>...</span>'
      */
     function markUnreadHtml(tmuxName, unread) {
-        // THE ONE GATE, so every surface hides it together. Both callers
-        // (session-sidebar-rows.js and launchpad.js) interpolate this
-        // return value straight into a row's HTML, so an empty string
-        // removes the control from all of them and there is no second
-        // place to remember. `UIFlags` answers the DEFAULT (shown) until
-        // its probe lands and whenever it cannot run at all, so a failed
+        // THE GATE FOR THIS SURFACE. ONE CALLER IS LEFT: launchpad.js,
+        // whose running-sessions rows interpolate this straight into a
+        // row's HTML, so an empty string removes the control there. The
+        // sidebar row menu no longer calls this at all - mark unread is
+        // a `session-card-action` plugin now (web/src/lib/plugins/
+        // mark-unread/), and it reads the SAME flag through its own
+        // `enabled`, so the two surfaces still hide together off one
+        // config key. `UIFlags` answers the DEFAULT (shown) until its
+        // probe lands and whenever it cannot run at all, so a failed
         // read never takes the control away - see client/js/ui-flags.js.
         if (globalThis.UIFlags && !globalThis.UIFlags.showMarkUnreadControl()) {
             return '';

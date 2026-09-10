@@ -28,6 +28,10 @@ import { ledHtmlForStatus, labelFor, labelWithSource, normalizeStatus } from './
 import type { StatusSignals } from './lib/status-dot';
 import { mountPanel, unmountPanel } from './lib/mount';
 import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
+// Imported for its side effect: this is what registers the shipped
+// plugins on the surface registry. Nothing reads a binding from it.
+import './lib/plugins/builtin';
+import { sessionCardMenuItems, runSessionCardAction } from './lib/plugins/session-card-actions';
 
 /** The id of the container `renderLaunchpadUI()` writes for the card. */
 const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
@@ -124,6 +128,20 @@ const CloudeWeb = {
     launchpad: {
         mountAttributionPrompt,
     },
+    /**
+     * THE `session-card-action` SURFACE, as the legacy row menu sees it.
+     * `sessionCardMenuItems` hands back the enabled contributions for one
+     * row as ITEM DESCRIPTORS - id, shortcut, label, order - to be merged
+     * into that menu's own declarative table and rendered by it;
+     * `runSessionCardAction` is the return trip, taking the item id off
+     * the activated `data-row-menu-item`. TWO ENTRY POINTS BECAUSE THERE
+     * ARE TWO MOMENTS, paint and run, and each has exactly one call site:
+     * `session-row-menu.js::pluginMenuItems` and
+     * `session-row-menu-actions.js::runPluginItem`. See
+     * web/src/lib/plugins/types.ts for why plugins are build-time only.
+     */
+    sessionCardMenuItems,
+    runSessionCardAction,
 } as const;
 
 declare global {

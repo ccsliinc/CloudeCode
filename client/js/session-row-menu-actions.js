@@ -399,33 +399,6 @@ console.log('[SessionRowMenuActions Module] Loading...');
     }
 
     /**
-     * Toggle OUR unread flag, through the row's own handler.
-     *
-     * Description: the inline control this replaces carried the name and
-     *   the current flag in its dataset, and
-     *   ``SessionSidebarClicks.onMarkUnreadClick`` reads exactly those
-     *   two fields. So the menu hands it an element carrying the same
-     *   two, rather than calling the API itself: one implementation, and
-     *   the repaint that follows a successful toggle comes for free.
-     *
-     *   The element is DETACHED on purpose. It is an argument, not a
-     *   control - nothing renders it and nothing can click it.
-     * Inputs: ctx (object) - the captured context.
-     * Output: Promise<void>
-     * Example: await runMarkUnread(ctx)  // flips ctx.unread
-     */
-    async function runMarkUnread(ctx) {
-        var clicks = window.SessionSidebarClicks;
-        if (!clicks || typeof clicks.onMarkUnreadClick !== 'function') return;
-        var proxy = document.createElement('button');
-        proxy.dataset.markUnread = ctx.name;
-        // The handler flips this, so it must report what the ROW showed
-        // when the menu was opened - the frozen snapshot, not a re-read.
-        proxy.dataset.unreadCurrent = ctx.unread ? 'true' : 'false';
-        await clicks.onMarkUnreadClick(window.SessionSidebar, proxy);
-    }
-
-    /**
      * Open OUR group picker for this row.
      *
      * Description: delegates to
@@ -456,13 +429,43 @@ console.log('[SessionRowMenuActions Module] Loading...');
     async function run(itemId, ctx) {
         if (!ctx) return;
         if (itemId === 'rename') return runRename(ctx);
-        if (itemId === 'mark-unread') return runMarkUnread(ctx);
         if (itemId === 'move-to-group') return runMoveToGroup(ctx);
         if (itemId === 'restart') return runRestart(ctx);
         if (itemId === 'fork') return runFork(ctx);
         if (itemId === 'new-in-folder') return runNewInFolder(ctx);
         if (itemId === 'mute') return runToggleMute(ctx);
         if (itemId === 'close') return runClose(ctx);
+        // THE PLUGIN RETURN TRIP, AND THE ONLY ONE. An id this table does
+        // not know belongs to a `session-card-action` contribution, and
+        // client/js/session-row-menu-plugins.js is the one thing that can
+        // run it. Reached LAST, so a contribution can never shadow a
+        // native item; and there is no hardcoded twin behind it - mark
+        // unread used to be an entry above, fabricating a detached
+        // element for the sidebar's own deleted unread handler, and both
+        // that entry and that handler were removed rather than kept as a
+        // fallback.
+        return runPluginItem(itemId, ctx);
+    }
+
+    /**
+     * Description: run a plugin-contributed item by id.
+     *
+     *   The row handed to the contribution is the FROZEN SNAPSHOT the
+     *   menu captured when the row was painted, not a re-read of the DOM:
+     *   the list repaints every five seconds, and an action that re-read
+     *   its row could act on a session that had replaced the one the user
+     *   opened the menu on. `ctx.unread` is what the row showed, so a
+     *   toggle sends the opposite of what the user is looking at.
+     * Inputs: itemId (string), ctx (object) - the captured context.
+     * Output: Promise<boolean> - whether a contribution ran.
+     * Example: await runPluginItem('mark-unread', ctx)
+     */
+    function runPluginItem(itemId, ctx) {
+        var bridge = window.SessionRowMenuPlugins;
+        if (!bridge || typeof bridge.run !== 'function') {
+            return Promise.resolve(false);
+        }
+        return bridge.run(itemId, ctx);
     }
 
     window.SessionRowMenuActions = {
@@ -472,7 +475,7 @@ console.log('[SessionRowMenuActions Module] Loading...');
         rowElementFor: rowElementFor,
         runRename: runRename,
         runRestart: runRestart,
-        runMarkUnread: runMarkUnread,
+        runPluginItem: runPluginItem,
         runMoveToGroup: runMoveToGroup,
         runFork: runFork,
         runNewInFolder: runNewInFolder,

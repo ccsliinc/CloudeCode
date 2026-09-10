@@ -393,7 +393,11 @@ console.log('[SessionRowMenuOpen Module] Loading...');
             activate(document.activeElement);
             return;
         }
-        var id = menu ? menu.itemIdForKey(key) : null;
+        // THE OPEN CONTEXT IS PASSED so a PLUGIN item's letter works too:
+        // its shortcut is rendered beside its label by panelHtml, and a
+        // lookup that read only the native table would paint a hint it
+        // could never honour.
+        var id = menu ? menu.itemIdForKey(key, openCtx) : null;
         if (!id) return;
         ev.preventDefault();
         ev.stopPropagation();

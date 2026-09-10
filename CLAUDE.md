@@ -181,6 +181,119 @@ missing, because a panel that silently never mounts is the same false green
 this project keeps paying for. Any later slice's call site needs the same
 shape.
 
+## The plugin surface registry
+
+A typed, BUILD-TIME registry of the four places a feature may extend a
+screen, plus the one real feature that now arrives through it. It lives in
+`web/src/lib/plugins/` and is compiled into `client/dist/app.js` with
+everything else in that tree.
+
+| Piece | Where |
+|---|---|
+| The four surfaces and every payload type | `web/src/lib/plugins/types.ts` |
+| Register, and ask a surface what it holds | `web/src/lib/plugins/registry.ts` |
+| The `session-card-action` adapter: render one, run one | `web/src/lib/plugins/session-card-actions.ts` |
+| The ship list, the whole "loader" | `web/src/lib/plugins/builtin.ts` |
+| The worked example | `web/src/lib/plugins/mark-unread/index.ts` |
+| The legacy consumer | `client/js/session-row-menu.js` |
+
+**FOUR SURFACES, AND THE LIST IS CLOSED UNTIL A CONSUMER ARGUES OTHERWISE:**
+`session-card-action`, `launchpad-panel`, `sidebar-item`, `status-source`.
+They are the four `.claude/notes/svelte-migration-launchpad.md` section 6
+named. ONLY THE FIRST IS PROVEN - it has a real consumer and a real
+contribution. The other three carry the smallest payload their eventual
+consumer plainly needs and are documented in `types.ts` as unsettled, so the
+first real consumer is expected to change the type rather than work around
+it. A surface with no reader is a guess about a screen nobody has written.
+
+**PLUGINS ARE BUILD-TIME MODULES, AND THE REASON IS THE CSP.** A plugin is a
+TypeScript module in this tree, added to the `BUILTIN` array in `builtin.ts`
+and compiled in. There is NO loader, no manifest schema, no permissions
+model, no marketplace, no settings page and no dynamic `import()` of a
+runtime-assembled path, because `script-src 'self'` forbids remote script,
+inline script and `eval` - "fetch a plugin and run it" has no implementation
+in this browser tab, only a CSP relaxation pretending to be one. The owner's
+framing, verbatim: "lean and mean. kiss." If a runtime rung is ever wanted,
+the precedent to copy is the theme `effects.js` flow in
+`client/js/themes/registry.js`: same-origin, flat non-traversable filename,
+explicit consent remembered per id. Never a remote URL, never `eval`.
+
+**THEMES ARE A SEPARATE, OLDER, WORKING SYSTEM AND ARE NOT THIS.** 26 bundled
+manifests at `client/css/themes/<id>/theme.json` plus a user themes
+directory, scanned server-side by `GET /themes`, already carry `cssVars`, an
+optional whole `themeCss`, an `xterm` palette and the consent-gated
+`effects.js`. Themes were already expandable and are NOT being rebuilt.
+Nothing on this registry duplicates, replaces or wraps them: a contribution
+that wants to recolor something belongs in a theme manifest.
+
+**ORDER IS DECLARED AND TOTAL, NEVER INSERTION LUCK.** `surfacesOf(kind)`
+sorts on each contribution's `order` (absent reads as 0) and then on its
+`id`, and hands back a sorted COPY, so a read cannot mutate the registry and
+two builds that import the plugins in a different sequence paint the same
+list. A DUPLICATE ID IS REFUSED AND LOGGED rather than overwriting: silent
+last-write-wins would let a new plugin replace a shipped control with
+something that merely shares its name, and the symptom would be a control
+that "stopped working" with nothing in the log. The refusal is ALL OR
+NOTHING, so a partially registered plugin is never a state to handle. No
+mutable singleton is exported - `createRegistry()` builds an independent one
+(which is how the tests get isolation with no test-only `reset()`), and
+`register` / `surfacesOf` are functions over one private instance.
+
+**`enabled(context)` IS WHAT MAKES A SHIPPED CONTRIBUTION SWITCHABLE WITHOUT
+UNREGISTERING IT**, and it reads flags as `!== false`. That is
+`client/js/ui-flags.js`'s own rule carried through unchanged: a probe that
+could not run, an older server or an unparseable config all leave a control
+where the user last saw it, because turning "I could not tell" into "hide it"
+is how a capability disappears with nobody deciding to remove it. It is
+checked TWICE - at render and again in `runSessionCardAction` - since a menu
+can sit open across a poll or a flag change, and checking only at paint time
+would make the flag a suggestion.
+
+**THE WORKED EXAMPLE IS MARK UNREAD, AND IT IS A RE-SEAT, NOT A REDESIGN.**
+The control shipped in 1.2 behind `ui.show_mark_unread_control`
+(`src/config.py::UIConfig`, served on `GET /api/v1/features`). The sidebar
+row overflow menu had it HARDCODED: a `SessionStatusUI.markUnreadHtml` call
+in `controlHtmlFor` and a `[data-mark-unread]` branch in `dispatch` routing to
+`SessionSidebarClicks.onMarkUnreadClick`. Both are DELETED, along with
+`onMarkUnreadClick` itself and the two list-scoped bindings that had been
+unreachable since the control folded into the menu. There is no dual path.
+The menu now CONCATENATES `window.CloudeWeb.sessionCardActions(row, context)`
+into the list it still builds itself, in the slot mark unread already
+occupied so the painted order did not move, and
+`window.CloudeWeb.runSessionCardAction(id, row, context)` is the return trip
+for the `data-plugin-action` attribute the renderer writes. Those two calls
+are the entire seam.
+
+**THE MARKUP IS THE SHIPPED MARKUP, PROVEN RATHER THAN REMEMBERED.**
+`web/src/lib/plugins/session-card-actions.test.ts` loads the REAL
+`client/js/session-status-ui.js` in a `vm` sandbox and compares
+`markUnreadHtml`'s output against the plugin's, attribute by attribute, in
+both unread states and against a hostile session name - the same discipline
+the StatusLed port used, for the same reason: hand-written expectations
+prove only that a port agrees with what the porter remembered. Attribute
+ORDER and the added `data-plugin-action` are the two documented exclusions;
+nothing in this app selects on attribute order, and the added attribute is
+asserted separately. `launchpad.js` still draws its own copy through
+`markUnreadHtml` because that screen is not migrated, and that test is what
+keeps the two surfaces painting one control.
+
+**THE NODE SUITE RUNS THE REAL BUNDLE, NOT A FIXTURE.**
+`tests/test_session_sidebar_rows.node.mjs` loads `client/dist/app.js` into
+its `vm` sandbox alongside the legacy modules - the emitted file carries no
+`import` or `export` statement, so it runs there and publishes the real
+`window.CloudeWeb`. So the assertions about the menu are about the shipped
+path. The guard at the call site is LOUD: a missing bundle `console.error`s
+and drops the contributions, because a panel that silently loses a shipped
+control is the false green this project keeps paying for.
+
+Measured in a real browser under the production CSP (a static server
+importing `src.security_headers`), 2026-09-10: flag on, the item renders from
+the plugin path, is decorated by the menu into a `role="menuitem"`, is
+visible, and a click calls `setSessionUnread` with the OPPOSITE of the
+painted state and repaints once; flag off, it is absent and the menu's other
+three items are untouched. One CSP violation in the whole run, and it is the
+deliberate off-origin image placed as the negative control.
+
 ## Architecture, the parts that shape everything else
 
 **tmux is the live backend. `PTYBackend` is legacy.** The `SessionBackend` ABC is
