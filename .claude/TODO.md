@@ -5470,9 +5470,11 @@ a decision, which is a merge that compiles and lies.
 
 ### Measured baselines
 
-- **pytest: 5625 passed / 2 failed / 21 skipped**, against **5610 / 2 /
-  21** for `v1.1` alone in the same checkout minutes earlier. 15 tests
-  added, no new failures. The two are the known environmental ones
+- **pytest: 5626 passed / 2 failed / 21 skipped**, against **5610 / 2 /
+  21** for `v1.1` alone in the same checkout minutes earlier. 16 tests
+  added, no new failures. The skip count reads 21 or 22 depending on
+  `pytest-randomly`'s ordering; `-p no:randomly` pins it at 21 and every
+  skip carries a named could-not-evaluate reason. The two are the known environmental ones
   (`test_home_write_guard`, `test_version_probe`). The third `CLAUDE.md`
   used to name, `test_state_dir_resolution`, now passes.
 - **node: 197 suites, all 197 passing**, against 193 with 2 failing at
@@ -5498,3 +5500,16 @@ commit in the same directory.
   ship; rewrite it against the box-shadow composition or drop it.
 - The `ui` settings block has no editor in the settings SCREEN yet - it
   round-trips through the API and is edited by hand in `config.json`.
+
+**Late catch, worth recording.** `UIFlags.ensure()` had NO CALLER when the
+merge commit landed. The module answers every flag's shipped default until
+its probe returns, which is the correct fail-open behaviour and is also
+exactly how a setting ships dead: `show_mark_unread_control` would have
+answered true forever and `ui.show_mark_unread_control: false` would have
+been a config key nothing ever read, with nothing failing and nothing
+logged. Fixed in a follow-up commit by calling it (unawaited, memoized to
+one request per page load) from `session-sidebar-fetch.js load()` and
+`launchpad.js loadRunningSessions()`, either of which may be the first
+surface a page load reaches, plus a test that fails if the caller
+disappears again. This is the "a fallback that cannot fire is not a
+fallback, and it is invisible" trap from CLAUDE.md, in a new place.

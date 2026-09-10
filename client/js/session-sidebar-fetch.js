@@ -56,6 +56,23 @@ console.log('[SessionSidebarFetch Module] Loading...');
         let rows = [];
         let listing = { ok: true, reason: null, detail: null };
 
+        // MEASURE THE OWNER'S UI SWITCHES ONCE PER PAGE LOAD, from the
+        // first thing that runs after auth. `ensure()` memoizes onto one
+        // promise, so calling it on every poll costs exactly one request
+        // for the life of the page. Deliberately NOT awaited: a flag that
+        // could delay the session list would make a network hiccup look
+        // like an empty sidebar, and every flag answers its shipped
+        // default until the probe lands. A module that is absent is
+        // simply skipped - see client/js/ui-flags.js.
+        //
+        // WITHOUT A CALLER HERE THE SETTING WOULD DO NOTHING, silently:
+        // `showMarkUnreadControl()` would answer its default forever and
+        // `ui.show_mark_unread_control: false` would be a config key
+        // nothing ever read.
+        if (window.UIFlags && typeof window.UIFlags.ensure === 'function') {
+            window.UIFlags.ensure();
+        }
+
         try {
             const attachable = await window.API.listAttachableSessions();
             rows = Array.isArray(attachable) ? attachable.slice() : [];

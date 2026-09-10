@@ -513,9 +513,12 @@ per server process and no subprocess at all.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
   2026-09-09 at the 1.2 merge (v1.1 + adamdev/master 887b8fc), is
-  **5625 passed / 2 failed / 21 skipped**, against **5610 / 2 / 21** for
+  **5626 passed / 2 failed / 21 skipped**, against **5610 / 2 / 21** for
   v1.1 alone measured in the same checkout minutes earlier - so the merge
-  added 15 tests and no failures. Two failures remain, both environmental
+  added 16 tests and no failures. Note the SKIP COUNT MOVES BY ONE between
+  runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
+  22 is not a test that stopped being measured; the skip REASONS are what
+  to read, and `-p no:randomly` pins it at 21. Two failures remain, both environmental
   and pre-existing:
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.

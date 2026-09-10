@@ -932,6 +932,15 @@ class Launchpad {
         // Reset the verdict for this poll tick. It is set to "not ok" by
         // either fetch below and consumed by renderRunningSessions().
         this.runningSessionsListing = { ok: true, reason: null, detail: null, sources: [] };
+        // The owner's UI switches, measured once per page load. Memoized
+        // onto one promise inside the module, so a poll costs nothing
+        // after the first tick, and NOT awaited - a flag must never be
+        // able to delay the session list. Same call in
+        // session-sidebar-fetch.js, because either surface may be the
+        // first one a page load reaches. See client/js/ui-flags.js.
+        if (window.UIFlags && typeof window.UIFlags.ensure === 'function') {
+            window.UIFlags.ensure();
+        }
         try {
             const list = await window.API.listAttachableSessions();
             if (Array.isArray(list)) {

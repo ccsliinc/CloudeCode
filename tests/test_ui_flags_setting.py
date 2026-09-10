@@ -157,3 +157,35 @@ def test_a_config_file_with_no_ui_key_summarises_as_shown(tmp_path):
     """The upgrade case, end to end through the real file reader."""
     summary = _settings(tmp_path, ui=None).get_settings_summary()
     assert summary["ui"]["show_mark_unread_control"] is True
+
+
+def test_the_client_actually_probes_the_flag():
+    """A SETTING NOTHING READS IS NOT A SETTING, and the failure is silent.
+
+    `client/js/ui-flags.js` answers every flag's DEFAULT until its probe
+    lands, which is correct and is also exactly how a flag can ship dead:
+    with no caller for `ensure()`, `showMarkUnreadControl()` returns true
+    forever and `ui.show_mark_unread_control: false` is a config key
+    nothing reads. Nothing fails, no error is logged, and the switch
+    simply does not work.
+
+    So this asserts the CALLER exists, on both surfaces that render the
+    control, because either can be the first one a page load reaches.
+    A source-text check is the right shape here: the property under test
+    is "some live code path calls this", and a unit test of the module
+    itself cannot see that.
+    """
+    from pathlib import Path
+
+    client_js = Path(__file__).resolve().parents[1] / "client" / "js"
+    for name in ("session-sidebar-fetch.js", "launchpad.js"):
+        src = (client_js / name).read_text(encoding="utf-8")
+        assert "UIFlags.ensure" in src, (
+            f"{name} must probe the UI flags, or the setting never reaches "
+            "the client and fails silently"
+        )
+
+    # And the module must actually be served, or the guard above is
+    # checking a call into nothing.
+    index = (client_js.parent / "index.html").read_text(encoding="utf-8")
+    assert "/static/js/ui-flags.js" in index
