@@ -192,10 +192,11 @@ everything else in that tree.
 |---|---|
 | The four surfaces and every payload type | `web/src/lib/plugins/types.ts` |
 | Register, and ask a surface what it holds | `web/src/lib/plugins/registry.ts` |
-| The `session-card-action` adapter: render one, run one | `web/src/lib/plugins/session-card-actions.ts` |
+| The `session-card-action` adapter: describe them, run one | `web/src/lib/plugins/session-card-actions.ts` |
 | The ship list, the whole "loader" | `web/src/lib/plugins/builtin.ts` |
 | The worked example | `web/src/lib/plugins/mark-unread/index.ts` |
-| The legacy consumer | `client/js/session-row-menu.js` |
+| THE ONE BRIDGE, both directions | `client/js/session-row-menu-plugins.js` |
+| The legacy consumer | `client/js/session-row-menu{,-items,-actions}.js` |
 
 **FOUR SURFACES, AND THE LIST IS CLOSED UNTIL A CONSUMER ARGUES OTHERWISE:**
 `session-card-action`, `launchpad-panel`, `sidebar-item`, `status-source`.
@@ -251,40 +252,72 @@ would make the flag a suggestion.
 
 **THE WORKED EXAMPLE IS MARK UNREAD, AND IT IS A RE-SEAT, NOT A REDESIGN.**
 The control shipped in 1.2 behind `ui.show_mark_unread_control`
-(`src/config.py::UIConfig`, served on `GET /api/v1/features`). The sidebar
-row overflow menu had it HARDCODED: a `SessionStatusUI.markUnreadHtml` call
-in `controlHtmlFor` and a `[data-mark-unread]` branch in `dispatch` routing to
-`SessionSidebarClicks.onMarkUnreadClick`. Both are DELETED, along with
-`onMarkUnreadClick` itself and the two list-scoped bindings that had been
-unreachable since the control folded into the menu. There is no dual path.
-The menu now CONCATENATES `window.CloudeWeb.sessionCardActions(row, context)`
-into the list it still builds itself, in the slot mark unread already
-occupied so the painted order did not move, and
-`window.CloudeWeb.runSessionCardAction(id, row, context)` is the return trip
-for the `data-plugin-action` attribute the renderer writes. Those two calls
-are the entire seam.
+(`src/config.py::UIConfig`, served on `GET /api/v1/features`). 1.2.1 then
+rewrote the row menu into a DECLARATIVE TABLE and mark unread was one of the
+eight items in it: an entry in `session-row-menu-items.js`, an availability
+probe in `session-row-menu.js::contextFromRow` asking whether
+`SessionStatusUI.markUnreadHtml` returned empty, and a
+`session-row-menu-actions.js::runMarkUnread` that fabricated a detached
+element for `SessionSidebarClicks.onMarkUnreadClick`. All four are DELETED,
+along with `onMarkUnreadClick` itself and the two list-scoped bindings that
+had been unreachable since the control folded into the menu. THERE IS NO
+DUAL PATH, and that is mutation proven: emptying the `BUILTIN` ship list
+removes the item from the live menu entirely and fails five node cases and
+nine vitest cases by name, rather than falling back to anything.
 
-**THE MARKUP IS THE SHIPPED MARKUP, PROVEN RATHER THAN REMEMBERED.**
+**A CONTRIBUTION SUPPLIES A MENU ITEM, NOT MARKUP, AND THAT IS THE 1.2.1
+SHAPE RATHER THAN THE ONE THIS SURFACE WAS BORN WITH.** It was first written
+against a menu that CONCATENATED raw HTML from whichever module owned each
+control, so `SessionCardAction` carried `icon`, `className` and `attrs` and
+the adapter emitted a `<span role="button">`. 1.2.1's menu renders every item
+itself as the same `<button role="menuitem">` with a label and a shortcut
+letter, so a contribution that still emitted its own span would paint a
+control unlike its seven neighbours, absent from the arrow-key focus ring and
+invisible to `itemIdForKey`. Those three fields were deleted rather than left
+unread; a contribution now supplies `shortcut`, `label(row)` and `run`, plus
+the `order` it already had. `client/js/session-row-menu-plugins.js` is the
+ONE bridge - `menuItems(row)` to describe, `run(id, ctx)` to activate - and
+`session-row-menu.js::itemsFor` is the ONE place the two lists meet, merging
+on `(order, id)`. The native table numbers itself 100, 300, 400, 500, 600,
+700, 800; mark unread takes 200, which is the second slot the owner's
+2026-09-10 superset ruling put it in. THE RULING DID NOT CHANGE - the eight
+items, their order, the separator above restart and close, and the flag gate
+are all still asserted by `tests/test_session_row_menu_superset.node.mjs`,
+whose own docblock anticipated this port: "a port that satisfies these is
+correct whatever it renders".
+
+**WHICH OPTIONAL ITEMS A ROW OFFERS IS STILL CAPTURED AT PAINT TIME.** The
+trigger's `data-row-menu-mark-unread` became `data-row-menu-plugin-items`, a
+comma-joined id list: the same fact - which optional items this row offers -
+recorded for ALL of them rather than for one by name. 1.2.1's frozen-snapshot
+rule is unchanged, and the round-trip case that proves it now reads
+`pluginItems` in place of `markUnreadAvailable`.
+
+**THE WORDS ARE THE SHIPPED WORDS, PROVEN RATHER THAN REMEMBERED.**
 `web/src/lib/plugins/session-card-actions.test.ts` loads the REAL
 `client/js/session-status-ui.js` in a `vm` sandbox and compares
-`markUnreadHtml`'s output against the plugin's, attribute by attribute, in
-both unread states and against a hostile session name - the same discipline
-the StatusLed port used, for the same reason: hand-written expectations
-prove only that a port agrees with what the porter remembered. Attribute
-ORDER and the added `data-plugin-action` are the two documented exclusions;
-nothing in this app selects on attribute order, and the added attribute is
-asserted separately. `launchpad.js` still draws its own copy through
-`markUnreadHtml` because that screen is not migrated, and that test is what
-keeps the two surfaces painting one control.
+`markUnreadHtml`'s `title` and `aria-label` against the contribution's
+`label`, in both unread states. It used to compare MARKUP attribute by
+attribute, which stopped meaning anything the moment a contribution supplied
+none; what survived is the part a user can see, and it still matters because
+`launchpad.js` DRAWS ITS OWN INLINE COPY through `markUnreadHtml` (that
+screen is not migrated) and two surfaces describing one action in different
+words would read as two features. The negative controls are kept: the
+comparison is proven able to fail, and the parser still refuses markup it
+cannot read.
 
 **THE NODE SUITE RUNS THE REAL BUNDLE, NOT A FIXTURE.**
-`tests/test_session_sidebar_rows.node.mjs` loads `client/dist/app.js` into
-its `vm` sandbox alongside the legacy modules - the emitted file carries no
+`tests/test_session_sidebar_rows.node.mjs` and
+`tests/test_session_row_menu_superset.node.mjs` load `client/dist/app.js`
+into their `vm` sandboxes alongside the legacy modules - the emitted file carries no
 `import` or `export` statement, so it runs there and publishes the real
 `window.CloudeWeb`. So the assertions about the menu are about the shipped
-path. The guard at the call site is LOUD: a missing bundle `console.error`s
-and drops the contributions, because a panel that silently loses a shipped
-control is the false green this project keeps paying for.
+path. The guard in the bridge is LOUD, AND IT GUARDS THE FUNCTION RATHER
+THAN THE RESULT: a missing bundle `console.error`s and drops the
+contributions, while an EMPTY list stays silent because that is exactly what
+`ui.show_mark_unread_control: false` looks like. Confusing the two is how a
+panel silently loses a shipped control, which is the false green this project
+keeps paying for.
 
 Measured in a real browser under the production CSP (a static server
 importing `src.security_headers`), 2026-09-10: flag on, the item renders from
@@ -293,6 +326,12 @@ visible, and a click calls `setSessionUnread` with the OPPOSITE of the
 painted state and repaints once; flag off, it is absent and the menu's other
 three items are untouched. One CSP violation in the whole run, and it is the
 deliberate off-origin image placed as the negative control.
+
+NOTE THAT MEASUREMENT PREDATES THE 1.2.1 REBASE and was taken against the
+concatenated-HTML shape described above. The behaviour it records is
+unchanged and is covered by the node and vitest suites, but THE BROWSER RUN
+HAS NOT BEEN REPEATED against the declarative menu. Repeat it before quoting
+it as current.
 
 ## Architecture, the parts that shape everything else
 
