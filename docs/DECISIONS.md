@@ -13,6 +13,61 @@ ruling about another.
 
 ---
 
+## Neither party deletes the other's design; a contested one ships as a plugin
+**2026-09-10, scope: all repos**
+
+Verbatim: "we dont want things removed that he or i design that we both dont
+agree upon into plugins. this way we can use the 2 of our wants to see whats
+resonable for main app and whats reasonable for plugins."
+
+**What a kept behaviour is.** Something a party relies on and would notice
+losing. Each party writes its own list at `docs/kept-behaviours/<party>.md` and
+only that party adds to, edits or retires its own entries. Nobody needs anyone's
+permission to add one, and nobody may touch someone else's file. Disagreeing
+with an entry is a conversation with the owner, who is the sole tie-breaker.
+
+**Removing one is a stop-and-ask.** Removing a behaviour on another party's kept
+list requires that party's agreement, or the owner's ruling. Absent either,
+stop and surface it. THE OTHER SIDE'S COMMIT INTENT IS NOT AUTHORITY OVER YOUR
+SIDE'S KEPT BEHAVIOURS: both of this week's incidents were that same mistake and
+one of them was ours. On 2026-09-10 adoom666's row menu removed restart on a
+live row, the manual mark-unread control and group filing, one of which the
+owner had ruled on the day before. Separately, ccsliinc's own merge nearly
+deleted the owner's double-click rename purely because an incoming commit
+intended to, and he stopped it with "i said merge not take everything".
+
+**When two designs conflict, BOTH SHIP.** The default is not a winner. One side
+ships as a plugin contribution on the surface registry (`web/src/lib/plugins/`,
+four surfaces, build-time TypeScript only because the CSP forbids remote or
+evaluated code) or behind a setting, and each party defaults it to its own
+preference. The worked example already exists: the manual mark-unread control is
+the first plugin, gated by `ui.show_mark_unread_control`, default true in
+`src/config.py` and served by `GET /api/v1/features`. The two kept lists read
+together are then the INPUT that shows what belongs in the core app and what
+belongs in a plugin, which is the whole point of keeping both.
+
+**It has an exit in both directions, because a policy with no exit is a
+ratchet.** Promotion, plugin to core: the other party stops defaulting it off,
+which is a default change plus the entry moving to the core list, and it needs
+only the party that was defaulting it off. Demotion, core to plugin: the same
+agreement a removal needs, because it is a removal from the default screen, and
+it lands as a setting defaulting to whatever the relying party had. Retirement:
+a party may drop its OWN entry unilaterally and at any time, with no agreement,
+because giving up your own claim harms nobody. That last rung is the pressure
+valve; without it the list only grows and eventually nobody reads it.
+
+**Themes are already extensible and are NOT part of this.** A theme is a JSON
+manifest under `client/css/themes/<id>/theme.json` (23 bundled, MEASURED on
+`feat/work-protocol` and on `feat/svelte-1.3-on-121`, both the same; the plugin
+registry's own docstring says 26, and 23 is what the tree holds) plus a user
+themes directory that the themes endpoint scans. Anything that only needs to recolour
+something belongs in a theme manifest. Do not rebuild it on the plugin registry.
+
+**Enforced, not merely written.** `scripts/check_kept_behaviours.py`, run by
+`tests/test_kept_behaviours_guard.py`, fails when an anchor a kept entry
+declares is gone from the tree. Reasoning and the file format live in
+`docs/KEPT-BEHAVIOURS.md`.
+
 ## The row menu is one superset, not two implementations
 **2026-09-10, scope: CloudeCodeDev**
 

@@ -47,8 +47,13 @@ body:
       label: What must NOT change
       description: |
         The blast-radius fence. Name the traps, especially the ones that look
-        like mistakes. Standing ones in this repo, delete what does not apply:
+        like mistakes. FIRST, read every file in `docs/kept-behaviours/` for the
+        paths you listed above and copy in any entry that names one: removing
+        another party's kept behaviour needs their agreement, and that lookup is
+        what turns this section from a memory test into a lookup. Standing ones
+        in this repo, delete what does not apply:
       value: |
+        - Kept behaviours touched: <none, or the entries from docs/kept-behaviours/>
         - The "Cloude" spelling is DELIBERATE across 55 files. Never correct it.
         - Every tmux call uses `-L cloude`. Without it you are talking to the
           user's personal tmux server.

@@ -2,8 +2,14 @@
 
 Ported 2026-09-10 from `wants/ccsliinc.md` on the `coord` branch, which the
 work protocol supersedes. The rule and the reasoning live in
-`docs/KEPT-BEHAVIOURS.md`. The `disliked` section from the original is kept
-below and is still stated as preference, not instruction.
+`docs/KEPT-BEHAVIOURS.md`, and the owner's ruling behind it is in
+`docs/DECISIONS.md`. The `disliked` section from the original is kept below and
+is still stated as preference, not instruction.
+
+Every entry carries `paths`, `anchors` and `tests`, and
+`scripts/check_kept_behaviours.py` fails a build when a declared anchor leaves
+the tree. `tests: none` is the honest record of a behaviour nothing holds and is
+never a failure; there is one, and it is the one that nearly died.
 
 ## kept
 
@@ -11,16 +17,23 @@ Behaviours we rely on and would notice losing. Adding something beside one of
 these is always fine. Removing one is not ours or yours to do alone.
 
 ### restart on a live row
-paths: client/js/session-sidebar-rows.js client/js/session-sidebar-clicks.js client/js/session-row-menu.js
+paths: client/js/session-sidebar-rows.js client/js/session-sidebar-clicks.js client/js/session-row-menu.js client/js/session-row-menu-items.js
+anchors: restartable | data-row-menu-status
+tests: tests/test_session_row_menu_superset.node.mjs tests/test_session_row_menu_dispatch.node.mjs
 Restarting a session from its row, with the picker seeing the row's MEASURED
-status rather than null. The row kebab is where that status came from
-(`data-row-status`). When the kebab went and the read moved to the row without
-anything stamping it there, every restart reported "unknown" instead of the
-measured state, and git merged both halves with no marker. Keep a route to
-restart, and keep whatever stamps the status it reads.
+status rather than null. The menu TRIGGER is where that status comes from: our
+own kebab spelled it `data-row-status` and the 2026-09-10 reconcile moved us
+onto adam's trigger, which spells it `data-row-menu-status`. When the kebab went
+and the read moved to the row without anything stamping it there, every restart
+reported "unknown" instead of the measured state, and git merged both halves
+with no marker. Keep a route to restart, and keep whatever stamps the status it
+reads. The anchor is the CURRENT spelling on purpose: an anchor on the retired
+one would keep matching the comment that explains the move.
 
 ### the manual mark-unread control
-paths: client/js/session-row-menu.js client/js/session-sidebar-clicks.js client/js/launchpad.js web/src/lib/plugins/mark-unread/index.ts
+paths: client/js/session-row-menu.js client/js/session-row-menu-items.js client/js/session-sidebar-clicks.js client/js/launchpad.js src/config.py src/main.py web/src/lib/plugins/mark-unread/index.ts
+anchors: mark-unread | show_mark_unread_control
+tests: tests/test_session_row_menu_superset.node.mjs tests/test_unread_led_one_field.node.mjs
 The owner's rule, verbatim: "when clicking a tab, the session is marked read. if
 i want it unread i click unread." The LED painting unread is an INDICATOR and
 does not replace the CONTROL. It already ships behind
@@ -28,27 +41,44 @@ does not replace the CONTROL. It already ships behind
 than a deletion.
 
 ### group filing from the row itself
-paths: client/js/session-sidebar-group-actions.js client/js/session-row-menu.js
+paths: client/js/session-sidebar-group-actions.js client/js/session-row-menu.js client/js/session-row-menu-items.js
+anchors: move-to-group
+tests: tests/test_session_row_menu_superset.node.mjs tests/test_sidebar_group_menu_stacking.node.mjs
 `rowMenuItemHtml` is the last POINTER route to the group picker. With it gone,
 `g` on a focused row and Alt+Arrow both need a keyboard and dragging onto a
 header is the only touch route left, which breaks that file's own stated rule
 that drag is never the only way to do anything. Phones have no keyboard.
 
 ### double-click rename, as well as menu rename
-paths: client/js/session-sidebar-rename.js client/js/session-sidebar-clicks.js
+paths: client/js/session-sidebar-rename.js client/js/session-sidebar-clicks.js client/js/session-sidebar.js
+anchors: onDblClick | addEventListener('dblclick'
+tests: none
 The owner uses it. A menu rename is a fine ADDITION and a poor replacement. This
 one nearly went on our own side, not theirs: the merge was about to drop it
 purely because an incoming commit intended to.
 
+NOTHING TESTS THE GESTURE, stated rather than papered over. The rename tests
+call `SessionSidebarRename.beginEdit` directly, which proves the editor works
+and proves nothing about whether a double-click still reaches it, which is
+exactly the half that was removed. Writing a test for it is open work. Until
+then the two anchors are the whole guard: `onDblClick` (the exported handler)
+and `addEventListener('dblclick'` (the registration in `session-sidebar.js`).
+Both were measured absent from `8898f07`, the commit that deleted the gesture,
+while the words "double-click" and "dblclick" both survived in its prose.
+
 ### dead rows go to Recent
 paths: src/core/session_lifecycle.py src/core/session_manager.py
+anchors: session_lifecycle_reaped | _reap_absent_instances
+tests: tests/test_ended_session_listing_rule.py tests/test_session_lifecycle_reconcile.py
 Owner's call, verbatim 2026-09-08: "they go into recent, they can disappear." A
 session whose process died leaves the live list rather than lingering there
 wearing a dead light, and a restart from Recent is a resume. A round that made a
 husk keep its row painted dead was overruled and reverted (`ba2aa5d`).
 
 ### the concentric single-element LED
-paths: client/js/status-led.js web/src/lib/StatusLed.svelte web/src/lib/led.ts
+paths: client/js/status-led.js client/css/status-led.css web/src/lib/StatusLed.svelte web/src/lib/led.ts
+anchors: box-shadow
+tests: tests/test_status_led.node.mjs
 Both rings are ONE element: the inner is the span's background-color and the
 outer is a three-layer box-shadow on that same span. There may not be a
 pseudo-element. The halo used to be an `::after` and the browser pixel-snaps
@@ -57,7 +87,9 @@ the dot landed on a fractional x/y. A box-shadow paints from the element's own
 border box, so concentric is the only geometry it can have.
 
 ### the outer ring carries unread, as a still green ring
-paths: client/js/status-led.js client/js/session-status-ui.js web/src/lib/led.ts
+paths: client/js/status-led.js client/js/session-status-ui.js client/css/status-led.css web/src/lib/led.ts
+anchors: OUTER_STATES | --led-color-unread
+tests: tests/test_status_led.node.mjs tests/test_status_key.node.mjs
 Ruled 2026-09-09, and the owner picked adoom666's model over ours ("1. his").
 `unread` IS an outer state (`OUTER_STATES` at `status-led.js:123`): a finished
 turn nobody has read paints a crisp STILL green ring, a read session at rest
@@ -72,6 +104,8 @@ Do not reintroduce inner-dot unread; it was decided against, not forgotten.
 
 ### the strict CSP, with no third-party origin in any directive
 paths: src/main.py src/security_headers.py client/index.html tests/test_no_remote_assets.py
+anchors: frame-ancestors | default-src
+tests: tests/test_no_remote_assets.py
 `default-src 'self'`, `frame-ancestors 'none'`, nothing off-origin. This was a
 correctness fix and not only hardening: a content blocker dropped enough of the
 CDN xterm.css that the character cell was measured wrong, FitAddon derived a
