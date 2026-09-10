@@ -6803,3 +6803,53 @@ protocol right now: #5 to #10, #16, #17, #20, #21 and #24 all landed between
 the Cloude spelling is deliberate, and hides 22 of 26 docs" and `#5` is a p0
 about pipe rotation leaving a terminal silent after 24 hours. Not ours to take
 without a decision.
+
+## 2026-09-10 - CORRECTION: the LED ruling in docs/DECISIONS.md was recorded INVERTED [DONE]
+
+Amends the entry written earlier today under "adopt adoom666's work protocol".
+
+**What was wrong.** `docs/DECISIONS.md` went out saying "the outer ring means
+activity and nothing else, unread rides the inner dot". That is the exact inverse
+of what shipped. The owner ruled on 2026-09-09, shown both models, verbatim
+"1. his": adoom666's ring model won. `client/js/status-led.js:123` on
+`release/1.2.1` is `const OUTER_STATES = ['active', 'steady', 'unread', 'off',
+'dim']`, so `unread` IS an outer state; a finished turn nobody has read paints a
+crisp STILL green ring, a read session at rest takes `steady`, `active` is the
+only outer state that animates, the inner dot carries the session's own state
+(`done` while the ring is up, `idle` once it goes), and `--led-color-unread`
+exists at `client/css/status-led.css:162` and was not retired.
+
+**Why it was got wrong, which is the part worth keeping.** The instruction
+stated the correct model AND said to verify each ruling from the records rather
+than trust the summary. Three records disagreed with it, so the summary was
+overruled. All three were real and ALL THREE PREDATED THE RULING:
+`settled/ccsliinc.md` and the 2026-09-08 `TODO.md` entry describe the state
+before the owner chose, and the `CLAUDE.md` that was read came from
+`feat/svelte-web`, a divergent branch carrying the LOSING model's text. The
+`CLAUDE.md` on `release/1.2.1` says the opposite and warns about this exact
+error in those words: anything reading as though unread lives on the inner dot
+"is describing the branch that lost; fix it rather than working around it".
+
+Three agreeing stale sources are one stale source counted three times. A dated
+record is evidence of what was true on that date; an older record cannot
+overturn a newer ruling. And `CLAUDE.md` is not ONE document in a repo with
+several long-lived branches - name the ref you read it from. The command that
+would have settled it in one shot, `grep OUTER_STATES client/js/status-led.js`
+on the branch being worked on, was never run: notes about the code were read
+instead of the code. Written up as
+`lessons/ccsliinc-a-dated-record-cannot-overturn-a-later-ruling.md` on `coord`.
+
+**THE OTHER THREE ENTRIES WERE RE-CHECKED AGAINST SHIPPED CODE AND ARE SOUND.**
+Dead panes to Recent: `CLAUDE.md:1442` on `release/1.2.1`, owner verbatim
+2026-09-08 "they go into recent, they can disappear". The mark-unread control:
+`src/config.py:542` is `show_mark_unread_control: bool = True`, the control
+ships and is default on, and the entry's wording never specified ring or dot so
+it did not carry the inversion. Push targets: `CLAUDE.md:769`, 2026-09-08, and
+the live `git remote -v` still shows the `DISABLED_do_not_push_to_Adoom666_CloudeCode`
+sentinel on `upstream`.
+
+`docs/kept-behaviours/ccsliinc.md` carried the same inversion, ported straight
+out of `wants/ccsliinc.md`, and is corrected in place with a note saying so.
+`wants/` and `settled/` on `coord` are FROZEN at the moment the work protocol
+superseded them, so anything else ported out of them needs re-verifying against
+code before it reaches a file that binds both teams.

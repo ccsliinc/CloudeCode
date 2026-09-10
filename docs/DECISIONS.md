@@ -63,21 +63,48 @@ of that binds CloudeCodeDev, which is a Python project with an unprotected
 main by choice. Adam owning both codebases makes him the tie-breaker in both;
 it does not make a decision about one a decision about the other.
 
-## The outer ring means activity, and unread rides the inner dot
+## The outer ring carries unread, as a still green ring
 **2026-09-09, scope: all repos**
 
-Verbatim: "the ring around some of the leds are not gray, which means there
-should be background tasks. i dont think those few have any background tasks."
+The owner was shown two models and picked adoom666's, over ccsliinc's. Verbatim
+answer: "1. his".
 
-`finished_unread` used to map to a breathing amber outer ring, so the quietest
-state on the dial wore the loudest light in the app. The outer ring now encodes
-ACTIVITY ONLY: `working` breathes, a live-but-stopped turn (question, notice, an
-unanswered startup gate) is lit and still, every resting or dead state leaves it
-off. Unread rides the INNER dot alone, green against grey. The outer `unread`
-state and its `--led-color-unread` hue are retired.
+Both lines were fixing ONE report - "the ring around some of the leds are not
+gray, which means there should be background tasks. i dont think those few have
+any background tasks" - and fixed it opposite ways within hours. ccsliinc retired
+the outer `unread` state and moved unread onto the inner dot. adoom666 kept the
+ring and simply stopped it breathing. The owner picked the ring.
 
-Reverted in passing once already by `ba2aa5d`, which is why it is written down.
-A design that moves unread back onto the ring contradicts a settled ruling.
+So, quoting the shipped code on `release/1.2.1` rather than any note:
+
+- `client/js/status-led.js:123`:
+  `const OUTER_STATES = ['active', 'steady', 'unread', 'off', 'dim'];`
+  `unread` IS an outer state.
+- A finished turn nobody has read paints `unread`, a crisp STILL green ring. A
+  read session at rest takes `steady`. A dead pane or a lost transport takes
+  `off`. An unmeasured one takes `dim`.
+- MOTION is the load-bearing distinction: `active` is the only outer state that
+  animates, so a light that MOVES is a session that is moving, which was the
+  whole of the original complaint.
+- The INNER dot carries the session's own state. `done` is what a finished turn
+  holds while the green unread ring is around it; `idle` is what the dot becomes
+  once that ring goes. That pair is what makes the ring's departure visible.
+- `--led-color-unread` EXISTS (`client/css/status-led.css:162`, green via
+  `--color-success`). It was not retired.
+
+**Do not reintroduce the inner-dot-unread model. It was decided against, not
+forgotten**, and the module header says so in those words. Anything in any
+document that reads as though unread lives on the inner dot is describing the
+branch that lost.
+
+**How this entry was got wrong once, on 2026-09-10, and it is worth keeping.**
+ccsliinc first recorded the INVERSE here, citing `settled/ccsliinc.md`, a
+2026-09-08 `TODO.md` entry and a CLAUDE.md on a divergent branch. All three are
+real and all three predate the ruling: they describe the state before the owner
+chose. A dated record is evidence of what was true on that date. An older record
+cannot overturn a newer ruling, and three agreeing stale sources are still stale.
+Check the date on a record before you let it overturn a later one, and prefer
+shipped code to any note.
 
 ## A dead pane leaves the live list and goes to Recent
 **2026-09-08, scope: all repos**

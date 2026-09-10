@@ -56,11 +56,19 @@ that box independently, so the two circles came apart by a device pixel whenever
 the dot landed on a fractional x/y. A box-shadow paints from the element's own
 border box, so concentric is the only geometry it can have.
 
-### the outer ring means activity and nothing else
+### the outer ring carries unread, as a still green ring
 paths: client/js/status-led.js client/js/session-status-ui.js web/src/lib/led.ts
-Ruled 2026-09-09. `working` breathes, a live-but-stopped turn is lit and still,
-every resting or dead state leaves it off. Unread rides the inner dot. Already
-reverted in passing once, which is why it is also in `settled/ccsliinc.md`.
+Ruled 2026-09-09, and the owner picked adoom666's model over ours ("1. his").
+`unread` IS an outer state (`OUTER_STATES` at `status-led.js:123`): a finished
+turn nobody has read paints a crisp STILL green ring, a read session at rest
+takes `steady`, and `active` is the only outer state that animates. The inner
+dot carries the session's state, `done` while the green ring is up and `idle`
+once it goes. `--led-color-unread` exists and was not retired.
+
+CORRECTED 2026-09-10. The version of this entry ported from `wants/ccsliinc.md`
+said the opposite, because `wants/` was written before the ruling and never
+updated after it. What we rely on is the RULED model, not the one we proposed.
+Do not reintroduce inner-dot unread; it was decided against, not forgotten.
 
 ### the strict CSP, with no third-party origin in any directive
 paths: src/main.py src/security_headers.py client/index.html tests/test_no_remote_assets.py
