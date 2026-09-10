@@ -182,5 +182,7 @@ def test_adopt_setup_makes_the_session_resizable() -> None:
     body = body[: body.index("\n    async def ensure_pipe_pane(")]
     assert '"window-size", "manual"' in body
     assert '"aggressive-resize", "off"' in body
-    assert "_apply_history_limit" in body
+    # The history limit travels in the adopt decoration batch now; the
+    # command builder is the symbol that carries it.
+    assert "_history_limit_command" in body
     assert "external_session_window_size_not_manual" not in body

@@ -212,6 +212,60 @@ having the respawned process write its own inherited value: a mock
 asserting two calls happened in order would only be testing its own
 arrangement.
 
+**THE ENVIRONMENT WRITES TRAVEL TOGETHER NOW, AND THEY STILL NEVER
+TRAVEL WITH THE SPAWN.** `respawn` issued one tmux process per variable;
+`src/core/tmux_command_batch.py` sends them as one `;`-separated command
+list, measured p50 20.99 ms to 9.38 ms for the two we inject. The batch is
+still a SEPARATE, AWAITED call ahead of `respawn-pane`, which is the
+distinction that matters: putting the spawn INSIDE the list would make
+this ordering a property of tmux's command queue rather than of two
+ordered awaits, and would swallow the spawn's own return code. Proved by
+`tests/test_tmux_launch_batching_real_tmux.py`, which has the respawned
+process write its own inherited value, and whose negative control was run
+before it shipped - with the writes moved BEHIND the spawn the pane does
+not come back empty, it comes back holding the tmux server's STALE
+global values, which is the 403 storm above wearing a plausible face.
+
+**THE LAUNCH IS SIX TMUX PROCESSES, DOWN FROM FOURTEEN, AND THE RULE FOR
+WHAT MAY SHARE ONE IS COMPATIBLE FAILURE BEHAVIOUR.** Counted by tracing a
+real `TmuxBackend.start()`, not estimated. Two batches: the pre-spawn
+`history-limit` plus `remain-on-exit`, and the eight post-probe
+decorations (extended keys, mouse, the two wheel bindings,
+terminal-features, escape-time, `window-size manual`, aggressive-resize).
+Every command in both was already `check=False`. The three whose outcome
+the caller ACTS on - `new-session`, `respawn-pane`, `pipe-pane` - stay in
+processes of their own, because tmux gives no per-command control over a
+list and a batch that reported only "the batch failed" would be a
+downgrade. `attach_existing`'s four adopt-time options batch the same way,
+behind `ensure_pipe_pane` rather than in front of it. Measured on tmux
+3.6a at load average 14: the eight decorations cost **p50 206.41 ms apart
+and p50 9.35 ms together**.
+
+**TMUX ABORTS A COMMAND LIST AT ITS FIRST ERROR, WHICH IS WHY THE RUNNER
+FALLS BACK.** Measured, not assumed: a list whose first command is invalid
+exits 1 and the second never runs. So a naive batch turns "one option this
+socket will not take" into "and every option after it was silently
+skipped", which is strictly WORSE than the per-command loop it replaces.
+`run_optional_batch` re-runs the commands individually on any non-zero
+exit - every one of them is idempotent, so that restores exactly the
+pre-batch behaviour, and it is also the only thing that can name WHICH
+command failed, since tmux's stderr carries the error text but not its
+position in the list. It costs nothing in steady state. A token that IS
+`;` or ENDS in one is REFUSED rather than batched, because it would split
+the list somewhere the caller did not intend; a semicolon in the MIDDLE
+of a token is fine, which the wheel bindings depend on.
+
+**AND `set-option` DOES NOT START A TMUX SERVER ON tmux 3.6a, WHICH THE
+COMMENT IN `start()` USED TO CLAIM.** Measured on a cold throwaway
+socket: both pre-spawn `set-option` calls exit 1 with "error connecting",
+batched or separate, and after `new-session` the socket reports
+`history-limit 2000` (tmux's default, not our 50000) and
+`remain-on-exit off`. That is PRE-EXISTING and unrelated to batching - it
+was silent because both calls pass `check=False` - and it means the FIRST
+session on a fresh tmux server gets neither setting. Not fixed here; it
+needs the options re-applied after `new-session`, which is a change to the
+launch ordering this section is otherwise about preserving.
+
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
 sessions and zero held. `src/core/session_boot_readopt{,_plan}.py` now re-adopts
