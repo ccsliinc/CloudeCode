@@ -6636,3 +6636,170 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 `macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
 would want the same ruling.
 
+
+## 2026-09-10 - adopt adoom666's work protocol, and migrate the coord claims onto it [DONE]
+
+**What this is.** adoom666 shipped `.claude/skills/work/` on `adamdev/master`
+(`a5f9991`) and marked `.claude/skills/coord/` SUPERSEDED. Work is now claimed
+with a GitHub Issue plus a DRAFT PR: an issue is a piece of work someone intends
+to do, no linked PR means free, a draft PR means taken, merged PRs carrying
+`Closes #N` are the shipped record, and `docs/DECISIONS.md` holds standing
+rulings. Adopted here as written, on `feat/work-protocol` off `release/1.2.1`.
+
+**Installed, byte for byte from `adamdev/master` except where marked.**
+`.claude/skills/work/SKILL.md` (243 lines, unmodified), `.claude/skills/work/work.sh`
+(203 lines his, 240 after three marked `ccsliinc:` fixes below),
+`.github/ISSUE_TEMPLATE/task.yml` (81, unmodified) and `docs/DECISIONS.md` (64 his,
+plus four ccsliinc rulings appended).
+
+**THE GITIGNORE TRAP, AND IT IS REAL.** `.gitignore:190` is `.claude/*` with only
+`!.claude/commands/` negated, so `git check-ignore -v .claude/skills/work/SKILL.md`
+answers `.gitignore:190`. Every file under `.claude/skills/` must be `git add -f`
+or it is silently untracked, which is the trap that hid every design note on this
+side until this morning. Verified after the commit with `git ls-files .claude/skills/`.
+
+**Our coord skill came onto the release line for the first time.** Our copy of
+`.claude/skills/coord/` existed only on `feat/coordination-protocol`, which is
+based on an older line and diverges heavily, so `release/1.2.1` had no copy at
+all and an agent here could neither read the branch nor see the banner. The four
+skill files were copied out of that branch (the files, not the branch) and
+adoom666's SUPERSEDED banner applied verbatim. The read path (`coord.py read`,
+`coord.py lessons`) still works; only the WRITE path is retired.
+
+**THREE DEFECTS IN `work.sh`, ALL FOUND BY RUNNING THE LITERAL COMMAND**, which
+is the discipline adoom666 recorded from us in
+`lessons/adoom666-test-the-documented-command.md` two days after we learned it.
+Each fix is one marked `ccsliinc:` block.
+
+1. **The push went to the wrong repository.** `_claim` runs
+   `gh issue develop -R $REPO` and then `git push -u origin`. In adoom666's clone
+   `origin` IS `Adoom666/CloudeCodeDev` so the two agree. In ours `origin` is
+   `ccsliinc/CloudeCode`, a DIFFERENT repo, so the claim commit would land on
+   ccsliinc while `gh pr create -R $REPO` opened the PR on CloudeCodeDev against
+   a branch that never received it. A claim that looks made and is not.
+   `work_remote()` resolves the push remote FROM `$REPO`, honours a
+   `WORK_REMOTE` override, and falls back to `origin`, which is what his clone
+   resolves to anyway, so his behaviour is unchanged. It cannot select
+   `upstream`: that push url is the `DISABLED_...` sentinel and does not contain
+   the repo name.
+
+2. **`gh pr create` had no `--title` and exits 3 non-interactively.** Measured on
+   gh 2.100.0: `-F -` supplies the BODY only, and gh refuses with "must provide
+   `--title` and `--body`" rather than prompting. The skill documents the same
+   command. It failed AFTER the branch, the empty commit and the push had already
+   happened, leaving a half-made claim; recovery was the one adoom666's own skill
+   describes, delete the branch and re-run. Title now comes from the issue, with
+   the slug as fallback.
+
+3. **The own-PR lookup races, and it is the SAME defect as the linkage retry it
+   sits in front of.** After a successful create, `gh pr list --head` came back
+   empty and the script reported "could not find own PR after create" while PR
+   #18 in fact existed AND was already linked to issue 14. His retry guards the
+   `closedByPullRequestsReferences` read; nothing guarded the read one step
+   earlier. Fixed by his own stated resolution, "validate the response against
+   your own write": take the number from `gh pr create`'s own printed URL, which
+   is our write handed back by the write itself and needs no index to catch up.
+   The list read stays as the fallback. This is occurrence 8 of
+   `lessons/adoom666-unmeasured-is-not-absent.md` and it is worth telling him.
+
+**Claims migrated.** Five ccsliinc claim files on `coord`, four with a home in
+the new model:
+
+| coord claim | issue | state |
+|---|---|---|
+| `ccsliinc-svelte-launchpad.md` (paused) | #11 | RESERVED, PR #23, start 2026-09-17 |
+| `ccsliinc-backend-decomposition.md` | #12 | claimed, PR #19 |
+| `ccsliinc-session-row-menu.md` (registry half) | #13 | claimed, PR #22 |
+| `ccsliinc-coordination-protocol.md` | #14 | claimed, PR #18 |
+| `ccsliinc-listing-perf.md` | none | shipped as v1.2.1 |
+
+`paused` has no state of its own in the new model, and RESERVED is the construct
+his skill provides for it: "a reservation and an active claim are
+indistinguishable to other agents by design." Verified against the branches
+before filing, and the claim files were stale in one place: that claim says
+backend decomposition is `status: planning` and it is not. S1 to S4 have landed
+on `feat/backend-decomposition` (`4e911b6`, `c170eb6`, `bb7abb0`, `09284df`) and
+S5 is being written right now.
+
+**No issue for listing-perf, on purpose.** That work shipped and belongs in the
+shipped record. It has no merged PR carrying `Closes #N` because it predates the
+protocol, so the shipped record does not cover it and cannot be back-filled
+honestly. Same is true of everything in v1.2.0 and v1.2.1.
+
+**`docs/DECISIONS.md`, four rulings added, none restating his.** His file already
+carries the row-menu superset and rename-keeps-all-three-doors, so those are not
+repeated. Added: the outer ring means activity and unread rides the inner dot
+(2026-09-09); a dead pane leaves the live list and goes to Recent (2026-09-08);
+the mark-unread CONTROL is not replaced by the unread INDICATOR, behind
+`ui.show_mark_unread_control` (2026-09-08); push only to `origin` and `adamdev`,
+never `upstream` (2026-09-08, scope ccsliinc clones).
+
+**ONE OF THE OWNER'S OWN SUMMARIES WAS INVERTED, AND THE RECORDS WON.** The
+instruction said "unread rides the OUTER ring as a still green ring". The records
+say the opposite, three times independently: `settled/ccsliinc.md`, this file's
+own entry under `## 2026-09-08 - unread is ONE instance-keyed flag`, and
+CLAUDE.md. Owner verbatim: "the ring around some of the leds are not gray, which
+means there should be background tasks. i dont think those few have any
+background tasks." The outer `unread` state and `--led-color-unread` were retired
+and unread moved to the inner dot. `DECISIONS.md` records the measured version.
+Flagged for the owner rather than silently chosen.
+
+**THE GAP, NAMED RATHER THAN FILLED.** His model has no home for `wants/`, the
+per-party list of behaviours each side relies on. It is not a work item: no
+owner, no lifecycle, no done state. His `check` compares a path list against open
+ISSUES only, so a behaviour nobody has an open issue about is invisible to it,
+where the old `coord.py check` warned in BOTH directions before work started.
+Both of this week's incidents came through that hole and neither had an open
+issue naming the files: adoom666's row menu removed restart, mark-unread and
+group filing, and our own merge nearly deleted the owner's double-click rename.
+`docs/DECISIONS.md` is the wrong home because it is for rulings the owner
+actually gave, and most kept behaviours have never been ruled on.
+
+Recorded, not worked around: `docs/KEPT-BEHAVIOURS.md` as a stable index plus
+`docs/kept-behaviours/ccsliinc.md` ported from `wants/ccsliinc.md`. One file per
+party, which is the filename-partition discipline that carried the `coord` branch
+through a week of concurrent writes with no cross-party conflict; sections in one
+shared file would conflict on exactly the merges this exists to survive. No new
+skill, no competing mechanism, no state, no lifecycle. Proposed to adoom666 as
+free issue #15 and in the coord note, with the integration point being his
+template's "What must NOT change" section citing the file instead of an agent's
+recollection. `.github/ISSUE_TEMPLATE/task.yml` is deliberately left byte-identical
+to his pending his answer.
+
+**THE REPO QUESTION, REPORTED AND NOT DECIDED.** Verified with `gh`, not assumed.
+His skill pins `R=Adoom666/CloudeCodeDev`: private, not a fork, Issues ENABLED,
+default branch `master`, and its newest PUBLISHED release is v0.8.1 from
+2026-08-04 with v1.2.0, v1.0.36 and v1.0.35 all still drafts. Our published line
+is `ccsliinc/CloudeCode`: public, `fork: true` of `Adoom666/CloudeCode`, Issues
+DISABLED (`has_issues: false`, which is GitHub's default for a new fork), default
+branch `main`, carrying v1.2.1 as Latest and v1.2.0. ccsliinc has admin on
+CloudeCodeDev, so the protocol works as written today.
+
+The consequence is that coordination lives in his PRIVATE repo while our releases
+live in the owner's PUBLIC one, so a reader of the published line sees releases
+with no issue trail and `Closes #N` never reaches them. If the owner picks
+`ccsliinc/CloudeCode` instead: Issues must be enabled there, the labels
+(`p0`/`p1`/`p2`, `area:*`) recreated, `WORK_REPO` and `WORK_BASE` both changed
+(`master` to `main`), adoom666 given write access to a repo he does not own, and
+his side's claims moved too or there are two trackers, which his own "Known
+limits" section already says is what degrades worst. Nothing was enabled,
+disabled or migrated.
+
+**Verified.** `work.sh` end to end: `whoami` 0, `free` 0, `taken` 0, `mine` 0,
+`search` 0, `area` 0, `check` on an overlapping path 2 and on a clean path 0,
+no-arg usage 3, `claim` 0 three times, `reserve` 0. After the claims, `free`
+returns issue #15 alone out of ours and `taken` returns all four draft PRs, which
+is the protocol reporting the state it is supposed to. `gh auth status` confirms
+the active account is `ccsliinc` before anything was created.
+`scripts/scan_secrets.py` exit 0 (1395 files, clean); `gitleaks --no-git` exit 0
+on the tree. `gitleaks` over full history exits 1 on 7 findings, all in
+`THEPROBLEM.md` and `worklog.md` from 2025-10 and 2026-04, files that no longer
+exist and nothing to do with this change. Test suites NOT run: this touches no
+product code, only `.claude/skills/`, `.github/` and `docs/`.
+
+**NOTED WHILE WORKING, NOT ACTED ON.** adoom666 is filing issues into this
+protocol right now: #5 to #10, #16, #17, #20, #21 and #24 all landed between
+18:19 and 18:26 UTC today, all free, several p0. `#6` is "CLAUDE.md never says
+the Cloude spelling is deliberate, and hides 22 of 26 docs" and `#5` is a p0
+about pipe rotation leaving a terminal silent after 24 hours. Not ours to take
+without a decision.
