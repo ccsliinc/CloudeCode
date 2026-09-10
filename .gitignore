@@ -189,3 +189,6 @@ scripts/verify/.terminal-opacity-shots/
 !.claude/
 .claude/*
 !.claude/commands/
+# Cross-party coordination skill: both teams run the same workflow, so it has
+# to travel with the repo rather than living in one person's global config.
+!.claude/skills/
