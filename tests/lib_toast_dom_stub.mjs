@@ -24,6 +24,18 @@ import vm from 'node:vm';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'client/js/toast.js'), 'utf8');
+// issue #55 split ToastManager's class body across three files that each
+// extend ToastManager.prototype (client/js/api-toasts.js's pattern for
+// API.prototype). Loaded in the shipped order, right after toast.js:
+// without these, add/dismiss/_groups/_render and everything built on them
+// are undefined on the manager and every case below would fail with "not
+// a function" rather than a useful assertion.
+const GROUPING_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-grouping.js'), 'utf8');
+const RENDER_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-render.js'), 'utf8');
+const LIFECYCLE_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-lifecycle.js'), 'utf8');
 // THE TWO MODULES THAT DECIDE WHICH CARD A TOAST LANDS ON, loaded in the
 // shipped order and into the SAME context, because one card per session
 // is not a property of toast.js alone: the attention order lives in
@@ -182,6 +194,9 @@ export function makeEnv(narrow = false) {
     vm.runInContext(SUMMARY_SRC, sandbox, { filename: 'session-status-summary.js' });
     vm.runInContext(GROUP_SRC, sandbox, { filename: 'toast-session-group.js' });
     vm.runInContext(SRC, sandbox, { filename: 'toast.js' });
+    vm.runInContext(GROUPING_SRC, sandbox, { filename: 'toast-grouping.js' });
+    vm.runInContext(RENDER_SRC, sandbox, { filename: 'toast-render.js' });
+    vm.runInContext(LIFECYCLE_SRC, sandbox, { filename: 'toast-lifecycle.js' });
     if (!sandbox.ToastSessionGroup) {
         throw new Error(
             'toast-session-group.js did not export itself into the sandbox, so '

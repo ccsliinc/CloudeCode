@@ -267,18 +267,27 @@ test('a malformed poll payload yields [] rather than throwing', () => {
 
 // ------------------------------------------------ wiring, read off source
 
-test('toast.js announces every dismissal so the poller can suppress it', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'client/js/toast.js'), 'utf8');
-    assert.match(src, /cloude:toast-dismissed/,
+test('toast-lifecycle.js announces every dismissal so the poller can suppress it', () => {
+    // issue #55 moved dismiss() (which fires cloude:toast-dismissed) into
+    // toast-lifecycle.js and _renderCard() (which marks a card clickable)
+    // into toast-render.js - the two halves of this claim now live in
+    // different files, split along the same seam the rest of the module
+    // was split along.
+    const lifecycleSrc = fs.readFileSync(
+        path.join(ROOT, 'client/js/toast-lifecycle.js'), 'utf8');
+    const renderSrc = fs.readFileSync(
+        path.join(ROOT, 'client/js/toast-render.js'), 'utf8');
+    assert.match(lifecycleSrc, /cloude:toast-dismissed/,
         'without this event the poll tick resurrects the card the user just '
         + 'dismissed, while its ack is still in flight');
-    assert.match(src, /toast--clickable/,
+    assert.match(renderSrc, /toast--clickable/,
         'a card is now usually about a session that is NOT on screen, so it '
         + 'has to be a way to get there');
 });
 
 test('the dismiss button stops the click reaching the card navigate handler', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'client/js/toast.js'), 'utf8');
+    const src = fs.readFileSync(
+        path.join(ROOT, 'client/js/toast-render.js'), 'utf8');
     assert.match(src, /stopPropagation\(\);\n\s*this\.dismissGroup\(key\)/,
         'dismissing a card must not also yank the user into the session');
 });

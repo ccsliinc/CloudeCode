@@ -813,6 +813,20 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- issue #55 - toast.js had grown past the 1000-line guideline, so
+         its class body is split across three files along the seams the
+         file already had: grouping/coalescing, rendering, lifecycle.
+         Each does `Object.assign(ToastManager.prototype, {...})`, the
+         same pattern api-toasts.js uses for API.prototype, so all three
+         MUST load after toast.js - `class ToastManager` is not hoisted
+         across scripts and each one throws loudly if loaded first. Order
+         AMONG the three does not matter: every cross-method call
+         (_render calling _groups, dismiss calling _cardFor, and so on)
+         resolves through the shared prototype at CALL time, well after
+         every script on the page has finished loading. -->
+    <script src="/static/js/toast-grouping.js"></script>
+    <script src="/static/js/toast-render.js"></script>
+    <script src="/static/js/toast-lifecycle.js"></script>
     <!-- punchlist 7 - a toast raised by ANY session reaches the browser,
          whatever session is on screen. Two things used to filter them:
          the toast.new WS frame is fanned out only to sockets bound to the
