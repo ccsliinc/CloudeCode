@@ -6121,3 +6121,34 @@ full width when sidebar is pinned".
   screen (`.claude/notes/svelte-migration-launchpad.md`). If it still bites in
   the vanilla client before then, a CSS-only fix is acceptable and expected to
   be thrown away.
+
+## 2026-09-10 - the design notes were never in git, and now are
+
+`.gitignore:183` is `.claude/*`, so everything under `.claude/notes/` was
+UNTRACKED except `HANDOFF.md` (and `TODO.md`), which had already been
+force-added at some point. That meant the whole 1.3 roadmap and every
+comparison report existed only as loose files in ONE working tree, invisible
+from any other worktree, absent from every clone, and one `git clean -x` away
+from gone. Nobody had noticed because reading them from the main repo worked
+perfectly.
+
+Force-added onto `feat/svelte-1.3`:
+- `.claude/notes/svelte-migration-launchpad.md` (522 lines) - the seven-slice
+  carve plan for `launchpad.js`, the state model, the plugin seam, the KISS
+  calls. This is the 1.3 roadmap; losing it would mean re-deriving it.
+- `.claude/notes/plugins-and-themes-research.md` (174) - the herdr teardown and
+  why our themes were already extensible.
+- `.claude/notes/divergence-adamdev-2026-09-09.md` (118).
+- `.claude/notes/troubleshooting.md` (773) - the file CLAUDE.md tells every
+  agent to read before investigating, which no fresh clone has ever had.
+- `.claude/notes/compare-1.2/*.md` (6 files) - the per-subsystem verdicts that
+  the owner's 1.2 decisions rest on, plus the round-2 review of Adam's
+  performance work.
+
+- [ ] Decide whether `.gitignore`'s `.claude/*` should keep excluding notes by
+  default. Force-adding works but is invisible: a NEW note is silently
+  untracked again unless someone remembers `-f`. Options: narrow the ignore to
+  the genuinely local paths (`.claude/sessions/`, `.claude/logs/`,
+  `.claude/tasks/`) and track `notes/` normally, or keep the ignore and add a
+  guard test that fails when a file under `.claude/notes/` is untracked.
+  The second is cheaper and matches how this repo already guards things.
