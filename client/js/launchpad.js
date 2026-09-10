@@ -1056,6 +1056,14 @@ class Launchpad {
                     // resolved and was served correctly still vanished on
                     // screen for want of this line.
                     if (live.label !== undefined) existing.label = live.label;
+                    // Whether this session's alerts are suppressed. The
+                    // card's three-dot menu renders one of two labels off
+                    // it. Overwritten unconditionally for the same reason
+                    // the family and wrapper above are: a session unmuted
+                    // elsewhere must stop reading as muted here. An older
+                    // server sends nothing, which lands on undefined and
+                    // the menu normalizes to false.
+                    existing.notifications_muted = live.notifications_muted;
                 } else {
                     this.runningSessions.unshift({
                         name: tmuxName,
@@ -1708,6 +1716,14 @@ class Launchpad {
                 startup: window.SessionStartupGate
                     ? window.SessionStartupGate.normalize(s.startup_gate)
                     : 'unknown',
+                // The three-dot menu's mute item renders one of two
+                // labels off this, and the menu is built into the card's
+                // markup. Same trap as `wrapper` above: without it a
+                // session muted from the sidebar keeps offering to mute
+                // itself here until something unrelated repaints.
+                muted: window.SessionRowMenu
+                    ? window.SessionRowMenu.mutedFor(s.name, s.notifications_muted)
+                    : false,
             })),
         });
         if (sig === this._lastRunningSig) {
@@ -1727,6 +1743,9 @@ class Launchpad {
             // Pencil rename button, in one of three states - never absent.
             // See _renderRenamePencilHtml for why omitting it was the bug.
             const renamePencil = this._renderRenamePencilHtml(s, escapedName);
+            // ONE verdict, read by the pencil above and by the menu's
+            // rename item below. See _renameVerdict.
+            const renameVerdict = this._renameVerdict(s);
             // Fork is offered on OWNED sessions only. An external tmux
             // session has no row of ours and therefore no recorded Claude
             // conversation to resume, so the server would refuse it with
@@ -1753,13 +1772,33 @@ class Launchpad {
                         : undefined,
                 })
                 : '';
-            // X (close) on a running row, trash (remove) on a stopped one,
-            // never both - built by the shared SessionRowActions module so
-            // the launcher, the conversation sidebar, and any future
-            // session surface draw the same glyph with the same tooltip
-            // for the same meaning. See client/js/session-row-actions.js.
-            const rowAction = window.SessionRowActions
+            // A LIVE ROW'S CLOSE X IS NOW A THREE-DOT MENU, and a stopped
+            // row is untouched. `SessionRowActions.offersMenu` is the one
+            // predicate deciding which of the two a status gets - true
+            // for exactly the statuses that would have painted an X - so
+            // a card draws one or the other and never both. A dead card
+            // keeps its inline restart and remove, from the same shared
+            // builder the sidebar row uses. See
+            // client/js/session-row-actions.js and
+            // client/js/session-row-menu.js.
+            const offersMenu = !!(window.SessionRowActions
+                && window.SessionRowActions.offersMenu(s.status));
+            const rowAction = (window.SessionRowActions && !offersMenu)
                 ? window.SessionRowActions.html(s.status, s.name, 'running-session-kill')
+                : '';
+            // Identity is captured at PAINT time and read back when the
+            // menu opens, so an item cannot act on a row this list has
+            // since repainted out from under it. Rename availability is
+            // the pencil's own verdict, not a second derivation: a
+            // session must not be renameable from the menu and not from
+            // the control beside it.
+            const rowMenu = (offersMenu && window.SessionRowMenu)
+                ? window.SessionRowMenu.triggerHtml(
+                    window.SessionRowMenu.contextFromRow(s, {
+                        surface: 'launchpad',
+                        renameable: renameVerdict.renameable,
+                        renameReason: renameVerdict.reason,
+                    }))
                 : '';
             // Empty string for a session with no theme, an unknown theme,
             // or a registry that has not loaded yet - all three render as
@@ -1804,6 +1843,7 @@ class Launchpad {
                     ${renamePencil}
                     ${forkBtn}
                     ${rowAction}
+                    ${rowMenu}
                   </div>
                   <div class="running-session-badges">
                     <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
@@ -2420,6 +2460,38 @@ class Launchpad {
      *   created_by_cloude: true}, 'cloude_fs2')
      *   -> '<span class="running-session-rename-unavailable" ...>'
      */
+    /**
+     * Whether this row can be renamed, and the sentence saying why not.
+     *
+     * Description: extracted so the pencil and the row's three-dot menu
+     *   answer from ONE rule. A session that is renameable from one
+     *   control and refused by the other, on the same card, is the kind
+     *   of disagreement a user reads as a broken app - and it is exactly
+     *   what two copies of this test would eventually produce.
+     *
+     *   Ownership is a THREE-valued field here. ``== null`` catches both
+     *   null and undefined and nothing else, deliberately: ``!s.x`` would
+     *   fold the genuine unknown into "external" and invent an answer.
+     * Inputs: s (object) - the row's session record.
+     * Output: object - {renameable (boolean), reason (string)}. ``reason``
+     *   is '' when renameable.
+     * Example: this._renameVerdict({name: 'cloude_api'})
+     *   -> {renameable: true, reason: ''}
+     */
+    _renameVerdict(s) {
+        const row = s || {};
+        if (row.session_id || row.tmux_session || row.name) {
+            return { renameable: true, reason: '' };
+        }
+        const reason = row.created_by_cloude == null
+            ? 'rename unavailable: CANNOT DETERMINE whether this session is yours,'
+                + ' so whether it can be renamed is unknown'
+            : (row.created_by_cloude
+                ? 'rename unavailable until this session is open - click the row to open it'
+                : 'rename unavailable until this session is adopted - click the row to adopt it');
+        return { renameable: false, reason };
+    }
+
     _renderRenamePencilHtml(s, escapedName) {
         const pencil = window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : '';
         // A TMUX NAME IS ENOUGH NOW. This required `s.session_id` - an
@@ -2442,15 +2514,10 @@ class Launchpad {
                 + ` data-rename-sid="${this._escapeHtml(renameKey)}"`
                 + ` data-rename-name="${escapedName}" title="rename session">${pencil}</span>`;
         }
-        // Ownership is a THREE-valued field here. `== null` catches both
-        // null and undefined and nothing else, deliberately: `!s.x` would
-        // fold the genuine unknown into "external" and invent an answer.
-        const reason = s.created_by_cloude == null
-            ? 'rename unavailable: CANNOT DETERMINE whether this session is yours,'
-                + ' so whether it can be renamed is unknown'
-            : (s.created_by_cloude
-                ? 'rename unavailable until this session is open - click the row to open it'
-                : 'rename unavailable until this session is adopted - click the row to adopt it');
+        // The reason comes from the ONE verdict this card and its menu
+        // both read, so the two controls cannot disagree about the same
+        // session. See _renameVerdict.
+        const reason = this._renameVerdict(s).reason;
         return `<span class="running-session-rename-unavailable" aria-disabled="true"`
             + ` aria-label="${this._escapeHtml(reason)}"`
             + ` title="${this._escapeHtml(reason)}">${pencil}</span>`;

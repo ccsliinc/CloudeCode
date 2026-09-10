@@ -9,45 +9,34 @@
  * row that composes them, nothing else - it holds no state and touches
  * no DOM, it only returns strings.
  *
- * THE ACTION ICONS ARE DRAWN INLINE AGAIN. "move the pin and close icons
- * back to the inline icons. remove 'add to group' / 'restart the agent'
- * and the three dots now that they're not needed." Pin and the
- * close/remove control sit on the row, built by the same two builders
- * that have always drawn them: `pinButtonHtml` here and
- * `SessionRowActions.html` next door. No kebab, no panel, no third way
- * to reach either control.
+ * PIN IS INLINE; THE OTHER ACTIONS ARE IN A THREE-DOT MENU. Pin is a
+ * toggle the eye reads at a glance, so it stays on the row from
+ * `pinButtonHtml` below. A LIVE row's close X is gone and a
+ * `SessionRowMenu` trigger stands where it did, carrying rename, fork,
+ * new-session-in-folder, mute and close. A DEAD row is untouched: it
+ * still draws inline restart and remove from `SessionRowActions.html`,
+ * which is the only surface reaching the respawn ladder, and draws no
+ * menu. `SessionRowActions.offersMenu` is the one predicate deciding
+ * which of the two a row gets, so it can never draw both or neither.
  *
- * WHAT WENT WITH THE MENU, so nobody goes looking for it: the group
- * picker ITEM (filing is still reachable by dragging onto a group
- * header, by `g` on a focused row and by Alt+Arrow across a band edge -
- * see client/js/session-sidebar-group-actions.js) and RESTART ON A LIVE
- * ROW (a DEAD row still offers it inline, and that is now the only
- * surface reaching the respawn ladder). Right-click and long-press
- * opened that menu and now open nothing.
- *
- * NO GROUP CHIP EITHER. Group membership is untouched: still DB-backed,
- * and still how the sidebar's OWN group headers file each row.
+ * GROUP FILING IS NOT ON THE ROW at all: it is reachable by dragging
+ * onto a group header, by `g` on a focused row and by Alt+Arrow across a
+ * band edge - see client/js/session-sidebar-group-actions.js.
  *
  * WHAT EACH DENSITY DRAWS (see client/js/session-sidebar-density.js for
  * the modes and where the preference lives):
- *   compact   grip, dot, name, pin, close/remove
+ *   compact   grip, dot, name, pin, menu (or restart/remove when dead)
  *   cozy      the above plus the tmux/external badge  (DEFAULT)
  *   detailed  the above, with the badge moved DOWN to a second line that
  *             also carries the session's age
  *
- * NO AGENT-FAMILY PILL, AT ANY DENSITY, SINCE THIS ROUND. "i dont think
- * we need the pills in the sidebar take out for now." The pill is still
- * drawn on the HOME screen by client/js/launchpad.js, which owns its own
- * builder; nothing here feeds that one, so removing this row's pill
- * cannot change what the home screen renders.
- *
- * REMOVING IT ALSO REMOVED A REAL DEFECT whose shape recurs: this
- * builder put a literal `~` in front of a guessed family AND
- * `.family-pill--guess::before` adds another, so `~~claude` rendered
- * while every DOM assertion read a correct `~claude`. A test that reads
- * DOM text cannot see a `::before`; only a rendered pixel or a computed
- * style can, which is why the pill assertions in
- * scripts/verify_sidebar_sessions.py were the ones that could catch it.
+ * NO AGENT-FAMILY PILL, AT ANY DENSITY. The home screen still draws one
+ * from its own builder in client/js/launchpad.js. Removing this row's
+ * copy also removed a defect whose shape recurs: this builder put a
+ * literal `~` in front of a guessed family AND `.family-pill--guess
+ * ::before` adds another, so `~~claude` rendered while every DOM
+ * assertion read a correct `~claude`. Only a rendered pixel or a
+ * computed style can see a `::before`.
  *
  * WHAT NOW FILLS DETAILED'S SECOND LINE: the tmux/external badge, moved
  * down off the first line, plus the age it already carried. The badge is
@@ -60,20 +49,16 @@
  * per density. The density contract is a number the stylesheet states,
  * not an accident of whichever controls currently ride the line.
  *
- * A RESTART CONTROL IS EMITTED for a row whose status is `dead`, inline
- * beside remove, and for no other status. It SUPERSEDES an older rule
- * saying the sidebar could not know a session was stopped rather than
- * unknown: `session-sidebar-fetch.js` `mergeLiveRow()` overwrites
- * `status` with the server's `activity_status`, which is
- * `resolve_pane_status()` reading tmux's own `#{pane_dead}`, so `dead` is
- * a MEASUREMENT - while a probe-only row still carries `unknown` and
+ * A RESTART CONTROL IS EMITTED for a row whose status is `dead` and for
+ * no other status. `dead` is a MEASUREMENT: `session-sidebar-fetch.js`
+ * `mergeLiveRow()` overwrites `status` with the server's
+ * `activity_status`, which is `resolve_pane_status()` reading tmux's own
+ * `#{pane_dead}`, while a probe-only row still carries `unknown` and
  * `SessionRowActions.actionsFor` refuses to treat `unknown` as stopped.
  *
- * The destructive control (close vs remove) is unchanged and still comes
- * from SessionRowActions.
- *
- * Must load AFTER session-status-ui.js, session-row-actions.js and
- * session-listing-state.js, and BEFORE session-sidebar.js runs.
+ * Must load AFTER session-status-ui.js, session-row-actions.js,
+ * session-row-menu.js and session-listing-state.js, and BEFORE
+ * session-sidebar.js runs.
  */
 
 console.log('[SessionSidebarRows Module] Loading...');
@@ -91,33 +76,30 @@ console.log('[SessionSidebarRows Module] Loading...');
 
     /**
      * Description: whether this row's session can be renamed, as THREE
-     *   states rather than a boolean, plus the sentence that says why.
+     *   states plus the sentence that says why. THE ONE RULE: the row
+     *   DRAWS it, the inline editor GATES on it, and the row's three-dot
+     *   menu enables or refuses its `rename` item from it, so the three
+     *   cannot disagree about the same session at the same moment.
      *
-     *   This mirrors LaunchpadController._renderRenamePencilHtml exactly,
-     *   on the same two fields, because a session must not be renameable
-     *   on one surface and not on the other. The two fields answer
-     *   DIFFERENT questions and neither one alone is the answer:
-     *   `session_id` is only populated by the /sessions/list merge, so it
-     *   really means "is there a live backend for this right now", while
+     *   The two fields answer DIFFERENT questions and neither alone is
+     *   the answer. `session_id` is only populated by the /sessions/list
+     *   merge, so it means "is there a live backend right now";
      *   `created_by_cloude` is about ORIGIN and is genuinely NULLABLE -
-     *   the server fills it from an ownership map that can simply have no
-     *   entry for a name.
+     *   the server fills it from an ownership map that can have no entry
+     *   for a name.
      *
-     *     'renameable'  a session id is known. The rename endpoint is
-     *                   keyed on it, so the edit can actually be sent.
+     *     'renameable'  a session id is known; the rename endpoint is
+     *                   keyed on it, so the edit can be sent.
      *     'unavailable' no session id, but ownership IS known, so the
-     *                   precondition can be stated precisely: open it
-     *                   (ours) or adopt it (external).
+     *                   precondition can be stated precisely.
      *     'unknown'     no session id AND ownership is null. CANNOT
      *                   DETERMINE. `== null` catches null and undefined
      *                   and nothing else, deliberately - `!r.x` would
      *                   fold the genuine unknown into "external" and
      *                   invent an answer nobody measured.
      *
-     *   The state is stamped on the row as `data-rename-state`, which is
-     *   what client/js/session-sidebar-rename.js gates the inline editor
-     *   on. A row that cannot be renamed must not silently accept an edit
-     *   that is going to fail.
+     *   Stamped on the row as `data-rename-state`. A row that cannot be
+     *   renamed must not silently accept an edit that is going to fail.
      * Inputs: r (object) - one merged session row.
      * Output: object - {state (string), reason (string)}.
      * Example: renameState({session_id: null, created_by_cloude: null})
@@ -125,7 +107,7 @@ console.log('[SessionSidebarRows Module] Loading...');
      */
     function renameState(r) {
         if (r && r.session_id) {
-            return { state: 'renameable', reason: 'double-click to rename (or F2)' };
+            return { state: 'renameable', reason: 'press F2 to rename' };
         }
         if (!r || r.created_by_cloude == null) {
             return {
@@ -212,26 +194,18 @@ console.log('[SessionSidebarRows Module] Loading...');
                 ? ['unavailable', listing.reason || '', listing.detail || '']
                 : ['ok'],
             missing: (missing || []).slice(),
-            // NO EXPLICIT INDEX HERE, AND THAT IS DELIBERATE. An earlier
-            // version carried the array index as a field to make the
-            // signature position-sensitive. It is provably redundant:
-            // this maps in order and JSON.stringify preserves array
-            // order, so two different orderings of the same rows already
-            // serialise differently. The index is fully determined by the
-            // position it was meant to witness, so it could never change
-            // a comparison - and a mutation that deleted it was
-            // unkillable by construction. What position-sensitivity
-            // actually requires is that this never sorts or normalises
-            // the row order before serialising it.
+            // NO EXPLICIT INDEX HERE, DELIBERATELY. This maps in order
+            // and JSON.stringify preserves array order, so two different
+            // orderings already serialise differently; an index field
+            // was fully determined by the position it witnessed and
+            // could never change a comparison. What position-sensitivity
+            // requires is that this never sorts or normalises the row
+            // order before serialising it.
             rows: (rows || []).map((r) => ({
                 name: r.name,
                 // THE ROW'S TEXT IS THE LABEL, so it must be here or a
                 // rename repaints nothing. `name` cannot stand in: a
-                // rename moves ONLY the label and leaves the handle put,
-                // so the field the diff watched is the one a rename no
-                // longer touches. The editor forces a repaint by clearing
-                // `_lastSig` - but the 5s poller and another tab's
-                // `session.renamed` come through this diff.
+                // rename moves ONLY the label and leaves the handle put.
                 label: r.label || null,
                 status: r.status || 'unknown',
                 active: !!r.is_active,
@@ -249,15 +223,21 @@ console.log('[SessionSidebarRows Module] Loading...');
                 // ownership has to repaint. It used to be implied by
                 // fields the family pill carried; those are gone.
                 badge: !!r.created_by_cloude,
-                // The age is only DRAWN at detailed density, and what is
-                // drawn is the coarse label ("3h"), not the epoch. Keying
-                // on the epoch would repaint every poll tick for a field
-                // nobody is looking at; keying on the label at every
-                // density would do the same at cozy, where there is no
-                // age on screen at all. The signature must track what the
-                // row SHOWS, which is why this is conditional.
+                // Only DRAWN at detailed, and what is drawn is the coarse
+                // label ("3h"), not the epoch. The signature must track
+                // what the row SHOWS, which is why this is conditional.
                 age: (density === 'detailed') ? ageLabel(r.created_at_epoch) : null,
                 theme: r.pinned_theme || null,
+                // The MENU's mute item renders one of two labels off
+                // this, and the menu is built into the row's markup, so
+                // a session muted from another surface must repaint here
+                // or the row keeps offering to mute what is already
+                // muted. Read through SessionRowMenu, never off the
+                // payload directly, so a toggle this browser just made
+                // and the server's own field are the one value.
+                muted: window.SessionRowMenu
+                    ? window.SessionRowMenu.mutedFor(r.name, r.notifications_muted)
+                    : false,
                 // punchlist 19 - the "needs a keypress" badge appears and
                 // disappears on its own, without any other field on the
                 // row changing: a session parked on its trust prompt has
@@ -426,17 +406,36 @@ console.log('[SessionSidebarRows Module] Loading...');
         const themeSwatch = window.SessionThemeTint
             ? window.SessionThemeTint.swatchHtml(r.pinned_theme)
             : '';
-        // THE TWO INLINE CONTROLS. Pin toggles the row to the top; the
-        // action is close on a live row, restart plus remove on a dead
-        // one. Both come from the builders that own them, so this row and
-        // the launcher's card draw the same glyphs, tooltips and confirm
-        // copy.
+        // PIN STAYS INLINE. It is a toggle the eye reads at a glance and
+        // burying it would cost a state the row currently SHOWS.
         const pin = pinButtonHtml(r.name, !!r.is_pinned);
-        const rowAction = window.SessionRowActions
+        const rename = renameState(r);
+        // THE THREE-DOT MENU REPLACED THE LIVE ROW'S CLOSE X, and it is
+        // the same question asked once: `offersMenu` is true for exactly
+        // the statuses `SessionRowActions.html` would have painted an X
+        // for, so a row draws one or the other and never both. A DEAD
+        // row is untouched - it keeps the inline restart and remove that
+        // are the only surface reaching the respawn ladder, and gets no
+        // menu, because none of the five items is what a stopped session
+        // needs. See client/js/session-row-menu.js.
+        const offersMenu = !!(window.SessionRowActions
+            && window.SessionRowActions.offersMenu(r.status));
+        const rowAction = (window.SessionRowActions && !offersMenu)
             ? window.SessionRowActions.html(
                 r.status, r.name, 'session-sidebar-row-delete')
             : '';
-        const rename = renameState(r);
+        // Identity is captured HERE, at paint time, and read back off
+        // the trigger when the menu opens. The list repaints itself
+        // every five seconds, so an item that resolved its row later
+        // could act on whatever had taken its place.
+        const rowMenu = (offersMenu && window.SessionRowMenu)
+            ? window.SessionRowMenu.triggerHtml(
+                window.SessionRowMenu.contextFromRow(r, {
+                    surface: 'sidebar',
+                    renameable: rename.state === 'renameable',
+                    renameReason: rename.state === 'renameable' ? '' : rename.reason,
+                }))
+            : '';
         // The badge is the first thing to go when the user asks for thin
         // rows: "tmux" vs "external" is already carried by the row's
         // ownership styling, so at compact it is the most redundant glyph
@@ -485,6 +484,7 @@ console.log('[SessionSidebarRows Module] Loading...');
             inlineBadge +
             pin +
             rowAction +
+            rowMenu +
             '</div>' +
             secondLine +
             '</div>'

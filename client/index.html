@@ -100,6 +100,12 @@
          square icon buttons, and this file widens them on a coarse
          pointer. Loaded earlier it would silently lose the tap targets. -->
     <link rel="stylesheet" href="/static/css/session-row-inline-controls.css" />
+    <!-- The session row's three-dot action menu, and the panel it opens.
+         MUST load after session-sidebar.css, session-sidebar-density.css
+         and session-row-inline-controls.css: those size row controls as
+         small square icon buttons, and this file has to win over them
+         for the trigger. -->
+    <link rel="stylesheet" href="/static/css/session-row-menu.css" />
     <!-- The launch-wrapper pill on a running-session row. After
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
@@ -888,6 +894,21 @@
          Pure decision logic - markup and screen state in, a verdict out -
          so this is its only ordering constraint. -->
     <script src="/static/js/project-list-render-guard.js"></script>
+    <!-- Viewport-clamped placement for every popover in the app. Moved
+         ABOVE launchpad.js with the row menu below, which is its first
+         load-order-constrained consumer; every other caller reaches it at
+         open time and is unaffected by the move. -->
+    <script src="/static/js/anchor-popover.js"></script>
+    <!-- The session row's three-dot ACTION MENU, in three files: the item
+         table and the markup (pure), what each item does, and the
+         opening/keyboard/focus half that is the only one touching the
+         document. Must load BEFORE session-sidebar-rows.js and
+         launchpad.js, which both build a trigger into their row markup,
+         and AFTER kebab-icon.js (the glyph), api.js (the mute write) and
+         anchor-popover.js (the viewport clamp). -->
+    <script src="/static/js/session-row-menu.js"></script>
+    <script src="/static/js/session-row-menu-actions.js"></script>
+    <script src="/static/js/session-row-menu-open.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
@@ -945,7 +966,6 @@
          call window.AnchorPopover.place(). launchpad.js also calls it
          (placeNewFabMenu) but loads earlier - that is fine, because the
          call happens on a user tap, long after every script has run. -->
-    <script src="/static/js/anchor-popover.js"></script>
     <!-- Terminal measurement guard. Must load BEFORE terminal-layout.js
          and terminal.js, both of which fit through
          window.TerminalMetrics.guardedFit so an untrustworthy cell

@@ -106,7 +106,7 @@ function makeSandbox() {
     const context = { window: fakeWindow, document: fakeDocument, console: { log() {} } };
     vm.createContext(context);
     for (const f of ['session-status-ui.js', 'session-row-actions.js',
-        'session-sidebar-rows.js']) {
+        'kebab-icon.js', 'session-row-menu.js', 'session-sidebar-rows.js']) {
         vm.runInContext(clientJs(f), context, { filename: f });
     }
     return { Rows: fakeWindow.SessionSidebarRows, RowActions: fakeWindow.SessionRowActions };
@@ -130,88 +130,62 @@ function row(overrides = {}) {
 }
 
 // ---------------------------------------------------------------------
-// 1. The menu is gone, all of it.
+// 1. PIN IS INLINE. The other actions are in the row's three-dot menu.
 // ---------------------------------------------------------------------
 
-test('the menu module, its gestures and its stylesheet are all deleted', () => {
-    // Three files, deleted together. Leaving any one behind would leave a
-    // module that loads, exports a global and can never be opened.
-    assert.equal(clientFileExists('js', 'session-row-menu.js'), false);
+test('the long-press gesture module stayed deleted', () => {
+    // The kebab came back with a DIFFERENT set of items; the right-click
+    // and long-press gestures that used to open it did not. Leaving that
+    // module behind would leave a file that loads, exports a global and
+    // wires listeners for a menu whose open path no longer runs through
+    // it.
     assert.equal(clientFileExists('js', 'session-row-menu-gestures.js'), false);
-    assert.equal(clientFileExists('css', 'session-row-menu.css'), false);
 });
 
-test('nothing in the client still loads or reaches for the deleted menu', () => {
-    // A dead reference is worse than a dead file: it reads like a live
-    // feature to the next person, and a `typeof x === "function"` guard
-    // in front of it makes it silently do nothing forever.
+test('the menu ships as three files and the client actually loads all of them', () => {
+    // A module nobody loads is dead code, and a stylesheet nobody loads
+    // is a control that renders as an unstyled button in the middle of a
+    // row.
+    for (const name of ['session-row-menu.js', 'session-row-menu-actions.js',
+        'session-row-menu-open.js']) {
+        assert.equal(clientFileExists('js', name), true, `${name} missing`);
+    }
+    assert.equal(clientFileExists('css', 'session-row-menu.css'), true);
     const html = fs.readFileSync(
         path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
-    assert.ok(!html.includes('session-row-menu'),
-        'index.html still loads the removed menu module or stylesheet');
-
-    const jsDir = path.join(__dirname, '..', 'client', 'js');
-    const offenders = fs.readdirSync(jsDir).filter(
-        (name) => name.endsWith('.js')
-            && /window\.SessionRowMenu|SessionRowMenuGestures/.test(
-                fs.readFileSync(path.join(jsDir, name), 'utf8')));
-    assert.deepEqual(offenders, [],
-        `these modules still reach for the deleted menu: ${offenders}`);
-});
-
-test('no DOM contract that only the menu ever read is still emitted', () => {
-    // `data-row-menu` was the kebab's identity, `data-row-pinned` and
-    // `data-row-unread` were state carried for the menu builder alone.
-    // The row keeps `data-row-status`, which now has a live reader in
-    // client/js/session-sidebar-clicks.js.
-    for (const status of ['working', 'dead', 'idle', 'unknown']) {
-        const html = Rows.rowHtml(row({ status, is_pinned: true, unread: true }));
-        for (const attr of ['data-row-menu', 'data-row-pinned', 'data-row-unread']) {
-            assert.ok(!html.includes(`${attr}=`),
-                `status ${status} still emits ${attr}, which nothing reads`);
-        }
-        assert.ok(html.includes(`data-row-status="${status}"`),
-            `status ${status} must still be stamped for the restart picker`);
+    for (const src of ['js/session-row-menu.js', 'js/session-row-menu-actions.js',
+        'js/session-row-menu-open.js', 'css/session-row-menu.css']) {
+        assert.ok(html.includes(src), `index.html does not load ${src}`);
     }
 });
 
-test('the restart picker reads the status off the ROW, not off a kebab', () => {
-    // The one attribute that moved rather than went. Reading it from a
-    // selector that can never match would hand the picker a null status
-    // silently, and the picker would then describe a session it could not
-    // see the state of.
-    const src = clientJs('session-sidebar-clicks.js');
-    assert.ok(!src.includes('data-row-menu'),
-        'the click router must not look up a kebab that is never painted');
-    assert.ok(src.includes(".getAttribute('data-row-status')"),
-        'the click router must read the status the row carries');
-    assert.ok(src.includes('.session-sidebar-row[data-name='),
-        'and resolve the row by its tmux name, as it always did');
-});
-
-// ---------------------------------------------------------------------
-// 2. Pin and close are inline, from the builders that own them.
-// ---------------------------------------------------------------------
-
-test('every row draws exactly one pin, from SessionSidebarRows own builder', () => {
-    // BE the builder's output, do not merely resemble it. A second copy
-    // of the markup on the row is how the row and the launcher card
-    // drifted apart the first time.
-    for (const pinned of [false, true]) {
-        const html = Rows.rowHtml(row({ is_pinned: pinned }));
-        assert.equal((html.match(/data-pin-session=/g) || []).length, 1);
-        assert.ok(html.includes(Rows.pinButtonHtml('cloude_api', pinned)),
-            'the inline pin must BE pinButtonHtml output, not a copy of it');
+test('the menu loads BEFORE the two builders that put a trigger in their markup', () => {
+    // A row painted before the menu module exists draws no trigger at
+    // all, and the row is repainted from a signature that would not
+    // change, so it would stay missing until something unrelated moved.
+    const html = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
+    const menu = html.indexOf('js/session-row-menu.js');
+    for (const after of ['js/session-sidebar-rows.js', 'js/launchpad.js']) {
+        assert.ok(menu < html.indexOf(after), `${after} must load after the menu`);
     }
+    assert.ok(html.indexOf('js/kebab-icon.js') < menu, 'the glyph comes first');
+    assert.ok(html.indexOf('js/anchor-popover.js') < html.indexOf('js/session-row-menu-open.js'),
+        'the placement rule must exist before anything places a panel');
 });
 
-test('every row draws its action control, from SessionRowActions own builder', () => {
-    for (const status of ['working', 'idle', 'unknown', 'dead']) {
-        const html = Rows.rowHtml(row({ status }));
-        assert.ok(
-            html.includes(RowActions.html(
-                status, 'cloude_api', 'session-sidebar-row-delete')),
-            `status ${status} must BE SessionRowActions.html output`);
+test('a dead row draws its action control from SessionRowActions own builder', () => {
+    // A LIVE row draws no inline action any more - its close became the
+    // menu's `close session` item - so the parity claim is scoped to the
+    // rows that still have one. Asserted as identity, not resemblance:
+    // the markup must BE the shared builder's output.
+    const html = Rows.rowHtml(row({ status: 'dead' }));
+    assert.ok(
+        html.includes(RowActions.html('dead', 'cloude_api', 'session-sidebar-row-delete')),
+        'a dead row must BE SessionRowActions.html output');
+    for (const status of ['working', 'idle', 'unknown']) {
+        assert.ok(!Rows.rowHtml(row({ status })).includes('data-session-action='),
+            `status ${status} reaches close through the menu, not an inline control`);
     }
 });
 

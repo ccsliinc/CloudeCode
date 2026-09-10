@@ -94,7 +94,14 @@ function loadRows() {
         'session-listing-state.js', 'session-sidebar-rows.js',
     ]);
     window.SessionStatusUI = { dotHtml: () => '<span class="status-dot"></span>', markUnreadHtml: () => '' };
-    window.SessionRowActions = { html: () => '<button data-session-action="close"></button>' };
+    // `offersMenu` is what decides between the inline X and the row's
+    // three-dot menu, so a stub without it makes every row throw. Kept
+    // faithful to the real rule rather than hardcoded: only a dead row
+    // draws the inline control.
+    window.SessionRowActions = {
+        html: () => '<button data-session-action="close"></button>',
+        offersMenu: (status) => status !== 'dead',
+    };
     return window.SessionSidebarRows;
 }
 

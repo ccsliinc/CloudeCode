@@ -84,6 +84,7 @@ function makeSandbox() {
     vm.runInContext(readClientJs('kebab-icon.js'), context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
+    vm.runInContext(readClientJs('session-row-menu.js'), context);
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
 
     return {
@@ -166,39 +167,59 @@ test('a hostile session name cannot break out of THIS module s own markup', () =
     assert.ok(!/<script/i.test(scripted));
 });
 
-test('the row draws its pin and its action INLINE, and no kebab', () => {
-    // The unfold, asserted as a fact rather than as an absence: "move the
-    // pin and close icons back to the inline icons ... and the three dots
-    // now that they're not needed". Exactly one pin and exactly one
-    // destructive control on the line, and no trigger for a menu that no
-    // longer exists.
-    for (const status of ['working', 'dead', 'idle', 'question', 'unknown']) {
+test('a live row draws pin plus the three-dot MENU; a dead row draws pin plus its two inline controls', () => {
+    // The split, asserted as a fact on both sides rather than as an
+    // absence on one. A live row's close X became the menu, so the two
+    // are mutually exclusive by construction; a dead row is untouched,
+    // because restart and remove are what a stopped session needs and
+    // none of the five menu items is.
+    for (const status of ['working', 'idle', 'question', 'unknown']) {
         const html = Rows.rowHtml(row({ status, is_pinned: true, unread: true }));
-        assert.equal((html.match(/data-row-menu=/g) || []).length, 0,
-            `status ${status} must paint no kebab`);
-        assert.ok(!html.includes('session-sidebar-row-kebab'),
-            `status ${status} must not carry the kebab's class either`);
+        assert.equal((html.match(/data-row-menu=/g) || []).length, 1,
+            `status ${status} must paint exactly one menu trigger`);
+        assert.equal(
+            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length, 0,
+            `status ${status} must not ALSO paint the inline close it replaced`);
         assert.equal((html.match(/data-pin-session=/g) || []).length, 1,
-            `status ${status} must paint exactly one inline pin`);
+            `status ${status} must keep exactly one inline pin`);
         assert.equal((html.match(/data-mark-unread=/g) || []).length, 0,
             'the mark-unread toggle is gone from the app entirely');
         assert.equal((html.match(/data-group-pick=/g) || []).length, 0,
-            'the group picker item went with the menu - filing is reached '
-            + 'by drag, by `g` on a focused row, or by Alt+Arrow');
-        assert.ok(
-            (html.match(new RegExp(`${RowActions.ATTR_ACTION}=`, 'g')) || []).length >= 1,
-            `status ${status} must draw the shared action control inline`);
+            'filing is reached by drag, by `g` on a focused row, or by Alt+Arrow');
     }
-    // The row carries the status the picker reads, now that the kebab
-    // that used to hold it is gone.
-    const dead = Rows.rowHtml(row({ is_pinned: true, status: 'dead' }));
+    const dead = Rows.rowHtml(row({ status: 'dead', is_pinned: true }));
+    assert.equal((dead.match(/data-row-menu=/g) || []).length, 0,
+        'a dead row gets no menu - restart and remove are what it needs');
+    assert.ok(dead.includes(`${RowActions.ATTR_ACTION}="restart"`));
+    assert.ok(dead.includes(`${RowActions.ATTR_ACTION}="remove"`));
+    // The row carries the status the restart picker reads.
     assert.ok(dead.includes('data-row-status="dead"'));
     assert.ok(!dead.includes('data-row-pinned='),
         'pinned state is carried by the pin button\'s aria-pressed, not a '
-        + 'second attribute that only the menu ever read');
+        + 'second attribute');
     assert.ok(!dead.includes('data-row-unread='));
     assert.ok(Rows.rowHtml(row({ status: undefined })).includes('data-row-status="unknown"'),
         'a row with no status says unknown out loud rather than saying nothing');
+});
+
+test('the menu trigger captures the row identity the items will act on', () => {
+    const html = Rows.rowHtml(row({
+        status: 'working', name: 'cloude_api', label: 'API work',
+        session_id: 'ses_1', created_by_cloude: true,
+    }));
+    assert.ok(html.includes('data-row-menu="cloude_api"'));
+    assert.ok(html.includes('data-row-menu-session-id="ses_1"'));
+    assert.ok(html.includes('data-row-menu-surface="sidebar"'));
+    assert.ok(html.includes('data-row-menu-renameable="1"'),
+        'a row with a live backend can be renamed, and the menu must agree with it');
+    const external = Rows.rowHtml(row({
+        status: 'working', session_id: null, created_by_cloude: false,
+    }));
+    assert.ok(external.includes('data-row-menu-renameable="0"'));
+    assert.ok(external.includes('data-row-menu-forkable="0"'),
+        'a session cloudecode did not create has no conversation to branch');
+    assert.ok(/data-row-menu-rename-reason="[^"]+"/.test(external),
+        'and the refusal must travel with it as a sentence');
 });
 
 test('the pin keeps its accessible name and its pressed state inline', () => {
@@ -216,11 +237,13 @@ test('the pin keeps its accessible name and its pressed state inline', () => {
     assert.ok(pinned.includes('aria-label="Unpin cloude_api"'));
 });
 
-test('the inline action keeps its title and aria-label, on every status', () => {
+test('the inline action keeps its title and aria-label, on every status that has one', () => {
+    // A live row no longer has an inline action - its close moved into
+    // the menu - so only the dead row's pair is asserted here. The menu's
+    // own labels are pinned in tests/test_session_row_menu.node.mjs.
     for (const [status, label] of [
-        ['working', 'close session'],
-        ['unknown', 'close session'],
         ['dead', 'remove from the list'],
+        ['dead', 'restart the agent'],
     ]) {
         const html = Rows.rowHtml(row({ status }));
         assert.ok(html.includes(`title="${label}"`),
@@ -235,12 +258,15 @@ test('the pin sits BEFORE the action, and both sit after the name', () => {
     // pin, then the destructive control on the far right, and putting a
     // destructive control anywhere else would move it under a cursor
     // that had learned where it was.
-    const html = Rows.rowHtml(row({ status: 'working' }));
-    const name = html.indexOf('session-sidebar-row-name');
-    const pin = html.indexOf('data-pin-session=');
-    const action = html.indexOf(`${RowActions.ATTR_ACTION}="close"`);
-    assert.ok(name < pin, 'the name column comes first and takes the slack');
-    assert.ok(pin < action, 'pin before the destructive control');
+    const live = Rows.rowHtml(row({ status: 'working' }));
+    assert.ok(live.indexOf('session-sidebar-row-name') < live.indexOf('data-pin-session='),
+        'the name column comes first and takes the slack');
+    assert.ok(live.indexOf('data-pin-session=') < live.indexOf('data-row-menu='),
+        'pin before the menu, which stands where the destructive control stood');
+    const dead = Rows.rowHtml(row({ status: 'dead' }));
+    assert.ok(dead.indexOf('data-pin-session=')
+        < dead.indexOf(`${RowActions.ATTR_ACTION}="remove"`),
+        'pin before the destructive control');
 });
 
 test('the group chip is removed, not commented out - no definition left behind', () => {
@@ -257,24 +283,21 @@ test('the group chip is removed, not commented out - no definition left behind',
         'session-sidebar-rows.js must not still reference the chip\'s CSS class');
 });
 
-test('every row carries exactly one DESTRUCTIVE control, from the shared module', () => {
-    // UPDATED by feat/session-respawn. The invariant is unchanged and is
-    // about the destructive pair: close and remove make opposite
-    // promises, so a row may carry exactly one of them, never both. What
-    // changed is that a `dead` row now ALSO carries a restart, which is
-    // the one non-destructive control in the family - so the count is
-    // taken per-action rather than over every action attribute.
+test('every row offers exactly ONE way to destroy the session, and never two', () => {
+    // The invariant is about the destructive pair: close and remove make
+    // opposite promises, so a row may offer exactly one of them, never
+    // both, and never neither. What changed is WHERE close lives - a
+    // live row reaches it through the menu item now, a dead row still
+    // draws remove inline - so the count is taken across both surfaces
+    // of the row rather than over the inline markup alone.
     for (const status of ['working', 'dead', 'idle', 'question']) {
         const html = offeredHtml(row({ status }));
-        const buttons = (html.match(new RegExp(RowActions.BASE_CLASS, 'g')) || []).length;
-        assert.ok(buttons >= 1, `status ${status} must paint the shared row control`);
-        const destructive =
+        const inlineDestructive =
             (html.match(new RegExp(`${RowActions.ATTR_ACTION}="close"`, 'g')) || []).length
             + (html.match(new RegExp(`${RowActions.ATTR_ACTION}="remove"`, 'g')) || []).length;
-        assert.equal(
-            destructive, 1,
-            `status ${status} must paint exactly one destructive control`,
-        );
+        const menus = (html.match(/data-row-menu=/g) || []).length;
+        assert.equal(inlineDestructive + menus, 1,
+            `status ${status} must offer exactly one route to destruction`);
         assert.equal(
             (html.match(/data-pin-session=/g) || []).length, 1,
             `status ${status} must paint exactly one pin toggle`,
@@ -282,11 +305,11 @@ test('every row carries exactly one DESTRUCTIVE control, from the shared module'
         const restarts =
             (html.match(new RegExp(`${RowActions.ATTR_ACTION}="restart"`, 'g')) || []).length;
         // ONE ON A DEAD ROW, NONE ANYWHERE ELSE. A live row briefly
-        // offered restart too; the owner removed that control on
-        // 2026-09-08 with the overflow menu it lived in. The dead row
-        // keeps it because a pane holding an exited process is the case
-        // restart exists for, and it is now the only surface in the app
-        // that reaches the respawn ladder.
+        // offered restart; the owner removed that control on 2026-09-08
+        // and the menu that replaced its close does not carry it back.
+        // The dead row keeps it because a pane holding an exited process
+        // is the case restart exists for, and it is still the only
+        // surface in the app that reaches the respawn ladder.
         assert.equal(restarts, status === 'dead' ? 1 : 0,
             `status ${status} restart count`);
     }

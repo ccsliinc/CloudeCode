@@ -105,9 +105,13 @@ class SessionSidebarController {
             this.close();
         });
         this.listEl.addEventListener('click', (e) => this._onRowClick(e));
-        this.listEl.addEventListener('dblclick', (e) => {
-            if (window.SessionSidebarRename) window.SessionSidebarRename.onDblClick(e);
-        });
+        // NO dblclick LISTENER. Double-click rename is gone: renaming is
+        // F2 on a focused row, or the `rename` item in the row's
+        // three-dot menu (client/js/session-row-menu.js). It was removed
+        // because the gesture cost every click on a renameable name a
+        // measured 250 ms hold before the row would switch, which is the
+        // single most-used interaction in this list paying for the
+        // rarest one.
         this._wired = true;
         // The panel ships CLOSED, and closed here means "slid off screen by
         // a transform" - which on its own leaves every row still focusable.

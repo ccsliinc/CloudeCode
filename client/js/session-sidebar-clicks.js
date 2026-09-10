@@ -84,18 +84,13 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const rowEl = e.target.closest('.session-sidebar-row');
         if (!rowEl) return;
 
-        // THE NAME IS THE ONE TARGET WHERE A CLICK HAS TO WAIT.
-        // Double-click on the name means rename, and a browser delivers
-        // the first click of a double-click before it delivers the
-        // double-click, so an instant switch here would navigate away
-        // from the row the user was about to edit. The wait is scoped as
-        // tightly as it can be: only on the NAME, and only on a row that
-        // is actually renameable. Every other part of the row, and every
-        // row that has nothing to edit, still activates immediately.
-        if (window.SessionSidebarRename
-            && window.SessionSidebarRename.deferActivation(e, rowEl, () => activateRow(ctrl, rowEl))) {
-            return;
-        }
+        // NOTHING WAITS ANY MORE. A click on a renameable row's NAME used
+        // to be held for 250 ms so a double-click could claim it for
+        // rename instead. Double-click rename is gone - renaming is F2,
+        // or the `rename` item in the row's three-dot menu - so there is
+        // no second gesture left to wait for, and the most-used
+        // interaction in this list stops paying for the rarest one. The
+        // measured 250 ms delay was the whole cost of that trade.
         await activateRow(ctrl, rowEl);
     }
 

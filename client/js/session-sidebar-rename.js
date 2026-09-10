@@ -1,24 +1,20 @@
 /**
- * Session sidebar INLINE RENAME - "double click to inline edit session
- * name in sidebar."
+ * Session sidebar INLINE RENAME - the editor, and the two ways in.
  *
- * THE HARD PART IS NOT THE EDITOR, IT IS THE CLICK. A row's single click
- * already means "switch to this conversation", and a browser delivers the
- * first click of a double-click BEFORE it delivers the dblclick - so the
- * naive version navigates away from the row a moment before the user
- * finishes asking to edit it. The fix is a deferral, and the whole design
- * is about keeping that deferral as small as it can possibly be:
+ * DOUBLE-CLICK IS GONE, AND THE COST IT CARRIED IS THE REASON. A row's
+ * single click means "switch to this conversation", and a browser
+ * delivers the first click of a double-click BEFORE it delivers the
+ * dblclick - so the gesture could only work by HOLDING every click on a
+ * renameable name for 250 ms before the row would switch. That is the
+ * most-used interaction in this list paying, on every use, for the
+ * rarest one, and it was measured as a real delay rather than argued
+ * about. The deferral, the dblclick handler and the timer are all
+ * removed; a click on a name now switches conversation in the frame it
+ * lands.
  *
- *   - it applies ONLY to a click that landed on the row's NAME. Anywhere
- *     else on the row - the dot, the badge, the padding - switches
- *     instantly, exactly as before.
- *   - it applies ONLY to a row whose `data-rename-state` is
- *     'renameable'. A row with nothing to edit has nothing to wait for.
- *   - it is DBLCLICK_MS, and the operation it delays is a network round
- *     trip plus a terminal attach.
- * So the cost is bounded to one target on one class of row, and it buys
- * the gesture the user asked for. Anything wider than that would be
- * paying for this feature on every click in the list.
+ * TWO WAYS IN, BOTH THROUGH `beginEdit`: F2 on a focused row, and the
+ * `rename` item in the row's three-dot menu
+ * (client/js/session-row-menu.js). Neither costs a click anything.
  *
  * THREE RENAMEABILITY STATES, AND THE EDITOR RESPECTS ALL THREE. The
  * classifier is `SessionSidebarRows.renameState()`, shared with the row
@@ -49,15 +45,6 @@
 console.log('[SessionSidebarRename Module] Loading...');
 
 (function () {
-    /**
-     * How long a click on a renameable row's NAME waits for a second
-     * click before it commits to switching conversation. The platform
-     * double-click threshold is around 400-500ms; this is deliberately
-     * shorter, because the cost of being too short is one extra click and
-     * the cost of being too long is a laggy list.
-     * @type {number}
-     */
-    const DBLCLICK_MS = 250;
 
     /**
      * Description: the label rule, from the one module that holds it.
@@ -75,9 +62,6 @@ console.log('[SessionSidebarRename Module] Loading...');
         // rule is how the two drift.
         return { ok: false, reason: 'the label rule is unavailable' };
     }
-
-    /** The in-flight deferred activation timer, or null. */
-    let pending = null;
 
     /** The name of the row currently being edited, or null. */
     let editing = null;
@@ -108,44 +92,6 @@ console.log('[SessionSidebarRename Module] Loading...');
     function isEditing() { return editing !== null; }
 
     /**
-     * Description: cancel a deferred row activation, if one is waiting.
-     * Inputs: none. Output: boolean - true when one was actually cancelled.
-     */
-    function clearPending() {
-        if (!pending) return false;
-        clearTimeout(pending);
-        pending = null;
-        return true;
-    }
-
-    /**
-     * Description: hold a click on a renameable row's NAME for
-     *   DBLCLICK_MS so a double-click can claim it instead. See the file
-     *   docblock for why the deferral is scoped this narrowly.
-     * Inputs: e (MouseEvent) - the click. rowEl (Element) - the row it
-     *   landed in. activate (function) - what to run if no second click
-     *   arrives.
-     * Output: boolean - true when the click was taken over, in which case
-     *   the caller must not activate the row itself.
-     */
-    function deferActivation(e, rowEl, activate) {
-        if (isEditing()) return true;
-        const nameEl = e.target.closest && e.target.closest('[data-row-name]');
-        if (!nameEl || !rowEl) return false;
-        if (rowEl.getAttribute('data-rename-state') !== 'renameable') return false;
-        // A second click of a double-click carries detail >= 2. Swallow it
-        // rather than starting a second timer - the dblclick handler is
-        // about to fire and it owns the gesture from here.
-        if (e.detail && e.detail > 1) { clearPending(); return true; }
-        clearPending();
-        pending = setTimeout(() => {
-            pending = null;
-            activate();
-        }, DBLCLICK_MS);
-        return true;
-    }
-
-    /**
      * Description: claim any click that lands inside an open editor, so
      *   putting the caret in the input does not also switch conversation.
      * Inputs: e (MouseEvent). Output: boolean - true when handled.
@@ -156,24 +102,6 @@ console.log('[SessionSidebarRename Module] Loading...');
         if (!inside) return false;
         e.stopPropagation();
         return true;
-    }
-
-    /**
-     * Description: open the editor on a double-clicked name, or say why
-     *   it cannot be opened. Also suppresses the browser's own
-     *   double-click text selection on the name, which would otherwise
-     *   leave the row's text highlighted underneath the input.
-     * Inputs: e (MouseEvent). Output: void.
-     */
-    function onDblClick(e) {
-        const nameEl = e.target.closest && e.target.closest('[data-row-name]');
-        if (!nameEl) return;
-        const rowEl = nameEl.closest('.session-sidebar-row');
-        if (!rowEl) return;
-        e.preventDefault();
-        e.stopPropagation();
-        clearPending();
-        beginEdit(rowEl);
     }
 
     /**
@@ -417,18 +345,19 @@ console.log('[SessionSidebarRename Module] Loading...');
     }
 
     /**
-     * Description: nothing to bind - the sidebar controller routes click,
-     *   dblclick and keydown into this module. Present so the controller's
-     *   init sequence reads the same for every sibling module, and so the
-     *   deferral timer is dropped if the panel is re-initialised.
+     * Description: nothing to bind and nothing to reset - the sidebar
+     *   controller routes click and keydown into this module, and there
+     *   is no timer left to drop now that double-click rename is gone.
+     *   Kept so the controller's init sequence reads the same for every
+     *   sibling module.
      * Inputs: none. Output: void.
      */
-    function init() { clearPending(); }
+    function init() {}
 
     window.SessionSidebarRename = {
-        init, afterRender, deferActivation, onListClick, onDblClick,
-        onRowKeydown, beginEdit, isEditing, clearPending,
-        DBLCLICK_MS, validateLabel,
+        init, afterRender, onListClick,
+        onRowKeydown, beginEdit, isEditing,
+        validateLabel,
     };
     console.log('[SessionSidebarRename Module] Exported as window.SessionSidebarRename');
 })();

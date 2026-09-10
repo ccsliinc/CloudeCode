@@ -251,6 +251,32 @@ console.log('[SessionRowActions Module] Loading...');
     }
 
     /**
+     * Whether a row with this status offers the three-dot ACTION MENU.
+     *
+     * Description: the menu replaced the live row's close X, so the two
+     *   are the same question asked once - a row that would have painted
+     *   ``close`` inline paints the menu instead, and ``close session``
+     *   is an item inside it. A DEAD row is untouched: it keeps its
+     *   inline restart and remove, because none of the five menu items
+     *   is what a stopped session needs and its two controls are what
+     *   the respawn ladder is reached through.
+     *
+     *   Derived from ``actionsFor`` rather than from a second status
+     *   list, so the row and the menu cannot come to disagree about
+     *   which one a status gets. See client/js/session-row-menu.js.
+     * Inputs:
+     *   status (string|null|undefined) - raw activity status.
+     * Output:
+     *   boolean - true when the row draws the menu instead of an X.
+     * Example:
+     *   offersMenu('working') -> true
+     *   offersMenu('dead')    -> false
+     */
+    function offersMenu(status) {
+        return actionsFor(status).indexOf(ACTION_CLOSE) !== -1;
+    }
+
+    /**
      * Back-compat single-action accessor.
      *
      * Description: kept so no existing call site has to change in the
@@ -489,6 +515,7 @@ console.log('[SessionRowActions Module] Loading...');
         BASE_CLASS,
         actionFor,
         actionsFor,
+        offersMenu,
         requiresConfirm,
         labelFor,
         iconFor,

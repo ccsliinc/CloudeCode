@@ -112,15 +112,21 @@ CSS_FILES = [
     "css/session-sidebar-density.css",
     "css/session-sidebar-groups.css",
     "css/session-row-inline-controls.css",
+    "css/session-row-menu.css",
 ]
 
 #: The REAL modules. Nothing in the chain from a row payload to a painted
 #: control is stubbed; only the collaborators beyond it are.
 JS_FILES = [
+    "js/kebab-icon.js",
     "js/session-status-ui.js",
     "js/session-row-actions.js",
     "js/session-label.js",
     "js/session-theme-tint.js",
+    "js/anchor-popover.js",
+    "js/session-row-menu.js",
+    "js/session-row-menu-actions.js",
+    "js/session-row-menu-open.js",
     "js/session-sidebar-rows.js",
     "js/session-sidebar-clicks.js",
 ]
@@ -176,6 +182,22 @@ window.API = {
   respawnSession: rec('respawnSession'),
   getSession: rec('getSession'),
   adoptSession: rec('activateRow'),
+  forkSession: rec('forkSession'),
+  /* The menu resolves a row's durable record only when an item that
+     needs one is chosen, so this answers with a single live row. */
+  listSessionRecords: function () {
+    window.__calls.push(['listSessionRecords']);
+    return Promise.resolve([
+      {session_uuid: 'uuid-a', tmux_name: 'row-a', working_dir: '/tmp/row-a',
+       tmux_created_epoch: 10, archived_at: null},
+    ]);
+  },
+  call: function (path, opts) {
+    window.__calls.push(['call', path, opts && opts.method,
+      opts && opts.body && opts.body.muted]);
+    return Promise.resolve({muted: !!(opts && opts.body && opts.body.muted),
+      policy_generation: 1});
+  },
 };
 window.App = {
   showConfirmModal: function (title) {
@@ -344,8 +366,12 @@ def page(base_url):
             "session-sidebar-rows.js did not load, so nothing below was "
             "measured against the real row builder"
         )
-        assert pg.evaluate("!window.SessionRowMenu"), (
-            "the removed row overflow menu is still being served"
+        assert pg.evaluate("!!window.SessionRowMenu"), (
+            "session-row-menu.js did not load, so the live row's trigger was "
+            "never built and nothing below about it was measured"
+        )
+        assert pg.evaluate("!!window.SessionRowMenuOpen"), (
+            "session-row-menu-open.js did not load, so no menu can open"
         )
         pg.evaluate("rows => window.__paint(rows)", ROWS)
         assert not errors, f"the page threw while loading: {errors}"
@@ -368,6 +394,23 @@ def _pin(page, name: str):
     """
     return page.locator(
         f'.session-sidebar-row[data-name="{name}"] [data-pin-session]')
+
+
+def _trigger(page, name: str):
+    """Locator for one row's three-dot action-menu trigger.
+
+    A LIVE row carries this where its close X used to be; a dead row
+    carries no menu at all.
+
+    Args:
+        page: the Playwright page.
+        name: the row's tmux name.
+
+    Returns:
+        Locator: that row's menu trigger.
+    """
+    return page.locator(
+        f'.session-sidebar-row[data-name="{name}"] [data-row-menu]')
 
 
 def _action(page, name: str, action: str):
@@ -458,36 +501,44 @@ def wide_page(base_url):
 # The controls themselves
 # ---------------------------------------------------------------------
 
-def test_the_row_shows_pin_and_action_inline_and_no_kebab(page):
-    """The unfold reached the screen, not just the markup.
+def test_a_live_row_draws_pin_and_a_menu_while_a_dead_row_draws_its_two(page):
+    """The split reached the screen, not just the markup.
 
-    Asserted on the PAGE and not only inside the row: the removed menu
-    mounted its panel on ``document.body``, so a row-scoped count could
-    have missed a trigger that still opened one.
+    A LIVE row's close X became the three-dot menu, so pin plus one
+    trigger is the whole line. A DEAD row is untouched: pin, restart and
+    remove, inline, and no menu - none of the five menu items is what a
+    stopped session needs.
+
+    Asserted on the PAGE and not only inside the row: the menu mounts its
+    panel on ``document.body``, so a row-scoped count could miss a panel
+    left open over a row it does not belong to.
     """
     assert page.evaluate("document.hidden") is False
-    for row, actions in (("row-a", ["close"]), ("row-b", ["close"]),
-                         ("row-dead", ["restart", "remove"])):
+    for row in ("row-a", "row-b"):
         sel = f'.session-sidebar-row[data-name="{row}"]'
         assert page.locator(f"{sel} [data-pin-session]").count() == 1, (
             f"{row} does not draw exactly one inline pin"
         )
-        for action in actions:
-            assert page.locator(
-                f'{sel} [data-session-action="{action}"]').count() == 1, (
-                f"{row} does not draw its {action} control inline"
-            )
-        for gone in ("[data-row-menu]", "[data-mark-unread]", "[data-group-pick]"):
-            assert page.locator(f"{sel} {gone}").count() == 0, (
-                f"{gone} is still drawn on {row}; the unfold did not happen"
-            )
-    assert page.locator("[data-row-menu]").count() == 0, (
-        "a kebab is painted somewhere on the page"
+        assert page.locator(f"{sel} [data-row-menu]").count() == 1, (
+            f"{row} does not draw exactly one menu trigger"
+        )
+        assert page.locator(f"{sel} [data-session-action]").count() == 0, (
+            f"{row} draws an inline action AND a menu; it must draw one"
+        )
+    dead = '.session-sidebar-row[data-name="row-dead"]'
+    assert page.locator(f"{dead} [data-pin-session]").count() == 1
+    for action in ("restart", "remove"):
+        assert page.locator(f'{dead} [data-session-action="{action}"]').count() == 1, (
+            f"the dead row does not draw its {action} control inline"
+        )
+    assert page.locator(f"{dead} [data-row-menu]").count() == 0, (
+        "a dead row must not draw a menu"
     )
+    for gone in ("[data-mark-unread]", "[data-group-pick]"):
+        assert page.locator(gone).count() == 0, f"{gone} is still drawn"
+    # NOTHING IS OPEN UNTIL SOMETHING IS PRESSED.
     assert page.locator("#session-row-menu-panel").count() == 0
-    # A LIVE ROW MAY NOT OFFER RESTART. This is the reachability half of
-    # the request, measured where a user would see it rather than only in
-    # the builder's return value.
+    # A LIVE ROW MAY NOT OFFER RESTART, on the row or in the menu.
     for row in ("row-a", "row-b"):
         assert page.locator(
             f'.session-sidebar-row[data-name="{row}"] '
@@ -511,7 +562,7 @@ def test_each_control_gets_a_thumb_sized_target_on_a_coarse_pointer(page):
         "measured"
     )
     for locator, label in ((_pin(page, "row-a"), "pin"),
-                           (_action(page, "row-a", "close"), "close")):
+                           (_trigger(page, "row-a"), "menu")):
         box = locator.bounding_box()
         assert box is not None, f"the {label} control has no box; it did not render"
         assert box["width"] >= MIN_TAP_W_PX, (
@@ -526,7 +577,7 @@ def test_each_control_gets_a_thumb_sized_target_on_a_coarse_pointer(page):
             const out = {};
             for (const [name, sel] of [
                     ['pin', '[data-pin-session]'],
-                    ['close', '[data-session-action="close"]']]) {
+                    ['menu', '[data-row-menu]']]) {
                 const btn = row.querySelector(sel);
                 const r = btn.getBoundingClientRect();
                 const cx = r.left + r.width / 2;
@@ -560,14 +611,14 @@ def test_neither_control_steals_the_other_s_taps(page):
             const row = document.querySelector(
                 '.session-sidebar-row[data-name="row-a"]');
             const pin = row.querySelector('[data-pin-session]');
-            const close = row.querySelector('[data-session-action="close"]');
+            const menu = row.querySelector('[data-row-menu]');
             const p = pin.getBoundingClientRect();
-            const c = close.getBoundingClientRect();
+            const c = menu.getBoundingClientRect();
             const owner = (x, y) => {
                 const el = document.elementFromPoint(x, y);
                 if (!el) return 'nothing';
                 if (pin.contains(el) || el === pin) return 'pin';
-                if (close.contains(el) || el === close) return 'close';
+                if (menu.contains(el) || el === menu) return 'menu';
                 return 'other';
             };
             const my = p.top + p.height / 2;
@@ -582,11 +633,11 @@ def test_neither_control_steals_the_other_s_taps(page):
     )
     assert verdict["overlap"] is False, "the two control boxes overlap"
     assert verdict["pinCentre"] == "pin"
-    assert verdict["closeCentre"] == "close"
+    assert verdict["closeCentre"] == "menu"
     assert verdict["pinLeftEdge"] == "pin", (
         "a tap on the pin's own left edge does not reach the pin"
     )
-    assert verdict["closeRightEdge"] == "close"
+    assert verdict["closeRightEdge"] == "menu"
 
 
 def test_the_controls_wear_no_circle(page):
@@ -603,7 +654,7 @@ def test_the_controls_wear_no_circle(page):
             const out = {};
             for (const [name, sel] of [
                     ['pin', '[data-pin-session]'],
-                    ['close', '[data-session-action="close"]']]) {
+                    ['menu', '[data-row-menu]']]) {
                 const s = getComputedStyle(row.querySelector(sel));
                 out[name] = {
                     radius: parseFloat(s.borderTopLeftRadius) || 0,
@@ -634,7 +685,7 @@ def test_both_glyphs_actually_have_ink_on_them(page):
     stroke colour would erase entirely.
     """
     for locator, label in ((_pin(page, "row-a"), "pin"),
-                           (_action(page, "row-a", "close"), "close")):
+                           (_trigger(page, "row-a"), "menu")):
         shot = locator.screenshot()
         img = Image.open(io.BytesIO(shot)).convert("RGB")
         pixels = list(img.getdata())
@@ -687,7 +738,7 @@ def test_the_name_is_not_crushed_at_330px(narrow_page):
             const main = row.querySelector('.session-sidebar-row-main');
             const name = row.querySelector('.session-sidebar-row-name');
             const pin = row.querySelector('[data-pin-session]');
-            const close = row.querySelector('[data-session-action="close"]');
+            const close = row.querySelector('[data-row-menu]');
             const m = main.getBoundingClientRect();
             return {
                 nameWidth: name.getBoundingClientRect().width,
@@ -715,7 +766,7 @@ def test_the_name_is_not_crushed_at_330px(narrow_page):
     slack = (metrics["mainRight"] - metrics["closeRight"]
              - metrics["mainPaddingRight"])
     assert abs(slack) <= 1, (
-        f"the close control sits {slack:.1f}px further from the right edge "
+        f"the menu trigger sits {slack:.1f}px further from the right edge "
         "than the row's own padding accounts for"
     )
     # AND THE PAGE MUST NOT SCROLL SIDEWAYS. A row that overflows its
@@ -806,7 +857,7 @@ def test_both_controls_are_fully_on_screen_at_330px(narrow_page):
     cannot land on, and it counts as present in every DOM assertion.
     """
     for row, sel in (("row-a", "[data-pin-session]"),
-                     ("row-a", '[data-session-action="close"]'),
+                     ("row-a", "[data-row-menu]"),
                      ("row-dead", '[data-session-action="restart"]'),
                      ("row-dead", '[data-session-action="remove"]')):
         box = narrow_page.locator(
@@ -878,10 +929,17 @@ def test_pin_fires_from_the_row_itself(page):
 
 
 def test_close_still_confirms_and_then_destroys(page):
-    """The destructive path is unchanged - dialog first, then the call."""
+    """The destructive path is unchanged - dialog first, then the call.
+
+    What changed is only how it is reached: the live row's X is now
+    ``close session`` inside the menu, and the item hands the click to
+    the SAME handler the inline control used, so the confirmation copy
+    and the endpoint are the ones that were already reviewed.
+    """
     page.evaluate("window.__calls = []")
-    _action(page, "row-a", "close").click()
-    page.wait_for_timeout(150)
+    _trigger(page, "row-a").click()
+    page.locator('#session-row-menu-panel [data-row-menu-item="close"]').click()
+    page.wait_for_timeout(200)
     calls = page.evaluate("window.__calls")
     names = [c[0] for c in calls]
     assert "confirm" in names, f"close fired with no confirmation: {calls}"

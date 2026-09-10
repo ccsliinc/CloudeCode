@@ -131,19 +131,34 @@ test('.session-sidebar-group-menu paints above .session-sidebar-panel', () => {
         + `(${panelZ}), or the menu paints behind the open sidebar`);
 });
 
-test('the deleted row overflow menu is not still being styled', () => {
-    // The stylesheet that carried `.session-row-menu` was removed with
-    // the menu itself. An orphan rule for a class nothing emits is the
-    // kind of leftover that makes a reader think the control still
-    // exists, and it would silently re-style the row's inline pin and
-    // close if either ever landed inside an element carrying that class.
+const rowMenuRules = rules(clientFile('css', 'session-row-menu.css'));
+
+test('.session-row-menu paints above the open sidebar it opens from', () => {
+    // Same stacking comparison as the group menu above, and it exists for
+    // the same reason: the row menu's panel is appended to document.body
+    // at runtime and is `position: fixed`, so it is a sibling of the
+    // sidebar rather than a child of it. A panel that opened from a row
+    // and then painted BEHIND the list holding that row would look like a
+    // control that does nothing.
+    const menuZ = zIndexOf(rowMenuRules, '.session-row-menu');
+    const panelZ = zIndexOf(sidebarRules, '.session-sidebar-panel');
+    assert.ok(menuZ > panelZ,
+        `row menu z-index (${menuZ}) must exceed the sidebar panel's (${panelZ})`);
+});
+
+test('only the row menu stylesheet styles the row menu', () => {
+    // One class, one file. A second sheet reaching for `.session-row-menu`
+    // would silently re-style items whose sizing this file deliberately
+    // overrides, and the cascade order between the two would decide the
+    // result rather than either author.
     const dir = path.join(__dirname, '..', 'client', 'css');
     const offenders = fs.readdirSync(dir).filter(
         (name) => name.endsWith('.css')
+            && name !== 'session-row-menu.css'
             && fs.readFileSync(path.join(dir, name), 'utf8')
                 .includes('.session-row-menu'));
     assert.deepEqual(offenders, [],
-        `these stylesheets still style the removed row menu: ${offenders}`);
+        `these stylesheets also style the row menu: ${offenders}`);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

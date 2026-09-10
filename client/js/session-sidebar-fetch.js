@@ -163,6 +163,15 @@ console.log('[SessionSidebarFetch Module] Loading...');
             // label CLEARED back to null is a real state, and `||` would
             // silently keep showing the old one.
             if (info.label !== undefined) existing.label = info.label;
+            // The row's three-dot menu renders `mute notifications` or
+            // `unmute notifications` off this. Overwritten
+            // UNCONDITIONALLY, for the same reason `startup_gate` above
+            // is: a session unmuted somewhere else must stop reading as
+            // muted here, and a `||` would keep the stale claim. A
+            // payload that does not carry the field lands on undefined
+            // and the menu normalizes it to false, which is the right
+            // degradation for an older server - no suppression recorded.
+            existing.notifications_muted = info.notifications_muted;
             if (info.agent_family !== undefined) existing.agent_family = info.agent_family;
             if (info.agent_family_source !== undefined) {
                 existing.agent_family_source = info.agent_family_source;
@@ -188,6 +197,7 @@ console.log('[SessionSidebarFetch Module] Loading...');
                 : null,
             pinned_theme: info.pinned_theme || null,
             startup_gate: info.startup_gate,
+            notifications_muted: info.notifications_muted,
         });
     }
 

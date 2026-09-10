@@ -105,27 +105,39 @@ test('there is exactly ONE definition of the mark in the client', () => {
         `these files draw their own kebab instead of calling KebabIcon: ${offenders}`);
 });
 
-test('the one remaining consumer actually calls the shared builder', () => {
-    // THERE USED TO BE TWO. The conversation rows drew this mark for
-    // their own overflow menu until 2026-09-08, when the owner asked for
-    // the three dots to go and pin/close to come back as inline icons.
-    // The extraction is kept for the header alone: the ink measurement in
-    // the module's docblock is the reason this mark is not a literal, and
-    // that reason has nothing to do with how many callers there are.
+test('both consumers call the shared builder rather than inlining the mark', () => {
+    // TWO CALLERS AGAIN. The header overflow has always drawn it; the
+    // session row's action menu draws it a second time, which is exactly
+    // the situation the extraction exists for - the ink measurement in
+    // the module's docblock is why this mark is not a literal, and a
+    // second inlined copy is how this app grew two drifting kebabs the
+    // first time.
     assert.ok(clientJs('header-menu.js').includes('window.KebabIcon.svg('),
         'the header overflow must render the shared mark');
+    assert.ok(clientJs('session-row-menu.js').includes('window.KebabIcon.svg('),
+        "the row menu's trigger must render the same shared mark");
 });
 
-test('NO CONVERSATION ROW DRAWS A KEBAB ANY MORE', () => {
-    // The removal, asserted rather than assumed. A row builder that
-    // started emitting a three-dot control again would be re-opening a
-    // menu whose items were deleted, so it would paint an empty panel.
+test('the row menu renders the mark SMALLER, and never redraws it', () => {
+    // A row is not a header. The trigger asks for 16px against the
+    // header's 20, which the shared builder answers by scaling the same
+    // three dots - the viewBox is fixed at 16 units whatever the pixel
+    // size, so a smaller rendering is not a different, thinner mark.
+    const src = clientJs('session-row-menu.js');
+    assert.ok(src.includes('window.KebabIcon.svg(16)'));
+    assert.ok(!/<circle/.test(src), 'no second copy of the glyph in the row menu');
+});
+
+test('the ROW BUILDERS still draw no glyph of their own', () => {
+    // The trigger comes from the menu module, which is the only thing
+    // that knows what the mark looks like. A row builder that started
+    // emitting its own three dots would be a second copy again.
     for (const name of ['session-sidebar-rows.js', 'launchpad.js']) {
         const src = clientJs(name);
         assert.ok(!src.includes('KebabIcon'),
-            `${name} must not draw a kebab on a session row`);
-        assert.ok(!src.includes('SessionRowMenu'),
-            `${name} must not reach for the deleted row overflow menu`);
+            `${name} must reach the mark through SessionRowMenu, not directly`);
+        assert.ok(src.includes('SessionRowMenu.triggerHtml('),
+            `${name} must build its trigger from the menu's own builder`);
     }
 });
 

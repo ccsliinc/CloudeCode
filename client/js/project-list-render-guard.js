@@ -53,12 +53,16 @@
  * the page is none of this guard's business, and a page-wide focus test
  * would let one stray focused field freeze the list indefinitely.
  *
- * IT USED TO ASK THE ROW'S OVERFLOW MENU TOO (`SessionRowMenu.isOpen()`).
- * That menu was removed on 2026-09-08 - pin and close are inline icons
- * again - so the question has no answer to give and the check went with
- * it. Nothing else on these rows opens a panel that a repaint could pull
- * out from under a finger; a control that does would have to be added
- * here.
+ * IT ASKS THE ROW'S ACTION MENU TOO. A session row's three-dot menu
+ * (client/js/session-row-menu-open.js) is a panel a repaint would pull
+ * out from under a finger: the panel itself is mounted on the body and
+ * survives, but the TRIGGER it is anchored to is inside the container
+ * being wiped, so a repaint would leave an open menu floating beside a
+ * button that no longer exists. The check is `isOpen()` and nothing
+ * more - deferring while a menu is open costs one poll tick and the
+ * menu is open for seconds, not minutes. It is asked THROUGH a
+ * capability test, so a page that loads the guard without the menu is
+ * simply never busy for that reason rather than throwing.
  *
  * Named for its first consumer, but `isBusy` is shared: launchpad.js
  * consults it from `renderRunningSessions()` too, because the inline
@@ -154,6 +158,11 @@ console.log('[ProjectListRenderGuard Module] Loading...');
                 if (container.querySelector(EDITOR_SELECTORS[i])) return true;
             }
         }
+
+        // AN OPEN ROW MENU IS AN INTERACTION IN PROGRESS. See the file
+        // header: the panel survives a repaint and its trigger does not.
+        var menu = typeof window !== 'undefined' ? window.SessionRowMenuOpen : null;
+        if (menu && typeof menu.isOpen === 'function' && menu.isOpen()) return true;
 
         var active = doc ? doc.activeElement : null;
         if (active
