@@ -66,6 +66,7 @@ from typing import Optional
 import structlog
 
 from src.core.notifications.events import EventType, NotificationEvent
+from src.core.session_notification_policy import POLICY_UNKNOWN
 
 logger = structlog.get_logger()
 
@@ -185,9 +186,30 @@ class IdleWatcher:
         session_slug: str,
         router,
         threshold_s: float = 30.0,
+        policy_resolver=None,
     ) -> None:
+        """Watch one session's output and raise idle notifications from it.
+
+        Inputs:
+            session_slug: the cloudecode session id this watcher belongs
+                to. Carried onto every event it emits.
+            router: the NotificationRouter to enqueue onto.
+            threshold_s: seconds of silence before the session counts as
+                idle.
+            policy_resolver: optional zero-argument callable returning
+                this session's ``PolicyVerdict`` (see
+                ``src.core.session_notification_policy``), or None to say
+                this build carries no durable mute. When it returns a
+                verdict, every emitted event is STAMPED with it and is
+                therefore subject to the mute; an absent resolver, or one
+                returning None, leaves events unstamped and the gate does
+                not apply.
+        Output: None.
+        Example: IdleWatcher('ses_1', router, policy_resolver=resolve)
+        """
         self.slug = session_slug
         self.router = router
+        self.policy_resolver = policy_resolver
         self.threshold_s = float(threshold_s)
         self.last_output_ts: float = time.monotonic()
         self.state: IdleState = IdleState.THINKING
@@ -429,11 +451,43 @@ class IdleWatcher:
         single place to carry the slug / timestamp / truncated-snippet
         convention.
         """
+        # STAMP THE DURABLE MUTE ONTO THE EVENT when this watcher was
+        # given a way to resolve it. The router drains its queue later and
+        # has only the event to go on, so the policy has to travel with
+        # it. A resolver that THROWS stamps ``unknown``, which the router
+        # refuses - a policy that could not be read may not be read as
+        # "not muted", because the user asked for silence and a push to a
+        # phone cannot be taken back.
+        policy_key = None
+        policy_generation = None
+        policy_verdict = None
+        if self.policy_resolver is not None:
+            try:
+                verdict = self.policy_resolver()
+                # None means this build has no durable mute wired in at
+                # all, so there is nothing to stamp and the event goes out
+                # as it always did. That is a different answer from a
+                # policy that could not be READ, which stamps ``unknown``
+                # below and is refused.
+                if verdict is not None:
+                    policy_key = verdict.session_uuid
+                    policy_generation = verdict.generation
+                    policy_verdict = verdict.verdict
+            except Exception as exc:  # noqa: BLE001 - see above
+                logger.warning(
+                    "idle_watcher.policy_unreadable",
+                    slug=self.slug,
+                    error=str(exc),
+                )
+                policy_verdict = POLICY_UNKNOWN
         event = NotificationEvent(
             kind=kind,
             session_slug=self.slug,
             timestamp=time.monotonic(),
             snippet=snippet[:200],
+            policy_key=policy_key,
+            policy_generation=policy_generation,
+            policy_verdict=policy_verdict,
         )
         try:
             self.router.emit(event)

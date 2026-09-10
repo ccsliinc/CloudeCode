@@ -50,12 +50,48 @@ class NotificationEvent:
         snippet: optional last line of output, truncated to 200 chars.
             Internal logging only - NEVER sent to ntfy. The IdleWatcher
             (Item 7) can populate this for its own debug trail.
+        policy_key: the DURABLE session identity (``sessions.session_uuid``)
+            this event belongs to, or None when the producer does not know
+            it. Internal only; never sent to any channel. It is what the
+            router looks the notification-mute policy up by - see
+            ``src.core.session_notification_policy``. Deliberately NOT
+            ``session_slug``: a slug is derived from a tmux name, names are
+            reused, and a mute must never transfer to whichever session
+            holds a name now.
+        policy_generation: the session's notification-policy generation as
+            it stood when this event was ENQUEUED. The router refuses to
+            send an event whose generation is no longer current, which is
+            what stops an alert queued before a mute from arriving after
+            it, and stops a muted backlog replaying on unmute. None means
+            the producer knew the session but not its generation, and only
+            the mute half of the gate applies.
+        policy_verdict: what the policy said at STAMP time - one of
+            ``src.core.session_notification_policy.ALL_POLICY_VERDICTS``,
+            or None. None is the load-bearing value: it means this
+            producer does not participate in the mute gate at all, and
+            such an event is always sent.
+
+            THE REASON THIS FIELD EXISTS RATHER THAN JUST ``policy_key``
+            IS THE ``unknown`` CASE. A policy that could not be read
+            yields no session uuid, so a key-only stamp would be
+            indistinguishable from "this producer knows nothing about
+            sessions" - and that reads as "send it", which is exactly the
+            outcome an unreadable mute must never produce. Carrying the
+            verdict separates "could not look" from "nothing to look up".
+
+    UNSTAMPED EVENTS ARE ALWAYS SENT. Every policy field defaults to None,
+    so a producer that has no session identity to offer is unaffected by
+    the gate. Dropping those would silently retire a channel rather than
+    mute a session.
     """
 
     kind: EventType
     session_slug: str
     timestamp: float
     snippet: str = ""
+    policy_key: Optional[str] = None
+    policy_generation: Optional[int] = None
+    policy_verdict: Optional[str] = None
 
 
 def build_deep_link(

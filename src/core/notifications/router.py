@@ -12,6 +12,13 @@ Design contract:
   the most recent signal is usually most relevant) and log both the
   drop and the enqueue at WARN.
 
+- The DURABLE PER-SESSION MUTE is checked twice, at ``emit()`` and again
+  at drain. The second is the one that matters: an event can wait in the
+  queue across a policy change, and only a check at the moment of sending
+  can see that. See ``attach_policy_store`` / ``_policy_allows`` below and
+  ``src/core/session_notification_policy.py`` for the three-value policy
+  and why an unread one suppresses rather than passing.
+
 Lifecycle: ``start()`` in the FastAPI lifespan, ``stop()`` on shutdown.
 ``ntfy.init()``, ``slack.init()``, and ``pushover.init()`` MUST be
 called before ``start()`` so the worker has clients to dispatch through.
@@ -27,6 +34,12 @@ import structlog
 from src.core.notifications import ntfy, pushover, slack
 from src.core.notifications.events import NotificationEvent
 from src.core.notifications.rate_limit import RateLimiter
+from src.core.session_notification_policy import (
+    DISPATCH_ALLOWED_UNSTAMPED,
+    DISPATCH_REFUSED_POLICY_UNKNOWN,
+    POLICY_UNKNOWN,
+    NotificationPolicyStore,
+)
 
 logger = structlog.get_logger()
 
@@ -69,6 +82,66 @@ class NotificationRouter:
             per_kind_cooldown_s=float(
                 getattr(config, "rate_limit_per_kind_cooldown_seconds", 10.0)
             ),
+        )
+        # DURABLE PER-SESSION MUTE. None until the lifespan attaches one,
+        # and a None store lets everything through - a router built
+        # without a policy store behaves exactly as it did before this
+        # existed, which is what keeps every non-session producer and
+        # every existing test unaffected. See ``attach_policy_store``.
+        self._policy_store: Optional[NotificationPolicyStore] = None
+
+    def attach_policy_store(self, store: NotificationPolicyStore) -> None:
+        """Give the router the durable notification-mute policy to obey.
+
+        Description: MUST be called before ``start()``, because the whole
+            point of resolving the policy at boot is that no producer ever
+            runs against an unresolved one. Attaching it later would leave
+            a window in which a muted session's pushes went out, and the
+            user would have no way to know they had.
+        Inputs: store (NotificationPolicyStore) - already hydrated, or at
+            least attempted. An UNHYDRATED store suppresses every stamped
+            event and says so in the log; that is the documented posture
+            for "the policy could not be read", never a silent pass.
+        Output: None.
+        Example: router.attach_policy_store(store)
+        """
+        self._policy_store = store
+
+    def _policy_allows(self, event: NotificationEvent) -> tuple:
+        """Whether the mute policy permits this event, and why.
+
+        Description: the single place both the enqueue and the drain
+            consult, so the two can never disagree about what a mute
+            means. It is applied TWICE on purpose:
+
+              * at ``emit()``, so a muted session cannot fill the bounded
+                queue and evict another session's alerts, and
+              * at drain, so an event that was queued while the session
+                was noisy is re-judged against the policy as it stands at
+                the moment it would actually be SENT. That second check
+                is the one the generation exists for.
+
+            AN EVENT STAMPED ``unknown`` IS REFUSED BEFORE THE STORE IS
+            EVEN CONSULTED. That stamp means the producer HAD a session
+            and could not read its policy, which is a different fact from
+            an event that carries no session at all - and only one of them
+            may be read as "send it". Folding the two together would let
+            an unreadable database deliver the pushes a muted session's
+            owner explicitly asked not to receive.
+
+            A router with no policy store attached allows everything.
+        Inputs: event (NotificationEvent) - stamped or not.
+        Output: (bool, str) - send or not, and the reason. See
+            ``src.core.session_notification_policy`` for the vocabulary.
+        Example: router._policy_allows(event)  # (True, 'allowed')
+        """
+        if event.policy_verdict == POLICY_UNKNOWN:
+            return False, DISPATCH_REFUSED_POLICY_UNKNOWN
+        store = self._policy_store
+        if store is None:
+            return True, DISPATCH_ALLOWED_UNSTAMPED
+        return store.allows_dispatch(
+            event.policy_key, event.policy_generation
         )
 
     async def start(self) -> None:
@@ -161,6 +234,22 @@ class NotificationRouter:
         if not (has_ntfy or has_slack or has_pushover):
             return
 
+        # THE MUTE, AT THE DOOR. Refusing here as well as at the drain
+        # keeps a muted session from consuming the bounded queue and
+        # evicting an alert some OTHER session's user does want. The
+        # drain repeats the check because the policy can change while an
+        # event waits, and only the check at the moment of sending can
+        # see that.
+        allowed, reason = self._policy_allows(event)
+        if not allowed:
+            logger.info(
+                "notify.policy_suppressed",
+                stage="emit",
+                kind=event.kind.value,
+                reason=reason,
+            )
+            return
+
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
@@ -195,6 +284,41 @@ class NotificationRouter:
         try:
             while True:
                 event = await self._queue.get()
+                # THE MUTE, AT THE MOMENT OF SENDING, AND THIS IS THE
+                # CHECK THAT MATTERS. An event can sit in this queue for
+                # an unbounded interval, so the policy it was enqueued
+                # under is not necessarily the policy now. Three refusals
+                # come out of here and they are different facts:
+                #
+                #   muted             the user muted the session while
+                #                     this waited. Do not send it.
+                #   stale_generation  a policy change happened while this
+                #                     waited, in EITHER direction. That
+                #                     is how a queued alert is stopped
+                #                     from escaping a mute, and how an
+                #                     unmute is stopped from replaying
+                #                     the backlog it was holding.
+                #   policy_unknown    the policy has never been read.
+                #                     Suppresses, loudly - see
+                #                     src/core/session_notification_policy.py
+                #                     for why not knowing may not answer
+                #                     "not muted" here.
+                #
+                # BEFORE THE RATE LIMITER, deliberately: a suppressed
+                # event must not consume a session's rate-limit budget or
+                # move its per-kind cooldown, or muting one session would
+                # quietly throttle the notifications of another.
+                policy_allowed, policy_reason = self._policy_allows(event)
+                if not policy_allowed:
+                    logger.info(
+                        "notify.policy_suppressed",
+                        stage="dispatch",
+                        kind=event.kind.value,
+                        reason=policy_reason,
+                        queued_generation=event.policy_generation,
+                    )
+                    self._queue.task_done()
+                    continue
                 # Plan v3.1 Item 8 - rate-limit gate. Suppressed events
                 # are logged + dropped; suppression is NOT an error so
                 # we still mark the queue item done and move on.

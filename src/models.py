@@ -424,6 +424,31 @@ class SessionInfo(BaseModel):
             "'unknown'. See src.core.session_startup_gate."
         ),
     )
+    # THE SESSION ACTION MENU'S "mute notifications", read off the durable
+    # row (``sessions.notifications_muted``, schema v26). ON THE WRAPPER,
+    # not on ``.session``, because it is a fact about the stored RECORD
+    # rather than about the live process - the same reason ``unread`` and
+    # ``created_by_cloude`` sit here. Reading ``info.session.
+    # notifications_muted`` gives you ``undefined`` silently, which is the
+    # single most repeated bug in this project (CLAUDE.md, "The
+    # /sessions/list shape").
+    #
+    # IT IS THE DISPLAY ANSWER, NOT THE SUPPRESSION ANSWER, and the two are
+    # deliberately different. It is True only when the row was READ and
+    # says muted. A policy that could not be read at all is not a fact
+    # about the row, so it paints as unmuted here while still suppressing
+    # every alert - see ``PolicyVerdict.muted`` versus
+    # ``PolicyVerdict.suppresses`` in src/core/session_notification_policy.py.
+    # A toggle that painted "muted" on an unreadable database would be
+    # claiming the user's setting is in force when nobody has looked at it.
+    notifications_muted: bool = Field(
+        default=False,
+        description=(
+            "True when this session's stored row records that its "
+            "notifications are muted. Defaults False, which is also what a "
+            "session with no stored row reports"
+        ),
+    )
 
 
 # API Request Models
@@ -2158,6 +2183,97 @@ class SessionRecord(BaseModel):
             "probe that advances on a session nobody has touched. None "
             "means no work has been recorded - a third outcome, sorted "
             "below every value and labelled, never treated as the epoch"
+        ),
+    )
+    # THE DURABLE MUTE, on the record it actually lives on. Carried here as
+    # well as on ``SessionInfo`` because the two payloads answer for
+    # different populations: ``SessionInfo`` covers sessions bound to a
+    # live backend, this covers every row including stopped and archived
+    # ones. A menu rendered from either must agree about the same session,
+    # which is the same reason ``agent_family`` and friends are on both.
+    notifications_muted: bool = Field(
+        default=False,
+        description=(
+            "True when this row records that its notifications are muted. "
+            "False on a database that predates schema v26, where the "
+            "column does not exist and nothing can have been muted"
+        ),
+    )
+    notification_policy_generation: int = Field(
+        default=0,
+        description=(
+            "How many times this row's notification policy has changed. "
+            "Steps on mute AND unmute; a queued alert stamped with an "
+            "older value is refused rather than delivered late"
+        ),
+    )
+
+
+class MuteNotificationsRequest(BaseModel):
+    """Body of ``PATCH /sessions/records/{session_uuid}/notifications``.
+
+    ``muted`` IS A STATE, NOT A TOGGLE, and that is the whole reason this
+    carries a boolean rather than being two verbs. A menu can be clicked
+    twice, a request can be retried, and two tabs can be open on the same
+    session; a toggle would make every one of those flip the setting to
+    whatever the race decided. Sending the state the user asked for makes
+    the call idempotent, so a repeat is a no-op that reports the same
+    answer instead of undoing the first one.
+    """
+
+    muted: bool = Field(
+        ...,
+        description="The state being requested. Idempotent: not a toggle",
+    )
+    # THE EXPECTED INSTANCE. A row action is fired from a LIST THAT WAS
+    # PAINTED EARLIER, and a tmux name is reusable - so between the paint
+    # and the click, the session under that name can have been replaced.
+    # Supplying the instance the user was looking at lets the server refuse
+    # rather than mute whatever holds the name now, which would be a
+    # setting the user never made, applied to a session they never saw, and
+    # SILENT: a wrongly muted session announces itself only by the alerts
+    # that stop arriving.
+    #
+    # OPTIONAL, AND THAT IS NOT A LOOPHOLE. ``session_uuid`` is minted once
+    # and never reused, so it already addresses exactly one row for good;
+    # this pair is a second, narrower check for a caller that has a live
+    # instance to name. An archived row has no tmux instance at all and
+    # must still be addressable. Both fields must be sent together to be
+    # checked - half a key identifies nothing.
+    expected_tmux_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "The tmux session name the caller believes this row carries. "
+            "Checked only when sent together with the epoch"
+        ),
+    )
+    expected_tmux_created_epoch: Optional[int] = Field(
+        default=None,
+        description=(
+            "tmux #{session_created} for the instance the caller means. "
+            "With the name this is the INSTANCE identity"
+        ),
+    )
+
+
+class NotificationPolicyResponse(BaseModel):
+    """What ``PATCH .../notifications`` committed.
+
+    Both fields are the COMMITTED values read back from the row, never the
+    values that were requested. A response that echoed the request would be
+    unable to report an idempotent no-op honestly, and the generation is
+    the one number a caller must not be allowed to guess: it orders every
+    queued notification against this change.
+    """
+
+    muted: bool = Field(
+        ..., description="The committed mute state on the row"
+    )
+    policy_generation: int = Field(
+        ...,
+        description=(
+            "The committed policy generation. Steps by one on every real "
+            "change, in both directions; unchanged by a no-op"
         ),
     )
 

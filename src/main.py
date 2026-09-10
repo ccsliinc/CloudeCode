@@ -33,6 +33,10 @@ from src.core.local_servers import LocalServersTracker
 from src.core.refresh_store import RefreshStore
 from src.core.upload_sweeper import UploadSweeper, datastore_project_paths
 from src.core.notifications import NotificationRouter
+from src.core.session_notification_policy import (
+    NotificationPolicyStore,
+    hydrate_from_datastore as hydrate_notification_policy,
+)
 from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
@@ -469,14 +473,43 @@ async def lifespan(app: FastAPI):
         getattr(notif_cfg, "pushover_token", ""),
         getattr(notif_cfg, "pushover_user_key", ""),
     )
+    # DURABLE PER-SESSION MUTE, RESOLVED BEFORE ANY PRODUCER STARTS.
+    # "mute notifications" is a standing instruction stored on the session
+    # row, and the whole point of reading it HERE is ordering: the router
+    # is not started and the hook route cannot be served until the policy
+    # is in hand, so there is no window in which a muted session's alerts
+    # escape. Resolving it lazily on first use would leave exactly that
+    # window, and the user would learn about it only from notifications
+    # they had asked not to receive.
+    #
+    # ONE BULK QUERY over a table that is under a thousand rows on the
+    # largest install measured, so it costs the boot nothing worth naming.
+    #
+    # A FAILURE HERE LEAVES THE STORE UNHYDRATED, WHICH SUPPRESSES rather
+    # than defaulting every session to unmuted, and never blocks boot -
+    # ``hydrate_from_datastore`` does not raise. A missing database file
+    # is NOT a failure: no rows means nothing can be muted, so a fresh
+    # install hydrates empty and is noisy exactly as it should be.
+    from src.core.db import db_path_for as _db_path_for
+
+    notification_policy_store = NotificationPolicyStore()
+    hydrate_notification_policy(
+        notification_policy_store, _db_path_for(settings.get_state_dir())
+    )
+
     notification_router = NotificationRouter(
         notif_cfg, asyncio.get_running_loop()
     )
+    # BEFORE start(), deliberately. The worker must never drain an event
+    # against a policy it does not have.
+    notification_router.attach_policy_store(notification_policy_store)
     await notification_router.start()
 
     # Item 7: inject the live router into SessionManager so IdleWatcher
     # instances created via create_session have a valid emit target.
     session_manager.attach_notification_router(notification_router)
+    # And the policy the toast path consults before raising anything.
+    session_manager.attach_notification_policy_store(notification_policy_store)
 
     # v0.7.0 Part 3 - idempotent-merge cloudecode's Claude Code lifecycle
     # hooks into ~/.claude/settings.json. Best effort: a parse error /
@@ -534,6 +567,7 @@ async def lifespan(app: FastAPI):
     app.state.local_servers = local_servers
     app.state.refresh_store = refresh_store
     app.state.notification_router = notification_router
+    app.state.notification_policy_store = notification_policy_store
 
     # Background upload-uploads TTL pruner - safety net for long-running
     # servers. Layers 1 (destroy_session rmtree) and 2 (startup orphan

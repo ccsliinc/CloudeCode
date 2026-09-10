@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 25
+CURRENT_SCHEMA_VERSION: int = 26
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -1586,3 +1586,66 @@ DDL_V25: Tuple[str, ...] = (
 #: Additive-only forward, RESTORE backward - same as V3, V4 and V23.
 #: Stated so the absence is a decision rather than a gap.
 REVERSAL_SQL_V25: Tuple[str, ...] = ()
+
+
+# ---------------------------------------------------------------------------
+# v25 -> v26: durable notification mute, and the generation that dates it
+# ---------------------------------------------------------------------------
+#
+# THE MUTE HAS TO OUTLIVE THE PROCESS OR IT IS NOT A SETTING. The session
+# action menu's "mute notifications" is a durable user decision about one
+# session: it must survive a server restart, and it must survive a restart
+# of the session itself. ``respawn-pane -k`` keeps the same row (see
+# CLAUDE.md, "Identity is MEASURED across the kill"), so a mute recorded
+# HERE, on the row, comes back with the session by construction. Anything
+# held only in memory, or keyed on a pane pid, would not.
+#
+# TWO COLUMNS, NOT ONE, AND THE SECOND IS NOT A TIMESTAMP.
+# ``notification_policy_generation`` is a COUNTER that steps by one on
+# every policy change - mute AND unmute alike. A notification queued
+# before a change carries the generation it was queued under, and the
+# dispatcher refuses to send anything whose generation is not the current
+# one. That is what stops an alert that was raised while the session was
+# noisy from arriving after the user muted it, and what stops a muted
+# backlog from being replayed the instant the user unmutes. A timestamp
+# could not do this job: two changes inside one clock tick would be
+# indistinguishable, and a clock that moves backwards would reorder them.
+#
+# BOTH ARE NULLABLE WITH NO SQL DEFAULT, and the NULL means something
+# definite rather than something unknown. A row that has never been muted
+# has never had a notification policy applied to it, and "no policy" IS
+# "unmuted at generation 0" - there is no third state, because a mute can
+# only be recorded here and nowhere else. That is what makes existing rows,
+# new sessions and forks all start unmuted without a backfill: the absence
+# of a row-level decision is itself the answer. Compare v25's ``kind``,
+# where NULL had to mean "never looked at" because the fact lived in a
+# transcript this column could not see.
+#
+# NO INDEX, same reasoning as v23's ``last_work_at`` and v25's ``kind``:
+# the sessions table is under a thousand rows on the largest install
+# measured, and the policy is read as ONE bulk pass at boot rather than
+# per-notification.
+DDL_V26_SESSIONS_NOTIFICATIONS_MUTED = (
+    "ALTER TABLE sessions ADD COLUMN notifications_muted INTEGER"
+)
+
+#: The counter described above. Stepped by ``session_store.set_notification_mute``
+#: and by nothing else, so there is exactly one writer of the ordering.
+DDL_V26_SESSIONS_NOTIFICATION_POLICY_GENERATION = (
+    "ALTER TABLE sessions ADD COLUMN notification_policy_generation INTEGER"
+)
+
+#: Ordered DDL for a v25 -> v26 database. Two ALTER TABLE ADD COLUMNs, each
+#: guarded by PRAGMA table_info in the step (SQLite has no IF NOT EXISTS for
+#: ADD COLUMN - same idiom as v3/v10/v11/v13/v15/v22/v23/v25). NO BACKFILL:
+#: see above for why NULL is already the correct value for every existing row.
+DDL_V26: Tuple[str, ...] = (
+    DDL_V26_SESSIONS_NOTIFICATIONS_MUTED,
+    DDL_V26_SESSIONS_NOTIFICATION_POLICY_GENERATION,
+)
+
+#: Additive-only forward, RESTORE backward - same as V3, V4, V23 and V25.
+#: Stated so the absence is a decision rather than a gap. A downgrade that
+#: left these columns in place would be harmless anyway: an older build
+#: neither reads nor writes them, and its session rows keep working.
+REVERSAL_SQL_V26: Tuple[str, ...] = ()

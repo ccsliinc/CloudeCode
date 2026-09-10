@@ -314,6 +314,15 @@ class SessionManager:
         # is skipped and no notification events fire.
         self._notification_router = None
 
+        # DURABLE PER-SESSION NOTIFICATION MUTE - set by
+        # ``attach_notification_policy_store`` during lifespan startup,
+        # after one bulk read of the sessions table and BEFORE any
+        # notification producer starts. None means "no policy resolved",
+        # which ``notification_policy_for`` reports as ``unknown`` rather
+        # than as "nothing is muted". See
+        # src/core/session_notification_policy.py.
+        self._notification_policy_store = None
+
         # The tmux socket the most recent attachable probe was bound to.
         # None until the first probe runs. Read by
         # ``list_attachable_sessions_with_socket`` so the adopt path keys
@@ -672,6 +681,86 @@ class SessionManager:
         must be usable for pre-router operations like ``lifespan_startup``).
         """
         self._notification_router = router
+
+    def attach_notification_policy_store(self, store) -> None:
+        """Inject the durable notification-mute policy after lifespan builds it.
+
+        Description: same shape and the same reason as
+            :meth:`attach_notification_router` above - the SessionManager
+            is constructed before the policy can be read, and must be
+            usable in between.
+
+            THE ORDER IS PART OF THE CONTRACT. main.py hydrates the store
+            and attaches it BEFORE it starts the notification router and
+            before the hook route can serve a request, so no producer ever
+            runs against an unresolved policy. A store attached late would
+            leave a window in which a muted session's alerts went out, and
+            nothing would tell the user they had.
+        Inputs: store (NotificationPolicyStore | None).
+        Output: None.
+        Example: mgr.attach_notification_policy_store(store)
+        """
+        self._notification_policy_store = store
+
+    def notification_policy_for(self, session_id: str):
+        """This live session's notification policy, resolved from memory.
+
+        Description: the read the hook route's mute gate makes on every
+            toast-worthy event. It maps the cloudecode session id onto the
+            tmux INSTANCE it is attached to - the name plus
+            ``#{session_created}`` - and asks the in-memory policy store,
+            so the answer costs two dict lookups and never opens a
+            database on the critical path of a live working session.
+
+            THE EPOCH IS USED WHENEVER IT IS KNOWN, and the name-only
+            fallback is the lossy one. See
+            ``NotificationPolicyStore.for_instance`` for exactly how lossy
+            and why it is still the right row for a LIVE session.
+
+            NO STORE ATTACHED IS ``unknown``, NOT ``unmuted``. A
+            SessionManager built without one (every existing test) never
+            reaches this method from the gate, because the route only
+            calls it when a store is present. Answering ``unknown`` here
+            keeps the honest reading if anything else ever asks.
+        Inputs: session_id (str) - a cloudecode session id.
+        Output: PolicyVerdict - see
+            ``src.core.session_notification_policy``.
+        Example: mgr.notification_policy_for('ses_1').suppresses
+        """
+        from src.core.session_notification_policy import UNKNOWN_VERDICT
+
+        store = getattr(self, "_notification_policy_store", None)
+        if store is None:
+            return UNKNOWN_VERDICT
+        sess = self.sessions.get(session_id)
+        tmux_name = getattr(sess, "tmux_session", None) if sess else None
+        return store.for_instance(
+            tmux_name, self._instance_epochs.get(session_id)
+        )
+
+    def notification_policy_stamp(self, session_id: str):
+        """The verdict to STAMP on an outgoing notification, or None.
+
+        Description: the difference from :meth:`notification_policy_for`
+            is the no-store case, and it is not a detail. No policy store
+            attached means this build has no durable mute wired in at all,
+            so there is nothing to honour and an event must go out exactly
+            as it did before mute existed - which is what None asks the
+            producer to do. A store that IS attached but could not be read
+            returns ``unknown``, and the dispatcher refuses that: not
+            having looked is not permission to push.
+
+            Folding the two into one value is how "the feature is not
+            installed" would come to mean "stay silent", which would
+            retire the notification channels of every caller that never
+            asked for mute.
+        Inputs: session_id (str) - a cloudecode session id.
+        Output: PolicyVerdict | None.
+        Example: mgr.notification_policy_stamp('ses_1')
+        """
+        if getattr(self, "_notification_policy_store", None) is None:
+            return None
+        return self.notification_policy_for(session_id)
 
     # ---- v0.7.0 Part 3 - Claude Code hook authentication -----------------
     #
@@ -2504,11 +2593,41 @@ class SessionManager:
                         EventType,
                         NotificationEvent,
                     )
+                    # STAMP THE POLICY ONTO THE EVENT, HERE, WHERE THE
+                    # SESSION IS IN HAND. The router drains its queue an
+                    # unbounded interval later and has only the event to
+                    # go on, so the durable identity and the generation
+                    # have to travel WITH it. Stamping is also what opts
+                    # this event into the mute gate at all: an unstamped
+                    # event is always sent, which is right for a producer
+                    # that has no session to be muted.
+                    #
+                    # The verdict is resolved by INSTANCE, so a reused
+                    # tmux name cannot lend this session another one's
+                    # mute.
+                    #
+                    # NOTHING IS STAMPED WHEN NO POLICY STORE IS
+                    # ATTACHED, and that is not the same as stamping an
+                    # unknown. No store means this build has no mute
+                    # policy wired in at all, so there is nothing to
+                    # honour and the event goes out exactly as it did
+                    # before mute existed. A store that IS attached but
+                    # could not be read stamps ``unknown``, which the
+                    # router refuses - not having looked is not
+                    # permission to push.
+                    policy = self.notification_policy_stamp(session_id)
                     event = NotificationEvent(
                         kind=EventType[event_type_name],
                         session_slug=session_id,
                         timestamp=_time.monotonic(),
                         snippet=body or title or "",
+                        policy_key=(
+                            policy.session_uuid if policy else None
+                        ),
+                        policy_generation=(
+                            policy.generation if policy else None
+                        ),
+                        policy_verdict=policy.verdict if policy else None,
                     )
                     self._notification_router.emit(event)
         except Exception as exc:  # pragma: no cover - defensive
@@ -3502,6 +3621,17 @@ class SessionManager:
                     session_slug=session_id,
                     router=self._notification_router,
                     threshold_s=threshold,
+                    # RESOLVED AT EMIT TIME, NOT NOW. The session's row
+                    # does not exist yet at this point in create_session,
+                    # and the user may mute or unmute at any time after,
+                    # so a value captured here would be wrong within
+                    # seconds. The lambda re-reads the in-memory
+                    # projection on each event, which is two dict lookups.
+                    policy_resolver=(
+                        lambda sid=session_id: (
+                            self.notification_policy_stamp(sid)
+                        )
+                    ),
                 )
                 await idle_watcher.start()
                 self.idle_watchers[session_id] = idle_watcher
@@ -4485,6 +4615,32 @@ class SessionManager:
         if gate == GATE_AWAITING and self._startup_gate_ledger.claim_toast(
             tmux_name
         ):
+            # A MUTED SESSION RAISES NO STARTUP TOAST EITHER. It is a web
+            # alert about this session, which is exactly what the user
+            # asked not to receive - the gate VERDICT is untouched, so the
+            # row still says "needs a keypress" and the launchpad card
+            # still paints it. Only the interruption is skipped.
+            #
+            # CHECKED AFTER ``claim_toast``, DELIBERATELY. The claim is a
+            # one-shot per instance, so consuming it here means unmuting
+            # later resumes FUTURE alerts without resurrecting this one -
+            # which is the same no-backlog-replay rule the push
+            # dispatcher's generation check enforces. Skipping the claim
+            # instead would leave it armed and fire on the next poll after
+            # an unmute, replaying a summons about a moment that has
+            # passed.
+            #
+            # ``notification_policy_stamp`` rather than
+            # ``notification_policy_for`` because None has to keep meaning
+            # "this build has no mute wired in", which must raise the
+            # toast exactly as it always did.
+            startup_policy = self.notification_policy_stamp(session_id)
+            if startup_policy is not None and startup_policy.suppresses:
+                logger.info(
+                    "startup_toast_suppressed_notifications_muted",
+                    session=tmux_name,
+                )
+                return gate
             title, body = startup_toast_copy()
             try:
                 toast = self.record_toast(
@@ -4776,6 +4932,20 @@ class SessionManager:
             activity_status=activity_status,
             unread=unread,
             startup_gate=startup_gate,
+            # READ OUT OF MEMORY, NEVER OFF DISK, because this function
+            # runs once per session per listing pass and every SQLite
+            # open on it is felt as terminal latency (see the ``is_alive``
+            # comment above for the measurement that removed the last
+            # per-row subprocess from this path). The policy store is the
+            # projection hydrated at boot from one bulk query.
+            #
+            # ``.muted`` rather than ``.suppresses``: this field says what
+            # the ROW records, so a policy that could not be read paints
+            # as unmuted even while it suppresses. Those are two
+            # questions and one boolean cannot answer both.
+            notifications_muted=self.notification_policy_for(
+                session_id
+            ).muted,
             # fix/session-ownership-source - ownership is membership in the
             # persisted owned set, NOT the shape of ``session_id``. After a
             # restart the app re-attaches to still-running tmux sessions
@@ -6772,6 +6942,13 @@ class SessionManager:
                 session_slug=adopt_session_id,
                 router=self._notification_router,
                 threshold_s=threshold,
+                # Resolved per event - see the create path for why a
+                # captured value would go stale.
+                policy_resolver=(
+                    lambda sid=adopt_session_id: (
+                        self.notification_policy_stamp(sid)
+                    )
+                ),
             )
             await iw.start()
             self.idle_watchers[adopt_session_id] = iw
