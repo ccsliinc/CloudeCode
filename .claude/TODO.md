@@ -6818,3 +6818,91 @@ end to end through the facade, plus a cutoff negative control beside it.
 
 No protocol added. The inbox does no I/O at all - no tmux, no database,
 no filesystem - so there is nothing to substitute.
+
+## 2026-09-10 - backend decomposition S4: the log buffers and command counts
+
+Slice S4 of `.claude/notes/backend-decomposition-plan.md`. `log_buffers`
+and `command_counts` left `SessionManager` for `SessionRegistry` in
+`src/core/sessions/registry.py` (187 lines), along with the append, the
+per-session line cap, the registration ensure and the teardown.
+
+`session_manager.py` 8,112 -> 8,167 (+55). Cumulative S1+S2+S3+S4: 8,340
+-> 8,167, -173. **This slice GROWS the facade and that is expected, not a
+regression.** The moved BODY was about 20 lines; the property pair plus
+the documented delegation that replaces it is a fixed cost of roughly 70,
+and the docstring standard is what makes it so. S7 moves the other four
+fields of this cluster into the same class and pays that cost only once
+more.
+
+**The registry lands in two pieces, on purpose.** The plan's registry
+cluster is six fields. S4 moves the two with NO reader outside
+`session_manager.py`; S7 moves `sessions`, `backends`, `_subscribers` and
+`_last_session_id`, which have 27 external readers between them. Splitting
+on reader count rather than on the heading puts the pattern under test on
+the half that cannot break a caller.
+
+**PLAN VERSUS CODE: the named coverage does not exist.** S4's entry says
+"Tests: `tests/test_session_backend.py`". Measured before the move,
+`add_log_entry` and `get_recent_logs` appear in ZERO test files in this
+suite, that one included. The only exercise either got was indirect,
+through `_session_info_for` reading `get_recent_logs` for a listing row.
+So no pre-existing test could have gone red for a defect introduced here.
+That is why `tests/test_session_registry.py` is 21 tests rather than a
+handful of legs.
+
+**The no-copy legs, chosen for a cluster with no external reader.** S3
+could lean on a defensive accessor in another module; there is no
+analogue here, and no consumer whose behaviour a copy would break. So:
+(a) identity of both containers; (b) neither name is an instance
+attribute and both are properties on the class; (c) an in-place write
+through either spelling is seen by the other; (d) live delegation through
+`add_log_entry`, `get_recent_logs` and `_wipe_session_state`; (e) an
+injected registry is the object the facade actually holds and uses.
+
+**The setter posture is now a rule with evidence behind it.** A
+write-through setter exists where a rebind is MEASURED (S2's
+`pinned_themes`, which `tests/test_tmux_listing_consumers.py` assigns
+wholesale). Nothing in `src/` or `tests/` assigns either name here, so
+both properties are read-only, like S3's pair. An earlier draft of this
+slice shipped setters for symmetry; they were removed once the rule was
+stated, because a setter nothing needs is a second way to write a
+container that must have one owner.
+
+**The line cap is an injected callable, and that is the S2 hazard in a
+new dress.** `add_log_entry` trimmed to `settings.log_buffer_size`,
+resolved out of `session_manager`'s globals per call. Four test modules
+(`test_s9_recent_and_pills.py`, `test_session_lifecycle_wiring.py`,
+`test_persist_fingerprint_family_wiring.py`,
+`test_tmux_listing_consumers.py`) install a stub `settings` carrying their
+own `log_buffer_size`. A registry importing `settings` itself would read
+the developer's real configuration during a pytest run. The cap is re-read
+per append rather than captured, so a settings reload still takes effect
+on a live manager. There is a leg for it.
+
+**Mutations, all run and all reverted to a byte-identical tree** (sha256
+checked after each revert).
+- facade property returns a COPY: 3 red - legs (a), (c) and (e).
+- `append_log` skips the cap trim: 3 red, the two cap legs and the trim
+  direction test.
+- `forget` drops only the buffer and leaves the counter: 2 red.
+- `forget` is a no-op: 2 red.
+- facade keeps its own plain ATTRIBUTE aliasing the registry's dict:
+  **1 red, leg (b) alone. Leg (a), the `is` check, stays GREEN**, which
+  is S2's measurement reproduced on a second cluster and the reason an
+  identity assertion is never the whole proof.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,804
+passed / 2 failed / 19 skipped. After S4: 5,828 / 2 / 19, the same two
+environmental failures (`test_home_write_guard`, `test_version_probe`).
+Collection 5,825 -> 5,849, +24, ZERO removed: 21 new tests, 2 from the
+package-rules parametrisation, 1 from `test_no_unresolved_names`. Node
+200/200. The three listing cost ceilings pass inside the full run.
+`scan_secrets.py` exit 0. Pre-commit hook left enabled.
+
+No protocol added. The registry does no I/O of its own - the one thing it
+reaches outside itself is the cap, and a zero-argument callable is a
+parameter, not a substitution point.
+
+No patch had to be repointed: nothing in the suite patches or
+monkeypatches `log_buffers`, `command_counts`, `add_log_entry` or
+`get_recent_logs` under any spelling.

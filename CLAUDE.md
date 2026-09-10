@@ -739,7 +739,23 @@ per server process and no subprocess at all.
   and failing no existing test. Whenever a slice moves a field, grep for a
   `getattr` on its name before trusting a green suite; that shape is what
   CLAUDE.md calls the characteristic failure of this refactor, and it has
-  now appeared in two of the first three slices.
+  now appeared in two of the first three slices. `SessionRegistry` (S4,
+  the log buffers and command counters, half the registry cluster with S7
+  bringing the rest) settles the SETTER POSTURE as evidence rather than
+  taste: **a write-through setter exists where a whole-map rebind is
+  MEASURED in the tree, and the property is read-only everywhere else**,
+  so a future assignment fails loudly instead of shadowing the property.
+  It also generalises S2's callable rule from paths to VALUES - the line
+  cap arrives as `lambda: settings.log_buffer_size`, because four test
+  modules install a stub `settings` on `session_manager` carrying their
+  own `log_buffer_size` and a collaborator that imported `settings` would
+  read the real one. And it names the case where the existing suite can
+  prove NOTHING: this cluster has zero readers outside `session_manager`
+  and had zero tests of its own, so no pre-existing test could redden for
+  any defect in the move and the structural legs carry the whole proof.
+  Measured on the aliasing mutation, where `__init__` holds the
+  collaborator's own dict as a plain attribute: leg (a), the `is` check,
+  stays GREEN and only leg (b) fails.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in

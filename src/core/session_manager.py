@@ -55,6 +55,7 @@ from src.core.session_backend import SessionBackend, build_backend
 # name is the facade rule applied to a type rather than to a method: no
 # caller moves.
 from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
+from src.core.sessions.registry import SessionRegistry
 from src.core.sessions import theme_dotfile
 from src.core.sessions.theme_accents import ThemeAccents
 from src.core.sessions.theme_store import ThemeStore
@@ -277,6 +278,7 @@ class SessionManager:
         probe_health: Optional[ProbeHealthRecorder] = None,
         theme_store: Optional[ThemeStore] = None,
         toast_inbox: Optional[ToastInbox] = None,
+        registry: Optional[SessionRegistry] = None,
     ):
         """Initialize the session manager.
 
@@ -291,8 +293,10 @@ class SessionManager:
           the tmux probe health cluster. theme_store (ThemeStore | None) -
           the owner of the pinned-theme map, the project dotfile and the
           accent cache. toast_inbox (ToastInbox | None) - the owner of the
-          per-session toast records and the startup-toast queue. Each
-          default-constructed when None.
+          per-session toast records and the startup-toast queue.
+          registry (SessionRegistry | None) - the owner of the per-session
+          log buffers and command counters. Each default-constructed when
+          None.
         Output: None.
         Example: SessionManager(probe_health=ProbeHealthRecorder())
         """
@@ -335,6 +339,24 @@ class SessionManager:
         self._toast_inbox: ToastInbox = (
             toast_inbox if toast_inbox is not None else ToastInbox()
         )
+        # S4 - the ONE owner of the log buffers and command counters.
+        # ``log_buffers`` and ``command_counts`` are PROPERTIES on this
+        # class now, both aliasing the registry's own dicts, so there is
+        # exactly one of each object however a caller reaches it.
+        #
+        # THE LINE CAP IS A CALLABLE FOR THE SAME REASON S2'S PIN PATH IS.
+        # It resolves ``settings`` out of THIS module's globals at append
+        # time, which is what the loose ``add_log_entry`` did. A registry
+        # that imported ``settings`` itself would not see the
+        # ``monkeypatch.setattr("src.core.session_manager.settings", ...)``
+        # four test modules use to install a stub with their own
+        # ``log_buffer_size``, so the cap under test would silently be the
+        # real one.
+        self._registry: SessionRegistry = (
+            registry
+            if registry is not None
+            else SessionRegistry(log_cap=lambda: settings.log_buffer_size)
+        )
         # ---- per-session state, keyed by session_id ---------------------
         # Multiple sessions coexist; two browser tabs can each be attached
         # to a different session. Touching one session's entry NEVER
@@ -351,10 +373,8 @@ class SessionManager:
         # its own session_id (see ``_make_output_handler``), so bytes route
         # to ``self._subscribers[session_id]`` and nowhere else.
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
-        # Per-session log buffers / command counters (capped per session at
-        # ``settings.log_buffer_size``).
-        self.log_buffers: dict[str, list[LogEntry]] = {}
-        self.command_counts: dict[str, int] = {}
+        # Per-session log buffers / command counters live on
+        # ``self._registry`` (S4); the two names above are properties.
         # Item 7: per-session idle watcher. Constructed lazily at
         # ``create_session`` / ``adopt_external_session`` so we can inject
         # the live router from ``app.state``; cleared on destroy/detach.
@@ -630,6 +650,40 @@ class SessionManager:
         """
         return self._toast_inbox.pending_startup
 
+    # ---- S4: log buffers and command counts, owned by ``self._registry`` -
+    #
+    # READ-ONLY properties, like S3's toast pair and unlike S2's
+    # ``pinned_themes``. The rule across these slices is evidence, not
+    # taste: a write-through SETTER exists where a whole-map rebind is
+    # MEASURED in the tree, and nowhere else. Nothing in src or in tests
+    # assigns either of these names, so a future assignment should fail
+    # LOUDLY rather than shadow the property with a second container the
+    # registry knows nothing about.
+
+    @property
+    def log_buffers(self) -> dict[str, list[LogEntry]]:
+        """Per-session log lines, oldest first.
+
+        Description: the SAME dict the registry holds, not a copy. A copy
+          would be correct on the day it was written and would fork the
+          first time anything appended through either spelling.
+        Inputs: none.
+        Output: dict[str, list[LogEntry]] - keyed by session id.
+        Example: mgr.log_buffers is mgr._registry.log_buffers  # True
+        """
+        return self._registry.log_buffers
+
+    @property
+    def command_counts(self) -> dict[str, int]:
+        """How many commands have been sent to each session.
+
+        Description: the SAME dict the registry holds, not a copy.
+        Inputs: none.
+        Output: dict[str, int] - keyed by session id.
+        Example: mgr.command_counts is mgr._registry.command_counts  # True
+        """
+        return self._registry.command_counts
+
     # ---- multi-session accessors / back-compat shims --------------------
 
     def current_session(self) -> Optional[Session]:
@@ -744,8 +798,7 @@ class SessionManager:
         self.sessions.pop(session_id, None)
         self.backends.pop(session_id, None)
         self._subscribers.pop(session_id, None)
-        self.log_buffers.pop(session_id, None)
-        self.command_counts.pop(session_id, None)
+        self._registry.forget(session_id)
         self.idle_watchers.pop(session_id, None)
         self.adopt_fifo_offsets.pop(session_id, None)
         # v0.7.0 Part 2 - drop pending toasts for this session. Other
@@ -1426,8 +1479,7 @@ class SessionManager:
         if backend is not None:
             self.backends[session.id] = backend
         self._subscribers.setdefault(session.id, [])
-        self.log_buffers.setdefault(session.id, [])
-        self.command_counts.setdefault(session.id, 0)
+        self._registry.ensure(session.id)
         self._last_session_id = session.id
 
     async def _lifespan_tmux_reconcile(self) -> None:
@@ -4243,7 +4295,7 @@ class SessionManager:
         try:
             await backend.write(command.encode("utf-8") + b"\n")
             sess.last_activity = datetime.utcnow()
-            self.command_counts[sid] = self.command_counts.get(sid, 0) + 1
+            self._registry.count_command(sid)
             self._save_session_metadata(sess)
             return True
         except Exception as e:
@@ -4305,25 +4357,28 @@ class SessionManager:
         sid = self._resolve_session_id(session_id)
         if not sid:
             return []
-        return self.log_buffers.get(sid, [])[-limit:]
+        return self._registry.recent_logs(sid, limit)
 
     def add_log_entry(
         self, content: str, log_type: str = "stdout",
         session_id: Optional[str] = None,
-    ):
-        """Append a log entry to a session's buffer (default: current)."""
+    ) -> None:
+        """Append a log entry to a session's buffer (default: current).
+
+        Description: resolves the session id, then hands the line to the
+          registry, which creates the buffer if it is absent and enforces
+          the per-session line cap. A call that resolves to no session is
+          a no-op rather than an error, which is what it has always been.
+        Inputs: content (str) - the line; log_type (str) - the stream
+          label carried on the entry; session_id (str | None) - defaults
+          to the current session.
+        Output: None.
+        Example: mgr.add_log_entry("boot ok", session_id="ses_1")
+        """
         sid = self._resolve_session_id(session_id)
         if not sid:
             return
-        buf = self.log_buffers.setdefault(sid, [])
-        buf.append(LogEntry(
-            timestamp=datetime.utcnow(),
-            session_id=sid,
-            content=content,
-            log_type=log_type,
-        ))
-        if len(buf) > settings.log_buffer_size:
-            del buf[: len(buf) - settings.log_buffer_size]
+        self._registry.append_log(sid, content=content, log_type=log_type)
 
     def _build_tmux_status_map(self) -> StatusMap:
         """One bulk tmux query, resolved into ``{tmux_session_name: row}``.
@@ -4599,9 +4654,9 @@ class SessionManager:
             return None
         uptime = int((datetime.utcnow() - sess.created_at).total_seconds())
         stats = SessionStats(
-            total_commands=self.command_counts.get(session_id, 0),
+            total_commands=self._registry.command_count(session_id),
             uptime_seconds=uptime,
-            log_lines=len(self.log_buffers.get(session_id, [])),
+            log_lines=self._registry.log_line_count(session_id),
             local_servers=0,
         )
         tmux_session_name = getattr(backend, "tmux_session", None)
