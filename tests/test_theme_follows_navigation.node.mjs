@@ -131,6 +131,9 @@ function loadApp(opts) {
         applied: [],
         appliedOpts: [],
         scopes: [],      // every setActiveSession() argument, in order
+        // every applySessionScope() argument, in order - the terminal's
+        // resolved {pinnedTheme, agentType} inputs
+        terminalScopes: [],
         clearSession: 0,
         audioSync: 0,
     };
@@ -197,6 +200,11 @@ function loadApp(opts) {
             return true;
         },
         applySession() {},
+        // The terminal's one theme writer. Records the {pinnedTheme,
+        // agentType} pair navigation resolved, which is what replaced the
+        // separate `Themes.applySession(agent_type)` app.js used to make
+        // after this module had already painted the pin.
+        applySessionScope(ctx) { calls.terminalScopes.push(ctx || {}); },
     };
     sandbox.GlobalAudioToggle = {
         place() {},
@@ -354,12 +362,70 @@ test('entering a session WITH a pin still paints it, and repaints xterm', () => 
     settleIgnoringTail(app.returnToExistingTerminal(sessionInfo('cloude_a', 'matrix')));
     const opts = calls.appliedOpts[calls.appliedOpts.length - 1];
     assert.equal(calls.applied[calls.applied.length - 1], 'matrix');
-    assert.equal(opts.forXterm, true,
+    // THE TERMINAL IS REPAINTED BY applySessionScope(), NOT BY forXterm.
+    // This assertion used to read `opts.forXterm === true`, which was the
+    // MECHANISM rather than the outcome: applyTheme() fired the page's
+    // palette at xterm and then app.js fired the AGENT's over the top, so
+    // the flag was true and the terminal was still wrong. The page paint
+    // now deliberately does NOT touch xterm (forXterm:false, no
+    // intermediate flash) and the single terminal writer below does, with
+    // the pin and the agent resolved together.
+    assert.equal(opts.forXterm, false,
+        'the page paint must not fire xterm; the terminal writer below does');
+    const scope = calls.terminalScopes[calls.terminalScopes.length - 1];
+    assert.ok(scope, 'entering a session must paint the terminal exactly once');
+    assert.equal(scope.pinnedTheme, 'matrix',
         'the freshly attached session must repaint the terminal palette, '
         + 'not only the page chrome');
     assert.equal(opts.persist, false,
         'this is a repaint of a choice already made; the server owns the '
         + 'pin and localStorage owns the global default');
+});
+
+test('the agent reaches the terminal as a FALLBACK input, never a later paint', () => {
+    const { app, calls } = loadApp({});
+    // A pinned session whose agent has a theme of its own. Before
+    // 2026-09-09 app.js followed the pin paint with
+    // Themes.applySession('claude'), and the agent won.
+    const pinned = sessionInfo('cloude_a', 'matrix');
+    pinned.agent_type = 'claude';
+    settleIgnoringTail(app.returnToExistingTerminal(pinned));
+    // Compared field by field rather than with deepStrictEqual: the object
+    // is constructed inside the vm sandbox, so its prototype belongs to that
+    // realm and a strict deep compare fails on the realm, not the values.
+    const pinnedScope = calls.terminalScopes[calls.terminalScopes.length - 1];
+    assert.equal(calls.terminalScopes.length, 1,
+        'both inputs must arrive in ONE call so the registry can rank them; '
+        + 'two calls is how the agent came to overwrite the pin');
+    assert.equal(pinnedScope.pinnedTheme, 'matrix');
+    assert.equal(pinnedScope.agentType, 'claude');
+
+    // An UNPINNED session still follows its agent - the fallback is intact.
+    const unpinned = sessionInfo('cloude_b', null);
+    unpinned.agent_type = 'claude';
+    settleIgnoringTail(app.returnToExistingTerminal(unpinned));
+    const unpinnedScope = calls.terminalScopes[calls.terminalScopes.length - 1];
+    assert.equal(unpinnedScope.pinnedTheme, null,
+        'an unpinned session carries no pin into the terminal');
+    assert.equal(unpinnedScope.agentType, 'claude',
+        'an unpinned session must still wear its agent theme');
+});
+
+test('a pin naming an uninstalled theme does not reach the terminal either', () => {
+    const { app, calls } = loadApp({});
+    const info = sessionInfo('cloude_a', 'uninstalled-theme');
+    info.agent_type = 'claude';
+    settleIgnoringTail(app.returnToExistingTerminal(info));
+    // The page fell back to the global theme because applyTheme() refused
+    // the pin. The terminal must fall back on the SAME evidence, or the two
+    // surfaces end up showing different themes.
+    assert.equal(calls.applied[calls.applied.length - 1], 'claude');
+    const refusedScope = calls.terminalScopes[calls.terminalScopes.length - 1];
+    assert.equal(refusedScope.pinnedTheme, null,
+        'a pin the registry refused for the page must not be handed to the '
+        + 'terminal as though it had been accepted');
+    assert.equal(refusedScope.agentType, 'claude',
+        'the agent fallback is what the terminal falls back TO');
 });
 
 // ---------------------------------------------------------------------------

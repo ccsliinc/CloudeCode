@@ -38,10 +38,21 @@
  * next navigation path someone adds free to reintroduce it. A navigation
  * site cannot forget to restore a theme it never had to restore by hand.
  *
- * WHAT IT DELIBERATELY DOES NOT OWN. Themes.applySession(agentType) is the
- * per-AGENT terminal scope - a different axis from the per-SESSION pin, and
- * replay-gated inside the registry. It stays at its existing call sites in
- * app.js, after terminal setup, untouched by this module.
+ * WHAT IT NOW ALSO OWNS, AND WHY IT HAD TO. This module used to leave the
+ * per-AGENT terminal scope alone, on the reading that the agent and the pin
+ * were "different axes". They are not: they are two candidate answers to one
+ * question, which theme the terminal wears. Treating them as independent
+ * meant app.js called Themes.applySession(agent_type) AFTER this module had
+ * painted the pin, and the later call won. A session pinned to snes came
+ * back in its agent's colours every time the user left and returned
+ * (measured 2026-09-09: xterm background #3A3A40 -> #1e1e1e, cyan #3CC4B5 ->
+ * #11a8cd) while the page around it stayed snes, because only the terminal
+ * had two writers.
+ *
+ * So applyForTarget() now hands BOTH inputs to Themes.applySessionScope() in
+ * one call and the registry resolves them: pin first, agent as the fallback,
+ * global theme when neither is available. The agent fallback itself is
+ * unchanged - an unpinned session still wears its agent's theme.
  */
 (function () {
     'use strict';
@@ -90,6 +101,31 @@
     }
 
     /**
+     * Description: read a session's agent id off a `/sessions/list` payload,
+     *   checking BOTH levels.
+     * Inputs: sessionInfo (object|null) - a SessionInfo wrapper, or an inner
+     *   Session row from an older caller.
+     * Output: string|null - the agent id, or null when the payload carries
+     *   none. Null is a supported answer, not a failure: the terminal then
+     *   follows the session's pin, or the global theme if it has no pin.
+     * Example: resolveAgentType({agent_type: 'claude'}) === 'claude'
+     *
+     * The agent is the terminal's FALLBACK theme when a session has no pin
+     * of its own. app.js used to read it here, at the two session-entry
+     * sites, and hand it to Themes.applySession() AFTER this module had
+     * already painted the pin - which is exactly how the agent's palette
+     * came to overwrite a pinned one. It is an input to the resolution now,
+     * not a second paint after it.
+     */
+    function resolveAgentType(sessionInfo) {
+        if (!sessionInfo) return null;
+        var inner = sessionInfo.session || null;
+        return sessionInfo.agent_type
+            || (inner && inner.agent_type)
+            || null;
+    }
+
+    /**
      * Description: paint the correct theme for a navigation target and put
      *   the theme system into the matching scope. Call on EVERY navigation.
      * Inputs: target (object) -
@@ -100,9 +136,14 @@
      *     is "adopted:<tmux-name>", which the backend's theme PATCH rejects
      *     with a 404 and which silently breaks pin persistence. Callers
      *     resolve this as `tmux_session || name`.
-     *   - pinnedTheme (string|null) - kind 'session' only.
-     * Output: string - the theme id actually painted. Returned so a caller
-     *   or a test can assert on the decision rather than infer it.
+     *   - pinnedTheme (string|null) - kind 'session' only. The session's
+     *     explicit theme, which outranks the agent for the terminal too.
+     *   - agentType (string|null) - kind 'session' only. The session's
+     *     agent, the terminal's FALLBACK theme when there is no pin.
+     * Output: string - the PAGE theme id actually painted. Returned so a
+     *   caller or a test can assert on the decision rather than infer it.
+     *   The terminal's own resolved theme is readable from
+     *   Themes.resolveTerminalThemeId() once this returns.
      * Example: applyForTarget({kind: 'session', sessionName: 'cloude_a',
      *                          pinnedTheme: null})  // paints the global theme
      */
@@ -138,10 +179,13 @@
             // persist:false - the server owns a session pin, and localStorage
             // already owns the global choice. This is a re-paint of a choice
             // already made, never a new choice.
-            // forXterm:true inside a session - the freshly-attached session
-            // must repaint the terminal palette, not just the page chrome.
+            // forXterm:false inside a session - the terminal is painted by
+            // the applySessionScope() call below, which ALWAYS fires (it
+            // falls back to the global palette when no session theme
+            // applies). Firing here as well would flash the page palette
+            // through the terminal on the way to the right one.
             var opts = isSession
-                ? { persist: false, forXterm: true }
+                ? { persist: false, forXterm: false }
                 : { persist: false };
             if (themes.applyTheme(wanted, opts)) {
                 painted = wanted;
@@ -154,6 +198,22 @@
                 // init().
                 themes.applyTheme(fallback, opts);
             }
+        }
+
+        // THE TERMINAL, ONCE, FROM BOTH INPUTS. The pin is only handed on
+        // when it is the theme that actually got painted above: a pin naming
+        // an uninstalled theme lost the page to the global fallback, and a
+        // terminal still honouring it would leave the two surfaces showing
+        // different themes. `painted === t.pinnedTheme` is true exactly when
+        // applyTheme() accepted the pin, so the terminal drops to the agent
+        // fallback on the same evidence the page dropped to global.
+        if (isSession && themes && typeof themes.applySessionScope === 'function') {
+            themes.applySessionScope({
+                pinnedTheme: (t.pinnedTheme && painted === t.pinnedTheme)
+                    ? t.pinnedTheme
+                    : null,
+                agentType: t.agentType || null
+            });
         }
 
         // The audio gate is keyed on the active session name, so it has to be
@@ -182,7 +242,8 @@
         return applyForTarget({
             kind: 'session',
             sessionName: sessionName || null,
-            pinnedTheme: resolvePinnedTheme(sessionInfo)
+            pinnedTheme: resolvePinnedTheme(sessionInfo),
+            agentType: resolveAgentType(sessionInfo)
         });
     }
 

@@ -5,12 +5,22 @@
  *   - Themes.init()                  fetch /api/v1/themes, apply persisted global
  *   - Themes.applyGlobal(id)         set <html data-theme>, write CSS vars on :root,
  *                                    fire xterm listeners, persist to localStorage
- *   - Themes.applySession(agentType) STUB - sets terminal-screen attr + console.log
- *                                    Phase 5 wires the full xterm side
- *   - Themes.clearSession()          remove session attr; restore global xterm
- *   - Themes.getActiveGlobal()       active global manifest
+ *   - Themes.applySessionScope(ctx)  set the terminal's theme inputs (the
+ *                                    session's pin and its agent) and paint
+ *                                    the resolved answer
+ *   - Themes.applySession(agentType) agent-only form of the above
+ *   - Themes.clearSession()          leave session scope; restore global xterm
+ *   - Themes.getActiveGlobal()       active global manifest (the PAGE theme)
+ *   - Themes.getActiveTerminalManifest()  the manifest the TERMINAL wears
  *   - Themes.listAll()               all manifests (built-ins first)
  *   - Themes.onXtermThemeChange(cb)  subscribe to xterm palette changes
+ *
+ * THE PAGE AND THE TERMINAL ARE TWO SURFACES WITH ONE OWNER EACH. The page
+ * is applyTheme()/paintCssVars() on :root. The terminal is
+ * paintTerminalScope() on #terminal-screen plus the xterm palette, resolved
+ * from the session's pin over its agent by resolveTerminalThemeId(). Nothing
+ * else may write either surface; a second writer is the 2026-09-09 defect
+ * where a pinned terminal reverted to its agent's colours on re-entry.
  *
  * Auth: fetches with Bearer token via window.Auth (matches the rest of the app).
  * Fallback: if /api/v1/themes fails for ANY reason, a hardcoded Claude manifest is
@@ -62,7 +72,29 @@
     // Module state
     var manifests = new Map();          // id -> ThemeManifest
     var activeGlobalId = DEFAULT_THEME_ID;
-    var activeSessionAgent = null;
+    // THE TERMINAL HAS EXACTLY ONE THEME OWNER, AND THESE THREE VARIABLES
+    // ARE IT. Until 2026-09-09 the terminal had TWO writers racing each
+    // other: theme-navigation.js painted the session's pin, and app.js then
+    // called applySession(agent_type) which painted the AGENT's manifest
+    // over the top. A session pinned to snes came back claude-coloured on
+    // re-entry (measured: background #3A3A40 -> #1e1e1e, cyan #3CC4B5 ->
+    // #11a8cd) while the page chrome stayed snes, because only the terminal
+    // had a second writer. The two inputs are now recorded separately and
+    // the ANSWER is derived from them in one place, resolveTerminalThemeId(),
+    // so there is no longer a later call that can disagree with an earlier
+    // one.
+    //   sessionPinnedThemeId - the explicit choice: a server-side pin, or a
+    //     theme the user picked from the in-session picker this instant.
+    //   sessionAgentFallback - the agent's own theme, used ONLY when there
+    //     is no explicit choice. This is the pre-existing applySession()
+    //     behaviour, deliberately preserved.
+    //   activeTerminalThemeId - the resolved answer currently painted, or
+    //     null when the global theme governs the terminal. Replaces the old
+    //     `activeSessionAgent`, and feeds applyTheme()'s legacy xterm gate
+    //     unchanged: "a session-scoped palette is on screen".
+    var sessionPinnedThemeId = null;
+    var sessionAgentFallback = null;
+    var activeTerminalThemeId = null;
     // SESSION-IDENTITY-V2 - name of the currently-active session, set by
     // app.js when transitioning to/from the terminal screen. When non-null
     // applyGlobal() PATCHes the server-side pinned theme INSTEAD of writing
@@ -78,13 +110,20 @@
     // keys are unique even if a theme accidentally lists a var twice.
     var sessionAppliedVarNames = new Set();
     // Phase 4-5: replay gate. While `replay_in_progress` is true (set by
-    // the WS replay path elsewhere), applySession() calls are deferred
-    // onto a queue and replayed once the flag clears. Prevents mid-replay
-    // theme flicker when bytes are still being painted into xterm at
-    // session-attach time. The flag itself is owned by the replay code;
-    // Phase 4-5 only consumes it.
+    // the WS replay path elsewhere), terminal-scope paints are deferred
+    // and run once the flag clears. Prevents mid-replay theme flicker when
+    // bytes are still being painted into xterm at session-attach time. The
+    // flag itself is owned by the replay code; this module only consumes it.
+    //
+    // WHAT IS DEFERRED IS THE PAINT, NOT A THEME ID. The queue used to hold
+    // the agentType of each deferred call and replay the last one. A queued
+    // id is a decision made in the past: if the user switches session or
+    // picks a different theme while replay runs, draining that id repaints
+    // the theme they just left. Deferring a BOOLEAN and re-resolving from
+    // the current inputs on drain cannot go stale, because the answer is
+    // derived after the wait rather than before it.
     var replayInProgress = false;
-    var deferredSessionQueue = [];
+    var terminalScopePaintDeferred = false;
 
     /**
      * Read the stored global theme id (sync, safe at any time).
@@ -525,14 +564,16 @@
      *   pinning is handled by applyGlobal() which calls this internally;
      *   this primitive intentionally does NOT touch the server.
      * @param {boolean} [opts.forXterm] - three-state xterm-repaint override:
-     *   - true       → ALWAYS fire fireXtermChange regardless of activeSessionAgent.
+     *   - true       → ALWAYS fire fireXtermChange regardless of the resolved
+     *                  terminal theme.
      *                  Use when the caller is the authoritative source for the
      *                  session's terminal palette (session theme picker, session
      *                  attach with pinned_theme).
      *   - false      → NEVER fire fireXtermChange. Use when the caller knows a
      *                  subsequent call (e.g. applySession) will paint the
      *                  terminal and wants to avoid an intermediate flash.
-     *   - undefined  → preserve legacy gate (fire iff !activeSessionAgent).
+     *   - undefined  → preserve legacy gate (fire iff no resolved terminal
+     *                  theme is painted).
      *                  This keeps every pre-existing caller's behavior intact.
      */
     function applyTheme(themeId, opts) {
@@ -586,7 +627,7 @@
             ? opts.forXterm
             : undefined;
         var shouldFireXterm = forXterm === true
-            || (forXterm === undefined && !activeSessionAgent);
+            || (forXterm === undefined && !activeTerminalThemeId);
         if (shouldFireXterm) {
             fireXtermChange(m.xterm || {});
         }
@@ -667,107 +708,162 @@
      */
     function applyGlobal(themeId) {
         // When the user picks a theme while inside a session, the pick IS
-        // for this session - force the xterm repaint so the terminal pane
-        // restyles immediately (otherwise only the page chrome would repaint
-        // because the legacy gate blocks xterm whenever activeSessionAgent
-        // is set, which is exactly when we're in a session). Outside a
-        // session (launchpad/auth), leave the flag undefined so the legacy
-        // gate fires xterm normally.
+        // this session's explicit choice - the same kind of fact a stored
+        // pin is. Recording it as one (rather than only firing xterm once
+        // and moving on) is what makes leaving and coming back show the
+        // same terminal: the resolver below reads the same input on the
+        // pick and on every later re-entry.
+        //
+        // BEFORE 2026-09-09 this passed forXterm:true and stopped there.
+        // That repainted the xterm palette but left #terminal-screen's
+        // data-session-theme and inline CSS vars owned by the AGENT, so the
+        // terminal's palette and its CSS scope disagreed from the moment of
+        // the pick - measured: palette snes, scope claude. Now the paint
+        // goes through the one terminal writer, which moves both together.
+        var inSession = !!activeSessionName;
         var ok = applyTheme(themeId, {
-            persist: !activeSessionName,
-            forXterm: activeSessionName ? true : undefined
+            persist: !inSession,
+            // forXterm:false inside a session - paintTerminalScope() below
+            // is the terminal's only writer and ALWAYS fires, so firing
+            // here too would be an intermediate flash of the page palette.
+            // Outside a session, leave it undefined so the legacy gate
+            // fires xterm normally.
+            forXterm: inSession ? false : undefined
         });
         if (!ok) return false;
-        if (activeSessionName) {
+        if (inSession) {
+            sessionPinnedThemeId = themeId;
+            paintTerminalScope();
             pinThemeForSession(activeSessionName, themeId);
         }
         return true;
     }
 
     /**
-     * Apply a per-session theme scoped to #terminal-screen.
+     * Description: decide which theme governs the TERMINAL right now. The
+     *   one and only resolution; every terminal paint reads it.
+     * Inputs: none - reads sessionPinnedThemeId and sessionAgentFallback.
+     * Output: string|null - a theme id known to the registry, or null when
+     *   no session-scoped theme applies and the global theme governs the
+     *   terminal too.
+     * Example: pin 'snes' + agent 'claude' → 'snes'
      *
-     * Behavior (Phase 4-5):
-     *   1. If `agentType` is null/undefined or doesn't match any manifest →
-     *      delegate to clearSession() and return. "Unknown agent" is the
-     *      same UX as "no agent": global theme governs the terminal too.
-     *   2. Set #terminal-screen[data-session-theme=<id>] so the per-theme
-     *      theme.css blocks (gradients, glows, scanlines) apply.
-     *   3. Apply the matched manifest's cssVars INLINE on #terminal-screen
-     *      via element.style.setProperty(). Inline > :root cascade so the
-     *      session palette wins over the global without a specificity war
-     *      and without !important. Track the set of names applied so
-     *      clearSession() can cleanly reverse without leaking.
-     *   4. Fire xtermThemeChange listeners with the matched manifest's
-     *      xterm palette (terminal.js subscribes and assigns to term.options.theme).
-     *
-     * Replay gate: if replay_in_progress is true the call is queued onto
-     * deferredSessionQueue and applied once setReplayInProgress(false) runs.
-     * The most recent enqueued agentType wins (we coalesce intermediate
-     * applySession() calls that landed mid-replay so we don't flicker
-     * through multiple themes when the queue drains).
+     * AN EXPLICIT CHOICE OUTRANKS A FALLBACK, and an id the registry does
+     * not know is not a choice. A pin naming an uninstalled theme drops
+     * through to the agent rather than painting nothing, for the same
+     * reason theme-navigation.js falls back to the global theme on an
+     * unknown pin: keeping the previous session's palette on screen is the
+     * defect, not the safe option.
      */
-    function applySession(agentType) {
-        // Replay gate - defer until replay completes. Coalesce: only the
-        // latest agentType matters when the queue drains.
-        if (replayInProgress) {
-            deferredSessionQueue.push(agentType);
-            console.log('Themes.applySession: replay in progress, deferred', agentType);
-            return;
+    function resolveTerminalThemeId() {
+        if (sessionPinnedThemeId && manifests.has(sessionPinnedThemeId)) {
+            return sessionPinnedThemeId;
         }
-
-        // No agent or unknown agent → revert to global theme rules.
-        if (!agentType) {
-            clearSession();
-            return;
+        if (sessionAgentFallback && manifests.has(sessionAgentFallback)) {
+            return sessionAgentFallback;
         }
-        var m = manifests.get(agentType);
-        if (!m) {
-            console.log('Themes.applySession: no manifest for "' + agentType + '" - falling back to global');
-            clearSession();
-            return;
-        }
-
-        var el = document.getElementById('terminal-screen');
-        if (!el) {
-            console.warn('Themes.applySession: #terminal-screen not found in DOM');
-            return;
-        }
-
-        // 1. Mark the screen so per-theme theme.css blocks engage.
-        el.dataset.sessionTheme = agentType;
-
-        // 2. Sync inline cssVars: unset stale, apply current. Same diff-set
-        //    pattern as paintCssVars() but scoped to the element instead
-        //    of :root, so the global theme on documentElement is untouched.
-        var nextVars = m.cssVars || {};
-        var nextNames = Object.keys(nextVars);
-        var nextSet = new Set(nextNames);
-        sessionAppliedVarNames.forEach(function (name) {
-            if (!nextSet.has(name)) {
-                try { el.style.removeProperty(name); } catch (_) { /* ignore */ }
-            }
-        });
-        nextNames.forEach(function (name) {
-            try { el.style.setProperty(name, nextVars[name]); } catch (_) { /* ignore bad var */ }
-        });
-        sessionAppliedVarNames = nextSet;
-
-        activeSessionAgent = agentType;
-        console.log('Themes.applySession: ' + agentType + ' (' + nextNames.length + ' inline vars)');
-
-        // 3. Push the session's xterm palette to subscribers.
-        if (m.xterm) {
-            fireXtermChange(m.xterm);
-        }
+        return null;
     }
 
     /**
-     * Remove the session scope. Strips the data attribute, removes every
-     * inline cssVar that applySession() set, and reverts xterm to the
-     * active global theme's palette.
+     * Description: the manifest whose xterm palette the terminal should be
+     *   showing right now - the resolved session theme, or the global theme
+     *   when no session theme applies.
+     * Inputs: none.
+     * Output: object|null - a theme manifest, or null when even the global
+     *   theme is unknown (registry not initialised).
+     *
+     * Exported because terminal.js SEEDS a brand-new xterm Terminal from it.
+     * Seeding from getActiveGlobal() instead was the third face of this bug:
+     * a terminal constructed while a session theme was already resolved came
+     * up wearing the page's palette until the next paint happened to fire.
      */
-    function clearSession() {
+    function getActiveTerminalManifest() {
+        var resolved = resolveTerminalThemeId();
+        if (resolved && manifests.has(resolved)) return manifests.get(resolved);
+        return manifests.get(activeGlobalId) || null;
+    }
+
+    /**
+     * Description: paint the resolved terminal theme - CSS scope and xterm
+     *   palette together. THE ONLY writer of either.
+     * Inputs: none - reads the resolution above.
+     * Output: string|null - the theme id painted, null when the terminal
+     *   fell back to the global theme, and null when the paint was deferred
+     *   behind the replay gate.
+     *
+     * Deferral re-resolves on drain rather than replaying a captured id, so
+     * a paint that waited out a replay cannot overwrite a newer choice made
+     * while it waited.
+     */
+    function paintTerminalScope() {
+        if (replayInProgress) {
+            terminalScopePaintDeferred = true;
+            console.log('Themes: replay in progress, terminal theme paint deferred');
+            return null;
+        }
+        var themeId = resolveTerminalThemeId();
+        if (!themeId) {
+            // No session theme applies: strip the scope and hand the
+            // terminal back to the global theme. Reached by an unpinned
+            // session whose agent has no manifest, by a null/unknown agent,
+            // and by leaving the terminal entirely.
+            stripTerminalScope();
+            return null;
+        }
+        var m = manifests.get(themeId);
+        var el = document.getElementById('terminal-screen');
+        if (el) {
+            // 1. Mark the screen so per-theme theme.css blocks engage.
+            el.dataset.sessionTheme = themeId;
+
+            // 2. Sync inline cssVars: unset stale, apply current. Same
+            //    diff-set pattern as paintCssVars() but scoped to the
+            //    element instead of :root, so the global theme on
+            //    documentElement is untouched. THE DIFF IS WHAT REMOVES A
+            //    PREVIOUS OWNER'S VARIABLES: when the pin takes the scope
+            //    off the agent, every var the agent set and the pin does
+            //    not define is removed here rather than left orphaned.
+            var nextVars = (m && m.cssVars) || {};
+            var nextNames = Object.keys(nextVars);
+            var nextSet = new Set(nextNames);
+            sessionAppliedVarNames.forEach(function (name) {
+                if (!nextSet.has(name)) {
+                    try { el.style.removeProperty(name); } catch (_) { /* ignore */ }
+                }
+            });
+            nextNames.forEach(function (name) {
+                try { el.style.setProperty(name, nextVars[name]); } catch (_) { /* ignore bad var */ }
+            });
+            sessionAppliedVarNames = nextSet;
+            console.log('Themes: terminal theme ' + themeId + ' (' + nextNames.length + ' inline vars)');
+        } else {
+            // The screen is not in the DOM yet. That costs the CSS scope,
+            // which the next paint restores, and it must NOT cost the
+            // palette: refusing to colour the terminal because a div is
+            // missing is the same "paints nothing" failure this module
+            // exists to remove.
+            console.warn('Themes: #terminal-screen not found - palette applied, CSS scope skipped');
+        }
+
+        activeTerminalThemeId = themeId;
+
+        // 3. Push the resolved palette to subscribers (terminal.js assigns
+        //    it to term.options.theme through the opacity adapter).
+        if (m && m.xterm) {
+            fireXtermChange(m.xterm);
+        }
+        return themeId;
+    }
+
+    /**
+     * Description: remove the terminal's session scope and hand its palette
+     *   back to the active global theme. Internal half of clearSession():
+     *   it undoes the PAINT without forgetting the session's inputs.
+     * Inputs: none.
+     * Output: void.
+     */
+    function stripTerminalScope() {
         var el = document.getElementById('terminal-screen');
         if (el) {
             if (el.dataset.sessionTheme) delete el.dataset.sessionTheme;
@@ -779,27 +875,87 @@
             });
         }
         sessionAppliedVarNames = new Set();
-        activeSessionAgent = null;
+        activeTerminalThemeId = null;
         var g = manifests.get(activeGlobalId);
         if (g && g.xterm) fireXtermChange(g.xterm);
     }
 
     /**
-     * Replay-gate setter. Called by the WS replay path:
+     * Description: set the terminal's theme inputs for the session being
+     *   entered, and paint the resolved answer.
+     * Inputs: context (object|null) -
+     *   - pinnedTheme (string|null) - the session's EXPLICIT theme: its
+     *     server-side pin. Null when the session has none.
+     *   - agentType (string|null) - the session's agent, used as the
+     *     fallback when there is no explicit pin. Null/unknown is fine and
+     *     means "the global theme governs the terminal too".
+     * Output: string|null - the theme id painted, or null when the terminal
+     *   fell back to the global theme (or the paint was deferred).
+     * Example: applySessionScope({pinnedTheme: 'snes', agentType: 'claude'})
+     *          → 'snes'
+     *
+     * THIS IS THE SEAM THE BUG CAME THROUGH. Navigation used to paint the
+     * pin and then app.js separately called applySession(agent_type), so
+     * the last writer won and the last writer was the agent. Both inputs
+     * now arrive in ONE call and the winner is decided by
+     * resolveTerminalThemeId(), which cannot be re-litigated by a later
+     * caller because there is no later caller.
+     */
+    function applySessionScope(context) {
+        var c = context || {};
+        sessionPinnedThemeId = c.pinnedTheme || null;
+        sessionAgentFallback = c.agentType || null;
+        return paintTerminalScope();
+    }
+
+    /**
+     * Description: set the terminal scope from an agent alone, with no
+     *   explicit session pin. Preserved as the registry's long-standing
+     *   entry point; applySessionScope() is what navigation calls.
+     * Inputs: agentType (string|null) - the session's agent id. Null or an
+     *   id no manifest matches hands the terminal to the global theme,
+     *   which is this function's documented behaviour and is unchanged.
+     * Output: string|null - the theme id painted, or null.
+     * Example: applySession('claude') === 'claude'
+     */
+    function applySession(agentType) {
+        return applySessionScope({ agentType: agentType });
+    }
+
+    /**
+     * Description: leave session theme scope entirely - forget the
+     *   session's pin and agent, strip the scope off #terminal-screen and
+     *   revert xterm to the active global palette. Called when navigating
+     *   to a screen that is not a session.
+     * Inputs: none.
+     * Output: void.
+     */
+    function clearSession() {
+        sessionPinnedThemeId = null;
+        sessionAgentFallback = null;
+        terminalScopePaintDeferred = false;
+        stripTerminalScope();
+    }
+
+    /**
+     * Description: replay-gate setter, called by the WS replay path:
      *   setReplayInProgress(true)  before painting buffered scrollback
-     *   setReplayInProgress(false) once the buffer is drained
-     * On the trailing edge we drain the deferred applySession queue;
-     * intermediate calls are coalesced (only the last enqueued agentType
-     * is applied).
+     *   setReplayInProgress(false) once the buffer is drained.
+     * Inputs: flag (boolean).
+     * Output: void.
+     *
+     * On the trailing edge a deferred terminal paint RE-RESOLVES from the
+     * current inputs rather than replaying the id that was current when it
+     * was deferred, so a theme the user has since navigated away from can
+     * never arrive late and overwrite the one they are looking at.
      */
     function setReplayInProgress(flag) {
         var was = replayInProgress;
         replayInProgress = !!flag;
-        if (was && !replayInProgress && deferredSessionQueue.length) {
-            var last = deferredSessionQueue[deferredSessionQueue.length - 1];
-            deferredSessionQueue = [];
-            console.log('Themes: replay finished - draining deferred session apply', last);
-            applySession(last);
+        if (was && !replayInProgress && terminalScopePaintDeferred) {
+            terminalScopePaintDeferred = false;
+            console.log('Themes: replay finished - painting the current terminal theme');
+            paintTerminalScope();
         }
     }
 
@@ -854,9 +1010,18 @@
         setActiveSession: setActiveSession,
         getActiveSession: getActiveSession,
         applySession: applySession,
+        // The navigation entry point: pin and agent together, resolved once.
+        applySessionScope: applySessionScope,
         clearSession: clearSession,
         setReplayInProgress: setReplayInProgress,
         getActiveGlobal: getActiveGlobal,
+        // Which theme the TERMINAL should be showing - the resolved session
+        // theme, or the global theme when none applies. terminal.js seeds a
+        // new xterm Terminal from this rather than from getActiveGlobal(),
+        // so a terminal built while a session theme is resolved comes up
+        // wearing that theme instead of the page's.
+        getActiveTerminalManifest: getActiveTerminalManifest,
+        resolveTerminalThemeId: resolveTerminalThemeId,
         listAll: listAll,
         onXtermThemeChange: onXtermThemeChange,
         // Expose constants for the selector + tests

@@ -1048,15 +1048,14 @@ class AppController {
         // v0.7.1 - reflect the attached session in the browser tab title.
         setPageTitle({ label: session && session.label, name: sessionName });
 
-        // Phase 4-5: scope the terminal screen + xterm palette to this
-        // session's agent theme. If session.agent_type is null/undefined
-        // (Phase 6 hasn't shipped yet, or the agent is unknown to the
-        // theme registry), applySession() falls through to clearSession()
-        // - meaning the global theme also rules the terminal. That's the
-        // desired fallback: no flicker, no broken-state.
-        if (window.Themes && typeof window.Themes.applySession === 'function') {
-            window.Themes.applySession(session && session.agent_type);
-        }
+        // NOTE: the terminal's own theme is painted by the
+        // applyForSession() call above, not here. This used to carry a
+        // second, later `Themes.applySession(session.agent_type)`, which
+        // overwrote a pinned session's terminal palette with its agent's
+        // (measured 2026-09-09: a snes-pinned session came back #1e1e1e).
+        // The agent is now an INPUT to that one resolution, so an unpinned
+        // session still wears its agent's theme and a pinned one keeps its
+        // pin. See client/js/theme-navigation.js.
 
         // Initialize terminal if first time
         if (!window.TerminalController.term) {
@@ -1198,15 +1197,14 @@ class AppController {
         // v0.7.1 - sync browser tab title to the re-entered session.
         setPageTitle({ label: reLabel, name: sessionName });
 
-        // Phase 4-5: re-scope to the session's theme on re-entry. Same
-        // null-tolerant semantics as showTerminal() - agent_type may be
-        // missing in pre-Phase-6 builds; registry handles the fallback.
-        var agentType = (session && session.agent_type)
-            || (inner && inner.agent_type)
-            || null;
-        if (window.Themes && typeof window.Themes.applySession === 'function') {
-            window.Themes.applySession(agentType);
-        }
+        // NOTE: the terminal's own theme is painted by the
+        // applyForSession() call above. THIS re-entry is where the defect
+        // was reported: a second `Themes.applySession(agent_type)` used to
+        // run here and repaint the terminal in the agent's colours, so
+        // leaving a snes-pinned session and coming back showed a claude
+        // terminal inside a snes page. applyForSession() resolves the pin
+        // and the agent together now, and the agent is still what an
+        // unpinned session follows. See client/js/theme-navigation.js.
 
         // First-time init if the user never hit showTerminal() this page load
         // (e.g. refreshed directly onto launchpad while session was running).
