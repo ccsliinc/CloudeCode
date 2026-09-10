@@ -5513,3 +5513,123 @@ one request per page load) from `session-sidebar-fetch.js load()` and
 surface a page load reaches, plus a test that fails if the caller
 disappears again. This is the "a fallback that cannot fire is not a
 fallback, and it is invisible" trap from CLAUDE.md, in a new place.
+
+---
+
+## 2026-09-09 DEPLOY RECORD - release/1.2 at 6768dcc to live (mac-mini-m4, port 8000)
+
+Deployed the merged 1.2 line from the release worktree, branch
+`release/1.2`, HEAD `6768dcc`, working tree clean. NOT TAGGED AND NOT
+PUSHED: browser check (a) failed, see "the one failure" below.
+
+**Deploy.** `./scripts/deploy-mini.sh --target live` selected "working tree
+is CLEAN, so deploying the committed state", 541 files, staged and hash
+checked 541/541 before production was touched, wrote the app bundle
+Resources then the server dir, pruned both, and re-verified after the
+restart. Banner `== DEPLOYED ==`. The re-run
+`./scripts/deploy-mini.sh --verify-only --target live` exited 0 with
+`== VERIFIED ==`, 541/541 on both destinations, mirror-clean, nothing
+copied. The supervisor did not give up and no kickstart was needed.
+
+**Boot, 2026-09-10T01:00:54Z.** `boot_readopt_complete` held 18, skipped 1,
+failed 0, live_count 19. held + skipped = 19 = `tmux -L cloude
+list-sessions | wc -l` = 19. `id_sources` all `hook_token` (18), zero
+`legacy_row`, zero `derived`, `no_row` 0, so no id was minted and no hook
+token was rotated. `status_seed_warm` seeded 19 of 19 examined.
+
+**Hooks after the restart.** Zero `hook_post_rejected_invalid_token`, zero
+`hook_post_rejected_non_loopback`, zero 403s and zero 410s on
+`/api/v1/hooks/claude-event`. 5 hook POSTs accepted, all 200, no non-200.
+Zero tracebacks in the post-restart window. Read off uvicorn's own access
+lines, not off a success-only application event, so "none rejected" is
+distinguishable from "none received".
+
+**Endpoints.** `GET /api/v1/features` returns
+`ui.show_mark_unread_control: true`, and the browser agrees:
+`UIFlags.showMarkUnreadControl()` answers true on a loaded page, so
+`UIFlags.ensure()` really has a caller. `GET /api/v1/sessions/list`
+returns 19 rows for 19 live tmux sessions, idle 16 / working 1 /
+finished_unread 2. The bearer was minted on the mini from `TOTP_SECRET`
+in the live install's `.env` via pyotp against `POST /api/v1/auth/verify`;
+the secret never left that box and neither it nor the token was printed.
+Negative control in the same pass: a bogus bearer returns 401, so the 200
+is evidence of the credential and not of an open endpoint.
+
+**Browser, live app, hard reloaded (a tab across a deploy does not
+refetch static assets).** Fresh bytes proven by presence rather than by a
+claim: `VersionFooter`, `UIFlags`, `StatusLed`, `TerminalLayoutWait` and
+`TerminalFrameGuard` are all defined on `window`, and every one of those
+files read `target MISSING` in the pre-deploy verify.
+
+- b PASS. The status-light key renders under "what the lights mean" with
+  seven states, and "done, unread" is drawn as a hollow GREEN ring,
+  visibly distinct from solid-green "working", solid-grey "idle" and the
+  hollow-grey "not measured".
+- c PASS end to end, on `cloude_Fantasy_Hockey_2026` / `ses_9523c563`,
+  the oldest live session by last activity (2026-09-03T14:15:12) and
+  already idle and read. Marked unread from its own row menu: the LED
+  became `status-dot--finished-unread`, title "done - unread (via tmux)",
+  `animationName: none` so it is STILL, and `::after` content `none` so
+  it is the single-element box-shadow build rather than the pseudo
+  element that used to drift a device pixel. NOTE THE SHAPE, because it
+  is the 2026-09-09 model and not the older one: the GREEN is the inner
+  dot, painted as `rgb(74,222,128) 0 0 0 2px inset`, while the outer
+  box-shadow rings are neutral grey at 0.18 and 0.063 alpha with a fully
+  transparent glow. The outer ring means activity alone and is correctly
+  OFF for a resting session. Clicking into the row cleared it: the
+  terminal bound (`Session: ses_9523c563 | PID: 23070`, footer
+  "Connected"), and the row came back `status-dot--idle`, title "idle -
+  read, nothing running", with the server reporting `unread=False` /
+  `idle`. THE NEGATIVE CONTROL IS THE LOAD-BEARING HALF: a blanket clear
+  would have passed the positive test perfectly, so the two sessions that
+  were already unread were re-read afterwards and BOTH stayed unread
+  (`cloude_Media_Compression`, `cloude_Hirschfeld`), on the server and in
+  the DOM.
+- d PASS. "mark unread for followup" is present in the sidebar row menu
+  on a live row.
+- e PASS. Every sidebar row carries the kebab, and the menu it opens
+  reads: pin to top, mark unread for followup, move to another group,
+  close session, restart the agent.
+- f PASS. All five group headers render the count in the fixed-width
+  gutter as plain coloured text `rgb(215,119,87)` (not a pill) plus a
+  `...` kebab BUTTON, the reserved "other" band included, whose button is
+  the smaller band menu, `Actions for the other group`. The pinned band
+  was NOT rendered at the time of the check because nothing is pinned, so
+  it was not measured live; it is the same `headerHtml` path and the same
+  unconditional `menuButtonHtml` call as "other", and pinning one of the
+  owner's sessions to see it was not worth the state change.
+- g PASS. Zero CSP violations across a full hard reload plus six seconds,
+  and zero console messages of any kind. The response carries
+  `default-src 'self'; script-src 'self'; style-src 'self'
+  'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:;
+  font-src 'self' data:; frame-ancestors 'none';` with no third-party
+  origin in any directive. A DETECTOR THAT NEVER FIRES CANNOT PROVE A
+  ZERO, so the negative control was run in the same pass: an injected
+  image from `cdn.jsdelivr.net` raised exactly one `img-src` violation on
+  the same listener, which is what makes the zero above mean something.
+
+**The one failure: a, the version footer reads v1.0.33, not 1.2.0.** It is
+not a bad deploy and no redeploy can move it. `src/core/version.py`
+resolves `CLOUDE_APP_VERSION` FIRST, the Electron shell sets it from
+`app.getVersion()` (`macOS/server-manager.js:917`), and that is the
+PACKAGED BUNDLE's own version, baked into `app.asar` at build time.
+Measured: the running server's environment carries
+`CLOUDE_APP_VERSION=1.0.33`, `/Applications/Cloude Code.app` has
+`CFBundleShortVersionString` 1.0.33, and `bootstrap.js` has stamped
+`1.0.33` into the server dir's VERSION file. `deploy-mini.sh` ships
+`git ls-files src client` and cannot rewrite `app.asar`, so
+`macOS/package.json` saying 1.2.0 in the repo reaches nothing at runtime.
+`GET /api/v1/version` returns `{"version": "1.0.33", ...}` and the client
+renders that string in four places. MOVING IT MEANS REBUILDING AND
+REINSTALLING THE ELECTRON BUNDLE AT 1.2.0, which is a separate release
+artifact and a much larger blast radius than a source deploy, so it was
+not attempted unasked on a live install.
+
+Worth knowing while you are in there: the same endpoint reports
+`update_available`, latest 1.0.36, against remote
+`https://github.com/Adoom666/CloudeCode.git` - the upstream this project
+is forbidden to push to. An install on the 1.2 line will keep being told
+it is behind by a line it does not follow.
+
+**Not done, deliberately, because a and the step 3 version check failed:**
+no `v1.2.0` tag was created, and nothing was pushed to origin.
