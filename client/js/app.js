@@ -710,10 +710,12 @@ class AppController {
      */
     showAuth() {
         console.log('App: Showing auth screen');
-        // Same rule as showLaunchpad(): this screen replaces whatever was
-        // being navigated to, so in-flight session work stops belonging on
-        // screen the moment it paints.
-        if (window.NavigationGeneration) window.NavigationGeneration.begin('auth');
+        // Same rule as showLaunchpad(), including the boot gate: this
+        // screen replaces whatever was being navigated to, but the FIRST
+        // paint of a page that has no token replaces nothing.
+        if (this.currentScreen && window.NavigationGeneration) {
+            window.NavigationGeneration.begin('auth');
+        }
         this.hideAllScreens();
         document.getElementById('auth-screen').classList.add('active');
         // NO PER-BUTTON HIDE LIST HERE ANY MORE. Three
@@ -910,7 +912,18 @@ class AppController {
         // when the user goes home must not paint that session over the
         // launcher a moment later, so this bumps the generation rather
         // than reading it. See client/js/navigation-generation.js.
-        if (window.NavigationGeneration) window.NavigationGeneration.begin('launchpad');
+        //
+        // A BOOT PAINT IS NOT A NAVIGATION, and the gate is what keeps a
+        // cold-load deep link alive. Router.init() runs while App.init()
+        // is still awaiting verifyToken(), so on /session/<name> the
+        // router has ALREADY declared the deep link's intent and
+        // openProjectByName() is already resolving it by the time this
+        // runs - and an unconditional bump here would supersede the very
+        // target the user typed. `currentScreen` is unset until the first
+        // screen paints, which is exactly that moment and no other.
+        if (this.currentScreen && window.NavigationGeneration) {
+            window.NavigationGeneration.begin('launchpad');
+        }
         // Archive deep link: consumed FIRST, and it RETURNS. See
         // _showArchiveIfDeepLinked() for why the position matters.
         if (this._showArchiveIfDeepLinked()) return;

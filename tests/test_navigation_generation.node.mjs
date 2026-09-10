@@ -332,6 +332,25 @@ test('every entry path declares an intent, and the two App entries only READ one
     }
 });
 
+test('A BOOT PAINT IS NOT A NAVIGATION, or a cold-load deep link dies', () => {
+    // Router.init() runs while App.init() is still awaiting
+    // verifyToken(), so on a cold load of /session/<name> the router has
+    // already declared the deep link's intent and openProjectByName() is
+    // already resolving it by the time App paints the launcher. An
+    // unconditional begin() there would supersede the very target the
+    // user typed, and the launcher would come up instead of the session.
+    // `currentScreen` is unset until the first screen paints, which is
+    // the one moment that must not bump the counter.
+    const app = read('client/js/app.js');
+    for (const fn of ['    showLaunchpad() {', '    showAuth() {']) {
+        const body = app.slice(app.indexOf(fn), app.indexOf(fn) + 1600);
+        const at = body.indexOf('NavigationGeneration.begin');
+        assert.ok(at > 0, `${fn.trim()} must declare a navigation`);
+        assert.match(body.slice(0, at), /if \(this\.currentScreen && window\.NavigationGeneration\)/,
+            `${fn.trim()} must gate that on there being a screen to replace`);
+    }
+});
+
 test('a stale generation never reaches the deep-link rejection banner', () => {
     // rejectTarget()'s contract is one banner for a URL that names
     // nothing. A superseded navigation names something perfectly real -

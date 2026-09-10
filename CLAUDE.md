@@ -2293,7 +2293,13 @@ launchpad gestures that dispatch `session-created`
 `SessionRestartReturn.reopen`, `ToastNavigate.go`, and the router's
 `deliverTargetToLaunchpad`. `App.showLaunchpad` and `App.showAuth` begin
 one too, because LEAVING a session is a navigation and is the half that
-is easy to forget.
+is easy to forget - but ONLY when `currentScreen` is already set. A BOOT
+PAINT IS NOT A NAVIGATION: `Router.init()` runs while `App.init()` is
+still awaiting `verifyToken()`, so on a cold load of `/session/<name>`
+the router has already declared the deep link's intent and
+`openProjectByName` is already resolving it by the time App paints the
+launcher, and an unconditional bump there would supersede the very target
+the user typed.
 
 **THE TWO `App` ENTRIES READ THE GENERATION AND NEVER BEGIN ONE, and the
 asymmetry is the design.** Bumping the counter inside `showTerminal`
