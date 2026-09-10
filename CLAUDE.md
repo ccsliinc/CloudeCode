@@ -402,6 +402,42 @@ beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
 
+**AND THE 150 ms ATTACH SETTLE IS NOW PAID ONLY WHEN A RESIZE ACTUALLY
+WENT OUT.** The handshake slept 150 ms on every attach so a `SIGWINCH`
+raised by the handshake resize could reach the pane's foreground process
+before the capture stomped its buffer. That is the right thing to wait
+for when a resize happened, and pure latency when the browser comes back
+at the geometry the pane is already at, which is the common reconnect.
+`src/api/attach_settle.py` is the rule and it has THREE outcomes, not
+two: the pane's own `#{pane_width}`/`#{pane_height}` measured EQUAL to
+the negotiated grid skips both the resize and the pause; measured
+DIFFERENT resizes and settles as before; and anything else - the probe
+refused, the backend cannot be asked, the client sent no dims, the resize
+raised - settles as before. **A READING THAT DID NOT HAPPEN IS NOT A
+READING OF NOTHING**: treating unknown as unchanged would leave the
+pane's grid disagreeing with the browser, invisibly, until the user
+typed. Both sleep sites go through the one function; the degraded branch
+that never got client dims can never take the fast path, by construction.
+
+**COMPARE AGAINST THE PANE, NEVER AGAINST THE NEGOTIATOR'S CACHE, and
+that is why this costs a probe at all.** `TerminalSizeNegotiator` forgets
+a session the moment its last client disconnects, so on the very common
+close-tab-reopen-tab attach it has NO record and reports the size as
+changed - keying the settle on its return alone would never once take the
+fast path. Worse, a value it did remember says nothing about a pane an
+adopt, a restart or an external `resize-window` has since moved.
+Measured on tmux 3.6a at load average 14: the probe costs p50 9.85 ms,
+the `resize-window` plus `refresh-client` pair it also skips costs p50
+22.81 ms of BLOCKING event-loop time, and the whole resize-and-settle
+segment on an identical-geometry attach went **p50 152.2 ms to 12.5 ms**.
+A changed geometry still measures p50 186.7 ms, which is the point.
+`tests/test_attach_settle_skip.py` proves the refusal against a REAL
+backend whose tmux session has been killed, because a double asked to
+return None proves only that someone wrote `return None`; its timing
+claims are made by RECORDING the sleeps rather than by a wall clock,
+which on a loaded box would either flake or be too loose to prove
+anything.
+
 **Config writes are atomic and backed up, and they go through ONE
 boundary.** The sequence is unchanged and is not open to tidying: the `.bak` of
 the pre-write bytes FIRST, then a temp file, `fsync`, `os.replace`. A
