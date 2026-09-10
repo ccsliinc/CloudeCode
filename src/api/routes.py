@@ -56,6 +56,8 @@ from src.models import (
     WrapperListResponse,
     WrapperExamplesResponse,
     SessionRecord,
+    MuteNotificationsRequest,
+    NotificationPolicyResponse,
     AttributionDeclineRequest,
     AttributionDeclineResponse,
     SessionAttributionPrompt,
@@ -1921,6 +1923,15 @@ async def create_session_toast(
     surface remains useful for manual testing and is the canonical entry
     point for synthetic-load tests.
 
+    NOT GATED BY THE PER-SESSION NOTIFICATION MUTE, and that is a decision
+    rather than an oversight. The mute suppresses the alerts an AGENT
+    raises about itself; this route is the app's own channel, and the
+    plan it comes from preserves action errors explicitly. Muting a
+    session must not stop the app telling its user that something the
+    user just did failed. The EXTERNAL push is still covered: the event
+    ``record_toast`` emits is stamped with the session's policy, so the
+    dispatcher drops it for a muted session either way.
+
     Returns 404 when the session id is unknown.
     """
     session_manager = request.app.state.session_manager
@@ -2428,6 +2439,69 @@ async def claude_event_hook(request: Request):
         # ACTIVITY_ONLY_EVENTS - state machine already updated above, no
         # toast to create or broadcast.
         return {"ok": True}
+
+    # THE USER TOLD US TO LEAVE THIS SESSION ALONE. "mute notifications"
+    # on the session action menu is a durable decision recorded on the
+    # session's own row (schema v26), and this is where it is honoured for
+    # web alerts: no toast is recorded, nothing is broadcast, and because
+    # ``record_toast`` is what emits to the push router, no external push
+    # goes out either. The push side is belt-and-braces gated a second
+    # time at the dispatcher, which is where the policy GENERATION is
+    # checked - see src/core/notifications/router.py.
+    #
+    # IT SITS ABOVE THE SUB-AGENT GATE AND COVERS MORE KINDS. That gate
+    # asks "is this session waiting on itself"; this one asks "did the
+    # user ask not to be told". Both end in the same silence and neither
+    # touches the state machine, but they are different questions and the
+    # log line says which one fired. Mute is checked first because it is
+    # an explicit instruction rather than an inference, so it is the more
+    # informative reason when both are true.
+    #
+    # EVERY TOAST KIND, INCLUDING ``PermissionRequest``. The sub-agent
+    # gate deliberately exempts permission prompts because a blocked
+    # session genuinely does want the user; a mute is the user answering
+    # that in advance, for this session, and exempting a kind from it
+    # would mean the control does not do what its label says.
+    #
+    # BUT MUTING ACKNOWLEDGES NOTHING, AND THAT IS THE LOAD-BEARING HALF.
+    # ``record_hook_event`` has ALREADY run above, so a suppressed
+    # ``PermissionRequest`` still sets ``permission_open`` and the session
+    # still resolves to ``question``; a suppressed ``Stop`` still flips
+    # unread. What is skipped is the interruption, never the record. A
+    # mute that quietly marked a pending permission answered would strand
+    # claude mid-turn behind a yes/no nobody was told about - the exact
+    # failure the sub-agent gate's own exemption exists to prevent, and it
+    # must not be reintroduced through this door.
+    #
+    # AN UNREADABLE POLICY SUPPRESSES. That is the opposite posture from
+    # the sub-agent gate below, on purpose: silence there would be bought
+    # with no evidence, while here the user has already asked for it and
+    # guessing "they did not mean it" sends pushes to a phone that cannot
+    # be recalled. See src/core/session_notification_policy.py. The check
+    # is skipped entirely when no policy store is attached, so a build
+    # without the feature behaves exactly as before.
+    if getattr(session_manager, "_notification_policy_store", None) is not None:
+        try:
+            policy = session_manager.notification_policy_for(session_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            # A read that THREW is a read that did not answer, and an
+            # unanswered mute may not be read as "not muted".
+            logger.warning(
+                "hook_notification_policy_unreadable",
+                session_id=session_id,
+                event_kind=event_kind,
+                error=str(exc),
+            )
+            policy = None
+        if policy is None or policy.suppresses:
+            logger.info(
+                "hook_toast_suppressed_notifications_muted",
+                session_id=session_id,
+                event_kind=event_kind,
+                policy=getattr(policy, "verdict", "unreadable"),
+                policy_generation=getattr(policy, "generation", None),
+            )
+            return {"ok": True, "toast_suppressed": "notifications_muted"}
 
     # WHILE SUB-AGENTS ARE RUNNING THE SESSION IS NOT WAITING ON THE USER,
     # IT IS WAITING ON ITSELF. claude fires ``Stop`` when the main turn
@@ -3359,6 +3433,15 @@ def _session_record_payload(row: dict) -> SessionRecord:
         # absence must arrive as None - "no work recorded" - rather than
         # as a KeyError out of a listing route.
         last_work_at=row.get("last_work_at"),
+        # THE DURABLE MUTE. ``.get`` with a falsy default for the same
+        # reason ``last_work_at`` uses ``.get``: a database that has not
+        # reached v26 has no such column. False is the RIGHT answer there
+        # rather than a placeholder - a mute can only be recorded in this
+        # column, so a database without it holds no mutes.
+        notifications_muted=bool(row.get("notifications_muted")),
+        notification_policy_generation=int(
+            row.get("notification_policy_generation") or 0
+        ),
     )
 
 
@@ -3500,6 +3583,165 @@ async def delete_session_record(request: Request, session_uuid: str):
             if performed
             else "Session was already deleted"
         )
+    )
+
+
+@router.patch(
+    "/sessions/records/{session_uuid}/notifications",
+    response_model=NotificationPolicyResponse,
+    dependencies=[Depends(require_auth)],
+)
+async def set_session_notification_policy(
+    request: Request, session_uuid: str, body: MuteNotificationsRequest
+):
+    """Mute or unmute one session's notifications. Durably.
+
+    Description: writes ``sessions.notifications_muted`` and steps
+      ``sessions.notification_policy_generation``, then updates the
+      in-memory policy projection the notification producers read so the
+      change takes effect immediately rather than at the next boot.
+
+      IT IS A STATE, NOT A TOGGLE. Sending ``{"muted": true}`` twice
+      commits once and reports the same answer both times. A toggle would
+      make a retry, a double click, or a second open tab flip the setting
+      to whatever the race decided.
+
+      THE GENERATION IS WHY THIS RETURNS MORE THAN "ok". Every queued
+      notification carries the generation it was raised under, and the
+      dispatcher refuses anything that is not current. So this response's
+      ``policy_generation`` is what makes "an old alert cannot escape a
+      mute/unmute cycle" checkable from outside the server.
+
+      MUTING ACKNOWLEDGES NOTHING. It records a delivery preference and
+      touches no toast, no unread flag and no activity state. In
+      particular a pending PERMISSION request stays open and the session
+      keeps reporting ``question``: claude is still blocked mid-turn
+      waiting on a human, and a mute that quietly marked that answered
+      would strand it behind a yes/no nobody was ever told about.
+
+      IT DOES NOT REPLAY A BACKLOG EITHER. Unmuting resumes FUTURE alerts
+      only. What was suppressed was never queued for later; what was
+      already queued is invalidated by the generation step.
+
+      ADDRESSED BY ``session_uuid``, and optionally checked against an
+      expected tmux instance - see ``MuteNotificationsRequest`` for why a
+      row action fired from a painted list needs that second key.
+    Inputs: request (Request) - unused beyond auth. session_uuid (str,
+      path) - the row. body (MuteNotificationsRequest).
+    Output: NotificationPolicyResponse - the COMMITTED state and
+      generation, read back rather than echoed.
+    Raises: HTTPException 404 - no row carries that uuid, or the database
+      predates schema v26 so there is nowhere to record this.
+      HTTPException 409 - the row is not the tmux instance the caller
+      named, so the list it was clicked from was stale.
+      HTTPException 503 - the datastore is absent or unreadable.
+    """
+    from contextlib import closing
+
+    from fastapi.concurrency import run_in_threadpool
+
+    from src.core import session_store
+    from src.core.db import DatastoreUnreadableError, connect, db_path_for
+
+    db_path = db_path_for(settings.get_state_dir())
+    if not db_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "no datastore: notification settings cannot be saved on "
+                "this install"
+            ),
+        )
+
+    def _write() -> dict:
+        """Open, write and close on ONE pooled thread.
+
+        Inputs: none (closes over db_path, session_uuid and body).
+        Output: dict with ``muted``, ``generation`` and ``changed``.
+        Raises: session_store.SessionNotFoundError,
+          session_store.SessionInstanceMismatchError,
+          DatastoreUnreadableError.
+        """
+        with closing(connect(db_path, create=False)) as conn:
+            return session_store.set_notification_mute(
+                conn,
+                session_uuid,
+                muted=body.muted,
+                expected_tmux_name=body.expected_tmux_name,
+                expected_tmux_created_epoch=body.expected_tmux_created_epoch,
+            )
+
+    try:
+        committed = await run_in_threadpool(_write)
+    except session_store.SessionInstanceMismatchError:
+        # 409, NOT 404. The row is there; it is simply not the session the
+        # caller was looking at when they clicked. Answering 404 would
+        # send a client hunting for a missing record instead of
+        # refreshing a stale list.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "that session record is a different tmux instance now - "
+                "refresh and try again"
+            ),
+        )
+    except session_store.SessionNotFoundError:
+        raise HTTPException(
+            status_code=404, detail=f"no session record {session_uuid}"
+        )
+    except DatastoreUnreadableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    # KEEP THE IN-MEMORY PROJECTION IN STEP WITH THE ROW. Without this the
+    # setting would be durable but inert until the next restart, because
+    # every gate reads the projection rather than the database - which is
+    # the whole reason the projection exists.
+    #
+    # It takes the COMMITTED values rather than the requested ones, so a
+    # no-op cannot invent a generation the row does not have.
+    session_manager = request.app.state.session_manager
+    store = getattr(session_manager, "_notification_policy_store", None)
+    if store is not None:
+        try:
+            store.apply(
+                session_uuid,
+                muted=committed["muted"],
+                generation=committed["generation"],
+            )
+            # AND TEACH IT THE INSTANCE, which is not the same write.
+            # ``apply`` records what the policy IS; this records how a
+            # LIVE session finds it. A row created since the last
+            # hydration is in neither index, so without this a mute set
+            # on a session started five minutes ago would be durable and
+            # inert - the hook gate looks the policy up by tmux instance
+            # and would not find the uuid the mute was stored under until
+            # the next boot.
+            store.bind_instance(
+                session_uuid,
+                tmux_name=committed.get("tmux_name"),
+                tmux_created_epoch=committed.get("tmux_created_epoch"),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            # The row IS written; only the live projection is behind, and
+            # it self-corrects on the next hydration. Logged rather than
+            # swallowed, and never turned into a failure the user would
+            # read as "your setting was not saved" when it was.
+            logger.warning(
+                "notification_policy_projection_update_failed",
+                session_uuid=session_uuid,
+                error=str(exc),
+            )
+
+    logger.info(
+        "session_notification_policy_set",
+        session_uuid=session_uuid,
+        muted=committed["muted"],
+        policy_generation=committed["generation"],
+        changed=committed["changed"],
+    )
+    return NotificationPolicyResponse(
+        muted=bool(committed["muted"]),
+        policy_generation=int(committed["generation"]),
     )
 
 

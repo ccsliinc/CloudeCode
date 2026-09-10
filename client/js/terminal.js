@@ -173,10 +173,21 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // Phase 4-5: theme drawn from registry. If Themes hasn't initialized
         // yet (registry init is post-auth) we fall back to DEFAULT_XTERM_THEME.
         // The `xtermThemeChange` subscription below picks up subsequent
-        // applyGlobal/applySession/clearSession calls and swaps the palette
-        // live without re-creating the Terminal.
+        // theme changes and swaps the palette live without re-creating the
+        // Terminal.
+        //
+        // SEED FROM THE TERMINAL'S THEME, NOT THE PAGE'S. getActiveGlobal()
+        // is the PAGE theme; when a session theme is already resolved (the
+        // usual case here, since showTerminal() paints before it builds the
+        // terminal) they are different, and seeding from the page's palette
+        // meant a first attach came up in the wrong colours until something
+        // else happened to fire a repaint. getActiveTerminalManifest() is
+        // the same resolution every later repaint uses, so construction and
+        // update can no longer disagree.
         const initialXtermTheme =
-            (window.Themes && window.Themes.getActiveGlobal && window.Themes.getActiveGlobal()?.xterm)
+            (window.Themes && window.Themes.getActiveTerminalManifest
+                && window.Themes.getActiveTerminalManifest()?.xterm)
+            || (window.Themes && window.Themes.getActiveGlobal && window.Themes.getActiveGlobal()?.xterm)
             || DEFAULT_XTERM_THEME;
 
         this.term = new XTerminal({

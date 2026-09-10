@@ -129,6 +129,23 @@ logger = structlog.get_logger()
 SESSIONS_TABLE = "sessions"
 
 
+class SessionInstanceMismatchError(LookupError):
+    """The addressed row exists but is not the tmux instance the caller meant.
+
+    Description: raised by :func:`set_notification_mute` when the caller
+      supplied an expected ``(tmux_name, tmux_created_epoch)`` and the row
+      found under that ``session_uuid`` carries a different one. Its own
+      type so the caller can answer 409 rather than 404: the row is there,
+      it is simply not the one the user clicked.
+
+      This exists because a tmux NAME is reusable and a session list on a
+      screen is a snapshot. A row action fired from a stale list would
+      otherwise land on whatever session holds that name now, and a mute
+      applied to the wrong session is silent by definition - the user only
+      finds out by missing something.
+    """
+
+
 class SessionNotFoundError(LookupError):
     """No sessions row carries the requested ``session_uuid``.
 
@@ -490,6 +507,257 @@ def unarchive_session(
     conn.commit()
     logger.info("session_unarchived", session_uuid=session_uuid)
     return True
+
+
+def notification_policy_rows(
+    conn: sqlite3.Connection, *, socket: str = DEFAULT_TMUX_SOCKET
+) -> List[Dict[str, Any]]:
+    """Every row's notification policy, for ONE bulk hydration at boot.
+
+    Description: the read half of the durable mute. It returns one entry
+      per session row carrying the identity a caller can key on
+      (``session_uuid``, and the tmux name plus creation epoch when the
+      row has them) alongside the policy itself.
+
+      ONE QUERY, READ ONCE, BECAUSE THE ANSWER IS NEEDED ON THE HOT PATH.
+      The gate that consults this runs on every hook event and on every
+      queued push. Opening a connection there would put SQLite on the
+      event loop in the one place terminal latency is felt (CLAUDE.md,
+      "THE LISTING PASS RUNS ON THE EVENT LOOP"), so the policy is
+      hydrated into memory before the notification producers start and
+      updated in place by the one writer below.
+
+      A PRE-v26 DATABASE ANSWERS EMPTY, NOT PARTIAL. If either column is
+      missing the whole read returns ``[]``, because a row whose mute
+      column does not exist cannot be muted - the caller's "nothing is
+      muted" reading is then exactly right rather than a guess.
+
+      Rows are returned in ASCENDING ``tmux_created_epoch`` order so a
+      caller building a name-keyed fallback index naturally ends up
+      holding the NEWEST instance for each reused name, which for a LIVE
+      session is the right row by construction (see
+      :func:`identity_for_live_name`).
+    Inputs: conn (sqlite3.Connection). socket (str) - the tmux socket to
+      scope tmux-keyed entries to. Rows for other sockets are returned
+      with their own socket value; the caller decides.
+    Output: list[dict] with keys ``session_uuid``, ``tmux_socket``,
+      ``tmux_name``, ``tmux_created_epoch``, ``muted`` (bool) and
+      ``generation`` (int). Empty on a pre-v2 or pre-v26 database.
+    Raises: sqlite3.Error - propagated, because the caller MUST be able
+      to tell "read nothing" from "could not read". Defaulting a failed
+      read to "nothing is muted" is precisely the failure this column
+      exists to prevent.
+    Example: notification_policy_rows(conn)  # [{'session_uuid': 'a', ...}]
+    """
+    if not sessions_table_ready(conn):
+        return []
+    if not column_exists(conn, SESSIONS_TABLE, "notifications_muted"):
+        return []
+    if not column_exists(
+        conn, SESSIONS_TABLE, "notification_policy_generation"
+    ):
+        return []
+    rows = conn.execute(
+        "SELECT session_uuid, tmux_socket, tmux_name, tmux_created_epoch, "
+        "notifications_muted, notification_policy_generation "
+        "FROM sessions "
+        "ORDER BY tmux_created_epoch ASC, id ASC"
+    ).fetchall()
+    out: List[Dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        epoch = row.get("tmux_created_epoch")
+        try:
+            epoch_value = int(epoch) if epoch is not None else None
+        except (TypeError, ValueError):
+            epoch_value = None
+        out.append(
+            {
+                "session_uuid": row.get("session_uuid"),
+                "tmux_socket": row.get("tmux_socket") or socket,
+                "tmux_name": row.get("tmux_name"),
+                "tmux_created_epoch": epoch_value,
+                "muted": bool(row.get("notifications_muted")),
+                "generation": int(
+                    row.get("notification_policy_generation") or 0
+                ),
+            }
+        )
+    return out
+
+
+def get_notification_policy(
+    conn: sqlite3.Connection, session_uuid: str
+) -> Dict[str, Any]:
+    """Read one row's notification policy.
+
+    Description: the single-row sibling of
+      :func:`notification_policy_rows`, used by the write path to report
+      the committed state back and by tests to assert persistence
+      directly. Not on any hot path.
+    Inputs: conn (sqlite3.Connection). session_uuid (str).
+    Output: dict with ``muted`` (bool) and ``generation`` (int).
+    Raises: SessionNotFoundError - no row carries that uuid, or this
+      database predates v26 so the columns it would be read from do not
+      exist. Both are "this call cannot answer", never "not muted".
+    Example: get_notification_policy(conn, 'a1b2')  # {'muted': False, ...}
+    """
+    if not sessions_table_ready(conn):
+        raise SessionNotFoundError(session_uuid)
+    if not column_exists(conn, SESSIONS_TABLE, "notifications_muted"):
+        raise SessionNotFoundError(session_uuid)
+    row = conn.execute(
+        "SELECT notifications_muted, notification_policy_generation "
+        "FROM sessions WHERE session_uuid = ?",
+        (session_uuid,),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(session_uuid)
+    return {
+        "muted": bool(row["notifications_muted"]),
+        "generation": int(row["notification_policy_generation"] or 0),
+    }
+
+
+def set_notification_mute(
+    conn: sqlite3.Connection,
+    session_uuid: str,
+    *,
+    muted: bool,
+    expected_tmux_name: Optional[str] = None,
+    expected_tmux_created_epoch: Optional[int] = None,
+    now: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Record whether this session's notifications are muted. Durably.
+
+    Description: THE ONLY WRITER of ``sessions.notifications_muted`` and
+      of ``sessions.notification_policy_generation``, so the ordering of
+      policy changes has exactly one author.
+
+      THE GENERATION STEPS ON EVERY REAL CHANGE, IN BOTH DIRECTIONS. Mute
+      steps it and unmute steps it, because both are policy changes and
+      what the counter dates is the POLICY, not the muting. A notification
+      queued under generation 3 and dispatched after either kind of change
+      is stale, and the dispatcher drops it. That is what makes "unmute
+      resumes future alerts without replaying a backlog" true: the backlog
+      is not held and skipped, it is invalidated by having been queued
+      under a generation that no longer exists.
+
+      A NO-OP DOES NOT STEP IT. Muting an already-muted session returns
+      the current generation unchanged and writes nothing. Stepping there
+      would invalidate every queued notification each time a client
+      re-sent the state it already had, which is a way to lose alerts
+      nobody asked to lose.
+
+      THE EXPECTED INSTANCE IS CHECKED WHEN IT IS SUPPLIED, AND THE
+      ABSENCE IS NOT A LOOPHOLE. ``session_uuid`` is minted once and never
+      reused, so the uuid alone already addresses one row for good; the
+      expected pair exists for a caller that captured a ROW ON A SCREEN
+      and wants the write refused if that screen was stale. Supplying it
+      makes the call strictly safer and never less safe, which is why it
+      is optional rather than required - a client that cannot see a tmux
+      instance (an archived row has none) can still address its own row.
+    Inputs: conn (sqlite3.Connection). session_uuid (str) - the row.
+      muted (bool) - the state being asked for, not a toggle: a repeated
+      request is idempotent. expected_tmux_name (str | None) and
+      expected_tmux_created_epoch (int | None) - the instance the caller
+      believes it is acting on; both must be supplied together to be
+      checked. now (str | None) - ISO-8601 stamp for ``updated_at``.
+    Output: dict with ``muted`` (bool - the committed state),
+      ``generation`` (int - the committed generation), ``changed`` (bool -
+      whether this call moved anything), and the row's ``tmux_name`` /
+      ``tmux_created_epoch``. THE INSTANCE IS RETURNED BECAUSE THE CALLER
+      NEEDS IT, not as a convenience: the in-memory projection is keyed by
+      instance for the live gate and by uuid for the record, and a row
+      created since the last hydration is in neither map. Handing back the
+      instance lets one write teach the projection both keys, so a mute
+      set on a session created five minutes ago takes effect on the very
+      next hook rather than at the next boot.
+    Raises: SessionNotFoundError - no row carries that uuid, or the
+      database predates v26. SessionInstanceMismatchError - the row is
+      not the instance the caller named.
+    Example: set_notification_mute(conn, 'a1b2', muted=True)
+    """
+    from src.core.trail_entry import utc_now
+
+    if not sessions_table_ready(conn):
+        raise SessionNotFoundError(session_uuid)
+    if not column_exists(conn, SESSIONS_TABLE, "notifications_muted"):
+        raise SessionNotFoundError(session_uuid)
+    row = conn.execute(
+        "SELECT tmux_name, tmux_created_epoch, notifications_muted, "
+        "notification_policy_generation FROM sessions WHERE session_uuid = ?",
+        (session_uuid,),
+    ).fetchone()
+    if row is None:
+        raise SessionNotFoundError(session_uuid)
+
+    if expected_tmux_name is not None and expected_tmux_created_epoch is not None:
+        stored_epoch = row["tmux_created_epoch"]
+        try:
+            stored_epoch = (
+                int(stored_epoch) if stored_epoch is not None else None
+            )
+        except (TypeError, ValueError):
+            stored_epoch = None
+        if (
+            row["tmux_name"] != expected_tmux_name
+            or stored_epoch != int(expected_tmux_created_epoch)
+        ):
+            logger.warning(
+                "session_notification_mute_instance_mismatch",
+                session_uuid=session_uuid,
+                expected_tmux_name=expected_tmux_name,
+                expected_epoch=int(expected_tmux_created_epoch),
+                stored_tmux_name=row["tmux_name"],
+                stored_epoch=stored_epoch,
+            )
+            raise SessionInstanceMismatchError(session_uuid)
+
+    current_muted = bool(row["notifications_muted"])
+    current_generation = int(row["notification_policy_generation"] or 0)
+    wanted = bool(muted)
+    stored_name = row["tmux_name"]
+    try:
+        stored_epoch_out = (
+            int(row["tmux_created_epoch"])
+            if row["tmux_created_epoch"] is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        stored_epoch_out = None
+
+    if current_muted == wanted:
+        return {
+            "muted": current_muted,
+            "generation": current_generation,
+            "changed": False,
+            "tmux_name": stored_name,
+            "tmux_created_epoch": stored_epoch_out,
+        }
+
+    next_generation = current_generation + 1
+    stamp = now or utc_now()
+    conn.execute(
+        "UPDATE sessions SET notifications_muted = ?, "
+        "notification_policy_generation = ?, updated_at = ? "
+        "WHERE session_uuid = ?",
+        (1 if wanted else 0, next_generation, stamp, session_uuid),
+    )
+    conn.commit()
+    logger.info(
+        "session_notification_mute_set",
+        session_uuid=session_uuid,
+        muted=wanted,
+        policy_generation=next_generation,
+    )
+    return {
+        "muted": wanted,
+        "generation": next_generation,
+        "changed": True,
+        "tmux_name": stored_name,
+        "tmux_created_epoch": stored_epoch_out,
+    }
 
 
 def needs_attention(conn: sqlite3.Connection) -> List[Dict[str, Any]]:

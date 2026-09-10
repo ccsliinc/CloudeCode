@@ -59,6 +59,8 @@ from src.core.db_models import (
     DDL_V24,
     DDL_V25_SESSIONS_KIND,
     DDL_V25_SESSIONS_KIND_BACKFILL,
+    DDL_V26_SESSIONS_NOTIFICATION_POLICY_GENERATION,
+    DDL_V26_SESSIONS_NOTIFICATIONS_MUTED,
     META_CREATED_AT,
     META_PROJECT_TOMBSTONES_LEGACY_GAP,
     META_PROJECT_TOMBSTONES_SINCE,
@@ -1291,6 +1293,51 @@ def _step_v24_to_v25(conn: sqlite3.Connection) -> None:
         conn.execute(DDL_V25_SESSIONS_KIND)
     conn.execute(DDL_V25_SESSIONS_KIND_BACKFILL)
 
+def _step_v25_to_v26(conn: sqlite3.Connection) -> None:
+    """Add the durable notification mute and its policy generation.
+
+    Description: gives every session row a place to record the user's
+      "mute notifications" decision, and a counter that dates it. The
+      mute has to survive a server restart and a restart of the session
+      itself, and the row is the only thing in this app that survives
+      both - ``respawn-pane -k`` keeps the row (CLAUDE.md, "Identity is
+      MEASURED across the kill"), so a mute stored here comes back with
+      the pane by construction.
+
+      ``notification_policy_generation`` IS A COUNTER, NOT A CLOCK. It
+      steps by one on every policy change, mute and unmute alike. A
+      notification carries the generation it was queued under and the
+      dispatcher refuses anything that is not the current one, which is
+      what stops an alert queued before a mute from arriving after it and
+      what stops a muted backlog from replaying on unmute. Two changes
+      inside one clock tick are indistinguishable by timestamp; by
+      counter they are not.
+
+      NO BACKFILL, AND THAT IS THE POINT. Both columns are nullable with
+      no SQL default, and NULL here is a definite answer rather than an
+      unknown one: a mute can only ever be recorded in this column, so a
+      row that has none has never been muted. Existing rows, new sessions
+      and forks therefore all start unmuted without a single UPDATE.
+      Compare v25's ``kind``, where the fact lived in a transcript the
+      column could not see and NULL had to mean "never looked at".
+
+      IDEMPOTENT: each ALTER is guarded by ``column_exists`` because
+      SQLite's ADD COLUMN has no IF NOT EXISTS. A no-op on an install
+      whose sessions table was never created (pre-v2).
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v25_to_v26(conn)  # after _step_v24_to_v25
+    """
+    if not table_exists(conn, "sessions"):
+        return
+    if not column_exists(conn, "sessions", "notifications_muted"):
+        conn.execute(DDL_V26_SESSIONS_NOTIFICATIONS_MUTED)
+    if not column_exists(
+        conn, "sessions", "notification_policy_generation"
+    ):
+        conn.execute(DDL_V26_SESSIONS_NOTIFICATION_POLICY_GENERATION)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1321,6 +1368,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     22: _step_v22_to_v23,
     23: _step_v23_to_v24,
     24: _step_v24_to_v25,
+    25: _step_v25_to_v26,
 }
 
 

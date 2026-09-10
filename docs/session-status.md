@@ -770,6 +770,112 @@ second entry. A store written before the re-key still answers, and
 migrates to the composite key on the next write rather than being
 duplicated.
 
+## Muting a session's notifications
+
+**A mute is a delivery preference, and nothing else.** "mute
+notifications" on the session action menu suppresses the ALERTS a session
+raises; it changes no status, answers no question, and acknowledges
+nothing. The state model above is untouched by it: a muted session still
+records every hook event, still resolves to `question` when it is blocked
+on a permission prompt, still flips unread on a `Stop`, and still paints
+its LED exactly as it would have. What is skipped is the interruption.
+
+**NO CLIENT CONTROL SHIPS ON THIS BRANCH YET, and that is a pending owner
+decision rather than an oversight.** Everything described in this section is
+server side and reachable only through
+`PATCH /sessions/records/{session_uuid}/notifications`. The "mute
+notifications" item named above lives in a session row action menu that
+release/1.2.1 did NOT take, because that menu also drops restart from a live
+row and the owner settled that surface the other way on 2026-09-09 (see
+`.claude/TODO.md`, "1.2 merge decisions (owner)", decision 3). Until the
+owner rules, a mute can be set by the endpoint and by nothing the user can
+click. Do not describe the menu item as present.
+
+| Piece | File |
+|---|---|
+| The three-value policy, the generation rule, and the in-memory index | `src/core/session_notification_policy.py` |
+| The durable columns and their one writer | `src/core/session_store.py` (`set_notification_mute`), schema v26 |
+| The web-alert gate | `src/api/routes.py`, in `claude_event_hook` beside the sub-agent gate |
+| The external-push gate | `src/core/notifications/router.py` |
+| `PATCH /sessions/records/{session_uuid}/notifications` | `src/api/routes.py` |
+
+**It lives on the row, which is the only thing that survives both
+restarts.** `sessions.notifications_muted` (schema v26). A server restart
+re-reads it at boot; a session restart (`respawn-pane -k`) keeps the row
+by construction, because the pane's PROCESS is replaced and the tmux
+session, its name and its creation epoch are not. Nothing is backfilled
+and nothing copies the column, so existing rows, new sessions and forks
+all start unmuted - the absence of a decision on a row IS the answer,
+because a mute can only ever be recorded there.
+
+**Two gates, and each has a different job.** The hook route refuses to
+RAISE a web alert for a muted session: no toast is recorded and nothing
+is broadcast. Because `record_toast` is also what feeds the push router,
+that alone stops the external push for hook-driven events - and the
+router gates again at drain time, which is where the GENERATION is
+checked and where the `IdleWatcher`'s own events are caught.
+
+**`PermissionRequest` IS muted, and this is the one place the mute gate
+differs from the sub-agent gate beside it.** That gate exempts permission
+prompts because a session waiting on its own background agents genuinely
+does still want the user when claude blocks. A mute is the user answering
+that in advance, for this session, so exempting a kind from it would mean
+the control does not do what its label says. What must NEVER follow is
+acknowledging the permission: claude is still stopped mid-turn and the
+row still reports `question`. A mute that quietly marked it answered
+would strand the agent behind a yes/no nobody was ever shown.
+
+**The generation is a counter, not a clock, and it is what stops a
+backlog.** Every policy change steps
+`sessions.notification_policy_generation` by one - mute and unmute alike,
+because what it dates is the POLICY. A queued notification carries the
+generation it was raised under, and the dispatcher refuses anything that
+is not current. So an alert raised while the session was noisy cannot
+arrive after the user mutes, and unmuting resumes FUTURE alerts without
+replaying what was suppressed: the backlog is not held and skipped, it
+was queued under a generation that no longer exists. A no-op request does
+not step it, or a client re-sending the state it already had would
+invalidate live alerts each time.
+
+**A failed policy read never answers "not muted", and that is deliberately
+the opposite posture from the sub-agent gate.** That gate FAILS TOWARD
+NOTIFYING, because a missed "your turn" is worse than a spurious one and
+its silence would be bought with no evidence. Here the user has already
+asked for silence, and guessing they did not mean it sends a push to a
+phone that cannot be recalled. So the policy has three values -
+`muted` / `unmuted` / `unknown` - and `unknown` SUPPRESSES while logging
+`notification_policy_unknown` every time.
+
+`unknown` is narrow by construction: it means the ONE bulk hydration
+query has never succeeded. A session with no row is not unknown, it is
+definitively unmuted, and a missing database FILE hydrates empty rather
+than failing - a fresh install has no rows, so nothing can be muted.
+
+**The policy is resolved BEFORE any producer starts.** `src/main.py`
+hydrates the store and attaches it to both the router and the
+`SessionManager` before `NotificationRouter.start()` and before the app
+serves a request. Resolving it lazily would leave a window in which a
+muted session's alerts escaped, and the user would learn about it only
+from notifications they had asked not to receive.
+
+**Keyed by the INSTANCE, so a reused name cannot be targeted.** The live
+gate resolves `(tmux_name, #{session_created})` to the durable
+`session_uuid` and reads the policy from that - the same identity rule
+unread uses, for the same reason. The name-only fallback is reached ONLY
+when the epoch is genuinely unavailable: a known epoch that is absent
+from the index answers about that instance and nothing else, so a
+successor session cannot inherit its predecessor's silence. The row
+action carries the same protection from the other side, as an optional
+`expected_tmux_name` / `expected_tmux_created_epoch` on the PATCH body
+that answers 409 when the list it was fired from is stale.
+
+**On the wire it is `SessionInfo.notifications_muted`, on the WRAPPER**
+(and `SessionRecord.notifications_muted` for rows with no live backend).
+It is the DISPLAY answer, so it is True only when the row was read and
+says muted: an unreadable policy paints as unmuted while still
+suppressing, because painting "muted" would claim a setting is in force
+that nobody has looked at.
+
 ## The LED: two independent dimensions
 
 `client/js/status-led.js` and `client/css/status-led.css`.
