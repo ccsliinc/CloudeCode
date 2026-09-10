@@ -7190,3 +7190,89 @@ Those belong to S7 and later and are deliberately outside
 `test_no_cluster_forwarders.py`'s list, which grows one entry per slice. A
 list that failed for work nobody has done would be a countdown, not an
 invariant.
+
+## 2026-09-10 - decomposition v2 slice S2: `src/models.py` into `src/models/`
+
+Plan v2 section 6, slice S2. Pure filing, zero behaviour, and it exists to
+prove the package machinery on the safest file in the tree before the
+machinery is pointed at anything that runs.
+
+**What moved.** 2,495 lines holding 78 top-level definitions - 73 pydantic
+models, 2 enums, 2 functions and 3 constants - into 16 domain modules plus a
+re-export `__init__.py`. `src/models.py` is DELETED, not emptied, in the same
+commit. Nothing was renamed and no importer changed: all 41 `from src.models
+import ...` sites in `src/`, `tests/` and `scripts/` still read the same names
+off the same objects. Largest module is `sessions.py` at 380 lines, the shim is
+149, every file is under the 500-line guideline.
+
+**The moved bodies are byte-exact.** Each definition was carved by source span
+including the comment block above it, so `git show` of this commit is a pure
+move plus 17 new headers. Two now-redundant section comments (`# API Response
+Models`, `# WebSocket Message Models`) were KEPT rather than tidied away,
+because a byte-exact diff is a property a reviewer can check and a tidied one
+is a property they have to take on trust.
+
+**The proof that nothing changed.** Every model's `model_json_schema()`, field
+annotations and model config were fingerprinted from the flat file at `1cc7046`
+and from the package, and compared: 78 names, zero differences once module
+qualnames (`src.models.Session` -> `src.models.sessions.Session`) and lambda
+repr addresses are normalised. `SessionInfo`'s two levels came through
+unchanged, which is what the plan named as this slice's trap.
+
+Three names the flat module leaked and the package does not re-export: `Enum`,
+`Field` and `field_validator`, which were only ever visible because they were
+imported at the top of one file. Checked before deleting: nothing in the tree
+imports any of them from `src.models`, and there is no `import *`.
+
+**`tests/test_models_package_rules.py`, 198 tests.** The frozen 78-name public
+surface, `__all__` parity with it, one-definition-per-name, and the two-level
+`SessionInfo` shape asserted in BOTH directions with the three fields that
+genuinely live on both levels named rather than left out.
+
+**The no-copy legs, chosen for THIS data.** A package split's characteristic
+failure is a class PASTED into two modules: both importable, neither
+recognising the other, and no traceback explaining it. So identity is one leg
+of four, not the proof.
+(a) `models.X is submodule.X` for all 78 names.
+(b) forward - build through the submodule, assert `type(...) is models.X`.
+(c) reverse - build through the root, assert `type(...) is submodule.X`. One
+    direction is not enough: S1 measured a copy that left the identity leg and
+    the forward leg both green.
+(d) through pydantic - `SessionInfo(session=...)` re-validates its nested
+    field against whatever its annotation resolves to, so a copy is silently
+    rebuilt as the copy and the VALUE still looks right. Assert the class that
+    comes OUT.
+
+**Five mutations, five red, every revert byte-identical by sha256.**
+1. Drop `SessionStats` from the re-export -> 2 red.
+2. Define `SessionStats` a second time in `common.py` -> 2 red.
+3. Flatten `SessionInfo.unread` down onto `Session` -> 1 red (the trap).
+4. Re-export `Session` as a SUBCLASS of the real one -> 4 red, including
+   both data legs. `isinstance` alone would have passed the reverse; the
+   `type(...) is` assertions are what made it fail.
+5. `adopt.py` keeps its own pasted `Session` instead of importing the
+   sibling -> 2 red.
+
+**Patch sweep: nothing to repoint.** Zero `patch(` or `patch.object(` anywhere
+in the tree aims at `src.models`, before or after.
+
+**Verification.** 6,141 passed / 2 failed / 20 skipped, 6,163 collected,
+against a control MEASURED on the same tree at `1cc7046` of 5,928 / 2 / 19 and
+5,949 collected. Delta +214, accounted entirely by collection diff: 198 in the
+new rules file (197 pass, 1 skip) and 16 in
+`test_no_unresolved_names.py::test_every_loaded_name_is_bound_somewhere`, which
+parametrises over source modules and now sees 17 files where it saw 1. ZERO
+tests removed, zero renamed. The two failures are the known environmental pair.
+Node 200/200 as CI globs them, `check-js-syntax.sh` clean. The three listing
+cost ceilings pass. `scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Doc paths repaired in the same commit**, per gotcha 8: CLAUDE.md's
+`src/models.py:138` and `src/models.py` in the `/sessions/list` section, and
+`docs/session-attribution-import.md`'s `models.py:346-353`, which was a line
+range rather than a name and would have been wrong on the next edit anyway.
+
+**Plan versus code: one disagreement, minor.** The plan's stopping condition
+says `src/models.py` ends "under 200, a re-export shim only". A module and a
+package of one name cannot coexist, so the shim is `src/models/__init__.py` at
+149 lines and the flat file is gone. The budget is the same number and it is
+enforced by `test_the_re_export_shim_stays_a_shim`.

@@ -143,7 +143,7 @@ ladder unable to identify the instance for the life of the process.
 **EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
 The owner's rule, verbatim: "all sessions belong to projects, the root folder
 ... its impossible to not have a project." Nothing in memory carries it - the
-`Session` model (`src/models.py:138`) has no project field and `SessionInfo`
+`Session` model (`src/models/sessions.py:45`) has no project field and `SessionInfo`
 ships none, so `/sessions/list` cannot lose a project and cannot restore one.
 The launchpad tree reads `project_id` / `project_attribution` off
 `GET /sessions/records`, joined to the live session by tmux name plus epoch in
@@ -321,7 +321,8 @@ JSON" shortcut anywhere in this codebase.
 
 ## The `/sessions/list` shape
 
-`GET /sessions/list` returns `SessionInfo` objects (`src/models.py`), and the
+`GET /sessions/list` returns `SessionInfo` objects
+(`src/models/sessions.py`), and the
 fields sit on **two different levels**:
 
 - On the wrapper: `activity_status`, `unread`, `startup_gate`, `tmux_session`,
