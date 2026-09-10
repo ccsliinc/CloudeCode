@@ -347,6 +347,83 @@ test('server values win on a refresh', async () => {
     assert.equal(prefs.revision(), 5);
 });
 
+test('a refresh turns a failed edit the server disagrees with into a conflict', async () => {
+    const prefs = loadModule();
+    const api = makeApi([
+        block(1, { theme: 'claude' }),
+        new Error('network down'),
+        block(4, { theme: 'chosen-on-another-device' }),
+    ]);
+    await prefs.hydrate(api);
+    await prefs.set('theme', 'matrix', api);
+    assert.equal(prefs.stateFor('theme'), prefs.FAILED);
+
+    await prefs.hydrate(api);
+
+    assert.equal(prefs.stateFor('theme'), prefs.CONFLICT);
+    assert.equal(prefs.get('theme'), 'matrix', 'the users unsaved edit was dropped');
+    assert.equal(prefs.committedValue('theme'), 'chosen-on-another-device');
+});
+
+test('a refresh never silently re-sends a failed edit', async () => {
+    const prefs = loadModule();
+    const api = makeApi([
+        block(1, { theme: 'claude' }),
+        new Error('network down'),
+        block(4, { theme: 'chosen-on-another-device' }),
+    ]);
+    await prefs.hydrate(api);
+    await prefs.set('theme', 'matrix', api);
+    await prefs.hydrate(api);
+
+    const writes = api.sent.filter((entry) => entry.options.method);
+    assert.equal(writes.length, 1,
+        'the reconnect re-sent an unsaved edit on its own; that overwrites '
+        + 'whatever another device committed while this one was offline');
+});
+
+test('a refresh clears a failed edit the server turns out to agree with', async () => {
+    const prefs = loadModule();
+    const api = makeApi([
+        block(1, { theme: 'claude' }),
+        new Error('the response was lost, but the write may have landed'),
+        block(2, { theme: 'matrix' }),
+    ]);
+    await prefs.hydrate(api);
+    await prefs.set('theme', 'matrix', api);
+    await prefs.hydrate(api);
+
+    assert.equal(prefs.stateFor('theme'), prefs.COMMITTED);
+    assert.equal(prefs.get('theme'), 'matrix');
+});
+
+test('a refresh leaves a save that is still in flight alone', async () => {
+    const prefs = loadModule();
+    let resolveSave;
+    const api = {
+        sent: [],
+        responses: [block(1, { theme: 'claude' }), block(3, { theme: 'other' })],
+        async call(endpoint, options = {}) {
+            api.sent.push({ endpoint, options });
+            if (options.method) {
+                return await new Promise((resolve) => { resolveSave = resolve; });
+            }
+            return api.responses.shift();
+        },
+    };
+    await prefs.hydrate(api);
+    const saving = prefs.set('theme', 'matrix', api);
+    await prefs.hydrate(api);
+
+    // Still in flight: it has not lost anything yet, so it stays pending
+    // and its own response decides.
+    assert.equal(prefs.stateFor('theme'), prefs.PENDING);
+
+    resolveSave({ status: 'committed', revision: 4, values: { theme: 'matrix' } });
+    await saving;
+    assert.equal(prefs.stateFor('theme'), prefs.COMMITTED);
+});
+
 test('a refresh never uploads this browsers state', async () => {
     const prefs = loadModule();
     const api = makeApi([block(1, { theme: 'claude' }), block(2, { theme: 'matrix' })]);

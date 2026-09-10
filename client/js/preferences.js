@@ -179,10 +179,14 @@ console.log('[Preferences Module] Loading...');
      *
      * Description: called once at startup before preference-dependent
      *   controls initialise, and again on reconnect. SERVER VALUES WIN:
-     *   a committed field is replaced outright. A field with an unsaved
-     *   local edit is NOT silently discarded - it becomes a conflict the
-     *   user can resolve, because dropping an edit the user watched
-     *   themselves make is the failure this whole design is avoiding.
+     *   a committed field is replaced outright. A field whose save
+     *   FAILED is NOT silently discarded and NOT silently re-sent - if
+     *   the server now disagrees with it, it becomes a conflict the user
+     *   resolves, because dropping an edit somebody watched themselves
+     *   make is the failure this whole design is avoiding, and re-sending
+     *   one unasked is how a reconnect overwrites another device.
+     *   A save still IN FLIGHT is left alone: it has not lost yet, and
+     *   its own response will commit it, fail it, or conflict it.
      *   A FAILED READ CHANGES NOTHING and leaves saving refused.
      * Inputs: api (object|undefined) - the API client; defaults to the
      *   global one. Must expose `call(path, options)`.
@@ -207,9 +211,35 @@ console.log('[Preferences Module] Loading...');
             held.status = READ_FAILED;
             return held.status;
         }
-        adoptServerState(body, { authoritative: true });
+        adoptServerState(body);
         held.status = HYDRATED;
+        reconcileAfterRefresh();
         return held.status;
+    }
+
+    /**
+     * Decide what a refresh did to the edits this browser still holds.
+     *
+     * Description: run after server values are adopted. A FAILED field
+     *   the server now disagrees with becomes a CONFLICT, so the user
+     *   sees both and neither is lost; one the server happens to agree
+     *   with is simply no longer an edit and is cleared. A PENDING field
+     *   is untouched, because a save in flight has not lost anything yet
+     *   and its own response decides. A CONFLICT stays a conflict until
+     *   the user resolves it.
+     * Inputs: none. Output: undefined.
+     */
+    function reconcileAfterRefresh() {
+        Object.keys(fields).forEach(function (name) {
+            const record = fields[name];
+            if (!record || record.state !== FAILED) return;
+            if (held.values[name] === record.local) {
+                delete fields[name];
+                notify(name, held.values[name], { state: COMMITTED });
+                return;
+            }
+            markConflict(name, record.local);
+        });
     }
 
     /**
@@ -268,7 +298,7 @@ console.log('[Preferences Module] Loading...');
                 // The server refused because somebody else committed
                 // first. Take its state, and keep the user's unsaved
                 // choice visible beside it rather than dropping either.
-                adoptServerState(conflict, { authoritative: true });
+                adoptServerState(conflict);
                 markConflict(name, value);
                 return { status: 'stale_revision', detail: conflict.detail };
             }
@@ -279,7 +309,7 @@ console.log('[Preferences Module] Loading...');
             return { status: 'failed', detail: String(err && err.message ? err.message : err) };
         }
 
-        adoptServerState(body, { authoritative: true });
+        adoptServerState(body);
         delete fields[name];
         notify(name, held.values[name], { state: COMMITTED });
         return { status: body && body.status ? body.status : 'committed' };
@@ -407,14 +437,13 @@ console.log('[Preferences Module] Loading...');
     // ---- internals -----------------------------------------------------
 
     /**
-     * Take a server body as the new truth.
+     * Take a server body as the new truth. SERVER VALUES WIN.
      *
-     * Inputs: body (object) - a GET or PATCH response, or a 409 detail;
-     *   opts (object) - reserved, currently unused beyond readability.
+     * Inputs: body (object) - a GET response, a PATCH response, or the
+     *   409 detail, all of which carry the same revision/values shape.
      * Output: undefined.
      */
-    function adoptServerState(body, opts) {
-        void opts;
+    function adoptServerState(body) {
         if (!body || typeof body !== 'object') return;
         const nextRevision = Number(body.revision);
         if (Number.isFinite(nextRevision)) held.revision = nextRevision;
