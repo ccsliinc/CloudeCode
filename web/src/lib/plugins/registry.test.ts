@@ -13,7 +13,7 @@
 import { describe, expect, test, vi } from 'vitest';
 
 import { createRegistry } from './registry';
-import type { Contribution, PluginContext, SessionCardAction } from './types';
+import type { Contribution, PluginContext, PluginSurface, SessionCardAction } from './types';
 
 /** A context with the given flags and a refresh that records its calls. */
 function ctx(flags: Record<string, boolean> = {}): PluginContext {
@@ -154,6 +154,35 @@ describe('duplicate refusal', () => {
         });
         expect(r.surfacesOf('session-card-action')).toHaveLength(1);
         expect(r.surfacesOf('sidebar-item')).toHaveLength(1);
+    });
+
+    test('the composite key is `surface\\0id`, not `surface + id` concatenated', () => {
+        // The within-plugin duplicate check builds `${c.surface}\0${c.id}`
+        // for each of a plugin's OWN contributions, so two DIFFERENT
+        // (surface, id) pairs in the same plugin can never collide by
+        // concatenation. Chosen so plain concatenation WOULD collide -
+        // 'ab' + 'c' === 'a' + 'bc' === 'abc' - while the true composite
+        // key does not: 'ab\0c' !== 'a\0bc'. If the NUL separator were
+        // ever dropped (making the key a bare concatenation) or altered
+        // to a character either string could contain, this test fails
+        // because the plugin's two unrelated contributions would look
+        // like an internal duplicate and the whole plugin - both
+        // contributions, all-or-nothing - would be refused.
+        const r = createRegistry();
+        const surfaceA = 'ab' as unknown as PluginSurface;
+        const surfaceB = 'a' as unknown as PluginSurface;
+        const make = (surface: PluginSurface, id: string): Contribution => ({
+            id,
+            surface,
+            enabled: () => true,
+            payload: { label: 'l', icon: '', run: () => {} },
+        } as unknown as Contribution);
+        expect(r.register({
+            id: 'both',
+            contributions: [make(surfaceA, 'c'), make(surfaceB, 'bc')],
+        })).toBe(true);
+        expect(r.surfacesOf(surfaceA)).toHaveLength(1);
+        expect(r.surfacesOf(surfaceB)).toHaveLength(1);
     });
 
     test('a plugin with no id, or a contribution with none, is refused', () => {
