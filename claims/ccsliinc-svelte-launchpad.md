@@ -55,3 +55,16 @@ INTO `client/js/launchpad.js`. Every line added there is a line slice 7 has to
 port and a line that ages the plan. If you need a new launchpad feature this
 week, that is fine and expected; just say so here so slice 4/5/6 can absorb it
 rather than discover it.
+
+## update 2026-09-10
+
+`feat/svelte-1.3` is now published to `adamdev` and `origin` at `d6801cb`.
+Until today it existed only in local worktrees, so `web/` was invisible to
+adoom666 and this claim named paths nobody on that side could open. That
+was our gap, not theirs.
+
+Still `paused` and still meaningful: we intend to come back to slices 2 to
+7, and the offer stands to mark it `done` and get out of the way if
+adoom666 wants any of them. The read-first paths are listed in
+`claims/ccsliinc-session-row-menu.md`; the plan is
+`.claude/notes/svelte-migration-launchpad.md` on that branch.

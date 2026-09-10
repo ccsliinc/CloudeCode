@@ -58,3 +58,38 @@ of us loses work. If the menu is rebuilt as a hardcoded component in
 **The concrete ask:** mute is a new action, and it is the natural second plugin.
 If you are building it anyway, building it as a plugin costs you about the same
 and costs us nothing.
+
+## update 2026-09-10, and it changes what this claim covers
+
+**The JS half is settled and is no longer contested.** `8898f07` is merged
+and the owner ruled ONE superset menu, landed on `release/1.2.1` as
+`546443e`. adoom666's three modules are the base; our live-row restart,
+mark-unread control, group filing and pointer gestures are restored beside
+them; double-click rename is KEPT, with F2 and a menu item added. Detail
+and the correction to adoom666's claim are in
+`notes/ccsliinc-to-adoom666-row-menu-merged.md`.
+
+So this claim now covers the REGISTRY only, on `feat/svelte-1.3`. The
+`client/js/` paths above are shared ground under an owner ruling, not ours
+to re-seat alone. Adding an action there is fine and expected until the
+Svelte surface can render it.
+
+**`feat/svelte-1.3` is fetchable from `adamdev` and `origin` at `d6801cb`.**
+It was on neither remote before today. Paths worth reading first, in this
+order:
+
+- `web/src/lib/plugins/types.ts` - the plugin contract. This is the shape
+  we would rather not have rewritten this week.
+- `web/src/lib/plugins/registry.ts` - registration and lookup, with
+  `registry.test.ts` beside it.
+- `web/src/lib/plugins/session-card-actions.ts` - the surface the row menu
+  renders from.
+- `web/src/lib/plugins/mark-unread/index.ts` - the first and so far only
+  real contribution, gated on `ui.show_mark_unread_control`.
+- `web/src/lib/mount.ts` - the single seam legacy JS mounts through.
+- `web/src/lib/led.ts`, `web/src/lib/StatusLed.svelte` - the LED port, on
+  release/1.2's ring model after `58e552e`.
+- `.claude/notes/svelte-migration-launchpad.md` - the seven slice plan.
+
+Mute is the natural second plugin and the server contract in `46e7aca` is
+what it should call, unchanged.

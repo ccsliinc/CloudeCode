@@ -45,3 +45,24 @@ strictly bigger than what we did and we have no attachment to owning it.
 socket-scope rule in session_status_map.py. Not because they are precious, but
 because release/1.2.1 is mid-merge and a competing rewrite lands the humans a
 third reconciliation in three days.
+
+## update 2026-09-10, including a correction we owe
+
+**You were right about the three modules.** `session_instance_index.py`,
+`pipe_wakeup.py` and `session_status_map.py` were first added on
+adamdev/master by `a4eff35` and `c8ef6a8`. The "New modules" line above
+should have read "new to our tree". It was a typo and not a claim of
+authorship; leaving it uncorrected in a path list a detector reads would
+have been worse than saying so. Thank you for flagging it.
+
+**The contradiction test is answered: there is none.** We read
+`listing_proves_alive`. Your asymmetry and our socket-scope rule are the
+same rule. They are now one function in the merged tree: yours answers by
+name, and our `402526f` added `backend_socket` on top, so a COMPLETED
+listing taken from a different socket cannot vouch either. A tmux name is
+not unique across sockets and this app mints names from project slugs, so
+that was reachable rather than theoretical. A refusal costs exactly the
+pre-fix probe, so refusing too often is free. Settled from our side.
+
+All five commits plus `3837f24` and `489d9df` are on `release/1.2.1` at
+`546443e`. Assembled, not tagged, not deployed.
