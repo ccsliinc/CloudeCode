@@ -6068,3 +6068,35 @@ Measured on this branch, 2026-09-10:
   surface's to close.
 - Three of the four surfaces have no consumer. Their payload types are a
   best guess and are marked as such in `types.ts`.
+
+## 2026-09-10: fix literal NUL bytes in tracked source (found by validation)
+
+`web/src/lib/plugins/registry.ts` had a literal NUL byte inside the
+contribution composite-key template literal (`` `${c.surface}<NUL>${c.id}` ``),
+which made `file`/`grep` classify the file as binary (plain `grep` returned
+nothing; `grep -a` was needed). A repo-wide byte scan of every tracked file
+under source/doc extensions found two more independently: `client/js/markdown-lite.js`
+(9 NULs - the `[\s\x00-\x1f]` char-class range plus the `\0CODE...\0` /
+`\0BLOCK...\0` stash sentinels) and `tests/test_restart_continuity_copy.node.mjs`
+(1 NUL, `[^\x00-\x7f]`). All replaced with the `\0` / `\x00` escape - runtime
+value unchanged, only the source encoding fixed. No separator character or
+key semantics changed; NUL-as-separator is the established, correct pattern
+here (same idea as the launchpad's tmux-name+epoch key).
+
+Added a Vitest test to `registry.test.ts` proving the composite key is
+`surface\0id`, not `surface + id` concatenated (negative control: mutating
+the source to drop the separator makes the test fail, confirmed then
+reverted). Added `tests/test_no_literal_nul_in_source.py` as a repo-wide
+guard (git-tracked text files only, `client/dist/`/vendored trees excluded),
+with a negative control against a planted NUL in a tmp file, plus
+parametrized checks on the three files this defect was found in.
+
+Rebuilt and committed `client/dist/app.js` (the fix reaches the compiled
+bundle; confirmed esbuild/vite preserved the `\0` escape rather than writing
+a literal byte in the minified output). `web/npm test`: 89/89 passed.
+`svelte-check --threshold error`: 0 errors. Node suites: 197/197 passed.
+`scripts/scan_secrets.py`: clean, exit 0. Full `pytest -q`: 5639 passed, 2
+failed (both the known environmental failures,
+`test_home_write_guard::test_guard_refuses_the_real_claude_settings_path_by_name`
+and `test_version_probe::test_current_version_empty_when_unresolvable`), 19
+skipped - nothing new introduced.
