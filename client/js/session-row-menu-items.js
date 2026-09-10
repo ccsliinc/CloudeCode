@@ -70,9 +70,13 @@ console.log('[SessionRowMenuItems Module] Loading...');
             separatorBefore: false,
             // OURS. The label states the RESULT of activating it, so it
             // flips with the row's current flag exactly as the inline
-            // control's title did.
+            // control's title did. SHORTENED 2026-09-10 alongside the
+            // rest of the panel (owner: shorter labels, icon per item);
+            // 'mark unread' / 'clear unread' keeps the same two-word
+            // shape as its toggle counterpart below rather than reading
+            // long next to it.
             label: function (ctx) {
-                return ctx.unread ? 'clear unread flag' : 'mark unread for followup';
+                return ctx.unread ? 'clear unread' : 'mark unread';
             },
             // THE ONE GATE, asked rather than re-implemented: the surface
             // stamps this from SessionStatusUI.markUnreadHtml() returning
@@ -112,7 +116,8 @@ console.log('[SessionRowMenuItems Module] Loading...');
             id: 'new-in-folder',
             shortcut: 'N',
             separatorBefore: false,
-            label: function () { return 'new session in folder'; },
+            // SHORTENED 2026-09-10, owner's word.
+            label: function () { return 'new session'; },
             available: function () { return true; },
             // ALWAYS OFFERED, and that is a measured choice rather than
             // an oversight. The folder is read from the stored session
@@ -128,8 +133,11 @@ console.log('[SessionRowMenuItems Module] Loading...');
             id: 'mute',
             shortcut: 'M',
             separatorBefore: false,
+            // SHORTENED 2026-09-10, owner's word for the base state;
+            // 'unmute' mirrors it for the toggled one rather than
+            // reading long next to a short 'mute'.
             label: function (ctx) {
-                return ctx.muted ? 'unmute notifications' : 'mute notifications';
+                return ctx.muted ? 'unmute' : 'mute';
             },
             available: function () { return true; },
             enabled: function () { return true; },
@@ -156,7 +164,11 @@ console.log('[SessionRowMenuItems Module] Loading...');
             id: 'close',
             shortcut: 'C',
             separatorBefore: false,
-            label: function () { return 'close session'; },
+            // RENAMED 2026-09-10, owner's word - this is the kebab
+            // menu's own item and is distinct from the inline close
+            // control's tooltip in session-row-actions.js, which is
+            // untouched.
+            label: function () { return 'kill session'; },
             available: function () { return true; },
             enabled: function () { return true; },
             reason: function () { return ''; },

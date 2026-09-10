@@ -1206,7 +1206,11 @@
          anchor-popover.js. The gesture module must load after the menu
          AND after session-sidebar.js, whose #session-sidebar-list it
          attaches to; it owns right click and long press only, because
-         -open.js binds the trigger tap itself. -->
+         -open.js binds the trigger tap itself. session-row-menu-icons.js
+         is the shared builder for each item's prefix glyph, same pattern
+         as kebab-icon.js; must load before session-row-menu.js, which
+         calls it. -->
+    <script src="/static/js/session-row-menu-icons.js"></script>
     <script src="/static/js/session-row-menu-items.js"></script>
     <script src="/static/js/session-row-menu.js"></script>
     <script src="/static/js/session-row-menu-actions.js"></script>
