@@ -6636,3 +6636,44 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 `macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
 would want the same ruling.
 
+
+## 2026-09-10 - HANDOFF.md's stale kickstart -k instruction, fixed
+
+Closed the open item this file itself flagged (line 6592 above): `.claude/notes/HANDOFF.md:118`
+still told a reader to recover a dead server with `launchctl kickstart -k gui/501/com.cloudecode.menubar`,
+which the 1.2.0 and 1.2.1 deploy records above (5685, 6491, 6585) had already
+proven wrong three rounds earlier and it was never edited. Fixed in place:
+that section now prescribes `launchctl bootout` followed by `launchctl bootstrap`,
+explains why (`kickstart -k` SIGKILLs Electron, orphans the python server on
+port 8000, the next app refuses to adopt it as a version mismatch), gives the
+poll loop for `/health` instead of a single sample (startup holds the event
+loop about 54 seconds after binding), and notes tmux sessions on `-L cloude`
+survive the restart untouched. A CORRECTIONS CARRIED FORWARD entry was added
+to HANDOFF.md section 10 naming the old instruction wrong rather than
+silently rewriting it.
+
+Same defect, same fix, in `docs/deploy-mini.md` ("Restarting the live app"
+section): it prescribed `kickstart -k` as the correct way to restart the app
+itself (as opposed to a code-only deploy) and gave a real, still-valid reason
+to avoid `osascript` quit-plus-reopen instead (it registers an ad hoc launchd
+job whose log goes to /dev/null). The ad hoc job warning stays; the prescribed
+remedy is now bootout/bootstrap plus the same poll loop, with a line noting the
+document used to say kickstart and why that was wrong.
+
+Left alone, deliberately: every `kickstart -k` occurrence inside `.claude/TODO.md`
+itself (2545, 3691, 5685-5686, 6491-6492, 6585, 6592) is an append-only log entry,
+some the original wrong belief and some the correction that already superseded
+it here - this file's own protocol is append-only, so past entries are not edited,
+only added to (this entry). `scripts/deploy-mini.sh:23` ("Measured 2026-08-29:
+file correct before kickstart, original hash after it, three times") is a
+historical measurement note describing what was observed at that time, not an
+instruction to use kickstart today, so it was left as written.
+
+Cross-checked against the "how to go back" block in the v1.2.0 and v1.2.1 GitHub
+release bodies (`gh release view v1.2.1 --repo ccsliinc/CloudeCode`) - the wording
+above matches that block's bootout/bootstrap sequence, its 2-second port-free
+measurement, its 15-19 second /health-back timing, its 54-second startup-hold
+figure, and its tmux-sessions-survive note. Nothing in the task's own description
+of the incident was contradicted by the records; all of it (bootout/bootstrap
+sequence, ~2s port free, ~15-19s /health back, ~54s startup hold, tmux surviving
+on `-L cloude`) matched what TODO.md and the release bodies already recorded.

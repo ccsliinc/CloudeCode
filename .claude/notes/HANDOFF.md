@@ -113,12 +113,37 @@ timestamp. If there is none, the fix is a hard reload, not the server.
 
 **The supervisor gives up after 3 unexpected stops.** A dead server can STAY
 dead while the page looks completely normal, because the UI gives no signal when
-the server dies. Recover with:
+the server dies. Recover with bootout then bootstrap, never `kickstart -k`:
 
-    launchctl kickstart -k gui/501/com.cloudecode.menubar
+    launchctl bootout gui/$(id -u)/com.cloudecode.menubar
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudecode.menubar.plist
 
-That took about 15 seconds on the last deploy. The missing down-indicator is
-itself an open item.
+`kickstart -k` sends SIGKILL to Electron, which orphans the python server still
+holding port 8000. The app that starts next fingerprints that orphan against
+its own version, calls it a mismatch, and `server-manager.js` refuses to either
+start or stop it - a dead end that logs as if nothing were wrong. Bootout takes
+the server child down with the app instead of leaving it behind; measured
+across the 1.2.0 and 1.2.1 deploys (2026-09-10), port 8000 was free about 2
+seconds after bootout, both times.
+
+Then POLL `/health`, do not take one sample:
+
+    for i in $(seq 1 60); do
+      printf '%s ' "$i"
+      curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health
+      sleep 2
+    done
+
+Startup holds the event loop for roughly 54 seconds after it binds port 8000
+(measured on the 1.2.1 deploy), so a single curl taken early can read 000 and
+look exactly like a dead server while the app is starting normally. Both
+2026-09-10 restarts had `/health` back at 200 within 15 to 19 seconds; the loop
+above is what to run instead of guessing when that window has passed.
+
+Your tmux sessions are not touched by any of this. They live on the dedicated
+`tmux -L cloude` socket, separate from the app, and were confirmed unchanged
+(same 19 sessions, none restarted or closed) across both restarts above. The
+missing down-indicator is itself an open item.
 
 **`com.cloudecode.menubar` on port 8000 is the live agent.**
 `com.cloudecode.v11` on 8001 was disabled 2026-08-31 (`launchctl bootout` plus
@@ -992,6 +1017,22 @@ its correction beats a clean lie.
 - **`com.imc.cloude-code` is the wrong agent name** for this app, in
   Infrastructure `CLAUDE.md` hazard 40. The live one is
   `com.cloudecode.menubar`.
+- **The section 2 recovery command was WRONG and stayed wrong for three
+  rounds after the evidence against it existed.** This file told a reader to
+  recover a dead server with `launchctl kickstart -k`. The 1.2.0 and 1.2.1
+  Electron bundle rebuilds (2026-09-10, recorded in `.claude/TODO.md`) measured
+  what that command actually does: it SIGKILLs Electron, which orphans the
+  python server on port 8000, and the app that starts back up refuses to adopt
+  that orphan because its version does not match - a dead end that produces no
+  error, only a server that will neither start nor stop. `bootout` then
+  `bootstrap` is correct instead, because it lets the app's own teardown take
+  its server child with it; both 2026-09-10 rounds measured port 8000 free
+  about 2 seconds after bootout. The same records also caught a second, milder
+  defect in the surrounding text: it named one sample of `/health` sufficient,
+  when startup holds the event loop about 54 seconds after binding, so a
+  single early curl reads 000 and looks exactly like a dead server. Both fixes
+  are in section 2 now. The corrected wording was already published in the
+  v1.2.0 and v1.2.1 GitHub release bodies before this file caught up to it.
 - Earlier in the migration: UTC timestamps were read as local and led to a wrong
   conclusion about which sessions post-dated the row-reuse fix (they PREDATE it
   by 1h38m); a proposal to delete all 6 archived DB rows would have orphaned
