@@ -3,6 +3,16 @@ name: coord
 description: Cross-party coordination for the two teams shipping into this codebase. Use at the START of any work session, and again BEFORE starting any new feature, fix, refactor or plan, to check whether the other party has already claimed it and to claim what you are about to do. Triggers on "what is the other team working on", "has anyone claimed", "before I start", "claim this", "coord branch", "post to coord", or whenever you are about to begin a distinct piece of work in this repo.
 ---
 
+> **SUPERSEDED 2026-09-10 by `.claude/skills/work/`.** Work is now claimed
+> with a GitHub issue and a draft PR, not with a claim file on an orphan
+> branch. Do not file anything new here.
+>
+> This skill stays only to READ the `coord` branch, which still holds the
+> other developer's four claims, their log and their lessons until they
+> migrate. `coord.py read` and `coord.py lessons` still work. The lessons in
+> particular are worth reading; they are the accumulated fixes for collisions
+> that already happened.
+
 # Coordination between two parties on one codebase
 
 Two teams ship into this codebase at the same time. Both drive agents that

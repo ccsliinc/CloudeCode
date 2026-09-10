@@ -1,0 +1,81 @@
+name: Task
+description: A piece of work specified well enough that any agent can implement it without asking
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An issue is a spec, not a reminder. The author does not own it.
+        Fill every section; a clean-context agent should be able to implement
+        this without asking a question.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or missing, and what it costs.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files and functions involved
+      description: |
+        Real paths. This is what makes an overlap checkable, so be specific
+        even if the list is a guess. Globs are fine.
+      placeholder: |
+        src/core/session_manager.py  _lifespan_tmux_reconcile
+        client/js/session-row-*.js
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Approach, and why this one
+      description: |
+        THE MOST IMPORTANT SECTION. The design direction, the invariant your
+        work assumes, and anything you expect to change about SHARED
+        semantics: a state machine, a key, a rendering contract, a
+        vocabulary. A design contradiction is a collision even when two
+        people share no file, and this paragraph is the only thing that
+        catches it. Write it the way you would explain it to the other
+        developer, not as a form.
+    validations:
+      required: true
+  - type: textarea
+    id: must-not-change
+    attributes:
+      label: What must NOT change
+      description: |
+        The blast-radius fence. Name the traps, especially the ones that look
+        like mistakes. Standing ones in this repo, delete what does not apply:
+      value: |
+        - The "Cloude" spelling is DELIBERATE across 55 files. Never correct it.
+        - Every tmux call uses `-L cloude`. Without it you are talking to the
+          user's personal tmux server.
+        - Hook events arrive unordered, duplicated and droppable. Every
+          consumer must stay idempotent.
+        - Fields sit on the SessionInfo wrapper or the nested .session, not
+          both. Check which before assuming a field is missing.
+    validations:
+      required: true
+  - type: textarea
+    id: verify
+    attributes:
+      label: How to verify
+      description: Commands someone can actually run.
+      placeholder: |
+        venv/bin/python -m pytest -q tests/test_thing.py
+        node --check client/js/thing.js
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+    validations:
+      required: true
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: Anything the implementer will have to decide. Empty is fine.
