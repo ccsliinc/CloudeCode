@@ -34,9 +34,27 @@
  *      moved AND the menu is still there.
  *
  * `MutationObserver` IS ASYNCHRONOUS AND `takeRecords()` IS NOT, which
- * is why every count below drains synchronously after an awaited settle
- * rather than waiting on a callback. A count that depended on a timer
- * would be a count that depended on the machine.
+ * is why every count below is collected in the observer's CALLBACK. Any
+ * await at all lets delivery run and drains the queue, so a test that
+ * awaited and then called `takeRecords()` reads a perfect zero.
+ *
+ * WHAT THIS FILE MEASURES IS A DATA CHANGE, NOT A POLL TICK, AND THE
+ * REAL BROWSER FOUND THE DIFFERENCE. `applyFixture` writes the store's
+ * fields directly; it never calls `loadRunningSessions`, which is what
+ * the 5s poller actually runs. Measured in Brave on 2026-09-10 against
+ * this same 9-project fixture, a real tick costs about 504 `childList`
+ * records and 1344 nodes on `.project-node__sessions` - rows MOVED
+ * rather than rebuilt, in an unchanged order, with zero attribute
+ * records - while this file reports 0. Every individual store write
+ * costs 0 there too; only the real `loadSessionAttribution()` reproduces
+ * it, and it has not been root-caused.
+ *
+ * SO "12 TICKS, NOTHING CHANGING: 0 RECORDS" BELOW IS TRUE OF THE
+ * ASSERTION IT MAKES AND NOT TRUE OF A POLL TICK. The browser number is
+ * the authoritative one for the tick path. Driving this harness through
+ * `loadRunningSessions` is the fix, and it is open in TODO.md; a harness
+ * that had done so would have failed on its first run rather than
+ * agreeing with itself.
  */
 import { beforeEach, describe, expect, test } from 'vitest';
 
