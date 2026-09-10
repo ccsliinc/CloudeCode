@@ -217,9 +217,12 @@ export interface SurfacePayloads {
  */
 export interface Contribution<K extends PluginSurface = PluginSurface> {
     /**
-     * Unique within its surface. It travels into the DOM as
-     * `data-plugin-action` and back out again to find `run`, so it must
-     * be stable across releases and safe in an attribute value.
+     * Unique within its surface. On `session-card-action` it travels into
+     * the DOM as the row menu's own `data-row-menu-item` - the same
+     * attribute every native item carries, because a contribution is
+     * rendered as one of them - and back out again to find `run`. So it
+     * must be stable across releases, safe in an attribute value, and
+     * must not collide with a native item id.
      */
     readonly id: string;
     /** Which surface this contributes to. */
