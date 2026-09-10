@@ -45,3 +45,11 @@ This is contention, not a regression. A clean full-suite number is OWED on a qui
 box. Candidate follow-up: the real_tmux marker added for #59 should cover
 tests/test_session_restart_wrapper_choice.py, whose 6s deadline is the tightest
 in the real-tmux family.
+
+[ORCH] 2026-09-10 19:20: NEGATIVE CONTROL for the entry above. The #42 branch
+changed only docs/ui-preferences-inventory.md and one CLAUDE.md table row, zero
+code, and its own full-suite run read 5753 passed / 5 failed / 18 skipped. The
+failures were in session-restart-wrapper, state-dir-resolution, tmux-respawn and
+tmux-pipe-rotation. A branch that changed no code cannot have caused them, so the
+real-tmux failure family under concurrent agents is CONFIRMED contention rather
+than any of today's work. The clean re-measure on a quiet box is still owed.
