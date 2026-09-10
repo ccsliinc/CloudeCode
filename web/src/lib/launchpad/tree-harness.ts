@@ -27,7 +27,9 @@ import { uiPrefs } from '../ui/prefs.svelte';
 import type { ProjectChromeControl } from './project-chrome-control';
 import type { ProjectTreeHost } from './project-tree-host';
 import type { TreeSessionRow } from './project-groups';
+import type { SessionHost } from '../sessions/host';
 import type {
+    AttachableSession,
     ProjectAuthority,
     ProjectPresenceRow,
     ProjectRow,
@@ -295,4 +297,104 @@ export async function settle(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
+}
+
+/**
+ * A `SessionHost` that answers a fixed fleet, so the REAL load path can
+ * be driven without a server.
+ *
+ * Description: THIS IS THE HARNESS GAP, CLOSED. `applyFixture` above
+ *   writes the store's fields directly, which measures the tree's
+ *   response to a DATA CHANGE and not to the tick the app actually runs.
+ *   `sessionStore.loadRunningSessions()` does far more: two fetches, the
+ *   merge, the dead-pane filter, the attribution join, the work-stamp
+ *   index and the sort, with an `await` in the middle of it. A harness
+ *   that cannot reach that path reported ZERO mutations on an unchanged
+ *   tick while a real browser reported 6,048 - so it hid a regression
+ *   rather than catching it.
+ *
+ *   THE ROWS ARE HANDED BACK IN FETCH ORDER, WHICH IS THE POINT. The
+ *   fixture below is built ascending by creation epoch and the sort is
+ *   descending, so fetch order and display order DISAGREE. That
+ *   disagreement is what made the intermediate publish visible; a
+ *   fixture whose two orders happened to match would pass whether the
+ *   defect was there or not.
+ * Inputs: fleet - projects and sessions to answer with, from `fleet()`.
+ * Output: SessionHost.
+ * Example: sessionStore.useHost(fixtureHost(fleet()))
+ */
+export function fixtureHost(fleet: Fleet): SessionHost {
+    return {
+        getProjects: async () => fleet.projects.slice(),
+        getProjectsPresence: async () => ({ status: 'ok', projects: [] }),
+        getProjectsAuthority: async () => ({
+            mode: 'db', degraded: false, writable: true,
+        }),
+        listAttachableSessions: async () => fleet.attachable.map((r) => ({ ...r })),
+        listSessions: async () => [],
+        getCurrentSession: async () => null,
+        listSessionRecords: async () => fleet.records.map((r) => ({ ...r })),
+    };
+}
+
+/** What `fleet()` answers with: one screen's worth of everything. */
+export interface Fleet {
+    projects: ProjectRow[];
+    attachable: AttachableSession[];
+    records: SessionRecord[];
+}
+
+/**
+ * Build one screen's worth of projects and sessions, in FETCH order.
+ *
+ * Description: ascending by creation epoch, which is the order a server
+ *   answers in and the OPPOSITE of the order the sort produces. See
+ *   `fixtureHost` for why that matters.
+ * Inputs: opts - `projects` and `perProject` counts, and `working`, the
+ *   set of tmux names whose status should read `working` instead of
+ *   `idle`.
+ * Output: Fleet.
+ * Example: fleet({projects: 9, perProject: 5, working: ['cloude_p3_s2']})
+ */
+export function fleet(opts: {
+    projects?: number;
+    perProject?: number;
+    working?: string[];
+} = {}): Fleet {
+    const projectCount = opts.projects ?? 9;
+    const per = opts.perProject ?? 5;
+    const working = new Set(opts.working ?? []);
+    const projects: ProjectRow[] = [];
+    const attachable: AttachableSession[] = [];
+    const records: SessionRecord[] = [];
+    for (let p = 0; p < projectCount; p++) {
+        projects.push({
+            id: p, name: `project-${p}`, path: `/p${p}`, root: `/p${p}`,
+            description: '', archived_at: null, work_at: null,
+        });
+        for (let s = 0; s < per; s++) {
+            const name = `cloude_p${p}_s${s}`;
+            const epoch = p * 100 + s;
+            attachable.push({
+                name, label: null, created_by_cloude: true,
+                created_at_epoch: epoch, window_count: 1,
+                agent_type: 'claude', agent_family: 'claude',
+                agent_family_source: 'wrapper', agent_wrapper_label: null,
+                pinned_theme: null, session_row_id: epoch,
+                parent_session_id: null,
+                status: working.has(name) ? 'working' : 'idle',
+                unread: false, listing_ok: true, listing_reason: null,
+            });
+            records.push({
+                session_uuid: `u${epoch}`, id: epoch, tmux_name: name,
+                tmux_created_epoch: epoch, lifecycle: 'running',
+                project_id: p, project_attribution: 'project',
+                working_dir: `/p${p}`, archived_at: null, title: null,
+                parent_session_id: null, last_work_at: null, owned: true,
+                agent_type: 'claude', agent_family: 'claude',
+                agent_family_source: 'wrapper',
+            });
+        }
+    }
+    return { projects, attachable, records };
 }

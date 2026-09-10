@@ -392,6 +392,27 @@ export const sessionStore = {
      *   by a value that had not arrived, and then never re-sort, because
      *   the sort is not repeated after that call.
      *
+     *   THE ROW SET IS PUBLISHED ONCE, ALREADY SORTED, AND THAT IS A FIX
+     *   RATHER THAN A TIDY-UP. This used to assign `runningSessions = rows`
+     *   in FETCH order, then await attribution, then assign the SORTED
+     *   array. Two assignments either side of an await are two separate
+     *   effect flushes, so every subscriber saw the unsorted order and then
+     *   the sorted one. A string renderer could not tell: it painted once,
+     *   at the end. A KEYED LIST CAN, and it faithfully moved every row to
+     *   match the intermediate and then moved them all back.
+     *
+     *   Measured in Brave on 2026-09-10 against a 9-project, 45-row screen:
+     *   504 `childList` records and 1,344 nodes PER TICK on a tick where
+     *   nothing a user could see had changed, because the fetch order is
+     *   ascending by creation and the sort is descending. That is worse
+     *   than the render guard this migration deleted, which got an
+     *   unchanged tick to zero. After: 0 and 0.
+     *
+     *   SO NOTHING MAY PUBLISH AN INTERMEDIATE ROW SET. If a future change
+     *   needs the rows before the sort key has arrived, it must hold them
+     *   in a local and assign once - `tests/../store-tick-mutations` fails
+     *   if a second assignment reappears.
+     *
      *   The UI flags are ensured and NOT awaited - a feature switch must
      *   never be able to delay the session list.
      * Inputs: t - the translator, for the failure sentences.
@@ -426,7 +447,9 @@ export const sessionStore = {
             onReauth: dispatchReauthNeeded,
         });
         runningSessionsListing = listing;
-        runningSessions = rows;
+        // ATTRIBUTION FIRST, because it carries the sort key. The rows stay
+        // in a local until then: see the header for what publishing them
+        // early cost.
         await this.loadSessionAttribution(t);
         runningSessions = sortRunningSessionsByWork(rows.slice(), workStampByName);
     },

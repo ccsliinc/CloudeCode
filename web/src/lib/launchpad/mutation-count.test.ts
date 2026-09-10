@@ -38,23 +38,21 @@
  * await at all lets delivery run and drains the queue, so a test that
  * awaited and then called `takeRecords()` reads a perfect zero.
  *
- * WHAT THIS FILE MEASURES IS A DATA CHANGE, NOT A POLL TICK, AND THE
- * REAL BROWSER FOUND THE DIFFERENCE. `applyFixture` writes the store's
- * fields directly; it never calls `loadRunningSessions`, which is what
- * the 5s poller actually runs. Measured in Brave on 2026-09-10 against
- * this same 9-project fixture, a real tick costs about 504 `childList`
- * records and 1344 nodes on `.project-node__sessions` - rows MOVED
- * rather than rebuilt, in an unchanged order, with zero attribute
- * records - while this file reports 0. Every individual store write
- * costs 0 there too; only the real `loadSessionAttribution()` reproduces
- * it, and it has not been root-caused.
+ * WHAT THIS FILE MEASURES IS A DATA CHANGE, NOT A POLL TICK, AND THAT
+ * DISTINCTION HID A REGRESSION FOR EXACTLY ONE DAY. `applyFixture`
+ * writes the store's fields directly; it never calls
+ * `loadRunningSessions`, which is what the 5s poller actually runs.
+ * Measured in Brave on 2026-09-10, this file reported 0 mutations on an
+ * unchanged tick while a real browser reported 6,048 - because
+ * `loadRunningSessions` was publishing the row set TWICE, once in fetch
+ * order and once sorted, either side of an await, and a keyed list moved
+ * all 45 rows to match the first before moving them back.
  *
- * SO "12 TICKS, NOTHING CHANGING: 0 RECORDS" BELOW IS TRUE OF THE
- * ASSERTION IT MAKES AND NOT TRUE OF A POLL TICK. The browser number is
- * the authoritative one for the tick path. Driving this harness through
- * `loadRunningSessions` is the fix, and it is open in TODO.md; a harness
- * that had done so would have failed on its first run rather than
- * agreeing with itself.
+ * ./store-tick-mutations.test.ts IS THE FILE THAT WATCHES THE REAL PATH,
+ * and it is the one to add a case to when the question is "what does a
+ * tick cost". This one keeps its narrower job: what the TREE does when
+ * its data changes, with no fetch, no merge and no sort in the way. Both
+ * are worth having, and neither substitutes for the other.
  */
 import { beforeEach, describe, expect, test } from 'vitest';
 

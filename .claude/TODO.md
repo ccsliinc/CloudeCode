@@ -7515,3 +7515,72 @@ until this is closed.
   directly, which is a deviation from "let the poller drive it" and is stated
   rather than hidden. Foregrounding the tab needs either the owner or macOS
   automation permission for AppleScript, which hung when tried.
+
+### 2026-09-10 later still - the churn, root-caused and fixed
+
+ROOT CAUSE, in `web/src/lib/sessions/store.svelte.ts` (SLICE 3's file, not a
+component). `loadRunningSessions` published the row set TWICE:
+
+    runningSessions = rows;                       // fetch order
+    await this.loadSessionAttribution(t);         // <- an await
+    runningSessions = sortRunningSessionsByWork(...);   // sort order
+
+Two assignments either side of an await are two separate effect flushes, so
+every subscriber saw the unsorted order and then the sorted one. The fetch
+order is ascending by creation epoch and `sortRunningSessionsByWork` ends
+`(b.created_at_epoch || 0) - (a.created_at_epoch || 0)`, i.e. DESCENDING - so
+the two orders are exact opposites and a keyed `{#each}` moved all 45 rows to
+match the intermediate and then moved them all back, every tick.
+
+THAT EXPLAINS EVERY MEASUREMENT and nothing else did: rows MOVED not rebuilt
+(identity survives a move), final order stable (it ends on the sorted one),
+`childList` only on `.project-node__sessions`, zero attribute records, and
+every individual store write costing 0 (a single synchronous write is one
+flush; only an await between two of them splits it).
+
+THE LEGACY RENDERER COULD NOT SEE IT. It painted once, at the end, from
+whatever the fields held - so an intermediate state was free. The moment a
+subscription replaced the repaint, it stopped being free. This is the general
+shape to watch for in slices 5 to 7: **anything that publishes an intermediate
+state was invisible before and is not invisible now.**
+
+FIX: one assignment, already sorted, after the await. Attribution still runs
+BEFORE the sort, which was the load-bearing ordering; the rows just stay in a
+local until then. Six lines.
+
+RE-MEASURED, Brave, `127.0.0.1:5057`, one session, `visibilityState: hidden`
+recorded on every phase, 9 projects / 45 rows / 442 elements:
+
+| measurement | before fix | after fix | vitest |
+|---|---|---|---|
+| 12 ticks, nothing changing | 6048 rec / 16128 nodes | **0 / 0** | 0 / 0 |
+| 12 ticks, one status change | (buried in the churn) | **5 records, 0 nodes** | 5 / 0 |
+| legacy `innerHTML` rebuild | 1 / 918 | **1 / 918** | 1 / 916 |
+| busy case, menu open | passed | **passed** | passed |
+
+The five are `class`, `data-inner`, `data-outer`, `title`, `aria-label` on ONE
+`status-dot`, `sameNode: true`. The busy case: dot `idle` to `working` with the
+menu open, dot is the same node, menu still connected, still in the tree, still
+in the same row, text intact. **Browser and Vitest now agree on all four.**
+
+HARNESS GAP CLOSED. `tree-harness.ts` gained `fixtureHost()` and `fleet()`, a
+real `SessionHost` answering a fixed fleet IN FETCH ORDER, so
+`store-tick-mutations.test.ts` drives `sessionStore.loadRunningSessions()` - the
+actual tick - instead of writing store fields. The fixture's fetch order and
+display order DISAGREE on purpose: one whose orders happened to match would
+pass whether the defect was there or not. `mutation-count.test.ts` keeps its
+narrower job (what the TREE does when its data changes) and its header now says
+which file to add to when the question is "what does a tick cost".
+
+MUTATION-PROVEN: reintroducing `runningSessions = rows;` turns
+`store-tick-mutations.test.ts` red on 3 of 8 - 5184 records / 13824 nodes over
+12 ticks, the changed-status case reading 5189 instead of 5, and the source rule
+finding two assignments instead of one. Reverted byte-identical.
+
+- [x] The per-tick churn is closed, and the committed "0 records on an
+  unchanged tick" figure is now true of the app and not only of the harness.
+- [ ] Slice 3's own tests did not catch this and still do not assert it:
+  `store.test.ts` checks WHAT `loadRunningSessions` ends up holding, never how
+  many times it publishes on the way there. The new source-rule test lives in
+  slice 4's directory because that is where the subscriber is; if slice 5 adds a
+  second subscriber it belongs somewhere shared.
