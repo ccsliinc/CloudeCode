@@ -7065,3 +7065,19 @@ Force-added onto `feat/svelte-1.3`:
   `.claude/tasks/`) and track `notes/` normally, or keep the ignore and add a
   guard test that fails when a file under `.claude/notes/` is untracked.
   The second is cheaper and matches how this repo already guards things.
+
+## 2026-09-10 - StatusLed.test.ts split (500-line rule)
+
+- [x] `web/src/lib/StatusLed.test.ts` (635 lines) split along its own
+  describe() seams into four files, no assertion rewritten: `led-legacy-fixture.ts`
+  (62, shared vm sandbox loader), `StatusLed.drift-guard.test.ts` (52, the two
+  legacy-vocabulary-pin cases), `StatusLed.parity.test.ts` (152, the
+  byte-for-byte equivalence matrix), `StatusLed.behaviour.test.ts` (426, the
+  rest of "the vocabularies" + "markup per state" + "the mapping from server
+  signals"). All 39 original test names verified identical before/after via a
+  sorted-name diff (93/93 full-suite names matched). Mutation-tested the drift
+  guard post-split by adding a bogus `shimmer` entry to `OUTER_STATES` in
+  `client/js/status-led.js`: exactly 1 of 93 tests failed (the drift guard
+  case), reverted clean. svelte-check 0 errors, `client/dist` bundle unchanged,
+  node suite 200/200, `scan_secrets.py` clean. Committed `e143ceb` on
+  `feat/svelte-1.3-on-121`.
