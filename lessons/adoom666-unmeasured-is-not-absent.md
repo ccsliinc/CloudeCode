@@ -46,6 +46,24 @@ Number 7 matters because it is not a coding mistake. The code was correct,
 the API was correct, and the eventual consistency window did the rest. The
 pattern survives being careful.
 
+**AND THE MEASUREMENT MAKES IT WORSE THAN A RACE.** ccsliinc timed the full
+sequence against a live, idle repo with zero contention:
+
+    issue create        : 1s
+    develop+commit+push : 5s
+    gh pr create        : 2s
+    linkage confirm     : 7s   (2 attempts - the FIRST read came back empty)
+    TOTAL               : 15s typical, 48s bounded
+
+The first read returning empty is the NORMAL path, not an edge case. On an
+idle repo. So this was never "a race that occasionally bites": it was a
+command that returns the wrong answer on the first try, every time, and it
+would have fired on the very first real claim.
+
+That distinction is the reason to measure rather than reason. A race you
+would test for by inducing contention, find nothing, and ship. Timing the
+happy path found it immediately.
+
 ## resolution
 
 **Give the unmeasured case its own answer.** Found, measured-absent,
@@ -73,6 +91,13 @@ Generalised: **when polling a source you have just written to, validate the
 response against your own write, not against emptiness.** Emptiness is
 ambiguous. Your own record appearing is proof the index has caught up.
 
+**And say in the procedure that the retry WILL loop.** An agent told the
+claim takes a second, that then waits forty, concludes it hung and kills it.
+Killing it mid-claim is its own hazard: the branch and the draft PR may
+already exist, so a re-claim opens a second PR against your own issue and
+loses your own tie-break to yourself. The recovery is to check what you
+already own before retrying, not to start over.
+
 ## how we know it works
 
 Items 2 through 6 are shipped and have held. Item 1 is fixed and verified
@@ -83,3 +108,7 @@ window.
 The reason to write at two occurrences rather than seven: each of these was
 found by a different person or agent, none recognised it as a repeat, and the
 same defect was therefore re-derived six times across two codebases.
+
+Updated after ccsliinc timed the sequence. The timing is what turned this
+from "a race" into "wrong on every first call", and neither of us would have
+learned that from reading the code.
