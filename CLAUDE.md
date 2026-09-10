@@ -729,7 +729,17 @@ per server process and no subprocess at all.
   patches the name in THAT module; a collaborator importing `settings`
   itself does not see it and reads and WRITES the developer's real
   `~/.cloude-sessions` during a pytest run. Resolving the path at call time
-  is also exactly what the loose methods did.
+  is also exactly what the loose methods did. `ToastInbox` (S3) adds the
+  third shape: **a moved container reached by a DEFENSIVE ACCESSOR in
+  another module needs its own proof leg.**
+  `src/core/toast_history.py` reads `getattr(manager, "_pending_toasts",
+  None)` and answers `{}` for anything that is not a Mapping, deliberately
+  and documented as such - so a facade that stopped exposing that name
+  would show an EMPTY toast history on every surface while raising nowhere
+  and failing no existing test. Whenever a slice moves a field, grep for a
+  `getattr` on its name before trusting a green suite; that shape is what
+  CLAUDE.md calls the characteristic failure of this refactor, and it has
+  now appeared in two of the first three slices.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in

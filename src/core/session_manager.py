@@ -58,6 +58,7 @@ from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
 from src.core.sessions import theme_dotfile
 from src.core.sessions.theme_accents import ThemeAccents
 from src.core.sessions.theme_store import ThemeStore
+from src.core.sessions.toast_inbox import ToastInbox
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
@@ -275,6 +276,7 @@ class SessionManager:
         *,
         probe_health: Optional[ProbeHealthRecorder] = None,
         theme_store: Optional[ThemeStore] = None,
+        toast_inbox: Optional[ToastInbox] = None,
     ):
         """Initialize the session manager.
 
@@ -288,7 +290,9 @@ class SessionManager:
         Inputs: probe_health (ProbeHealthRecorder | None) - the owner of
           the tmux probe health cluster. theme_store (ThemeStore | None) -
           the owner of the pinned-theme map, the project dotfile and the
-          accent cache. Each default-constructed when None.
+          accent cache. toast_inbox (ToastInbox | None) - the owner of the
+          per-session toast records and the startup-toast queue. Each
+          default-constructed when None.
         Output: None.
         Example: SessionManager(probe_health=ProbeHealthRecorder())
         """
@@ -317,6 +321,19 @@ class SessionManager:
             theme_store
             if theme_store is not None
             else ThemeStore(pin_path=lambda: settings.get_pinned_themes_path())
+        )
+        # S3 - the ONE owner of the toast cluster. ``_pending_toasts``
+        # and ``_pending_startup_toasts`` are read-only PROPERTIES on this
+        # class now, both aliasing the inbox's own containers. Read-only
+        # is deliberate: nothing assigns either name wholesale, so an
+        # AttributeError from a future assignment is a LOUD failure, which
+        # is what you want from a container two objects must not both
+        # hold. Note ``src/core/toast_history.py`` reaches
+        # ``_pending_toasts`` through a tolerant getattr that answers {}
+        # for a non-Mapping, so dropping the property would empty the
+        # toast history silently rather than raise.
+        self._toast_inbox: ToastInbox = (
+            toast_inbox if toast_inbox is not None else ToastInbox()
         )
         # ---- per-session state, keyed by session_id ---------------------
         # Multiple sessions coexist; two browser tabs can each be attached
@@ -381,12 +398,6 @@ class SessionManager:
         # against stranding in-flight sessions on upgrade.
         self._legacy_metadata_needs_backfill: bool = False
 
-        # v0.7.0 Part 2 - per-session toast notifications. Newest-first list
-        # per session id; pruning keeps ALL unacked + last 50 acked (see
-        # ``_prune_toasts``). Cleared on ``_wipe_session_state``. The
-        # accent cache the toast colour is read from lives on the S2
-        # theme store; ``_theme_accent_cache`` below is a property onto it.
-        self._pending_toasts: dict[str, list[Toast]] = {}
 
         # v0.7.0 Part 3 - per-session HMAC tokens. Minted on
         # ``create_session`` / ``adopt_external_session``, injected as
@@ -483,10 +494,6 @@ class SessionManager:
         # keeps both the session_id and the epoch and only moves the pane
         # pid. See src/core/session_startup_gate.py's StartupGateLedger.
         self._startup_gate_ledger = StartupGateLedger()
-        # Toasts raised by the SYNC ``_session_info_for`` and drained by
-        # the ASYNC ``list_session_infos``, which is the only caller able
-        # to await the WS broadcast. Each entry is (session_id, Toast).
-        self._pending_startup_toasts: list[tuple[str, Toast]] = []
 
         # feat/hook-driven-status - durable per-tmux-name read/unread
         # store. Own module (src/core/unread_store.py) rather than more
@@ -584,6 +591,44 @@ class SessionManager:
         Example: mgr._theme_accent_cache["matrix"]  # '#00ff41'
         """
         return self._theme_store.accent_cache
+
+    # ---- S3: the toast cluster, owned by ``self._toast_inbox`` ---------
+    #
+    # READ-ONLY properties, unlike S2's ``pinned_themes``. Nothing assigns
+    # either container wholesale, so there is no rebind to write through
+    # and a future assignment should fail LOUDLY rather than quietly
+    # shadow the property with a second container.
+
+    @property
+    def _pending_toasts(self) -> dict[str, list[Toast]]:
+        """Session id to that session's toast records, newest-first.
+
+        Description: the SAME dict the inbox holds, not a copy.
+          ``src/core/toast_history.py`` reads it through a deliberately
+          tolerant ``getattr(manager, "_pending_toasts", None)`` that
+          answers ``{}`` for anything that is not a Mapping, so removing
+          this property would empty every history view without raising
+          anywhere. That is the failure this property exists to prevent.
+        Inputs: none.
+        Output: dict[str, list[Toast]].
+        Example: mgr._pending_toasts is mgr._toast_inbox.pending  # True
+        """
+        return self._toast_inbox.pending
+
+    @property
+    def _pending_startup_toasts(self) -> list[tuple[str, Toast]]:
+        """The startup-prompt toasts waiting for an async broadcast.
+
+        Description: the SAME list the inbox holds. Filled by
+          ``_startup_gate_for`` (sync) and emptied by
+          ``_flush_startup_toasts`` (async) through
+          ``ToastInbox.drain_startup``, which is why nothing rebinds this
+          name any more.
+        Inputs: none.
+        Output: list[tuple[str, Toast]] - (session_id, Toast) pairs.
+        Example: mgr._pending_startup_toasts == []
+        """
+        return self._toast_inbox.pending_startup
 
     # ---- multi-session accessors / back-compat shims --------------------
 
@@ -705,7 +750,7 @@ class SessionManager:
         self.adopt_fifo_offsets.pop(session_id, None)
         # v0.7.0 Part 2 - drop pending toasts for this session. Other
         # sessions' toast lists are untouched.
-        self._pending_toasts.pop(session_id, None)
+        self._toast_inbox.drop_session(session_id)
         # v0.7.0 Part 3 - drop the HMAC hook token. After this point any
         # incoming hook POST for this session_id rejects with 403 (unknown
         # session → ``validate_hook_token`` returns False).
@@ -2124,20 +2169,13 @@ class SessionManager:
 
     # ---- toast notifications (v0.7.0 Part 2) ----------------------------
     #
-    # Per-session list of ``Toast`` records, newest-first. Pruning rule:
-    # keep ALL unacked + at most the LAST 50 acked (acked beyond that cap
-    # fall off the tail). Every unacked toast stays surfaceable to a
-    # re-attaching browser via ``get_toasts(..., unacked_only=True)``.
-    #
-    # THAT CAP BOUNDS ONLY THE ACKED TAIL. The unacked half has no cap and
-    # cannot have one, because a cap there would drop a notification the
-    # user has not seen. The unacked list is instead kept small at the
-    # SOURCE: a kind whose older unacked record is strictly superseded by
-    # a newer one is REPLACED IN PLACE rather than appended. Today that is
-    # ``Stop`` and only ``Stop`` - see ``_TOAST_SUPERSEDING_KINDS``. Before
-    # that rule existed, a session that ran 200 assistant turns without the
-    # user dismissing anything held 200 identical "Your turn" records and
-    # replayed all 200 on every attach backfill.
+    # STORAGE LIVES IN ``src/core/sessions/toast_inbox.py`` (S3): the
+    # records, the acked-tail cap, the supersession rule and the
+    # startup-toast queue. Read that module for why the cap bounds only
+    # the acked half and why ``Stop`` is the only superseding kind. What
+    # stays here is everything the inbox deliberately does not know:
+    # resolving a hook's session id onto a live one, the accent colour,
+    # the session label, and the notification-router fan-out.
     #
     # Color resolution: when a toast is recorded, we read the session's
     # project theme (via ``resolve_project_theme``), then read the theme
@@ -2149,8 +2187,6 @@ class SessionManager:
     # value already used elsewhere in the client as the session-identity
     # accent. Fall back to None when the theme isn't found or the var is
     # missing - the client CSS has its own ``var(... fallback)`` chain.
-
-    _TOAST_ACKED_CAP = 50
 
     @staticmethod
     def _themes_dir() -> Path:
@@ -2203,97 +2239,28 @@ class SessionManager:
         )
 
     def _prune_toasts(self, session_id: str) -> None:
-        """Trim the acked-toasts tail past ``_TOAST_ACKED_CAP``.
+        """Trim the acked-toasts tail past the inbox's cap.
 
-        Unacked toasts are preserved unconditionally (every unacked toast
-        is potentially surfaceable to a re-attaching browser). Acked
-        toasts beyond the cap are dropped from the END of the list
-        (newest-first ordering means the tail is the OLDEST acked).
+        Description: delegates to the S3 toast inbox, which owns the
+          records and the asymmetry - every unacked record survives, only
+          the oldest acked ones fall off.
+        Inputs: session_id (str).
+        Output: None.
+        Example: mgr._prune_toasts("ses_1")
         """
-        toasts = self._pending_toasts.get(session_id)
-        if not toasts:
-            return
-        acked_count = 0
-        keep: list[Toast] = []
-        for t in toasts:
-            if t.acknowledged:
-                if acked_count < self._TOAST_ACKED_CAP:
-                    keep.append(t)
-                    acked_count += 1
-                # else: drop - past the cap
-            else:
-                keep.append(t)
-        self._pending_toasts[session_id] = keep
+        self._toast_inbox.prune(session_id)
 
     # v0.7.0 Part 4 - Map the WS toast ``kind`` string (the wire-level
     # vocabulary used by the Claude hook endpoint) to a typed EventType
     # so the notification router can fan out to ntfy + Slack. Unmapped
     # kinds (e.g. a future toast kind that doesn't need a push) skip
-    # the router emit silently.
+    # the router emit silently. THIS STAYS ON THE FACADE: it is about the
+    # notification router, not about toast storage.
     _TOAST_KIND_TO_EVENT_TYPE = {
         "Stop": "CLAUDE_STOP",
         "PermissionRequest": "CLAUDE_PERMISSION_REQUEST",
         "Notification": "CLAUDE_NOTIFICATION",
     }
-
-    # Kinds whose older UNACKED record is strictly superseded by a newer
-    # one. Deliberately a one-element set, and the exclusions are the
-    # point:
-    #
-    #   Stop      - matcher "*", no throttle, one per assistant turn,
-    #               title always the literal "Your turn". Every older
-    #               unacked Stop says the same thing the newest one says,
-    #               because "your turn" has been continuously true since
-    #               the first of them fired. Nothing is lost.
-    #   Notification - the BODY is the message. Two Notifications are two
-    #               things to read; collapsing them destroys one.
-    #   PermissionRequest - each is a distinct decision about a distinct
-    #               command. Superseding one would silently discard a
-    #               command the user was never shown. Never collapse a
-    #               decision.
-    #
-    # This mirrors client/js/toast.js COALESCE_KEY exactly, including the
-    # keying on title, so server storage and client rendering partition
-    # the same set the same way. See record_toast for why they must.
-    _TOAST_SUPERSEDING_KINDS = frozenset({"Stop"})
-
-    @staticmethod
-    def _find_supersedable_toast(
-        bucket: list[Toast], kind: str, title: str
-    ) -> Optional[Toast]:
-        """Return the record a new ``(kind, title)`` toast should replace.
-
-        Description: Scans a session's toast bucket for an UNACKED record
-            of a superseding kind carrying the same title. Returns None
-            when the kind does not supersede, when nothing matches, or
-            when the only matches are acknowledged.
-        Inputs:
-            bucket: the session's newest-first list of Toast records.
-            kind: wire-level toast kind of the incoming event.
-            title: title of the incoming event. Part of the match key so
-                this partitions identically to the client's coalesce key.
-        Output: the Toast to replace in place, or None to append a new one.
-
-        ACKNOWLEDGED RECORDS ARE NEVER RETURNED. An acked toast is one the
-        user dismissed; reusing its id and clearing nothing would still
-        leave a record the backfill has already stopped serving, and
-        mutating its body would rewrite history the user acted on. A new
-        turn after a dismissal is a genuinely new notification and gets a
-        new id.
-
-        Example:
-            >>> SessionManager._find_supersedable_toast([], "Stop", "Your turn")
-        """
-        if kind not in SessionManager._TOAST_SUPERSEDING_KINDS:
-            return None
-        for existing in bucket:
-            if (
-                existing.kind == kind
-                and not existing.acknowledged
-                and existing.title == title
-            ):
-                return existing
-        return None
 
     def _live_session_id_for_stale_id(self, session_id: str) -> Optional[str]:
         """Map a pre-restart session id onto the live one for that pane.
@@ -2341,25 +2308,14 @@ class SessionManager:
         WS broadcast (the route layer does this after calling this method
         - keeps storage and fanout decoupled).
 
-        SUPERSESSION. When the session already holds an UNACKED toast of a
-        superseding kind with the same title (``Stop``, and only ``Stop``),
-        this REPLACES that record in place and returns it instead of
-        appending a second one. The id is deliberately preserved:
-
-          - The client dedupes by id and a coalesced card acks EVERY member
-            id on dismiss. A fresh id per turn would leave the browser
-            holding ids the server no longer has (their acks land on
-            nothing) while the server holds an id the browser never saw,
-            which comes straight back on the next attach backfill.
-          - The caller broadcasts the returned Toast either way, so the
-            client sees one id for one card and the count it renders
-            matches the number of records the server actually holds. A
-            card reading "x12" over a single stored record is the same
-            class of lie as twelve cards over twelve records, just
-            pointing the other way.
-
-        The returned Toast is therefore not always newly created. Callers
-        must not assume ``toast.id`` is unseen.
+        SUPERSESSION IS THE INBOX'S RULE, not this method's - see
+        ``ToastInbox.store`` and ``ToastInbox.find_supersedable``. When
+        the session already holds an UNACKED toast of a superseding kind
+        with the same title (``Stop``, and only ``Stop``), the record is
+        REPLACED IN PLACE, keeping its id, and returned instead of a
+        second one being appended. The returned Toast is therefore not
+        always newly created, and callers must not assume ``toast.id`` is
+        unseen.
 
         v0.7.0 Part 4 - also emits a ``NotificationEvent`` into the
         attached router (if any) so ntfy + Slack channels fan out from
@@ -2371,8 +2327,6 @@ class SessionManager:
                 toasts for sessions that don't exist - the client would
                 have no live WS to receive them on).
         """
-        import uuid as _uuid
-
         session = self.sessions.get(session_id)
         if session is None:
             # THE ID MAY SIMPLY PREDATE A RESTART. The pane's
@@ -2419,47 +2373,19 @@ class SessionManager:
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("toast_label_read_threw", error=str(exc))
             session_label = None
-        bucket = self._pending_toasts.setdefault(session_id, [])
-        superseded = self._find_supersedable_toast(bucket, kind, title)
-        if superseded is not None:
-            # REPLACE IN PLACE, KEEPING THE ID. See _find_supersedable_toast
-            # for which records qualify and why the id must not change.
-            superseded.body = body
-            superseded.color = color
-            superseded.session_label = session_label
-            superseded.session_name = session_name
-            superseded.created_at = datetime.utcnow()
-            bucket.remove(superseded)
-            bucket.insert(0, superseded)  # newest-first
-            toast = superseded
-            logger.info(
-                "toast_superseded",
-                session_id=session_id,
-                toast_id=toast.id,
-                kind=kind,
-            )
-        else:
-            toast = Toast(
-                id=_uuid.uuid4().hex,
-                session_id=session_id,
-                kind=kind,
-                title=title,
-                body=body,
-                color=color,
-                session_label=session_label,
-                session_name=session_name,
-                created_at=datetime.utcnow(),
-                acknowledged=False,
-            )
-            bucket.insert(0, toast)  # newest-first
-            logger.info(
-                "toast_recorded",
-                session_id=session_id,
-                toast_id=toast.id,
-                kind=kind,
-                color=color,
-            )
-        self._prune_toasts(session_id)
+        # STORAGE, SUPERSESSION AND PRUNING ARE THE INBOX'S. Everything
+        # above this line is what the inbox deliberately does not know:
+        # which live session this hook's id means, what colour the
+        # session's theme is, and what to call it.
+        toast, _superseded = self._toast_inbox.store(
+            session_id,
+            kind=kind,
+            title=title,
+            body=body,
+            color=color,
+            session_label=session_label,
+            session_name=session_name,
+        )
 
         # v0.7.0 Part 4 - fan out to the notification router (ntfy + Slack).
         # Lazy import to keep the (already-circular-prone) notifications
@@ -2970,24 +2896,7 @@ class SessionManager:
         Example:
             >>> mgr.ack_toast("ses_1", "abc", reason="answered")
         """
-        bucket = self._pending_toasts.get(session_id)
-        if not bucket:
-            return False
-        for t in bucket:
-            if t.id == toast_id:
-                if t.acknowledged:
-                    return False
-                t.acknowledged = True
-                t.ack_reason = reason
-                self._prune_toasts(session_id)
-                logger.info(
-                    "toast_acked",
-                    session_id=session_id,
-                    toast_id=toast_id,
-                    reason=reason,
-                )
-                return True
-        return False
+        return self._toast_inbox.ack(session_id, toast_id, reason)
 
     def auto_ack_toasts(
         self,
@@ -3030,11 +2939,11 @@ class SessionManager:
         """
         if not toast_auto_ack.kinds_answered_by(event_kind):
             return []
-        if session_id not in self._pending_toasts:
+        if not self._toast_inbox.has(session_id):
             remapped = self._live_session_id_for_stale_id(session_id)
             if remapped is not None:
                 session_id = remapped
-        bucket = self._pending_toasts.get(session_id)
+        bucket = self._toast_inbox.bucket(session_id)
         if not bucket:
             return []
         candidates = toast_auto_ack.resolve_auto_acks(
@@ -3063,10 +2972,7 @@ class SessionManager:
         Newest-first. Returns an empty list (NOT None) when the session
         has no recorded toasts - callers can iterate without a None check.
         """
-        bucket = self._pending_toasts.get(session_id, [])
-        if unacked_only:
-            return [t for t in bucket if not t.acknowledged]
-        return list(bucket)
+        return self._toast_inbox.get(session_id, unacked_only)
 
     # ---- output fan-out (per session) -----------------------------------
 
@@ -4646,7 +4552,7 @@ class SessionManager:
                     "startup_gate_toast_unrecordable", session=tmux_name
                 )
             else:
-                self._pending_startup_toasts.append((session_id, toast))
+                self._toast_inbox.queue_startup(session_id, toast)
                 logger.info(
                     "startup_prompt_detected",
                     session=tmux_name,
@@ -5194,14 +5100,13 @@ class SessionManager:
           unacked toasts on attach, which is the recovery path. A failed
           broadcast must never turn a once-per-instance toast into a
           once-per-poll one.
-        Inputs: none (drains ``self._pending_startup_toasts``).
+        Inputs: none (drains the inbox's startup queue).
         Output: None.
         Example: await mgr._flush_startup_toasts()
         """
-        if not self._pending_startup_toasts:
+        pending = self._toast_inbox.drain_startup()
+        if not pending:
             return
-        pending = self._pending_startup_toasts
-        self._pending_startup_toasts = []
         from src.api.websocket import connection_manager
         from src.models import ToastNewMessage
 

@@ -6744,3 +6744,77 @@ socket, INFRA-49 class, not this change.
 
 No protocol added. The plan names three; none is a substitution point
 here, and the one injection a test needs is a parameter, not a Protocol.
+
+## 2026-09-10 - backend decomposition S3: the toast inbox
+
+Slice S3 of `.claude/notes/backend-decomposition-plan.md`.
+`_pending_toasts` and `_pending_startup_toasts` left `SessionManager` for
+`src/core/sessions/toast_inbox.py` (390 lines), along with the acked-tail
+cap, the supersession rule, the prune and the startup queue.
+
+`session_manager.py` 8,207 -> 8,112 (-95). Cumulative S1+S2+S3: 8,340 ->
+8,112, -228.
+
+**The seam is storage versus everything else.** `record_toast` is 196
+lines, and only the storage half moved. The inbox resolves no session id,
+reads no theme, stamps no label and emits nothing to the notification
+router; those are other clusters and stay on the facade. What DID move is
+every rule about which record wins, which may be rewritten and which may
+be dropped - the three questions a toast store gets wrong.
+
+**A THIRD NO-COPY SHAPE, and it is the one CLAUDE.md warns about.**
+S1 was scalars, S2 was dicts a caller rebinds. This cluster is reached by
+a DEFENSIVE ACCESSOR from another module: `toast_history.py` does
+`getattr(manager, "_pending_toasts", None)` and answers `{}` for a
+non-Mapping. Drop the facade property and every history view goes empty,
+raising nowhere and failing no existing test. That is leg (e), and it
+asserts the reader gets the REAL dict (`is`), not merely that it does not
+explode. Legs (a) identity, (b) no instance field and both are properties,
+(c) writes cross, (d) live delegation through all four public methods.
+
+Both properties are READ-ONLY here, unlike S2's `pinned_themes`. Nothing
+assigns either container wholesale once `_flush_startup_toasts` drains
+through `drain_startup()` instead of rebinding, so a future assignment
+should fail LOUDLY rather than shadow the property with a second
+container.
+
+**Mutations, all run and all reverted to a byte-identical tree.** The
+facade one was run as THREE variants, because only the third isolates the
+claim.
+- facade keeps its own REFERENCE to the records dict: 1 red, leg (b)
+  alone.
+- the facade property is REMOVED entirely: 16 red, 12 of them
+  pre-existing. So a total removal is caught by the repo as it stands.
+- the facade property returns a COPY: **every pre-existing toast suite
+  stays GREEN, 66 of 66**, and only legs (a) and (e) go red. That is the
+  measurement behind this slice's claim. A copy works perfectly on the
+  day it is written and diverges the first time anything writes through
+  the inbox rather than through the facade, and `toast_history`'s
+  tolerant `getattr` cannot tell the difference.
+- `find_supersedable` may return an ACKED record: 2 red, including the
+  pre-existing `test_toast_supersede.py`.
+- `ack` re-stamps a record already acknowledged: 4 red.
+- `prune` caps the UNACKED half too: 2 red.
+
+**A claim corrected rather than left standing.** An earlier draft of this
+entry said `test_toast_lifecycle.py` passed 17 of 17 with the property
+removed. That was measured on a tree where a `git checkout --` had
+already reverted the facade wiring, so it was a reading of the S2 code,
+not of a mutant. Re-measured properly, removal IS caught. The copy
+variant above is the honest version of the same point.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,734 passed
+/ 2 failed / 19 skipped. After S2: 5,778 / 2 / 19. After S3: 5,804 / 2 /
+19, the same two environmental failures throughout. Collection 5,799 ->
+5,825, +26, ZERO removed: 23 new tests, 2 from the package-rules
+parametrisation, 1 from `test_no_unresolved_names`. Node 200/200. Listing
+cost ceilings hold. `scan_secrets.py` exit 0.
+
+The plan's S3 asked for "a test that a duplicated `Stop` acks by KIND and
+never acks the toast the same event just raised, a rule currently
+expressed only in prose". It is
+`test_a_duplicated_stop_acks_by_kind_and_not_the_toast_it_just_raised`,
+end to end through the facade, plus a cutoff negative control beside it.
+
+No protocol added. The inbox does no I/O at all - no tmux, no database,
+no filesystem - so there is nothing to substitute.
