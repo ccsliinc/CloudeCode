@@ -56,6 +56,7 @@ from src.core.session_backend import SessionBackend, build_backend
 # caller moves.
 from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
 from src.core.sessions.registry import SessionRegistry
+from src.core.sessions.sidecars import AttachmentSidecars
 from src.core.sessions import theme_dotfile
 from src.core.sessions.theme_accents import ThemeAccents
 from src.core.sessions.theme_store import ThemeStore
@@ -279,6 +280,7 @@ class SessionManager:
         theme_store: Optional[ThemeStore] = None,
         toast_inbox: Optional[ToastInbox] = None,
         registry: Optional[SessionRegistry] = None,
+        sidecars: Optional[AttachmentSidecars] = None,
     ):
         """Initialize the session manager.
 
@@ -295,7 +297,9 @@ class SessionManager:
           accent cache. toast_inbox (ToastInbox | None) - the owner of the
           per-session toast records and the startup-toast queue.
           registry (SessionRegistry | None) - the owner of the per-session
-          log buffers and command counters. Each default-constructed when
+          log buffers and command counters. sidecars (AttachmentSidecars |
+          None) - the owner of the idle watchers, the adopt FIFO offsets
+          and the pending terminal commands. Each default-constructed when
           None.
         Output: None.
         Example: SessionManager(probe_health=ProbeHealthRecorder())
@@ -357,31 +361,30 @@ class SessionManager:
             if registry is not None
             else SessionRegistry(log_cap=lambda: settings.log_buffer_size)
         )
+        # S5 - the ONE owner of the three per-session sidecars.
+        # ``idle_watchers``, ``adopt_fifo_offsets`` and
+        # ``pending_terminal_commands`` are PROPERTIES on this class now,
+        # all three aliasing the collaborator's own dicts. In-memory only,
+        # exactly as they were: a pending terminal command that survived a
+        # restart would type itself into a pane on the next attach.
+        self._sidecars: AttachmentSidecars = (
+            sidecars if sidecars is not None else AttachmentSidecars()
+        )
         # ---- per-session state, keyed by session_id ---------------------
         # Multiple sessions coexist; two browser tabs can each be attached
         # to a different session. Touching one session's entry NEVER
         # touches another's - that isolation is the whole point.
         self.sessions: dict[str, Session] = {}
         self.backends: dict[str, SessionBackend] = {}
-        # session_id -> configured terminal-command id awaiting its first
-        # client attach (feat/settings-tabs-and-commands). Holds an ID, never
-        # a command string; the text is read from config.json at flush time.
-        # In-memory only and popped on flush, so a restart or a reconnect
-        # can never replay a command. See flush_pending_terminal_command.
-        self.pending_terminal_commands: dict[str, str] = {}
         # Output fan-out: each backend's ``on_output`` callback is bound to
         # its own session_id (see ``_make_output_handler``), so bytes route
         # to ``self._subscribers[session_id]`` and nowhere else.
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         # Per-session log buffers / command counters live on
         # ``self._registry`` (S4); the two names above are properties.
-        # Item 7: per-session idle watcher. Constructed lazily at
-        # ``create_session`` / ``adopt_external_session`` so we can inject
-        # the live router from ``app.state``; cleared on destroy/detach.
-        self.idle_watchers: dict[str, IdleWatcher] = {}
-        # Byte offset into an adopted session's pipe-pane FIFO at capture
-        # time - consumed once by the WS tailer. See ``consume_adopt_fifo_offset``.
-        self.adopt_fifo_offsets: dict[str, int] = {}
+        # The three per-session sidecars live on ``self._sidecars`` (S5);
+        # ``idle_watchers``, ``adopt_fifo_offsets`` and
+        # ``pending_terminal_commands`` are properties onto it.
         # Most-recently-created/adopted session id - backs the back-compat
         # ``current_session()`` / ``self.session`` / ``self.backend`` views.
         self._last_session_id: Optional[str] = None
@@ -684,6 +687,74 @@ class SessionManager:
         """
         return self._registry.command_counts
 
+    # ---- S5: the per-session sidecars, owned by ``self._sidecars`` ------
+    #
+    # THE SETTER POSTURE IS EVIDENCE, NOT SYMMETRY, and this cluster is
+    # where it earns the rule. ``pending_terminal_commands`` gets a
+    # write-through setter because ``tests/test_terminal_commands.py``
+    # REBINDS it wholesale, twice. The other two are read-only, because
+    # nothing in src or tests assigns either name and a future assignment
+    # should fail LOUDLY rather than shadow the property with a second
+    # container the collaborator knows nothing about.
+    #
+    # ``idle_watchers`` is also read through a DEFENSIVE ACCESSOR in
+    # another module: ``src/api/websocket.py`` does
+    # ``getattr(sm, "idle_watchers", {}).get(session_id)``. Drop the
+    # property and that reader silently finds no watcher, on every
+    # session, raising nowhere. It is S3's shape and it has now appeared
+    # in three of the first five slices.
+
+    @property
+    def idle_watchers(self) -> dict[str, IdleWatcher]:
+        """Live idle watchers, keyed by session id.
+
+        Description: the SAME dict the sidecars hold, not a copy.
+        Inputs: none.
+        Output: dict[str, IdleWatcher].
+        Example: mgr.idle_watchers is mgr._sidecars.idle_watchers  # True
+        """
+        return self._sidecars.idle_watchers
+
+    @property
+    def adopt_fifo_offsets(self) -> dict[str, int]:
+        """Pipe-pane FIFO offsets awaiting their one WS tailer, by session id.
+
+        Description: the SAME dict the sidecars hold, not a copy. Reading
+          this does not consume anything; ``consume_adopt_fifo_offset``
+          is the one-shot take.
+        Inputs: none.
+        Output: dict[str, int].
+        Example: mgr.adopt_fifo_offsets is mgr._sidecars.adopt_fifo_offsets
+        """
+        return self._sidecars.adopt_fifo_offsets
+
+    @property
+    def pending_terminal_commands(self) -> dict[str, str]:
+        """Terminal-command IDs awaiting their session's first attach.
+
+        Description: the SAME dict the sidecars hold, not a copy. Holds
+          IDs, never command strings.
+        Inputs: none.
+        Output: dict[str, str].
+        Example: mgr.pending_terminal_commands is mgr._sidecars.pending_terminal_commands
+        """
+        return self._sidecars.pending_terminal_commands
+
+    @pending_terminal_commands.setter
+    def pending_terminal_commands(self, value: dict[str, str]) -> None:
+        """Rebind the whole map, on the sidecars rather than on the facade.
+
+        Description: writes THROUGH to the one owner. This setter exists
+          because a rebind is MEASURED - ``tests/test_terminal_commands.py``
+          assigns this name wholesale to arrange and then to clear. Without
+          it the assignment raises; with a plain attribute it would shadow
+          the property and the two objects would fork silently.
+        Inputs: value (dict[str, str]).
+        Output: None.
+        Example: mgr.pending_terminal_commands = {}
+        """
+        self._sidecars.pending_terminal_commands = value
+
     # ---- multi-session accessors / back-compat shims --------------------
 
     def current_session(self) -> Optional[Session]:
@@ -728,7 +799,7 @@ class SessionManager:
         sess = self.current_session()
         if sess is None:
             return None
-        return self.idle_watchers.get(sess.id)
+        return self._sidecars.watcher(sess.id)
 
     @property
     def adopt_fifo_start_offset(self) -> Optional[int]:
@@ -736,7 +807,7 @@ class SessionManager:
         sess = self.current_session()
         if sess is None:
             return None
-        return self.adopt_fifo_offsets.get(sess.id)
+        return self._sidecars.peek_fifo_offset(sess.id)
 
     def get_session(self, session_id: str) -> Optional[Session]:
         return self.sessions.get(session_id)
@@ -799,8 +870,7 @@ class SessionManager:
         self.backends.pop(session_id, None)
         self._subscribers.pop(session_id, None)
         self._registry.forget(session_id)
-        self.idle_watchers.pop(session_id, None)
-        self.adopt_fifo_offsets.pop(session_id, None)
+        self._sidecars.forget(session_id)
         # v0.7.0 Part 2 - drop pending toasts for this session. Other
         # sessions' toast lists are untouched.
         self._toast_inbox.drop_session(session_id)
@@ -3090,7 +3160,7 @@ class SessionManager:
         Inputs: session_id (str) - the session being attached to.
         Output: None.
         """
-        command_id = self.pending_terminal_commands.pop(session_id, None)
+        command_id = self._sidecars.take_pending_command(session_id)
         if not command_id:
             return
         command = settings.get_terminal_command(command_id)
@@ -3441,7 +3511,9 @@ class SessionManager:
             # attaches, so the handshake's repaint cannot clear the output.
             # See flush_pending_terminal_command.
             if terminal_command_id:
-                self.pending_terminal_commands[session_id] = terminal_command_id
+                self._sidecars.set_pending_command(
+                    session_id, terminal_command_id
+                )
 
             # PID for metadata: both backends expose `.pid` now.
             # PTYBackend tracks a single forked pid for the process
@@ -3588,7 +3660,7 @@ class SessionManager:
                     ),
                 )
                 await idle_watcher.start()
-                self.idle_watchers[session_id] = idle_watcher
+                self._sidecars.set_watcher(session_id, idle_watcher)
 
             logger.info(
                 "session_created",
@@ -3647,7 +3719,7 @@ class SessionManager:
                 await backend.stop()
             except Exception:
                 pass
-        iw = idle_watcher or self.idle_watchers.get(session_id)
+        iw = idle_watcher or self._sidecars.watcher(session_id)
         if iw is not None:
             try:
                 await iw.stop()
@@ -3694,7 +3766,7 @@ class SessionManager:
         try:
             # Tear down the idle watcher first - mirrors destroy ordering so
             # a trailing poll iteration can't fire after the backend is gone.
-            iw = self.idle_watchers.get(sid)
+            iw = self._sidecars.watcher(sid)
             if iw is not None:
                 try:
                     await iw.stop()
@@ -3798,7 +3870,7 @@ class SessionManager:
         try:
             # Item 7: tear down the watcher FIRST so no poll iteration races
             # with the pending backend shutdown.
-            iw = self.idle_watchers.get(sid)
+            iw = self._sidecars.watcher(sid)
             if iw is not None:
                 try:
                     await iw.stop()
@@ -6847,7 +6919,7 @@ class SessionManager:
             name, also=adopt_session_id
         ):
             old_backend = self.backends.get(stale_id)
-            old_iw = self.idle_watchers.get(stale_id)
+            old_iw = self._sidecars.watcher(stale_id)
             if old_iw is not None:
                 try:
                     await old_iw.stop()
@@ -7103,7 +7175,7 @@ class SessionManager:
         self._save_session_metadata(adopted_session)
 
         # Stash the FIFO offset for THIS session's WS tailer to consume.
-        self.adopt_fifo_offsets[adopt_session_id] = fifo_start_offset
+        self._sidecars.set_fifo_offset(adopt_session_id, fifo_start_offset)
 
         # Spin up IdleWatcher per the normal create path so notifications
         # fire for adopted sessions too. Router may be None in tests.
@@ -7130,7 +7202,7 @@ class SessionManager:
                 ),
             )
             await iw.start()
-            self.idle_watchers[adopt_session_id] = iw
+            self._sidecars.set_watcher(adopt_session_id, iw)
 
         logger.info(
             "session_adopted_external",
@@ -8163,5 +8235,5 @@ class SessionManager:
         sid = self._resolve_session_id(session_id)
         if not sid:
             return None
-        return self.adopt_fifo_offsets.pop(sid, None)
+        return self._sidecars.take_fifo_offset(sid)
 

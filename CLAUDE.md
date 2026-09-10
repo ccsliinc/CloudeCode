@@ -755,7 +755,25 @@ per server process and no subprocess at all.
   any defect in the move and the structural legs carry the whole proof.
   Measured on the aliasing mutation, where `__init__` holds the
   collaborator's own dict as a plain attribute: leg (a), the `is` check,
-  stays GREEN and only leg (b) fails.
+  stays GREEN and only leg (b) fails. `AttachmentSidecars` (S5, the idle
+  watchers, the adopt FIFO offsets and the pending terminal commands)
+  QUALIFIES the getattr rule above rather than repeating it. **A
+  defensive-accessor leg catches a REMOVED property, and it catches a
+  COPYING one only if it asserts identity on the container itself.**
+  `toast_history`'s leg does (`is` on the dict) and the websocket's
+  `getattr(sm, "idle_watchers", {}).get(session_id)` does not - measured
+  on the copying mutation, that leg passed while identity, cross-writes,
+  the rebind and injection all failed. And **a test that constructs the
+  manager with `SessionManager.__new__` bypasses `__init__`, so every
+  property a slice adds is unreachable there**: it has to install the
+  collaborator by hand the way it already installs `backends`. One file
+  does that today, `tests/test_terminal_commands.py`, and it was
+  repointed in the same commit. S5 also carries the one-shot rule for
+  the two sidecars that are consumed exactly once - `take_fifo_offset`
+  and `take_pending_command` POP, `peek_fifo_offset` does not, because
+  `adopt_fifo_start_offset` is a property and a getter that consumed
+  would let an unrelated read destroy the replay position of a session
+  nobody had attached to yet.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in

@@ -6906,3 +6906,116 @@ parameter, not a substitution point.
 No patch had to be repointed: nothing in the suite patches or
 monkeypatches `log_buffers`, `command_counts`, `add_log_entry` or
 `get_recent_logs` under any spelling.
+
+## 2026-09-10 - backend decomposition S5: the three per-session sidecars
+
+Slice S5 of `.claude/notes/backend-decomposition-plan.md`. `idle_watchers`,
+`adopt_fifo_offsets` and `pending_terminal_commands` left `SessionManager`
+for `AttachmentSidecars` in `src/core/sessions/sidecars.py` (211 lines),
+taking three clusters out of `_wipe_session_state`.
+
+`session_manager.py` 8,167 -> 8,239 (+72). Cumulative S1..S5: 8,340 ->
+8,239, -101. Like S4 this slice grows the facade, for the same reason:
+three properties plus a documented setter cost more lines than the three
+field declarations and eleven call sites they replace. The god method
+`_wipe_session_state` lost three of its nine clusters, which is the
+measurement the plan actually cares about.
+
+**They are one cluster because they have one lifecycle**, not because
+they are three dicts: each is written on the create or adopt path, read
+once when a client shows up, and dropped when the session goes away.
+
+**The one-shot rule is the point, and half of it was undefended.** The
+plan asks for both. `take_pending_command` already had a pre-existing
+guard - `test_terminal_commands.py::test_flush_types_the_command_and_pops_it`
+went red on the pop-to-get mutation. `take_fifo_offset` had NONE: that
+same mutation on the FIFO offset reddened only the two new tests. A
+reconnect re-seeking to a stale offset would replay against a FIFO that
+has grown by however much output landed meanwhile.
+
+**A getter may not consume.** `peek_fifo_offset` exists next to
+`take_fifo_offset` because `adopt_fifo_start_offset` is a PROPERTY, and
+`peek` and `take` differ by one method call while both read perfectly.
+Its own test, and its own mutation.
+
+**PLAN VERSUS CODE: `flush_pending_terminal_command` did not move, only
+its pop did.** The plan lists it among "their four accessors". It is 60
+lines of settings lookup, backend write and retry loop, which is the S3
+seam - storage versus everything else - so the sidecars own
+`take_pending_command` and the facade keeps the flush. The ordering is
+the safety property rather than the pop alone: the flush can fail after
+the pop on an unknown id, a missing backend or a write error, and a
+session whose command FAILED must still not have it retyped. There is a
+test for that ordering.
+
+**`forget` deliberately does not drop the pending command.** Measured
+pre-move: `_wipe_session_state` popped the watcher and the offset and
+never touched `pending_terminal_commands`. Preserved verbatim, and now
+ASSERTED, so that changing it is a decision somebody makes rather than a
+diff nobody notices. Session ids are not reused, so what is left behind
+is an entry nothing can ever read; worth dropping one day, but a refactor
+is not where a behaviour change belongs.
+
+**The legs, and the one that is necessary but NOT sufficient.** (a)
+identity of all three containers; (b) none of the three is an instance
+attribute and all three are properties; (c) in-place writes cross both
+ways; (c2) a whole-map REBIND through the facade reaches the collaborator
+- this is the cluster that gives the setter rule its evidence, because
+`tests/test_terminal_commands.py` rebinds `pending_terminal_commands`
+wholesale twice while nothing rebinds the other two, which are therefore
+read-only with a negative control asserting the assignment raises; (d)
+live delegation through `idle_watcher`, `adopt_fifo_start_offset` and
+`_wipe_session_state`; (e) the defensive reader in `src/api/websocket.py`
+still finds the watcher; (f) injection is real.
+
+**Leg (e) is where the S3 rule gets QUALIFIED.** `toast_history`'s leg
+asserts `is` on the container and catches a copying property. The
+websocket's is `getattr(sm, "idle_watchers", {}).get(session_id)`, and
+`.get()` on a copy answers correctly - so measured on the copying
+mutation, leg (e) PASSED while (a), (c), (c2) and (f) failed. A
+defensive-accessor leg catches a REMOVED property always, and a COPYING
+one only if it asserts identity on the container itself.
+
+**A patch that had to be repointed.** `tests/test_terminal_commands.py`
+builds its manager with `SessionManager.__new__(SessionManager)`, which
+skips `__init__` entirely, so `_sidecars` does not exist and every S5
+property is unreachable. It now installs `AttachmentSidecars()` by hand
+the same way it already installs `backends`. Two other files bypass the
+constructor (`test_workspace_env_reaches_terminal.py`,
+`test_adoption_three_outcomes.py`) and neither touches an S5 name. Any
+later slice adding a property must re-check those three.
+
+**Mutations, all run and all reverted to a byte-identical tree** (sha256
+checked after each revert).
+- `take_fifo_offset` reads instead of popping: 2 red, both new.
+- `take_pending_command` reads instead of popping: 3 red, one
+  pre-existing.
+- `peek_fifo_offset` consumes: 2 red.
+- `forget` also drops the pending command: 1 red.
+- the three facade properties return COPIES: 4 red, and leg (e) GREEN,
+  as above.
+- the setter shadows instead of writing through: 3 red, two pre-existing.
+- the facade keeps its own attributes aliasing the sidecar dicts: 5 red.
+- `_wipe_session_state` stops reaching the sidecars: 1 red.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,804
+passed / 2 failed / 19 skipped. After S4: 5,828 / 2 / 19. After S5:
+5,856 / 2 / 19, the same two environmental failures throughout.
+Collection 5,849 -> 5,877, +28, ZERO removed against S4 and ZERO against
+the control: 25 new tests, 2 from the package-rules parametrisation, 1
+from `test_no_unresolved_names`. Node 200/200. The three listing cost
+ceilings pass inside the full run. `scan_secrets.py` exit 0. Pre-commit
+hook left enabled.
+
+No protocol added. The sidecars do no I/O at all - no tmux, no database,
+no filesystem, no awaits - so there is nothing to substitute.
+
+**Coordination.** Re-read `now/adoom666.md` and both his claims off
+`adamdev/coord` at `6e09b1c` before starting. Nothing of his names
+`session_manager.py`, `log_buffers`, `command_counts`, `idle_watchers`,
+`adopt_fifo_offsets` or `pending_terminal_commands`. His mute work lives
+in `src/core/session_notification_policy.py` and
+`src/core/notifications/idle_watcher.py`; neither is touched here - S5
+moves only the manager's MAP of watchers, not the watcher. His queued
+wave 3 lands in `_session_info_for` and `create_session`, which are
+slices 8 and 9, not these.
