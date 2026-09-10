@@ -2265,8 +2265,19 @@ async def claude_event_hook(request: Request):
     # droppable - CLAUDE.md), or a read that threw. A missed "your turn"
     # is a worse failure than a spurious one, so silence is only ever
     # bought with evidence.
+    #
+    # THE LATCH IS THE OTHER HALF OF THE SAME EVIDENCE, and it is read
+    # here for the same reason: ``Stop`` resets the depth to 0, so the
+    # depth alone covers only the FIRST event of a background wait. The
+    # trailing idle ``Notification`` claude fires about 60s later, and any
+    # second ``Stop`` behind it, find a depth of 0 and would be raised.
+    # ``subagent_wait_active`` answers for a bounded window after a
+    # ``Stop`` that was itself suppressed at a positive depth. It is read
+    # BEFORE ``record_hook_event`` so this event cannot stamp the latch it
+    # is then judged by.
     try:
         subagent_depth_at_event = session_manager.subagent_depth(session_id)
+        subagent_wait_at_event = session_manager.subagent_wait_active(session_id)
     except Exception as exc:  # pragma: no cover - defensive, see above
         logger.warning(
             "hook_subagent_depth_unreadable",
@@ -2275,6 +2286,7 @@ async def claude_event_hook(request: Request):
             error=str(exc),
         )
         subagent_depth_at_event = 0
+        subagent_wait_at_event = False
 
     # feat/hook-driven-status - EVERY valid event kind updates the
     # activity-status state machine, not just the toast-worthy ones.
@@ -2522,15 +2534,19 @@ async def claude_event_hook(request: Request):
     # The activity state machine is untouched: the session still records
     # the event, still flips unread on a Stop, still resolves its status.
     # The one thing skipped is the interruption.
-    if (
-        event_kind in (EVENT_STOP, EVENT_NOTIFICATION)
-        and subagent_depth_at_event > 0
+    #
+    # TWO SOURCES OF ONE FACT, and the session is waiting on itself if
+    # EITHER says so: the live depth for the first event of a wait, the
+    # bounded latch for the ones trailing it. Both fail toward notifying.
+    if event_kind in (EVENT_STOP, EVENT_NOTIFICATION) and (
+        subagent_depth_at_event > 0 or subagent_wait_at_event
     ):
         logger.info(
             "hook_toast_suppressed_subagents_running",
             session_id=session_id,
             event_kind=event_kind,
             subagent_depth=subagent_depth_at_event,
+            subagent_wait_latched=subagent_wait_at_event,
         )
         return {"ok": True, "toast_suppressed": "subagents_running"}
 

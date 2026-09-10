@@ -154,6 +154,39 @@ WORKING_HEARTBEAT_TIMEOUT_SECONDS: int = 120
 
 _HEARTBEAT_TIMEOUT = timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS)
 
+#: How long a ``Stop`` that was suppressed for sub-agent reasons keeps
+#: suppressing the events that trail it.
+#:
+#: WHY A LATCH IS NEEDED AT ALL. ``Stop`` resets ``subagent_depth`` to 0
+#: (it must - see the field comment), so the toast gate correctly
+#: suppresses that first ``Stop`` at a positive depth and is then blind
+#: for the rest of the same wait. Measured live 2026-09-10 on
+#: ``ses_63beb976``, three times in twelve minutes: an idle
+#: ``Notification`` RAISED about 60s after a suppressed ``Stop`` (plus
+#: 60.09s, plus 60.12s, plus 60.03s), once with a second ``Stop`` raised
+#: at plus 19.22s as well. Each summoned the user to a pane reading
+#: "Waiting for N background agents to finish".
+#:
+#: Reasoning for 180s. It has to be LONGER than the whole trailing burst
+#: claude emits during one background wait, and the longest gap measured
+#: between a suppressed ``Stop`` and a trailing event is about 85s, so
+#: anything under about 120s reintroduces the bug on the slower waits. It
+#: also has to clear ``WORKING_HEARTBEAT_TIMEOUT_SECONDS`` (120s), because
+#: while that window is open the session can still be painting ``working``
+#: from the pre-Stop heartbeat and a toast landing inside it is the same
+#: false summons. 180s is a bit over twice the longest measured gap and
+#: half again the heartbeat window.
+#:
+#: It has to be FINITE, and that is the safety property, not a
+#: convenience: with a TTL an over-long background wait degrades to a
+#: DELAYED notification, never a lost one. A latch with no expiry is an
+#: unbounded mute, and a missed "your turn" is a worse failure than a
+#: spurious one. Silence is only ever bought with evidence, and this
+#: latch is evidence with a shelf life.
+SUBAGENT_WAIT_LATCH_SECONDS: int = 180
+
+_SUBAGENT_WAIT_LATCH = timedelta(seconds=SUBAGENT_WAIT_LATCH_SECONDS)
+
 logger = structlog.get_logger(__name__)
 
 
@@ -293,6 +326,23 @@ class SessionActivitySignal:
     #: the persisted unread flag is the durable record of "a Stop happened
     #: and nobody's looked".
     last_stop_ts: Optional[datetime] = None
+    #: When a ``Stop`` was last SUPPRESSED for sub-agent reasons, or None.
+    #: Stamped by the ``Stop`` branch from the depth as it stood BEFORE
+    #: that branch's own reset, because the reset is what destroys the
+    #: evidence the toast gate needs for the rest of the wait. Read
+    #: through ``subagent_wait_active``, which is where the TTL lives.
+    #:
+    #: THE STAMP IS THE TRANSITION, NOT THE EVENT, the same discipline
+    #: ``permission_opened_at`` uses. A duplicate ``Stop`` arrives with
+    #: the depth already 0, so it finds nothing to stamp from and leaves
+    #: the original stamp alone; a repeating hook therefore cannot push
+    #: the mute out indefinitely.
+    #:
+    #: RETIRED BY AN OPENING EVENT OR BY THE TTL, NEVER BY COUNTING DOWN.
+    #: After a ``Stop`` the depth is already 0, so a later
+    #: ``SubagentStop`` hits the floor branch and decrements nothing - any
+    #: retire-by-counting-down design would never retire at all.
+    subagent_wait_since: Optional[datetime] = None
 
 
 class SessionActivityTracker:
@@ -363,6 +413,9 @@ class SessionActivityTracker:
             state.permission_open = False
             state.permission_opened_at = None
             state.notice_open = False
+            # An OPENING event retires the sub-agent wait latch: a new
+            # turn beginning is positive proof the previous wait is over.
+            state.subagent_wait_since = None
             # An OPENING event: a prompt was submitted, so a turn is live
             # again even though this event stamps no heartbeat of its own
             # (a turn that calls no tool never paints ``working``, which
@@ -379,6 +432,8 @@ class SessionActivityTracker:
             state.notice_open = False
             state.turn_open = True
             state.last_tool_event_ts = now
+            # An OPENING event: see EVENT_USER_PROMPT_SUBMIT above.
+            state.subagent_wait_since = None
         elif kind == EVENT_POST_TOOL_USE:
             # A CLOSING event. It is a heartbeat only while a turn is
             # open, or while we have never seen a Stop for this session
@@ -399,6 +454,13 @@ class SessionActivityTracker:
             state.subagent_depth += 1
             state.turn_open = True
             state.last_tool_event_ts = now
+            # An OPENING event, and it also raises the depth - so the gate
+            # is covered by the live count from here until the next Stop
+            # and needs no latch in between. Clearing it is the
+            # fail-toward-notifying direction: a straggler SubagentStart
+            # delivered after a Stop costs at most one spurious toast,
+            # where leaving the latch standing would cost a missed one.
+            state.subagent_wait_since = None
         elif kind == EVENT_SUBAGENT_STOP:
             # A SubagentStop NEVER STAMPS THE HEARTBEAT. It reports that
             # work ENDED, so the only thing it may move is the depth, and
@@ -422,6 +484,15 @@ class SessionActivityTracker:
             # Turn ended cleanly: nothing blocking, nothing asking for
             # attention, no in-flight tool work, no in-flight subagent. A
             # duplicate Stop re-applies the exact same reset - harmless.
+            #
+            # THE DEPTH IS CAPTURED BEFORE THE RESET, and the reset below
+            # is deliberately unchanged. Letting SubagentStop decrement it
+            # naturally instead would mean one DROPPED SubagentStop pins
+            # the depth above zero forever and silences that session
+            # permanently, which fails toward SILENCE. So the depth still
+            # resets and the fact that a wait was in progress is latched
+            # separately, with a TTL. See ``subagent_wait_since``.
+            depth_before_stop = state.subagent_depth
             state.permission_open = False
             state.permission_opened_at = None
             state.notice_open = False
@@ -429,6 +500,8 @@ class SessionActivityTracker:
             state.last_tool_event_ts = None
             state.turn_open = False
             state.last_stop_ts = now
+            if depth_before_stop > 0:
+                state.subagent_wait_since = now
 
     def resolve(
         self,
@@ -670,6 +743,43 @@ class SessionActivityTracker:
         """
         state = self._signals.get(session_id)
         return state.subagent_depth if state is not None else 0
+
+    def subagent_wait_active(
+        self, session_id: str, now: Optional[datetime] = None
+    ) -> bool:
+        """True while a recent ``Stop`` was suppressed for sub-agent reasons.
+
+        Description: The second half of the sub-agent evidence the toast
+            gate reads, and the half that survives ``Stop``'s own reset of
+            ``subagent_depth``. A ``Stop`` that landed at a positive depth
+            stamps ``subagent_wait_since``; this answers True until an
+            OPENING event clears the stamp or
+            ``SUBAGENT_WAIT_LATCH_SECONDS`` elapses, whichever comes
+            first.
+
+            FAIL TOWARD NOTIFYING, exactly as ``subagent_depth`` does. A
+            session this tracker has never seen, one with no stamp, and
+            one whose stamp has expired all answer False, so the toast is
+            raised. Only a stamp inside its window buys silence, and it
+            buys a BOUNDED amount of it: an over-long background wait
+            degrades to a DELAYED notification, never a lost one.
+        Inputs:
+            session_id: cloudecode session id.
+            now: injectable clock for tests. Defaults to
+                ``datetime.utcnow()``, matching ``record_event``.
+        Output: bool. True only when a stamp exists and is younger than
+            ``SUBAGENT_WAIT_LATCH_SECONDS``.
+        Example:
+            >>> tracker.record_event("ses_1", EVENT_SUBAGENT_START)
+            >>> tracker.record_event("ses_1", EVENT_STOP)
+            >>> tracker.subagent_wait_active("ses_1")
+            True
+        """
+        state = self._signals.get(session_id)
+        if state is None or state.subagent_wait_since is None:
+            return False
+        now = now or datetime.utcnow()
+        return (now - state.subagent_wait_since) < _SUBAGENT_WAIT_LATCH
 
     def forget(self, session_id: str) -> None:
         """Drop all ephemeral state for ``session_id``. Idempotent.

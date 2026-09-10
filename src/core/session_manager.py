@@ -2664,6 +2664,25 @@ class SessionManager:
         """
         return self._activity_tracker.subagent_depth(session_id)
 
+    def subagent_wait_active(self, session_id: str) -> bool:
+        """Whether a recent Stop for this session was a sub-agent wait.
+
+        Description: Thin read-only passthrough to
+            ``SessionActivityTracker.subagent_wait_active``, matching the
+            ``subagent_depth`` passthrough above so the hook endpoint can
+            read both halves of the same evidence without reaching into a
+            private attribute. An unknown session answers False - not
+            having a record is not evidence a wait is in progress, and the
+            one caller uses a True only to STAY SILENT.
+        Inputs:
+            session_id: cloudecode session id.
+        Output: bool.
+        Example:
+            >>> mgr.subagent_wait_active("ses_1")
+            False
+        """
+        return self._activity_tracker.subagent_wait_active(session_id)
+
     def record_hook_event(
         self, session_id: str, kind: str, payload: Optional[dict] = None
     ) -> None:
