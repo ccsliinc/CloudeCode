@@ -167,7 +167,7 @@ function livePreview(projectedKind) {
 // ---------------------------------------------------------------------------
 
 test('a live row offers restart alongside close', () => {
-    const w = load(['session-status-ui.js', 'session-row-actions.js']);
+    const w = load(['session-status-ui.js', 'session-row-actions-confirm.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
     for (const status of ['working', 'working_subagent', 'question',
         'finished_unread', 'idle', 'running']) {
@@ -181,7 +181,7 @@ test('a live row offers restart alongside close', () => {
 });
 
 test('a dead row is exactly what it was', () => {
-    const w = load(['session-status-ui.js', 'session-row-actions.js']);
+    const w = load(['session-status-ui.js', 'session-row-actions-confirm.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
     assert.deepEqual(
         plain(A.actionsFor('dead')), [A.ACTION_RESTART, A.ACTION_REMOVE]);
@@ -190,7 +190,7 @@ test('a dead row is exactly what it was', () => {
 });
 
 test('an unknown row is never offered a control that kills', () => {
-    const w = load(['session-status-ui.js', 'session-row-actions.js']);
+    const w = load(['session-status-ui.js', 'session-row-actions-confirm.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
     for (const status of [undefined, null, 'unknown', 'not_a_real_status']) {
         const actions = plain(A.actionsFor(status));
@@ -205,7 +205,7 @@ test('an unknown row is never offered a control that kills', () => {
 test('a stopped row is not treated as a live one', () => {
     // 'stopped' means the tmux instance is GONE - there is no pane to kill
     // and nothing to respawn into, which is why it is not in LIVE_STATUSES.
-    const w = load(['session-status-ui.js', 'session-row-actions.js']);
+    const w = load(['session-status-ui.js', 'session-row-actions-confirm.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
     assert.ok(A.LIVE_STATUSES.indexOf('stopped') === -1);
     assert.ok(A.LIVE_STATUSES.indexOf('dead') === -1);
@@ -216,7 +216,7 @@ test('the restart control still needs no generic confirm dialog', () => {
     // The picker IS the confirmation for a dead pane and carries its own
     // second one for a live pane, so routing restart through the shared
     // modal would ask twice and say less.
-    const w = load(['session-status-ui.js', 'session-row-actions.js']);
+    const w = load(['session-status-ui.js', 'session-row-actions-confirm.js', 'session-row-actions.js']);
     const A = w.SessionRowActions;
     assert.equal(A.requiresConfirm(A.ACTION_RESTART), false);
     assert.equal(A.requiresConfirm(A.ACTION_CLOSE), true);

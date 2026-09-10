@@ -81,6 +81,7 @@ function loadModules() {
     };
     vm.createContext(sandbox);
     vm.runInContext(readClientJs('session-status-ui.js'), sandbox);
+    vm.runInContext(readClientJs('session-row-actions-confirm.js'), sandbox);
     vm.runInContext(readClientJs('session-row-actions.js'), sandbox);
     sandbox.window.__confirmCalls = confirmCalls;
     return sandbox.window;

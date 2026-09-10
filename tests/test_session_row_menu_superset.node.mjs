@@ -77,6 +77,7 @@ function sandbox(opts = {}) {
     };
     vm.createContext(context);
     vm.runInContext(clientJs('session-status-ui.js'), context);
+    vm.runInContext(clientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(clientJs('session-row-actions.js'), context);
     // THE ONE GATE. markUnreadHtml returns '' when the operator turned the
     // control off, and the menu asks it rather than reading the flag a
@@ -85,6 +86,7 @@ function sandbox(opts = {}) {
     win.SessionStatusUI.markUnreadHtml = (name, unread) => (
         showMarkUnread ? realMarkUnread.call(null, name, unread) : '');
     if (opts.groupActions !== false) win.SessionSidebarGroupActions = { openPickerFor() {} };
+    vm.runInContext(clientJs('session-row-menu-items.js'), context);
     vm.runInContext(clientJs('session-row-menu.js'), context);
     return { Menu: win.SessionRowMenu, RowActions: win.SessionRowActions, win };
 }

@@ -117,7 +117,14 @@ const F = loadModule('server-status-format.js', 'ServerStatusFormat');
 const panelSrc = read('client', 'js', 'server-status-panel.js');
 const apiSrc = read('client', 'js', 'api.js');
 const menuSrc = read('client', 'js', 'server-controls-menu.js');
-const actionsSrc = read('client', 'js', 'session-row-actions.js');
+// The row-actions module was split for the 500-line rule: the
+// confirmation copy and its two functions now live in
+// session-row-actions-confirm.js. The assertions below are about the
+// PAIR - what a destructive control tells the user, and what it then
+// calls - so both halves are read as one source, and executing them in
+// order is what the page's script tags do too.
+const actionsSrc = read('client', 'js', 'session-row-actions-confirm.js')
+    + '\n' + read('client', 'js', 'session-row-actions.js');
 const launchpadSrc = read('client', 'js', 'launchpad.js');
 const indexHtml = read('client', 'index.html');
 const css = read('client', 'css', 'server-status.css');

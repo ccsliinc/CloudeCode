@@ -110,6 +110,7 @@ function makeSandbox() {
     const context = { window: fakeWindow, document: fakeDocument, console };
     vm.createContext(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
+    vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
 
     return {
@@ -382,6 +383,7 @@ function makeRenderSandbox(moduleFile, containerId) {
     };
     vm.createContext(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
+    vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
     // The sidebar's row markup moved into its own module when
     // session-sidebar.js hit the 500-line ceiling; SessionSidebar.render()
@@ -392,6 +394,7 @@ function makeRenderSandbox(moduleFile, containerId) {
     // for its one remaining control, and the sidebar assertion below
     // reads the folded actions back out of it.
     vm.runInContext(readClientJs('kebab-icon.js'), context);
+    vm.runInContext(readClientJs('session-row-menu-items.js'), context);
     vm.runInContext(readClientJs('session-row-menu.js'), context);
     vm.runInContext(readClientJs(moduleFile), context, { filename: moduleFile });
     return { win, container };

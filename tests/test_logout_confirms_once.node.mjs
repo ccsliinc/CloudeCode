@@ -99,7 +99,8 @@ function load() {
     vm.createContext(sandbox);
 
     for (const m of ['session-label.js', 'session-status-ui.js',
-        'session-row-actions.js', 'app.js', 'terminal.js']) {
+        'session-row-actions-confirm.js', 'session-row-actions.js',
+        'app.js', 'terminal.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', m), 'utf8'),
             sandbox, { filename: m });

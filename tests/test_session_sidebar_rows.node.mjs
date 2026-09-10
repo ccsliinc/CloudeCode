@@ -83,12 +83,14 @@ function makeSandbox() {
     vm.createContext(context);
     vm.runInContext(readClientJs('kebab-icon.js'), context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
+    vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
     // The row's action controls MOVED into the overflow menu. The module
     // that builds them from a row's kebab is loaded here so the
     // invariants below can still be asserted over what a row OFFERS,
     // rather than quietly narrowing to what a row happens to draw inline.
+    vm.runInContext(readClientJs('session-row-menu-items.js'), context);
     vm.runInContext(readClientJs('session-row-menu.js'), context);
 
     return {

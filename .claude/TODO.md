@@ -6183,3 +6183,76 @@ long press), `session-row-actions.js` (`actionsFor` / `offersMenu`),
 `project-list-render-guard.js`, `client/css/session-row-menu.css` and
 `client/index.html`. The two new test files are the specification and
 should port before the code does.
+
+## 2026-09-10 later still: two validator findings on the menu delta, fixed
+
+Independent validation failed the row-menu commit on 2 of 12 checks. Both
+were real. The other ten passed, including the live-row restart guard,
+which broke 7 cases across 3 files when forced rather than the 6 recorded
+above.
+
+### FINDING 1: the attribute-name bug was FIXED BUT NOT GUARDED
+
+The validator mutated the READER in `session-sidebar-clicks.js` back to
+the old spelling `data-row-status`, ran all 200 node suites, and got
+**zero failures**. So the "compiles and lies" regression the commit
+message claims to fix could come straight back and ship silently.
+
+**Why the existing cover could not see it, and the lesson.** There were
+two tests either side of the seam and neither crossed it: a WRITER-side
+assertion that the trigger carries `data-row-menu-status`, which passes
+happily while the reader looks somewhere else, and a READER-side dispatch
+test whose `runRestart` was a MOCK - and a mock never performs the
+attribute read at all. Two green tests, one unguarded contract. **When a
+writer and a reader agree by naming the same string, only a test that
+runs BOTH halves is evidence.**
+
+**The fix:** two cases in `tests/test_session_row_menu_dispatch.node.mjs`
+that render the REAL trigger through `SessionRowMenu.triggerHtml`, parse
+the attributes out of that rendered markup (never a hand-written map,
+which would be a third spelling that could agree with one side while the
+other drifted), and drive the REAL `SessionSidebarClicks.runRestart`
+against it with a recording picker. The status must arrive at
+`picker.open` as `working`, not null. The second case drives four
+statuses, because a wrong spelling reads null for every one and a single
+fixture could pass on a default.
+
+**MUTATION-PROVEN, before and after the split:** with the reader on the
+wrong spelling both new cases fail and the full 200-suite run reports 1
+failing file instead of 0. Reverted and re-confirmed green.
+
+### FINDING 2: two client files shipped over the 500-line rule
+
+`session-row-menu.js` 535 and `session-row-actions.js` 552. CLAUDE.md
+names this family as one that must not grow, and the owner has recorded
+"files over 500 lines" as a stated dislike, so shipping them was
+inconsistent with what we published the same day. Split along the seam the
+three-module structure already had - a LIFT each, no redesign, no new
+abstraction, no renamed export:
+
+| file | was | now |
+|---|---|---|
+| `client/js/session-row-menu.js` | 535 | **402** |
+| `client/js/session-row-menu-items.js` | - | **168** (the item table) |
+| `client/js/session-row-actions.js` | 552 | **449** |
+| `client/js/session-row-actions-confirm.js` | - | **166** (CONFIRM_COPY, `confirm`, `attachmentPreamble`) |
+
+`SessionRowMenu.ITEMS` is still re-exported and `SessionRowActions.confirm`
+/ `.attachmentPreamble` still exist under their own names, delegating, so
+no caller changed. A missing confirm module answers **false** - a
+destructive action must never proceed because its confirmation failed to
+load. Nine test sandboxes that load these modules standalone now load the
+split half too, and `test_server_status_panel.node.mjs` reads the pair as
+one source because its assertions are about the pair.
+
+### Verification after both fixes
+
+pytest **5708 passed / 2 failed / 19 skipped** (the two environmental);
+the three cost-ceiling suites `test_listing_seed_row_cost.py`,
+`test_listing_subprocess_cost.py`, `test_listing_liveness_socket_scope.py`
+**12 passed**; node **200 suites, 0 failing**; `node --check` clean;
+`scan_secrets.py` exit 0; version still **1.2.1**.
+
+The two `src/` follow-ups recorded above (`session_notification_policy.py`
+563, `notifications/idle_watcher.py` 513) are UNCHANGED and still open -
+that code is not being rewritten, so they still want a real split.

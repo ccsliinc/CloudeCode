@@ -280,6 +280,159 @@ test('a runner whose collaborator is missing does nothing, and does not throw', 
     win.SessionRowMenuActions.run('move-to-group', ctx());
 });
 
+// =====================================================================
+// THE WRITER AND THE READER MUST AGREE ON THE ATTRIBUTE NAME
+// =====================================================================
+
+/**
+ * Turn one rendered `<button ...>` tag into something with getAttribute.
+ *
+ * Description: THE MARKUP IS THE REAL OUTPUT of
+ *   SessionRowMenu.triggerHtml, parsed rather than hand-written, because
+ *   a hand-written attribute map would be a THIRD spelling of the same
+ *   fact and could agree with the reader while the writer disagreed with
+ *   both. Attributes are read out of the tag exactly as rendered.
+ * Inputs: tag (string) - one rendered button tag.
+ * Output: object - an element exposing getAttribute.
+ */
+function elementFromTag(tag) {
+    const attrs = Object.create(null);
+    for (const m of tag.matchAll(/([a-zA-Z0-9-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
+    return {
+        attrs,
+        getAttribute: (n) => (n in attrs ? attrs[n] : null),
+        querySelector: () => null,
+    };
+}
+
+test('RESTART READS THE STATUS THE TRIGGER ACTUALLY STAMPED', () => {
+    // THE REGRESSION THIS EXISTS FOR. `runRestart` resolves a row's
+    // status by reading an attribute off the menu trigger. The writer
+    // (SessionRowMenu.triggerHtml) spells it `data-row-menu-status`; it
+    // was `data-row-status` on our own kebab before the 2026-09-10
+    // reconcile. If the reader is left on the old spelling the lookup
+    // returns null, the picker is handed "unknown" for every session, and
+    // NOTHING FAILS - the restart still opens, still looks right, and
+    // simply predicts the wrong thing.
+    //
+    // Neither half alone can catch that. A writer-side assertion that the
+    // trigger carries the attribute passes while the reader looks
+    // elsewhere; a reader-side test with a MOCKED runRestart never
+    // performs the read at all. So this drives the REAL runRestart
+    // against the REAL rendered trigger and asserts the status arrives at
+    // the picker - the one observation that fails if the two spellings
+    // ever drift apart again.
+    const win = { addEventListener() {}, SessionLabel: { LABEL_MAX_CHARS: 200 } };
+    win.window = win;
+    const makeDiv = () => {
+        let text = '';
+        return {
+            set textContent(v) { text = v == null ? '' : String(v); },
+            get textContent() { return text; },
+            get innerHTML() {
+                return text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            },
+        };
+    };
+    const doc = {
+        createElement: makeDiv,
+        getElementById: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener() {},
+    };
+    const context = {
+        window: win, document: doc, globalThis: win,
+        console: { log() {}, error() {} },
+        CSS: { escape: (v) => v },
+        alert() { throw new Error('runRestart must not fail closed here'); },
+    };
+    vm.createContext(context);
+    vm.runInContext(clientJs('session-status-ui.js'), context);
+    vm.runInContext(clientJs('session-row-actions-confirm.js'), context);
+    vm.runInContext(clientJs('session-row-actions.js'), context);
+    vm.runInContext(clientJs('session-row-menu-items.js'), context);
+    vm.runInContext(clientJs('session-row-menu.js'), context);
+    vm.runInContext(clientJs('session-sidebar-clicks.js'), context);
+
+    // THE WRITER, for real.
+    const menu = win.SessionRowMenu;
+    const html = menu.triggerHtml(menu.contextFromRow(
+        { name: 'cloude_api', label: 'api', status: 'working', created_by_cloude: true },
+        { surface: 'sidebar', renameable: true },
+    ));
+    const tag = (html.match(/<button[\s\S]*?>/) || [])[0];
+    const trigger = elementFromTag(tag);
+    doc.querySelector = (sel) => (sel.includes('cloude_api') ? trigger : null);
+
+    // THE READER, for real. The picker records what it was handed.
+    const seen = [];
+    win.SessionRestartPicker = {
+        open(name, label, status) { seen.push(status); return Promise.resolve(null); },
+        lastError() { return null; },
+    };
+
+    return win.SessionSidebarClicks.runRestart(win.SessionSidebar, 'cloude_api', null)
+        .then(() => {
+            assert.equal(seen.length, 1, 'the picker must have been opened');
+            assert.equal(
+                seen[0], 'working',
+                'the reader and the writer disagree about the status attribute: '
+                + 'runRestart read ' + JSON.stringify(seen[0]) + ' from a trigger '
+                + 'that stamps data-row-menu-status="working"',
+            );
+        });
+});
+
+test('and it reports the MEASURED status, never a default, for each one', () => {
+    // The failure mode is uniform: a wrong spelling reads null for EVERY
+    // status, so one fixture could pass by luck if the picker defaulted.
+    // Driving several proves the value travels rather than a constant.
+    for (const status of ['working', 'idle', 'question', 'notice']) {
+        const win = { addEventListener() {}, SessionLabel: { LABEL_MAX_CHARS: 200 } };
+        win.window = win;
+        const makeDiv = () => {
+            let text = '';
+            return {
+                set textContent(v) { text = v == null ? '' : String(v); },
+                get textContent() { return text; },
+                get innerHTML() { return text; },
+            };
+        };
+        const doc = {
+            createElement: makeDiv, getElementById: () => null,
+            querySelector: () => null, querySelectorAll: () => [], addEventListener() {},
+        };
+        const context = {
+            window: win, document: doc, globalThis: win,
+            console: { log() {}, error() {} },
+            CSS: { escape: (v) => v }, alert() {},
+        };
+        vm.createContext(context);
+        vm.runInContext(clientJs('session-status-ui.js'), context);
+        vm.runInContext(clientJs('session-row-actions-confirm.js'), context);
+        vm.runInContext(clientJs('session-row-actions.js'), context);
+        vm.runInContext(clientJs('session-row-menu-items.js'), context);
+        vm.runInContext(clientJs('session-row-menu.js'), context);
+        vm.runInContext(clientJs('session-sidebar-clicks.js'), context);
+        const menu = win.SessionRowMenu;
+        const html = menu.triggerHtml(menu.contextFromRow(
+            { name: 'cloude_api', status, created_by_cloude: true },
+            { surface: 'sidebar', renameable: true },
+        ));
+        const trigger = elementFromTag((html.match(/<button[\s\S]*?>/) || [])[0]);
+        doc.querySelector = () => trigger;
+        const seen = [];
+        win.SessionRestartPicker = {
+            open(n, l, st) { seen.push(st); return Promise.resolve(null); },
+            lastError() { return null; },
+        };
+        win.SessionSidebarClicks.runRestart(win.SessionSidebar, 'cloude_api', null);
+        assert.equal(seen[0], status, `status ${status} must reach the picker`);
+    }
+});
+
 await runQueue();
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);
