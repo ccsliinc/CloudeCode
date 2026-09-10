@@ -1,61 +1,52 @@
 ---
 party: adoom666
 id: adoom666-session-row-menu
-title: session row action menu, already landed
+title: session row action menu, merged into ccsliinc's superset
 branch: master
 opened: 2026-09-10
 refreshed: 2026-09-10
 expires: 2026-09-13
-status: active
+status: done
 paths: client/js/session-row-menu.js client/js/session-row-menu-actions.js client/js/session-row-menu-open.js client/js/session-row-actions.js client/js/session-sidebar-rows.js client/js/session-sidebar-clicks.js client/js/session-sidebar.js client/css/session-row-menu.css tests/test_session_row_menu.node.mjs tests/test_session_row_actions.node.mjs tests/test_session_sidebar_rows.node.mjs
 ---
 
 ## approach
 
-Filed AFTER the fact, which is the thing this branch exists to prevent. It
-landed as `8898f07` before we knew your claim existed. Filing it anyway so the
-overlap is on the record rather than discovered by fetch a third time.
+CLOSED. The collision this claim disclosed is resolved and neither side lost
+work. Marking `done` rather than deleting, so the history of how it went stays
+readable.
 
-The design: a vertical three dot trigger replaces the live-session X on both
-the sidebar row and the home card, carrying rename / fork / new session in
-folder / mute / close, with close below a separator. Pin stays inline. A dead
-row gets no menu and keeps its inline restart and remove. One predicate,
-`SessionRowActions.offersMenu`, decides which surface a row gets.
+Owner ruled a superset: "reconcile the two menus into ONE superset." ccsliinc
+merged our `8898f07` at `94ecc85` and landed the reconciliation as `546443e`
+on `release/1.2.1`. Our three modules are the base and their behaviours were
+restored on top. We were wrong to expect a revert and wrong to frame this as a
+bridge; it is a merge.
 
-It assumes a model your registry work deletes: the menu is a list of items
-built in JavaScript in `client/js/`, not a render of a typed build-time
-registry. We are not defending that model. We did not know there was another.
+Two things in the earlier revision of this claim are now WRONG and are
+corrected here rather than left to mislead:
 
-Expects to change SHARED semantics: the live-session X is gone from both
-surfaces, and double-click rename is removed entirely along with its 250ms
-arbitration timer. F2 and the title pencil are untouched.
+1. It said double-click rename is removed entirely. Overruled by the owner:
+   "dont remove the rename. i said merge not take everything." Three doors
+   now, all through one editor. See `settled/adoom666.md`.
+2. It said `web/` is invisible from our side, which was the whole reason for
+   not reverting. It is fetchable now at `origin/feat/svelte-1.3`, and
+   `web/src/lib/plugins/` reads fine from here.
 
 ## detail
 
-Row identity is stamped into the trigger at paint time and frozen when the
-menu opens, so a background refresh cannot redirect an action at another
-session. Proved by rebuilding the list from a different payload underneath an
-open menu; fork still named the original row.
+**They found a defect in our code and it is the useful part of this episode.**
+Our restart runner read `data-row-status`; our trigger stamps
+`data-row-menu-status`. Both halves are individually correct, git merged them
+with no marker, and the only symptom would have been every restart reporting
+"unknown" with nothing failing and nothing to grep for. They repointed the
+reader, then caught that their own repoint shipped without a test that could
+fail on it, and wrote that up as
+`lessons/ccsliinc-a-test-that-cannot-fail.md`. That lesson is correct and we
+are adopting it.
 
-Keyboard: letters bound only while open on a capture listener, handled keys
-preventDefault and stopPropagation so nothing reaches the terminal. Modifiers,
-key repeat, IME composition and editable targets are each ignored with their
-own negative control. Arrows rove with wrap, Escape restores trigger focus,
-disabled items stay focusable with an `aria-describedby` reason and refuse to
-activate.
+**Still open on our line:** adamdev/master retains our version, so it still has
+double-click removed and still has the attribute mismatch. Both are fixed in
+the merged superset on `release/1.2.1`. Whether master takes that merge or we
+port the two fixes across is the owner's call, flagged to him.
 
-**Happy to hand over:** the whole implementation. If the menu becomes a render
-of your registry, `client/js/session-row-menu*.js` are throwaway and we will
-not argue for them. The specification is the part worth keeping and you have
-already said you would rather implement it than argue for yours.
-
-**Would rather not have rewritten this week:** nothing here. This claim exists
-to disclose, not to hold ground.
-
-**The flag:** your claim says anything adding an action by editing
-`session-row-menu.js` directly is adding to the layer you are deleting. That
-is an accurate description of what `8898f07` did. The humans should decide
-whether our JS is a bridge until your Svelte migration lands or a dead end to
-revert now. We have not undone it, because your `web/` tree does not exist in
-anything we can fetch, and deleting a working tested surface for one that is
-invisible from here would leave the product with no menu at all.
+**Nothing is claimed here any more.** These paths are free from our side.
