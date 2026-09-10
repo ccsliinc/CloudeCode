@@ -1,39 +1,34 @@
 /**
- * Vitest port of tests/test_status_led.node.mjs, plus the equivalence
- * proof that is the whole reason this port is allowed to exist.
+ * Vitest port of tests/test_status_led.node.mjs: behavioural cases for
+ * the TypeScript LED port itself, covering the vocabularies it exports
+ * (minus the drift guard), the markup ledHtml renders, and the mapping
+ * from server signals to led state.
  *
  * WHAT IS PORTED AND WHAT IS NOT. The node suite has 56 test blocks. The
- * 30 that exercise the MODULE are ported here one for one, same names,
- * same assertions, so a failure reads the same in either harness. The 26
- * that assert on the TEXT of client/css/status-led.css are NOT ported:
- * that stylesheet is not copied by this port, it is the same file both
- * trees paint through, and the node suite already runs those assertions
- * on every push (see the `javascript` job in .github/workflows/tests.yml).
- * Two copies of an assertion about one file is two things to update when
- * the file changes, and the stale one is the one somebody trusts.
+ * 30 that exercise the MODULE are ported one for one across this file and
+ * its siblings, same names, same assertions, so a failure reads the same
+ * in either harness. The 26 that assert on the TEXT of
+ * client/css/status-led.css are NOT ported: that stylesheet is not copied
+ * by this port, it is the same file both trees paint through, and the
+ * node suite already runs those assertions on every push (see the
+ * `javascript` job in .github/workflows/tests.yml). Two copies of an
+ * assertion about one file is two things to update when the file
+ * changes, and the stale one is the one somebody trusts.
  *
- * THE EQUIVALENCE TEST IS THE LOAD-BEARING ONE. Porting a module by hand
- * and then testing the port against hand-written expectations proves only
- * that the port agrees with what the porter remembered. So the last block
- * loads the REAL client/js/status-led.js and client/js/session-status-ui.js
- * in a `vm` sandbox and compares their output against this port's, string
- * against string, across the full cross product of status, unread flag,
- * startup gate and status source. If a rule here and a rule there ever
- * disagree by one character, that is where it surfaces.
+ * Split out of StatusLed.test.ts: this file holds
+ * describe('the vocabularies') minus its two legacy-sandbox cases,
+ * describe('markup per state') and describe('the mapping from server
+ * signals'), unchanged. The drift guard lives in
+ * StatusLed.drift-guard.test.ts and the byte-for-byte equivalence proof
+ * against the legacy renderer lives in StatusLed.parity.test.ts - both
+ * share a sandbox loader in led-legacy-fixture.ts that this file does not
+ * need, because nothing here reaches into client/js.
  *
  * Run with: npm test   (from web/)
  */
 import { describe, expect, test } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
 
 import * as Led from './led';
-import { ledHtmlForStatus } from './status-dot';
-
-/** Repo root, two levels up from web/src/lib. */
-const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 /**
  * Pull one attribute's raw value out of generated markup.
@@ -51,49 +46,7 @@ function rawAttr(html: string, attr: string): string | null {
     return html.slice(from, end);
 }
 
-/** The shape the legacy files publish, as far as these tests use it. */
-interface LegacyApi {
-    dotHtml(status?: unknown, signals?: unknown): string;
-    ledStateFor(signals?: unknown): { inner: string; outer: string };
-    ledHtml(opts?: unknown): string;
-    /** The legacy module's OWN vocabularies, for the drift guard below. */
-    INNER_STATES: string[];
-    OUTER_STATES: string[];
-}
-
-/**
- * Load the two legacy client modules in one bare sandbox.
- *
- * Description: status-led.js publishes onto `globalThis` and
- *   session-status-ui.js onto `window`, so the sandbox supplies a bare
- *   `window` object and nothing else. There is deliberately no document:
- *   both modules claim to need none, and a reach for one throws here,
- *   which is the point.
- * Inputs: none.
- * Output: LegacyApi - the two entry points these tests compare against.
- * Example: legacy().dotHtml('idle', {unread: true})
- */
-function legacy(): LegacyApi {
-    const context: Record<string, unknown> = { console, window: {} };
-    vm.createContext(context);
-    for (const file of ['status-led.js', 'session-status-ui.js']) {
-        const src = fs.readFileSync(path.join(repoRoot, 'client', 'js', file), 'utf8');
-        vm.runInContext(src, context);
-    }
-    const led = context['StatusLed'] as LegacyApi;
-    const ui = (context['window'] as Record<string, unknown>)[
-        'SessionStatusUI'
-    ] as LegacyApi;
-    return {
-        dotHtml: (status, signals) => ui.dotHtml(status, signals),
-        ledStateFor: (signals) => led.ledStateFor(signals),
-        ledHtml: (opts) => led.ledHtml(opts),
-        INNER_STATES: led.INNER_STATES,
-        OUTER_STATES: led.OUTER_STATES,
-    };
-}
-
-// ---- the vocabularies -------------------------------------------------
+// ---- the vocabularies (minus the drift guard) -------------------------
 
 describe('the vocabularies', () => {
     test('both vocabularies are exported and non-empty', () => {
@@ -103,37 +56,6 @@ describe('the vocabularies', () => {
         expect(Led.OUTER_STATES.length).toBeGreaterThan(0);
     });
 
-    test('THE DRIFT GUARD: the port\'s vocabularies ARE the legacy ones', () => {
-        // THIS IS THE CASE THAT CATCHES A SILENT PORT ROT, and it is here
-        // because the LED has already rotted once this way. Every matrix
-        // loop below enumerates `Led.INNER_STATES` and `Led.OUTER_STATES`
-        // - the PORT's own lists. If a release grew, renamed or reordered
-        // a state in client/js/status-led.js, those loops would keep
-        // covering the old set perfectly, every byte-for-byte comparison
-        // would keep passing, and the new state would simply never be
-        // visited. A clean rebase would report nothing, because the two
-        // files do not conflict: they are different files.
-        //
-        // The block below pins the port against a HAND-WRITTEN list, which
-        // proves only that the port agrees with what its author
-        // remembered. This one pins it against the shipped module itself,
-        // read off disk, so the two cannot come apart unnoticed. Order is
-        // compared too: `resolveInner` falls back on membership, but the
-        // docs and the stylesheet both read these as an ordered set.
-        const real = legacy();
-        expect([...Led.INNER_STATES]).toEqual(real.INNER_STATES);
-        expect([...Led.OUTER_STATES]).toEqual(real.OUTER_STATES);
-    });
-
-    test('NEGATIVE CONTROL: the drift guard can actually fail', () => {
-        // A comparison against a list that came back empty or undefined
-        // would pass vacuously and guard nothing.
-        const real = legacy();
-        expect(real.INNER_STATES.length).toBeGreaterThan(0);
-        expect(real.OUTER_STATES.length).toBeGreaterThan(0);
-        expect([...Led.INNER_STATES]).not.toEqual([...real.INNER_STATES, 'banana']);
-        expect([...Led.INNER_STATES]).not.toEqual(real.OUTER_STATES);
-    });
 
     test('the inner vocabulary is exactly the nine documented states', () => {
         // `notice` and `disconnected` joined in the five-colour pass that
@@ -500,136 +422,5 @@ describe('the mapping from server signals', () => {
             inner: 'unknown',
             outer: 'dim',
         });
-    });
-});
-
-// ---- the equivalence proof --------------------------------------------
-
-describe('byte-identical to the legacy renderer', () => {
-    /** Every status the legacy vocabulary knows, plus two it does not. */
-    const STATUSES = [
-        'working',
-        'working_subagent',
-        'running',
-        'question',
-        'notice',
-        'finished_unread',
-        'idle',
-        'dead',
-        'stopped',
-        'unknown',
-        undefined,
-        'a-state-from-2030',
-    ];
-    /** Every status_source the server can send, plus two it cannot. */
-    const SOURCES = [
-        undefined,
-        'hook',
-        'transcript',
-        'seed_row',
-        'tmux',
-        'none',
-        'not-a-source',
-    ];
-    /** Every startup_gate value, plus absent. */
-    const GATES = [undefined, 'ready', 'awaiting_startup_prompt', 'unknown'];
-    /**
-     * Every transport value, plus absent and one this client does not know.
-     * It is in the matrix because it is a signal the port PASSES THROUGH:
-     * an untested passthrough that silently dropped the field would leave
-     * every other cell green while disconnected sessions kept asserting a
-     * status nothing could refresh.
-     */
-    const TRANSPORTS = [undefined, 'connected', 'disconnected', 'reconnecting'];
-
-    test('the legacy files load in a bare sandbox', () => {
-        const api = legacy();
-        expect(typeof api.dotHtml).toBe('function');
-        expect(typeof api.ledStateFor).toBe('function');
-    });
-
-    test('ledHtmlForStatus matches SessionStatusUI.dotHtml over the whole matrix', () => {
-        const api = legacy();
-        let compared = 0;
-        for (const status of STATUSES) {
-            for (const unread of [true, false, undefined]) {
-                for (const startup_gate of GATES) {
-                    for (const status_source of SOURCES) {
-                        for (const transport of TRANSPORTS) {
-                            const signals = {
-                                unread,
-                                startup_gate,
-                                status_source,
-                                transport,
-                            };
-                            const mine = ledHtmlForStatus(status, signals);
-                            const theirs = api.dotHtml(status, signals);
-                            expect(
-                                mine,
-                                `status=${status} unread=${unread} gate=${startup_gate} source=${status_source} transport=${transport}`,
-                            ).toBe(theirs);
-                            compared++;
-                        }
-                    }
-                }
-            }
-        }
-        // A matcher that always finds something is worse than useless, so
-        // the count is asserted: a loop that silently ran zero times would
-        // otherwise pass this test perfectly.
-        expect(compared).toBe(
-            STATUSES.length * 3 * GATES.length * SOURCES.length * TRANSPORTS.length,
-        );
-        expect(compared).toBeGreaterThan(1000);
-    });
-
-    test('the `size` passthrough matches too, including the values it drops', () => {
-        const api = legacy();
-        for (const size of ['9px', '18px', '1.5rem', 'red; background:url(x)', '']) {
-            const signals = { unread: false, size };
-            expect(ledHtmlForStatus('idle', signals), `size=${size}`).toBe(
-                api.dotHtml('idle', signals),
-            );
-        }
-    });
-
-    test('a caller passing no signals at all matches too', () => {
-        const api = legacy();
-        for (const status of STATUSES) {
-            expect(ledHtmlForStatus(status), `status=${status}`).toBe(
-                api.dotHtml(status),
-            );
-            expect(ledHtmlForStatus(status, null), `status=${status} null`).toBe(
-                api.dotHtml(status, null),
-            );
-        }
-    });
-
-    test('the low-level ledHtml matches the legacy one over its own matrix', () => {
-        const api = legacy();
-        for (const inner of [...Led.INNER_STATES, 'banana', undefined]) {
-            for (const outer of [...Led.OUTER_STATES, 'kumquat', undefined]) {
-                for (const extraClass of [undefined, 'status-dot', '" onload="x']) {
-                    const opts = { inner, outer, extraClass };
-                    expect(
-                        Led.ledHtml(opts),
-                        `${String(inner)}/${String(outer)}/${String(extraClass)}`,
-                    ).toBe(api.ledHtml(opts));
-                }
-            }
-        }
-    });
-
-    test('NEGATIVE CONTROL: the comparison can actually fail', () => {
-        // Everything above compares two strings and asserts they match. If
-        // the legacy loader silently returned this port instead of the
-        // legacy code, every one of those assertions would pass and prove
-        // nothing. So: feed the legacy renderer a DIFFERENT input and
-        // require the strings to differ.
-        const api = legacy();
-        expect(ledHtmlForStatus('idle', { unread: false })).not.toBe(
-            api.dotHtml('idle', { unread: true }),
-        );
-        expect(ledHtmlForStatus('working')).not.toBe(api.dotHtml('dead'));
     });
 });
