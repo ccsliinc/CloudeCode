@@ -6535,3 +6535,104 @@ the upstream this project may not push to, and reports
 sorts above 1.0.36, so the visible symptom is a bogus "latest" figure and an
 `upgrade_command` pointing at the forbidden fork's releases page rather than a
 false update prompt. Where the update checker SHOULD point is the owner's call.
+
+---
+
+## 2026-09-10 - v1.2.0 and v1.2.1 PUBLISHED on ccsliinc/CloudeCode
+
+**Before:** both were DRAFTS. The release marked Latest was `v1.0.33` from
+2026-08-29, so anyone landing on the repo saw a two week old build as current,
+and there was no published artifact to downgrade TO.
+
+**Published, both not prerelease:**
+- `v1.2.1` at `d074bbc`, Latest, published 16:21:01Z
+  https://github.com/ccsliinc/CloudeCode/releases/tag/v1.2.1
+- `v1.2.0` at `ecd0669`, not Latest, published 16:21:53Z
+  https://github.com/ccsliinc/CloudeCode/releases/tag/v1.2.0
+
+**THE ARTIFACTS WERE ALREADY THERE, BUILT BY CI FROM THE TAG, and that is the
+copy that was published.** `.github/workflows/release.yml` fires on a `v*` tag
+push and attaches a DMG to the draft it creates, so no rebuild was needed. The
+local `macOS/dist/Cloude Code-1.2.1-arm64.dmg` in this worktree was
+deliberately NOT used: it is built from `ce67957`, two docs-only commits PAST
+the `v1.2.1` tag, and it hashes
+`50a9f8a46753300f013c9eec0ebb351ab5578d2052f0ae4ef7155ad4382d89f1` at
+126,257,121 bytes, which is neither the same bytes nor the same tree as the tag.
+electron-builder DMGs are not byte reproducible, so the two were never going to
+agree; the tag-built one is the one with provenance.
+
+    v1.2.1  Cloude.Code-1.2.1-arm64.dmg  126,246,156 bytes
+            sha256 01ed34e6f41097d24d60ca60f8c73b046cbc5462f0e4749b38c3ba75c2beeb5e
+    v1.2.0  Cloude.Code-1.2.0-arm64.dmg  126,181,438 bytes
+            sha256 9a80057f17c529f5d5b2ed8f7f0a1b3d22e1d5f9b168bfc42546489cc985c305
+
+**Verified as a downloader, not as an uploader.** Each asset was fetched back
+from its PUBLIC unauthenticated URL after publishing and re-hashed: both match
+the sha256 and the byte count above exactly. A silently truncated upload is the
+failure that only shows up at the moment someone actually needs to downgrade,
+which is why the download-back is the check that counts and `gh release view`
+reporting an asset is not. Both DMGs were also mounted: each holds
+`Cloude Code.app` at the right `CFBundleShortVersionString` (1.2.1 and 1.2.0),
+each passes `codesign --verify --deep --strict` as `Signature=adhoc`
+`Identifier=com.cloudecode.menubar`, and each carries the `/Applications`
+symlink so the drag install works.
+
+**Both bodies carry a "how to go back" block** written for someone on a phone or
+a fresh machine: swap the bundle (older DMG, or move the
+`/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538` copy back), then
+`launchctl bootout gui/$(id -u)/com.cloudecode.menubar` followed by
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudecode.menubar.plist`.
+It says explicitly NOT to use `kickstart -k` and why (SIGKILLs Electron, orphans
+the python server on port 8000, the next app refuses to adopt it as a version
+mismatch), and it tells the reader to POLL `/health` rather than sample it,
+because startup holds the loop about 54 seconds after binding. It also records
+that `tmux -L cloude` sessions survive an app swap.
+
+**`.claude/notes/HANDOFF.md:118` IS STALE AND WAS NOT EDITED THIS ROUND.** It
+still prescribes `launchctl kickstart -k gui/501/com.cloudecode.menubar` as the
+supervisor recovery, which the 1.2.0 and 1.2.1 deploy records in this file
+supersede. Anyone reading HANDOFF first will get the wrong instruction. Fixing
+that line is an open item.
+
+**Credit, measured rather than assumed.** Between `v1.2.0` and `v1.2.1`,
+`psyance` (Adoom666) authored 9 of the 18 non-merge commits, so the 1.2.1 notes
+credit a large share to him and that is accurate. Between `v1.0.36` and
+`v1.2.0` he authored 2 of 40 (the app icon and DMG background `887b8fc`, and the
+README logo and download link `8e7f8b9`), so the 1.2.0 notes credit those two
+things specifically and do NOT claim a large share. The brief for this task said
+a large share of BOTH came from him; that is right for 1.2.1 and wrong for
+1.2.0, and the published notes say the measured thing.
+
+**The stale drafts were left ALONE, as instructed. They are the owner's call.**
+There are 33 of them, `v1.0.0` through `v1.0.32`, not the 6 the brief expected,
+and EVERY ONE carries exactly one DMG at about 118 MB, totalling **3.81 GB** of
+release storage. None is empty. `v1.0.31` exists twice, one published
+(20:37:17Z) and one draft (20:33:48Z) minutes earlier. Separately, tags
+`v1.0.34`, `v1.0.35` and `v1.0.36` are pushed but have NO release object at all.
+Recommendation, for the owner to accept or refuse: keep `v1.0.33` (the last
+published 1.0) and delete the other 32 drafts to reclaim the storage, since a
+draft is invisible to users and its DMG is not reachable by anyone who does not
+have write access, so nothing downstream can be depending on them. The tag and
+the commit are the real history; the draft is just a build artifact.
+
+**THE UPDATE CHECKER STILL POINTS AT THE FORBIDDEN FORK.** `GET /api/v1/version`
+reports `latest_version` resolved from `Adoom666/CloudeCode`, so a 1.2.1 install
+is told the latest release is 1.0.36 and its upgrade link opens the wrong
+project. Now that ccsliinc has real published releases this is worth closing.
+Two lines, both in `src/core/update_check.py`:
+
+    line 76  FALLBACK_REMOTE = "https://github.com/Adoom666/CloudeCode.git"
+    line 81  DEFAULT_UPGRADE_COMMAND = "open https://github.com/Adoom666/CloudeCode/releases/latest"
+
+They would become `https://github.com/ccsliinc/CloudeCode.git` and
+`open https://github.com/ccsliinc/CloudeCode/releases/latest`. The reason the
+FALLBACK is what ships is `resolve_remote()` at `:362`: it prefers a configured
+remote, then `discover_origin_remote(self._root)`, then the fallback, and a
+packaged install's root is the state dir rather than a git work tree, so it has
+no `origin` and always lands on the fallback. Note the visible symptom is a
+bogus "latest" figure and a wrong upgrade link, NOT a false update prompt,
+because 1.2.1 sorts above 1.0.36 and `status` therefore reads `current`.
+NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
+`macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
+would want the same ruling.
+
