@@ -79,9 +79,10 @@ still unacked, and feeding that through `add()` would resurrect the card
 the user just dismissed, in front of them.
 `client/js/toast-dismissed-ring.js` is a bounded, expiring set of
 locally dismissed ids that the poller filters every result through.
-`toast.js` announces each dismissal as a `cloude:toast-dismissed`
-CustomEvent so the ring hears it without the toast module gaining a hard
-dependency on the poller.
+`toast.js`'s lifecycle half (`client/js/toast-lifecycle.js`) announces
+each dismissal as a `cloude:toast-dismissed` CustomEvent so the ring
+hears it without the toast module gaining a hard dependency on the
+poller.
 
 **IT IS A SUPPRESSION, NEVER AN ACK.** Nothing in the ring talks to the
 server. If the ack genuinely FAILED, the record is still unacked
@@ -249,7 +250,10 @@ items below.
 | `GET /toasts`, `GET /toasts/history` | `src/api/toast_routes.py` |
 | Record, supersede, ack, prune | `src/core/session_manager.py` |
 | Per-session list/create/ack routes | `src/api/routes.py` |
-| Render the stack, coalesce, cap, dismiss | `client/js/toast.js` |
+| The registry (severity, coalesce keys) and the constructor | `client/js/toast.js` |
+| Coalesce, cap, severity | `client/js/toast-grouping.js` |
+| Render the stack | `client/js/toast-render.js` |
+| Add, dismiss, reconcile, backfill | `client/js/toast-lifecycle.js` |
 | The two cross-session API calls | `client/js/api-toasts.js` |
 | The cross-session poll | `client/js/toast-global-poll.js` |
 | Stop a dismissed card coming back | `client/js/toast-dismissed-ring.js` |
