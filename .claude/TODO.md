@@ -6753,3 +6753,82 @@ full history repaints the current screen and replace"
   thrown away.
 - Related open question from an earlier session, still unanswered: what "show
   full history" is supposed to do, versus "show summary".
+
+## 2026-09-10 - repository of record switched to adamdev, origin becomes the mirror
+
+Owner's ruling, verbatim: "you can use his repo as the main. keep mine for
+backup." Implemented on `docs/repo-of-record`, cut from `release/1.2.1`.
+
+VERIFIED WITH `gh` FIRST, because the distribution half of this is the part
+that breaks users if it is got wrong:
+
+- `Adoom666/CloudeCodeDev` (`adamdev`): PRIVATE, Issues ENABLED, not a fork,
+  default branch `master`. Its three recent releases (v1.2.0, v1.0.36,
+  v1.0.35) are ALL DRAFTS. Only v0.8.1 and older are published there.
+- `ccsliinc/CloudeCode` (`origin`): PUBLIC, Issues **DISABLED**, is a fork of
+  `Adoom666/CloudeCode`, default branch `main`. Holds the published downloads:
+  v1.2.0 and v1.2.1, each with an arm64 dmg asset, a sha256 and a downgrade
+  procedure in the body, v1.2.1 marked Latest.
+
+So PUBLIC DISTRIBUTION STAYS ON `origin`. "Primary" means development, not
+distribution. And because `origin` has Issues disabled, it cannot act as a
+fallback tracker while that holds; `adamdev` is the only tracker either side
+has.
+
+MIRRORED, additive only, no force, no fan-out command (`upstream` is still the
+sentinel `DISABLED_do_not_push_to_Adoom666_CloudeCode` and must never be
+repaired):
+
+- 16 of our branches pushed to `adamdev` (15 new, plus `release/1.2.1`
+  fast-forwarded 109aae0 to f9f5319).
+- 7 pushed to `origin`: `feat/svelte-1.3-on-121` and the four `feat/1x-*`
+  claim branches were new there; `feat/backend-decomposition` and
+  `feat/gui-fork` fast-forwarded.
+- Tags: 37 pushed to `adamdev`, 3 (v1.0.34, v1.0.35, v1.0.36) to `origin`.
+- Proved with `git ls-remote` per remote afterwards, not by trusting the push
+  output: zero tag gaps in either direction, and all 24 of our branches now
+  report identical shas on both remotes.
+
+NOT TOUCHED, on purpose. Adam's branches (`master`, `v1.1`, `weekend-mvp-v3.1`,
+`fix/5-pipe-rotation-fd`, `claude/issue-2-*`, `add-claude-github-actions-*`)
+stay where they are; `adamdev` is PRIVATE and `origin` is PUBLIC, so mirroring
+his branches outward would be a disclosure, not a backup. Local `v1.1` is 34
+commits ahead of `adamdev/v1.1` and that is HIS branch, so it was left alone
+even though the push would have fast-forwarded.
+
+STILL OPEN, needs a ruling rather than a guess:
+
+- 27 legacy branches exist on `origin` only (`chore/*`, `pr/*`, `ship/*`,
+  `release/v1.0.x`, `run/live`, several `fix/*` and `integration/*`, and
+  `main`). Not mirrored: they predate the collaboration and would be clutter
+  in the shared primary. `origin/main` is also 321 commits AHEAD of local
+  `main`, so nothing local should be pushed over it.
+- 10 branches exist ONLY on this disk and are backed up nowhere:
+  `feat/dmg-packaging`, `feat/history-viewer`, `feat/svelte-slice-2`,
+  `feat/svelte-web`, `feat/ui-disclosure-and-tooltips`,
+  `fix/editor-project-roots`, `fix/portability-and-personal-paths`,
+  `fix/scrollback-gate-ownership`, `test/s4-adversarial`, `test/s4-verify2`.
+  Left alone because they were never on any remote and one is named for
+  personal paths while `origin` is public. Worth a decision: they are the
+  worst-backed-up things we own.
+- `src/core/update_check.py:76,81` still points the UPDATE CHECKER at the
+  FORBIDDEN `Adoom666/CloudeCode`. Not changed here; the owner has not ruled
+  on the update checker. `macOS/update-check.js:22` is already correct
+  (`ccsliinc/CloudeCode`), which is what the distribution exception requires.
+- `.claude/skills/work/SKILL.md` claim block says `git push -u origin
+  "feat/$N-$SLUG"`. On Adam's clone `origin` IS CloudeCodeDev; on ours it is
+  the backup, so followed literally it now claims work on the wrong remote.
+  That file lives on `feat/work-protocol`, not on this branch.
+
+WRITTEN RULE UPDATED in three places, recorded as a dated CHANGE rather than a
+silent rewrite, so a reader who remembers "push to origin" can tell which rule
+is current: `CLAUDE.md` (the push bullet under "How we work here"),
+`.claude/notes/HANDOFF.md` (the restated remote rule), and a new
+`docs/DECISIONS.md` entry "Adam's repo is the primary, ours is the backup,
+releases stay on ours", which supersedes the 2026-09-08 entry below it.
+`docs/DECISIONS.md` lives on `feat/work-protocol`; its exact blob
+(2fae593) was carried onto this branch and appended to, so the two merge
+cleanly.
+
+No product code touched, so the pytest and node suites were deliberately not
+run. `scripts/scan_secrets.py` exit 0.
