@@ -16,7 +16,8 @@ Everything else is prose. Read SKILL.md.
 Commands:
     read                     fetch and print the other parties' live state
     check PATH [PATH ...]    report overlaps against every active claim
-    write KIND SLUG          write a file from stdin (kind: now/claim/log/note/settled)
+    write KIND SLUG          write a file from stdin (kind: now/claim/log/note/settled/lesson)
+    lessons                  print every party's lessons, newest observation first
     sync                     commit and push whatever `write` staged
 
 Exit codes:
@@ -35,7 +36,7 @@ import sys
 from pathlib import Path
 
 BRANCH = "coord"
-KINDS = {"now", "claim", "log", "note", "settled"}
+KINDS = {"now", "claim", "log", "note", "settled", "lesson"}
 #: A claim stops counting as an overlap this many days after `refreshed`.
 #: Matches the 72 hours the protocol's README specifies.
 EXPIRY_DAYS = 3
@@ -238,6 +239,37 @@ def load_claims(remote: str) -> list[tuple[str, dict[str, str], str]]:
     return claims
 
 
+def cmd_lessons(remote: str) -> int:
+    """Print every party's lessons.
+
+    Lessons are read from ALL parties including your own, because a lesson is
+    something to apply rather than something to disclose. Yours are as easy to
+    forget as theirs.
+
+    Args:
+        remote: remote carrying the branch.
+
+    Returns:
+        Process exit code.
+    """
+    subprocess.run(["git", "fetch", "--quiet", remote, BRANCH], check=False)
+    found = False
+    for path in branch_files(remote):
+        if not path.startswith("lessons/"):
+            continue
+        text = show(remote, path) or ""
+        fields = header(text)
+        found = True
+        seen = fields.get("occurrences", "?")
+        print(f"=== {path}  [seen {seen}x, {fields.get('scope', '?')}]  "
+              f"{fields.get('title', '')}")
+        body = re.sub(r"\s*---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.S)
+        print(body.strip()[:1200], "\n")
+    if not found:
+        print("no lessons recorded yet")
+    return 0
+
+
 def cmd_read(remote: str, me: str | None) -> int:
     """Print the other parties' live state.
 
@@ -274,6 +306,10 @@ def cmd_read(remote: str, me: str | None) -> int:
         if path.startswith("settled/") and (me is None or f"/{me}." not in path):
             print(f"=== {path}")
             print((show(remote, path) or "").strip()[:1500], "\n")
+
+    # Lessons last and unfiltered: they are the accumulated fixes for
+    # collisions that already happened, and they apply to both parties.
+    cmd_lessons(remote)
     return 0
 
 
@@ -338,6 +374,9 @@ def cmd_write(remote: str, me: str, kind: str, slug: str) -> int:
         rel = f"{kind}/{me}.md"
     else:
         rel = f"{kind}s/{me}-{slug}.md"
+    if kind in {"claim", "note", "lesson"} and not slug:
+        print(f"{kind} needs a slug")
+        return 4
     if me not in rel:
         print(f"refused: {rel} does not carry your party name")
         return 4
@@ -435,6 +474,8 @@ def main(argv: list[str]) -> int:
     command = argv[0]
     if command == "read":
         return cmd_read(remote, me)
+    if command == "lessons":
+        return cmd_lessons(remote)
     if command == "check":
         if len(argv) < 2:
             print("check needs at least one path")
