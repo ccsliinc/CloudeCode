@@ -94,6 +94,27 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // recovery is in progress", because nothing reads it.
         this._restartWatch = null;
         this._restartWatchActive = false;
+
+        // THE NAVIGATION THIS TERMINAL IS BOUND TO. Set by whichever
+        // entry path attached the current session, and the definition of
+        // "old" for everything this controller defers: the 500ms
+        // scheduled connect, the reconnect scheduler, and the queue of
+        // bytes waiting to be written. See
+        // client/js/navigation-generation.js.
+        this._navToken = null;
+    }
+
+    /**
+     * Description: is the navigation that attached this session still the
+     *   one on screen? The single predicate every deferred action in this
+     *   file asks before it acts.
+     * Inputs: what (string) - what is being abandoned, for the log line.
+     * Output: boolean - true to proceed. True when the module is absent,
+     *   because a load-order accident must not stop the terminal working.
+     */
+    _navCurrent(what) {
+        if (!window.NavigationGeneration) return true;
+        return window.NavigationGeneration.keep(this._navToken, what);
     }
 
     /**
@@ -807,8 +828,13 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *   from. Client doesn't consume this directly; it's the server's
      *   contract - we accept it for symmetry and logging only.
      */
-    async connectToSession(session, opts = {}) {
+    async connectToSession(session, opts = {}, ctx = {}) {
         const { initialScrollbackB64 = '', fifoStartOffset = null } = opts;
+        // The caller's token wins over a fresh read: App.showTerminal()
+        // captured it before its own awaits, and re-reading here would
+        // hand this session the generation of whatever superseded it.
+        this._navToken = (ctx && ctx.nav != null) ? ctx.nav
+            : (window.NavigationGeneration ? window.NavigationGeneration.current() : null);
         console.log('Terminal: Connecting to session:', this._unwrapSession(session).id, {
             adopted: !!initialScrollbackB64,
             fifoStartOffset,
@@ -920,8 +946,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             this.term.writeln('\x1b[1;32m[Session created - connecting to WebSocket...]\x1b[0m');
         }
 
-        // Connect WebSocket
-        setTimeout(() => this.connectWebSocket(), 500);
+        // Connect WebSocket. THE DELAY IS A WINDOW: a session switch
+        // landing inside it used to open this session's socket anyway,
+        // which the next connect then had to abandon mid-handshake.
+        setTimeout(() => {
+            if (this._navCurrent('scheduled connect')) this.connectWebSocket();
+        }, 500);
     }
 
     /**
@@ -946,8 +976,11 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * @param {object} session - Session object (shape matches what
      *   GET /sessions returns under the ``session`` key).
      */
-    async reconnectToExistingSession(session) {
+    async reconnectToExistingSession(session, ctx = {}) {
         console.log('Terminal: Reconnecting to existing session:', this._unwrapSession(session).id);
+        // Same rule as connectToSession(): the caller's token wins.
+        this._navToken = (ctx && ctx.nav != null) ? ctx.nav
+            : (window.NavigationGeneration ? window.NavigationGeneration.current() : null);
         // THE path that lost a conversation on every server restart. See client/js/terminal-reconnect-buffer.js.
         const paintPlan = window.TerminalReconnectBuffer ? window.TerminalReconnectBuffer.planFor(this.term, this._unwrapSession(this._currentSession).id, this._unwrapSession(session).id, session && session.initial_scrollback_b64) : 'replace';
 
@@ -1063,7 +1096,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // the terminal screen transition has time to settle and the
         // fit/font readiness dance in connectWebSocket() has a stable
         // container to measure.
-        setTimeout(() => this.connectWebSocket(), 500);
+        setTimeout(() => {
+            if (this._navCurrent('scheduled reconnect')) this.connectWebSocket();
+        }, 500);
     }
 
     /**

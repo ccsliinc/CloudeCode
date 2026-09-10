@@ -703,8 +703,17 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // page), lives in client/js/terminal-socket-abandon.js. What is left
     // here is the call and the reference it drops: ten lines, of which
     // five are the pointer at that file.
+    // RAISED 2436 -> 2470, with the stated reason this comment demands.
+    // The controller now knows WHICH NAVIGATION it is bound to, so the
+    // three things it defers - the 500ms scheduled connect, a scheduled
+    // reconnect, and the queue of bytes waiting on an animation frame -
+    // can each ask whether the session they were started for is still on
+    // screen. What is left here is the field, one three-line predicate,
+    // and the call at each of those sites; the whole rule, why a counter
+    // rather than a session id and why a stale token discards rather than
+    // retries, lives in client/js/navigation-generation.js.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2436, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2470, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {

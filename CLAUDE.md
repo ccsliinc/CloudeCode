@@ -2056,6 +2056,67 @@ tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
 
+## One navigation generation, and what a completion is allowed to write
+
+**A COMPLETION MAY ONLY WRITE TO SHARED UI STATE WHILE ITS NAVIGATION IS
+CURRENT.** `client/js/navigation-generation.js` is the whole mechanism: a
+monotonic counter, `begin(target)` / `current()` / `isCurrent(token)` /
+`keep(token, what)`, no dependencies, loaded first in `index.html`. Every
+entry path captures a token SYNCHRONOUSLY at the user gesture, before its
+first await, and checks it immediately before the write it cannot take
+back. A stale token DISCARDS, silently, with a debug log - never a retry,
+never an error, and never `Router.rejectTarget()`'s banner, which means
+"this URL names nothing" and not "you went somewhere else".
+
+**A COUNTER, NOT A TARGET IDENTITY.** Click a session, click away, click
+back: comparing session ids lets the FIRST click's in-flight work satisfy
+the third, and the screen it would paint into was torn down in between.
+`tests/test_navigation_generation.node.mjs` drives that exact sequence
+against the shipped sidebar module.
+
+**THE ENTRY PATHS ARE PROVABLY ALL OF THEM, because two functions are the
+choke point.** `TerminalController.connectToSession` and
+`reconnectToExistingSession` have EXACTLY ONE caller each -
+`App.showTerminal` and `App.returnToExistingTerminal` - so the complete
+set of ways into a session is the callers of those two plus the screen
+changes that leave one. Six declare an intent: the conversation sidebar's
+`activateRow`, the launcher's `_returnToActiveRunningSession`, the five
+launchpad gestures that dispatch `session-created`
+(`_handleAttachRunningSession`, `createConsoleSession`,
+`_createNewSessionInner`, `connectToExistingSession`, `selectProject`),
+`SessionRestartReturn.reopen`, `ToastNavigate.go`, and the router's
+`deliverTargetToLaunchpad`. `App.showLaunchpad` and `App.showAuth` begin
+one too, because LEAVING a session is a navigation and is the half that
+is easy to forget.
+
+**THE TWO `App` ENTRIES READ THE GENERATION AND NEVER BEGIN ONE, and the
+asymmetry is the design.** Bumping the counter inside `showTerminal`
+would let a caller that ALREADY lost the race mint itself a fresh win a
+few awaits later. The five `session-created` dispatchers carry their
+token in `detail.nav` and `app.js`'s ONE listener is the only thing that
+checks it, so a seventh dispatcher cannot invent a different rule; a
+dispatcher carrying no token falls through to `showTerminal`'s own read,
+which is exactly the pre-existing behaviour.
+
+**NOT ON A SYNCHRONOUS PATH.** A check between a gesture and a write with
+no await between them costs a comparison, buys nothing, and tells the next
+reader there was a race where there was none. That is why
+`ThemeNavigation.applyForTarget()` takes no token: it is synchronous, and
+the staleness it could suffer is its CALLER's, guarded at the top of
+`showTerminal` / `returnToExistingTerminal`. The themes registry's own
+replay gate (`6f79e90`) is untouched and deliberately re-resolves on drain
+rather than replaying a captured id.
+
+**THE TERMINAL RECORDS THE TOKEN IT BOUND UNDER**, as `_navToken`, and
+`_navCurrent(what)` is the one predicate every deferred action in that
+file asks. It gates the 500ms scheduled connect on both entry paths - that
+delay is a window a session switch lands in, and a connect fired inside it
+used to open a socket the next connect had to abandon mid-handshake - and
+it is the definition of "old" for the write queue and the reconnect
+scheduler below. A missing module answers TRUE: the token is a correctness
+guard, never a dependency, and a load-order accident must not stop the
+terminal working.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,

@@ -573,8 +573,20 @@ class AppController {
         // launchpad dispatched after adopting an external session -
         // forward the whole thing so showTerminal() can plumb to the
         // terminal controller's connectToSession() opts.
+        // THE CREATE PATHS' OWNERSHIP CHECK, IN ONE PLACE. Six surfaces
+        // dispatch this event and every one of them POSTs first, so a
+        // sidebar row clicked while a create is in flight would otherwise
+        // be painted over by the create landing after it. Each dispatcher
+        // declares its intent with NavigationGeneration.begin() before its
+        // POST and carries the token here as `detail.nav`; this listener
+        // is the only thing that has to check it, so a new dispatcher
+        // cannot invent a different rule. A dispatcher that carries no
+        // token falls through to showTerminal()'s own read of the current
+        // generation, which is exactly what happened before this existed.
         window.addEventListener('session-created', (e) => {
             console.log('App: Session created', e.detail);
+            if (window.NavigationGeneration && e.detail.nav != null
+                && !window.NavigationGeneration.keep(e.detail.nav, 'session create')) return;
             this.showTerminal(e.detail.session, {
                 initialScrollbackB64: e.detail.initialScrollbackB64,
                 fifoStartOffset: e.detail.fifoStartOffset,
@@ -698,6 +710,10 @@ class AppController {
      */
     showAuth() {
         console.log('App: Showing auth screen');
+        // Same rule as showLaunchpad(): this screen replaces whatever was
+        // being navigated to, so in-flight session work stops belonging on
+        // screen the moment it paints.
+        if (window.NavigationGeneration) window.NavigationGeneration.begin('auth');
         this.hideAllScreens();
         document.getElementById('auth-screen').classList.add('active');
         // NO PER-BUTTON HIDE LIST HERE ANY MORE. Three
@@ -889,6 +905,12 @@ class AppController {
      */
     showLaunchpad() {
         console.log('App: Showing launchpad screen');
+        // LEAVING A SESSION IS A NAVIGATION TOO, and it is the half that
+        // is easy to forget. A session entry still resolving its fetch
+        // when the user goes home must not paint that session over the
+        // launcher a moment later, so this bumps the generation rather
+        // than reading it. See client/js/navigation-generation.js.
+        if (window.NavigationGeneration) window.NavigationGeneration.begin('launchpad');
         // Archive deep link: consumed FIRST, and it RETURNS. See
         // _showArchiveIfDeepLinked() for why the position matters.
         if (this._showArchiveIfDeepLinked()) return;
@@ -986,6 +1008,15 @@ class AppController {
      */
     async showTerminal(session, opts = {}) {
         console.log('App: Showing terminal screen');
+        // READS the generation, never begins one. The gesture that led
+        // here already declared its intent before the fetch it awaited;
+        // bumping the counter here would let a caller that ALREADY lost
+        // the race mint itself a fresh win a few awaits later. There are
+        // two real awaits below - xterm's first-time init and the slash
+        // command modal's - and a second navigation can land in either.
+        // See client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
         // Outbound URL sync: capture whether we were ALREADY viewing a
         // session before this call flips currentScreen below. Deciding
         // push-vs-replace off the PREVIOUS screen is what tells "entering
@@ -1085,11 +1116,17 @@ class AppController {
             window.SlashCommandsModal.show();
         }
 
+        // THE LAST CHECK BEFORE THE SOCKET. Everything above this line is
+        // chrome the next navigation repaints for itself; connectToSession
+        // resets xterm and opens a WebSocket, which is the write that
+        // cannot be taken back. A superseded navigation stops here.
+        if (window.NavigationGeneration
+            && !window.NavigationGeneration.keep(nav, 'terminal connect')) return;
         // Connect terminal to session. Adopt-path opts (scrollback,
         // fifo offset) are forwarded through - a plain new-session
         // create leaves them undefined and connectToSession treats
         // that as a normal (non-adopt) path.
-        window.TerminalController.connectToSession(session, opts);
+        window.TerminalController.connectToSession(session, opts, { nav: nav });
         this.focusTerminal();
     }
 
@@ -1135,6 +1172,14 @@ class AppController {
      */
     async returnToExistingTerminal(session) {
         console.log('App: Returning to existing terminal', session && session.id);
+        // READS the generation, never begins one - same rule and same
+        // reason as showTerminal(). This is the busiest session-entry
+        // path in the app (the conversation sidebar, the launcher, the
+        // toast stack and the restart return all land here), so it is
+        // also the one where a second click is most likely to overtake
+        // the first. See client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
         // Outbound URL sync: see showTerminal()'s identical comment -
         // same push-vs-replace rule, off the screen we were on BEFORE
         // this call. Callers: the launchpad's active-session banner
@@ -1226,7 +1271,11 @@ class AppController {
             window.SlashCommandsModal.show();
         }
 
-        window.TerminalController.reconnectToExistingSession(session);
+        // THE LAST CHECK BEFORE THE SOCKET - see showTerminal()'s copy of
+        // this guard for why it sits here and not higher.
+        if (window.NavigationGeneration
+            && !window.NavigationGeneration.keep(nav, 'terminal rejoin')) return;
+        window.TerminalController.reconnectToExistingSession(session, { nav: nav });
         this.focusTerminal();
     }
 

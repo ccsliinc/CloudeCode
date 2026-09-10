@@ -143,6 +143,15 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
         const sessionId = rowEl.dataset.sessionId || null;
+        // THE INTENT, DECLARED BEFORE THE FETCH. Both branches below await
+        // the network, and a second row click during that await must win.
+        // Captured here rather than after the await, which would compare a
+        // freshly read value against itself and guard nothing. See
+        // client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('session:' + name) : null;
+        const stillOurs = () => !window.NavigationGeneration
+            || window.NavigationGeneration.keep(nav, 'sidebar switch to ' + name);
         try {
             // A row carries session_id only when it came from
             // GET /sessions/list - it is bound to a live backend and can
@@ -150,6 +159,7 @@ console.log('[SessionSidebarClicks Module] Loading...');
             // and must go through the adopt flow instead.
             if (sessionId) {
                 const info = await window.API.getSession(sessionId, { includeScrollback: true });
+                if (!stillOurs()) return;
                 if (info) {
                     ctrl._closeAfterSwitch();
                     window.App.returnToExistingTerminal(info);
@@ -157,6 +167,11 @@ console.log('[SessionSidebarClicks Module] Loading...');
                 return;
             }
             const response = await window.API.adoptSession(name, true);
+            // The adopt already happened server-side and that is fine to
+            // leave standing - it is idempotent and costs the user
+            // nothing. What must not happen is PAINTING it over the
+            // session they have since moved to.
+            if (!stillOurs()) return;
             const session = response.session || response;
             ctrl._closeAfterSwitch();
             window.dispatchEvent(new CustomEvent('session-created', {

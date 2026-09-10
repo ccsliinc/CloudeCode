@@ -349,6 +349,20 @@
         if (!target) {
             return;
         }
+        // THE ROUTER'S INTENT, DECLARED AT ITS ONE HANDOFF POINT. A deep
+        // link and a Back/Forward are navigations exactly as a click is,
+        // and openProjectByName() can spend well over a second resolving
+        // this name against the session listing. Everything else this
+        // file does either stashes a target or calls App.showLaunchpad(),
+        // which declares its own. See client/js/navigation-generation.js.
+        //
+        // A STALE GENERATION IS NOT A REJECTED TARGET. rejectTarget()'s
+        // banner means "this URL names nothing"; a superseded navigation
+        // means the user simply went somewhere else, and raising a banner
+        // for it would be a lie the user has to dismiss.
+        if (window.NavigationGeneration) {
+            window.NavigationGeneration.begin('deeplink:' + target);
+        }
         if (window.Launchpad && typeof window.Launchpad.openProjectByName === 'function') {
             console.log('Router: delivering deep-link target to launchpad:', target);
             try {

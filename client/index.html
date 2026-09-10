@@ -788,6 +788,13 @@
          wiring their listeners. See that file for the two shipped bugs it
          exists to retire. -->
     <script src="/static/js/dismiss-guard.js"></script>
+    <!-- The one answer to "is the navigation I started still the one on
+         screen?". Zero dependencies, and loaded here because every
+         surface that navigates - the conversation sidebar, the launcher,
+         the router, the restart return, the toast stack and the terminal
+         itself - reads it, and the earliest load order is the only one
+         that cannot be got wrong by a later insertion. -->
+    <script src="/static/js/navigation-generation.js"></script>
     <!-- The vertical three-dot mark. Its one consumer is the header
          overflow (header-menu.js), so it must load before that. It was
          shared with the conversation rows until their overflow menu was
