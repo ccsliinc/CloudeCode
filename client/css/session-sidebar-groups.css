@@ -95,6 +95,22 @@
     display: block;
 }
 
+/* ---- Space above a section header -------------------------------------
+ * The owner's request: bands were sitting tight against the last row of
+ * the band above, so the list read as one continuous scroll instead of
+ * distinct sections. The gap belongs BETWEEN bands only, so this is an
+ * adjacent-sibling rule rather than a margin on the header itself: it
+ * fires on every `.session-sidebar-group` that FOLLOWS another one, which
+ * is every band except the first. The first band therefore keeps the
+ * list's own 8px `.session-sidebar-list` padding above it and never gets
+ * a dead void at the top of the panel - no first-child override needed,
+ * because a section with nothing before it never matches this selector.
+ * Scaled down for compact density in session-sidebar-density.css rather
+ * than duplicated here. */
+.session-sidebar-group + .session-sidebar-group {
+    margin-top: 28px;
+}
+
 /* ---- The header ROW: count gutter, fold button, menu -----------------
  *
  * Every header is the same four slots in the same order: the count
