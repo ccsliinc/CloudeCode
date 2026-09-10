@@ -701,6 +701,21 @@ per server process and no subprocess at all.
   `client/js/launchpad.js`, `client/js/app.js`, `client/css/styles.css`,
   `src/config.py`, `src/api/routes.py`, `src/core/session_manager.py`. Edit them
   when the change belongs there; do not use them as the default landing spot.
+- **`src/core/sessions/` holds the collaborators `SessionManager` composes**, one
+  mutable state cluster each, per
+  `.claude/notes/backend-decomposition-plan.md`. THE STATE MOVES, IT NEVER
+  COPIES: a collaborator holds the one and only copy of its cluster and the
+  facade keeps none, because two objects holding one logical state and kept in
+  sync by hand is the shape of the bug that produced 22 `/sessions/list` rows
+  for 21 live panes. `SessionManager()` still takes NO required arguments (104
+  test files construct it bare); a collaborator is an optional KEYWORD-ONLY
+  argument with a default-constructed value, so injection is available to a new
+  test and invisible to every old one. Two rules hold for every module in the
+  package and both are enforced by `tests/test_sessions_package_rules.py`
+  rather than remembered: nothing in there may import `session_manager`, and no
+  file exceeds 500 lines. `ProbeHealthRecorder` (slice S1) is the worked
+  example, and `ProbeHealth` is DEFINED there and re-exported from
+  `session_manager` so every existing import keeps resolving.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in

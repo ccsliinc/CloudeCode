@@ -26,7 +26,6 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, List, Optional
 from datetime import datetime
 from fastapi import HTTPException
@@ -48,6 +47,14 @@ from src.models import (
 from src.core import claude_hooks
 from src.core.workspace_settings import build_spawn_env
 from src.core.session_backend import SessionBackend, build_backend
+
+# S1 of the decomposition. ``ProbeHealth`` is DEFINED in the collaborator
+# that owns it and re-exported here, so the 108 existing spellings of
+# ``from src.core.session_manager import ProbeHealth`` keep resolving
+# while there is exactly one definition of the dataclass. Re-exporting a
+# name is the facade rule applied to a type rather than to a method: no
+# caller moves.
+from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
@@ -224,31 +231,6 @@ def _sanitize_tmux_name(name: str) -> str:
     return collapsed.strip()
 
 
-@dataclass(frozen=True)
-class ProbeHealth:
-    """Outcome of the most recent tmux listing probe (S9).
-
-    THREE OUTCOMES, not two. ``ok=None`` ("never probed") must never be
-    read the same as ``ok=True`` ("probed and healthy") - a caller that
-    treats "no answer yet" as "healthy" is exactly the false-green class
-    this repo's CLAUDE.md names as the recurring defect. See
-    ``SessionManager.last_probe_health``.
-
-    Attributes:
-        ok: None - no probe has run yet this process's lifetime.
-            True - the most recent probe succeeded (regardless of how
-            many rows it returned). False - the most recent probe
-            failed.
-        reason: short machine token for the failure (mirrors
-            ``TmuxListing.reason``), or None when ``ok`` is not False.
-        detail: human-readable detail for the same failure, or None.
-    """
-
-    ok: Optional[bool]
-    reason: Optional[str] = None
-    detail: Optional[str] = None
-
-
 def _configured_wrappers():
     """The user's configured launch wrappers, or an empty list.
 
@@ -285,8 +267,33 @@ def _configured_wrappers():
 class SessionManager:
     """Manages Claude Code sessions via a pluggable SessionBackend."""
 
-    def __init__(self):
-        """Initialize the session manager."""
+    def __init__(
+        self,
+        *,
+        probe_health: Optional[ProbeHealthRecorder] = None,
+    ):
+        """Initialize the session manager.
+
+        Description: composes the collaborators that own this object's
+          state clusters. Each is an OPTIONAL KEYWORD with a
+          default-constructed value, so injection is available to a new
+          test and invisible to the 104 existing bare
+          ``SessionManager()`` constructions. Keyword-only on purpose: a
+          positional optional would let a later slice's collaborator
+          land silently in this one's slot.
+        Inputs: probe_health (ProbeHealthRecorder | None) - the owner of
+          the tmux probe health cluster. Default-constructed when None.
+        Output: None.
+        Example: SessionManager(probe_health=ProbeHealthRecorder())
+        """
+        # S1 - the ONE owner of the probe cluster. The four scalars that
+        # used to live on this object (``_last_probe_ok``,
+        # ``_last_probe_reason``, ``_last_probe_detail``,
+        # ``_last_probe_socket``) live on the recorder and NOWHERE else:
+        # this facade keeps no copy, so the two cannot drift.
+        self._probe_health: ProbeHealthRecorder = (
+            probe_health if probe_health is not None else ProbeHealthRecorder()
+        )
         # ---- per-session state, keyed by session_id ---------------------
         # Multiple sessions coexist; two browser tabs can each be attached
         # to a different session. Touching one session's entry NEVER
@@ -331,13 +338,6 @@ class SessionManager:
         # than as "nothing is muted". See
         # src/core/session_notification_policy.py.
         self._notification_policy_store = None
-
-        # The tmux socket the most recent attachable probe was bound to.
-        # None until the first probe runs. Read by
-        # ``list_attachable_sessions_with_socket`` so the adopt path keys
-        # its rows on the socket the listing came from rather than on the
-        # one settings claims.
-        self._last_probe_socket: Optional[str] = None
 
         # Track 1 - adopt-external-session support.
         #
@@ -512,23 +512,6 @@ class SessionManager:
         self._listing_fingerprint_cache: dict[
             tuple[str, str, int], Optional[str]
         ] = {}
-
-        # S9 - health of the MOST RECENT tmux listing probe, whichever
-        # caller ran it (``list_attachable_sessions`` is the common
-        # path, called on every home-screen poll). ``None`` until the
-        # first probe of this process's lifetime - genuinely different
-        # from both True and False, because "never checked" is its own
-        # answer and must not be read as "checked and healthy". The
-        # RECENT group (``GET /sessions/recent``) reads this rather than
-        # triggering its own extra probe: RESTART safety depends on the
-        # stored ``stopped`` rows being trustworthy RIGHT NOW, and a
-        # currently-failing probe means we cannot currently confirm
-        # that - a row that looks stopped in a stale read could in fact
-        # be running, and offering RESTART against it is how you get two
-        # of the same session.
-        self._last_probe_ok: Optional[bool] = None
-        self._last_probe_reason: Optional[str] = None
-        self._last_probe_detail: Optional[str] = None
 
         # Load persisted session if it exists
         self._load_session_metadata()
@@ -6079,15 +6062,15 @@ class SessionManager:
         """
         from src.core.db_models import DEFAULT_TMUX_SOCKET
 
-        probed = getattr(self, "_last_probe_socket", None)
-        if probed:
-            return str(probed)
-
         session_cfg = getattr(settings, "session", None)
-        return (
+        configured = (
             getattr(session_cfg, "tmux_socket_name", None)
             or DEFAULT_TMUX_SOCKET
         )
+        # The probe-wins-over-settings rule lives on the recorder, which
+        # owns the probed socket. Delegated rather than re-implemented
+        # here so there is one place the preference is expressed.
+        return self._probe_health.socket_name(configured=configured)
 
     def last_probe_health(self) -> "ProbeHealth":
         """Report whether the most recent tmux listing probe succeeded.
@@ -6101,16 +6084,12 @@ class SessionManager:
         Inputs: none.
         Output: ProbeHealth - ``ok`` is None when no probe has run yet
           this process's lifetime (a real third state, distinct from
-          both True and False - see the field's docstring in
-          ``__init__``), True/False otherwise, with ``reason``/``detail``
-          populated only on a known failure.
+          both True and False - see
+          ``src/core/sessions/probe_health.py``), True/False otherwise,
+          with ``reason``/``detail`` populated only on a known failure.
         Example: mgr.last_probe_health().ok
         """
-        return ProbeHealth(
-            ok=self._last_probe_ok,
-            reason=self._last_probe_reason,
-            detail=self._last_probe_detail,
-        )
+        return self._probe_health.health
 
     def tmux_socket_name(self) -> str:
         """The tmux socket this manager probes and keys its rows on.
@@ -6571,7 +6550,7 @@ class SessionManager:
             outcome = reconcile_from_listing(
                 conn,
                 listing=listing,
-                socket=self._last_probe_socket or self._tmux_socket_name(),
+                socket=self._tmux_socket_name(),
             )
             if outcome.changed:
                 # PROVABLY REDUNDANT TODAY, KEPT ANYWAY. src.core.db.connect
@@ -6629,7 +6608,7 @@ class SessionManager:
         Example: mgr.list_attachable_sessions_with_socket()[0]  # 'cloude'
         """
         listing = self.list_attachable_sessions()
-        return self._last_probe_socket, listing
+        return self._probe_health.socket, listing
 
     def list_attachable_sessions(self) -> TmuxListing:
         """Enumerate tmux sessions on our socket, flagged by ownership.
@@ -6663,7 +6642,7 @@ class SessionManager:
         # Record the socket the probe is ACTUALLY bound to, for
         # list_attachable_sessions_with_socket. See that method for why
         # settings is not a trustworthy answer to this question.
-        self._last_probe_socket = getattr(probe, "socket_name", None)
+        self._probe_health.record_socket(getattr(probe, "socket_name", None))
         listing = coerce_listing(
             probe.list_attachable_sessions(
                 owned_names=set(self.owned_tmux_sessions),
@@ -6684,16 +6663,14 @@ class SessionManager:
             # write on a failed probe, same rule ``reconcile_existing``
             # already enforces for lifecycle) - only the in-memory health
             # flag other readers consult moves.
-            self._last_probe_ok = False
-            self._last_probe_reason = listing.reason
-            self._last_probe_detail = listing.detail
+            self._probe_health.record_failure(
+                reason=listing.reason, detail=listing.detail
+            )
             return listing
         # S9 - a successful listing is this process's evidence that tmux
         # answered just now, independent of what rows it returned (an
         # empty tmux server is still a successful probe).
-        self._last_probe_ok = True
-        self._last_probe_reason = None
-        self._last_probe_detail = None
+        self._probe_health.record_success()
         # THE REAPER. This listing is a complete enumeration of the
         # socket, so it is the one moment the app can tell that a stored
         # 'running' row's tmux instance is gone. Runs here rather than on
@@ -6753,7 +6730,7 @@ class SessionManager:
         # index answers exactly what the per-row reads answered when the
         # datastore could not be opened.
         instance_index = self._instance_index_for_listing(
-            socket=self._last_probe_socket or self._tmux_socket_name(),
+            socket=self._tmux_socket_name(),
             names=[r.get("name") for r in rows],
         )
         for row in rows:
@@ -6829,7 +6806,7 @@ class SessionManager:
                 # WHICH branch answered rather than hardcoded True, so
                 # the pill's dashed treatment tracks the actual
                 # provenance instead of the code path.
-                probe_socket = self._last_probe_socket or self._tmux_socket_name()
+                probe_socket = self._tmux_socket_name()
                 launch = instance_index.stored_launch(
                     name, row.get("created_at_epoch")
                 )

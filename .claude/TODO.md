@@ -6590,3 +6590,78 @@ parallel to Adam; 8 onward waits on `now/adoom666.md`.
 **Plan:** `.claude/notes/backend-decomposition-plan.md`, 499 lines, on
 `feat/backend-decomposition`. Force-added, because `.gitignore:183` ignores
 `.claude/*`.
+
+## 2026-09-10 - S1 SHIPPED: ProbeHealthRecorder, the first collaborator
+
+**What moved.** The four probe scalars (`_last_probe_ok`, `_last_probe_reason`,
+`_last_probe_detail`, `_last_probe_socket`) left `SessionManager` for
+`src/core/sessions/probe_health.py`, which now HOLDS a `ProbeHealth` instead of
+re-deriving one from loose fields on every read. `ProbeHealth` itself is defined
+there and re-exported from `session_manager`, so every existing
+`from src.core.session_manager import ProbeHealth` keeps resolving. Delegating
+readers: `last_probe_health`, `_tmux_socket_name`, `tmux_socket_name`,
+`list_attachable_sessions_with_socket`, and the write half of
+`list_attachable_sessions`.
+
+**Line delta.** `src/core/session_manager.py` 8,340 to 8,317 (-23; 53 inserted,
+76 deleted). New: `src/core/sessions/probe_health.py` 194,
+`src/core/sessions/__init__.py` 22. The file grew a docstring-heavy constructor
+while shedding a dataclass and four fields, so the net is smaller than the
+volume moved. Twelve slices, not one.
+
+**A CORRECTION TO THE PLAN, recorded because the next reader will trust it.**
+Section 3 says `ProbeHealth` "is a dataclass nothing constructs". Measured: it
+WAS constructed, at `session_manager.py:6109`, lazily from three loose scalars on
+every call. The seam the plan saw is real; the wording is not. S1 is better
+stated as "the recorder HOLDS a ProbeHealth instead of rebuilding one".
+
+**A DRY defect found and closed in passing.** Three sites read
+`self._last_probe_socket or self._tmux_socket_name()`, but `_tmux_socket_name()`
+already prefers `_last_probe_socket` internally, so `X or f()` where `f()`
+returns X-when-truthy is exactly `f()`. All three collapsed. The probed socket is
+now read in ONE place, which is what makes the no-copy rule structural rather
+than remembered. Also removed the defensive `getattr(self, "_last_probe_socket",
+None)`: left in place it would have returned None silently once the field was
+gone, and the probe-wins-over-settings rule would have died with a green suite.
+
+**HOW THE NO-COPY RULE IS PROVEN, and why it is not the plan's `is` check.**
+Rule A's example (`manager.sessions is registry.sessions`) is for a shared
+mutable dict. This cluster is four SCALARS, and an identity assertion on a value
+proves nothing (rebinding a bool on the facade is invisible through any other
+object, and two equal frozen dataclasses are never `is`). So the proof has three
+legs: (a) the fields DO NOT EXIST on the facade, asserted with `hasattr` over a
+named list; (b) the injected recorder IS the held object, `is`; (c) delegation is
+live in BOTH directions, including through the REAL `list_attachable_sessions`
+path rather than a stubbed method.
+
+**MUTATION RESULTS. Both mutations were run, and both were reverted.**
+1. The named one, the facade keeping its own copy instead of delegating (four
+   fields restored to `__init__`, all readers and writers pointed back at them,
+   recorder still constructed): **6 tests red**, legs (a) and (c) together.
+   Leg (b) alone stayed GREEN, which is exactly why one leg is not enough and
+   the three exist.
+2. False-green, `health` reporting `ok=True` when nothing has been probed:
+   **4 tests red**, including the S1-named "never ran reads cannot_determine and
+   never ok". The PRE-EXISTING `tests/test_s9_recent_and_pills.py` also went red,
+   so the old regression guards still bind through the new indirection.
+   Reverted, 24 green.
+
+**Measured, in this worktree, not quoted.** Control before the change: 5,708
+passed / 2 failed / 19 skipped. After: 5,734 / 2 / 19, the same two
+environmental failures (`test_home_write_guard`, `test_version_probe`). The +26
+is fully accounted by a collection diff: 24 new tests of mine, plus 2 the
+repo-wide `test_no_unresolved_names` guard automatically added for the 2 new
+source modules. ZERO tests removed. Node 200 suites, 0 failures. Listing cost
+ceilings 12 passed. `scan_secrets.py` exit 0.
+
+**New tests.** `tests/test_probe_health_recorder.py` (19) and
+`tests/test_sessions_package_rules.py` (5), the latter enforcing the plan's two
+package-wide rules by AST parse rather than grep, with a guard test that fails
+when the package globs empty (a parametrised test over an empty list passes, so
+a renamed package would otherwise look perfectly compliant).
+
+**Not done, deliberately.** No `Protocol` was added: the plan names three
+(`TmuxReader`, `SessionRecordStore`, `Clock`) and none is a substitution point
+for S1, which does no I/O and calls nothing. No live deploy, so the plan's proof
+by measurement for S1 (`/sessions/list` row count against
+`tmux -L cloude list-sessions | wc -l`) is UNVERIFIED and still owed.
