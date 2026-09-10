@@ -5899,14 +5899,22 @@ class SessionManager:
             build_instance_index,
         )
 
+        wanted = [n for n in names if n]
+        if not wanted:
+            # THE COMMON PRODUCTION CASE, and worth the branch. Every
+            # session bound to a live backend is filtered out of this
+            # listing, so on a settled box it returns NO rows at all -
+            # measured 0 of 11 on the owner's machine. Opening the
+            # datastore to look up nothing would make this round's fix a
+            # small net COST in exactly the state the app spends most of
+            # its time in.
+            return InstanceIndex()
         conn = None
         try:
             conn = self._writable_datastore_connection()
             if conn is None:
                 return InstanceIndex()
-            return build_instance_index(
-                conn, socket=socket, names=[n for n in names if n]
-            )
+            return build_instance_index(conn, socket=socket, names=wanted)
         except Exception as exc:  # noqa: BLE001 - a decoration read must not crash a listing
             logger.debug("instance_index_for_listing_threw", error=str(exc))
             return InstanceIndex()
