@@ -154,6 +154,7 @@ def read_instance_row(
     epoch: Optional[int],
     *,
     session_id: Optional[str] = None,
+    index: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """The four columns the ladder needs, off ONE instance's row.
 
@@ -167,13 +168,22 @@ def read_instance_row(
       failure, and it would drown the warning below in noise.
     Inputs: manager (SessionManager). tmux_name (str | None). epoch
       (int | None) - ``#{session_created}`` for the exact instance.
-      session_id (str | None) - for the failure log only.
+      session_id (str | None) - for the failure log only. index
+      (InstanceIndex | None) - the pass's bulk read, used ONLY when it
+      reports ``complete``; otherwise this falls through to the per-row
+      connection below, which is what every caller had before it existed.
     Output: dict | None - ``activity_state``, ``activity_state_at``,
       ``claude_session_uuid``, ``working_dir``.
     Example: read_instance_row(mgr, 'cloude_Mac', 1788463220)
     """
     if not tmux_name or epoch is None:
         return None
+    # THE BULK READ, WHEN THE CALLER TOOK ONE, and only when it reports
+    # ``complete`` - a False there means nothing was LOOKED AT, and a
+    # None off a reading that never ran would refuse the seed for the
+    # whole pass. See ``session_instance_index``'s module docstring.
+    if index is not None and getattr(index, "complete", False):
+        return index.seed_row(tmux_name, epoch)
     conn = None
     try:
         conn = manager._writable_datastore_connection()
@@ -243,6 +253,7 @@ def derive_seed(
     epoch: Optional[int] = None,
     unread: bool = False,
     now: Optional[datetime] = None,
+    index: Optional[Any] = None,
 ) -> StatusSeed:
     """Run the whole ladder for one session and return what it supports.
 
@@ -268,14 +279,17 @@ def derive_seed(
       (str | None). epoch (int | None) - defaults to the manager's
       recorded epoch for this session. unread (bool) - the session's
       persisted flag, read by rung 0 and written only when a NEW turn
-      end is measured. now (datetime | None).
+      end is measured. now (datetime | None). index (InstanceIndex |
+      None) - the pass's bulk row read, used only when ``complete``.
     Output: StatusSeed - ``seeds`` is False whenever no rung answered.
     Example: derive_seed(mgr, 'ses_5a756046', 'cloude_Punchlist').state
     """
     epoch = _resolve_epoch(manager, session_id, epoch)
     stamp = now or datetime.now(timezone.utc)
 
-    row = read_instance_row(manager, tmux_name, epoch, session_id=session_id)
+    row = read_instance_row(
+        manager, tmux_name, epoch, session_id=session_id, index=index
+    )
     if row is None:
         return StatusSeed(
             rung=SEED_RUNG_NONE,
@@ -316,6 +330,7 @@ def seeded_status(
     epoch: Optional[int] = None,
     unread: bool = False,
     now: Optional[datetime] = None,
+    index: Optional[Any] = None,
 ) -> Optional[str]:
     """The status a session's durable evidence supports, cached and refreshed.
 
@@ -333,12 +348,18 @@ def seeded_status(
     Inputs: manager (SessionManager). session_id (str). tmux_name
       (str | None). epoch (int | None). unread (bool) - the persisted
       flag; read by the display and by rung 0, which is the ONLY thing
-      here that may write one. now (datetime | None).
+      here that may write one. now. index - the pass's bulk row read.
     Output: str | None - an activity status, or None for "nothing seeded".
     Example: seeded_status(mgr, sid, name, unread=False) -> 'idle'
     """
     return seeded_display(
-        manager, session_id, tmux_name, epoch=epoch, unread=unread, now=now
+        manager,
+        session_id,
+        tmux_name,
+        epoch=epoch,
+        unread=unread,
+        now=now,
+        index=index,
     )[0]
 
 
@@ -350,6 +371,7 @@ def seeded_display(
     epoch: Optional[int] = None,
     unread: bool = False,
     now: Optional[datetime] = None,
+    index: Optional[Any] = None,
 ) -> Tuple[Optional[str], str]:
     """The seeded status AND the provenance to report for it.
 
@@ -371,7 +393,10 @@ def seeded_display(
       A seed that has EXPIRED renders as no answer, and its source is
       reported as ``none`` for the same reason: nothing currently
       supports a status, so nothing may be credited with supporting one.
-    Inputs: as ``seeded_status``.
+    Inputs: as ``seeded_status``, ``index`` included: the ONE row read
+      the pass took for every session in it, and what keeps this seam
+      from opening a SQLite connection per session. Omitting it costs
+      exactly what it cost before.
     Output: tuple[str | None, str] - the status (or None) and one of
       ``session_status_source.ALL_STATUS_SOURCES``.
     Example: seeded_display(mgr, sid, name) -> ('idle', 'transcript')
@@ -388,6 +413,7 @@ def seeded_display(
                 epoch=resolved_epoch,
                 unread=unread,
                 now=stamp,
+                index=index,
             )
             store.remember(session_id, seed, now=stamp, epoch=resolved_epoch)
         else:

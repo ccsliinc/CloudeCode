@@ -27,7 +27,7 @@ import sqlite3
 import time
 from pathlib import Path
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from datetime import datetime
 from fastapi import HTTPException
 import structlog
@@ -4626,7 +4626,10 @@ class SessionManager:
         return gate
 
     def _session_info_for(
-        self, session_id: str, status_map: Optional[dict] = None
+        self,
+        session_id: str,
+        status_map: Optional[dict] = None,
+        instance_index: Optional[Any] = None,
     ) -> Optional[SessionInfo]:
         """Build SessionInfo for a specific live session, or None.
 
@@ -4636,6 +4639,17 @@ class SessionManager:
         call. When omitted, a fresh single-use map is built here so
         single-session callers (``get_session_info``) still get a real
         status without the caller having to know about the map.
+
+        ``instance_index`` is the SAME IDEA FOR THE DATASTORE, and it is
+        the second per-row cost this pass used to pay. The status seed
+        ladder reads four columns off this session's row, keyed on the
+        instance triple, through
+        ``session_status_seed_read.read_instance_row`` - which opened its
+        OWN SQLite connection, per session. A listing caller reads every
+        row it needs in ONE query and passes the index here. When omitted
+        (a single-session caller) the seed does exactly what it always
+        did, so this is a saving on the pass and never a change of
+        answer.
 
         The returned ``SessionInfo.session.pty_pid`` is resolved LIVE off
         that same status map (see the ``live_pid`` block below) rather than
@@ -4838,6 +4852,7 @@ class SessionManager:
                     tmux_session_name,
                     epoch=row.get("created_at_epoch") if row else None,
                     unread=unread,
+                    index=instance_index,
                 )
                 if seeded:
                     activity_status = seeded
@@ -5020,15 +5035,66 @@ class SessionManager:
         return self._session_info_for(sid)
 
     async def list_session_infos(self) -> list[SessionInfo]:
-        """SessionInfo for every live session, oldest first."""
+        """SessionInfo for every live session, oldest first.
+
+        TWO BULK READS UP FRONT, AND NEITHER IS OPTIONAL TO THE COST.
+        This body is entirely SYNCHRONOUS inside ``async def``, so for as
+        long as it runs the event loop does nothing else - it cannot read
+        the tmux pipe carrying terminal output, cannot spawn the
+        ``send-keys`` that delivers a keystroke, and cannot answer another
+        request. Anything in here that is paid PER SESSION is therefore
+        terminal latency multiplied by the session count. The tmux
+        listing is read once (``status_map``); the ``sessions`` row is
+        read once (``instance_index``), for the status seed that used to
+        open a SQLite connection per session.
+        """
         status_map = self._build_tmux_status_map()
+        instance_index = self._instance_index_for_listing(
+            socket=self._tmux_socket_name(),
+            names=self._listed_tmux_names(),
+        )
         out: list[SessionInfo] = []
         for sid in list(self.sessions.keys()):
-            info = self._session_info_for(sid, status_map=status_map)
+            info = self._session_info_for(
+                sid, status_map=status_map, instance_index=instance_index
+            )
             if info is not None:
                 out.append(info)
         await self._flush_startup_toasts()
         return out
+
+    def _listed_tmux_names(self) -> list[str]:
+        """Every tmux name this pass may need a stored row for.
+
+        Description: read off the BACKENDS, which is where
+          ``_session_info_for`` reads the name it then looks the row up
+          by (``getattr(backend, "tmux_session")``). Reading it from
+          anywhere else would be a second derivation of one key, and two
+          derivations are two keys the moment they disagree - here that
+          would show as a session silently missing from the index and
+          falling back to its own connection, which is invisible except
+          in a subprocess count.
+
+          IT IS TAKEN FROM THE SESSIONS THE MANAGER HOLDS, NOT FROM THE
+          TMUX LISTING. The index answers None for a name it was not
+          built over, and for the seed a None reads as "this instance
+          could not be identified" - so building it over the tmux
+          listing would refuse the seed for any registered session the
+          listing did not name, which is a different set.
+        Inputs: none.
+        Output: list[str] - deduplicated, order preserved, no falsy entries.
+        Example: mgr._listed_tmux_names() -> ['cloude_a', 'cloude_b']
+        """
+        hook_names = getattr(self, "_hook_tmux_names", None) or {}
+        names: list[str] = []
+        for session_id in list(self.sessions.keys()):
+            backend = self.backends.get(session_id)
+            name = getattr(backend, "tmux_session", None) or hook_names.get(
+                session_id
+            )
+            if name:
+                names.append(name)
+        return list(dict.fromkeys(names))
 
     async def _flush_startup_toasts(self) -> None:
         """Broadcast startup-prompt toasts queued by the sync listing pass.
