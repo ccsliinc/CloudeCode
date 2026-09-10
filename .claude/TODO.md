@@ -6636,3 +6636,67 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 `macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
 would want the same ruling.
 
+
+## 2026-09-10 - proposal: move from fork-and-merge to Issues plus Projects in one shared repo
+
+Owner's framing, verbatim: "we can try to go with this. adam is working on
+this, but you can add to our notes, but i think we should utilize this over the
+fork possibly." He has sent Adam a description of a GitHub team workflow
+(Issues with sub-issues, a Project board with Backlog/Ready/In progress/In
+review/Done plus assignee, priority and size, labels, milestones, issue
+templates carrying repro steps and acceptance criteria, ONE accountable owner
+per issue, PR review, Actions, rulesets requiring review and passing checks,
+CODEOWNERS, and `Closes #123` automation) and ended it asking whether the two
+of them work in one shared repository or several. THAT QUESTION IS THE OPEN
+DECISION and it is the owner's and Adam's to make.
+
+Full evaluation: `.claude/notes/github-team-workflow-proposal.md`, on branch
+`docs/team-workflow` off `release/1.2.1`. Under 250 lines. FORCE-ADDED, because
+`.gitignore` line 183 is `.claude/*` with only `.claude/commands/` negated,
+which is the trap that kept every design note in this project out of git until
+today.
+
+- Repo facts verified 2026-09-10 with `gh api`, and two of them correct the
+  brief: `origin` (ccsliinc/CloudeCode) is a FORK of `upstream` and its Issues
+  tab is DISABLED, the GitHub default for a fork; `adamdev`
+  (Adoom666/CloudeCodeDev) is PRIVATE and every release on it is a draft.
+  `upstream` (Adoom666/CloudeCode) is the only one with an audience, 9 stars
+  and 1 fork, and is the one nobody may push to. Tags: 54 / 20 / 19. No
+  ruleset and no branch protection anywhere. ZERO open issues on all three, so
+  migrating issues costs nothing today.
+- Mapping verdict. `now/` -> a Project view, `log/` -> closed issues plus
+  releases, `notes/` -> issue comments: replaced and improved. `claims/`:
+  PARTLY, because the 72 hour expiry and the `paths` glob intersection that
+  `coord.py check` exits 2 on have no tracker equivalent. `settled/`, `wants/`
+  and `lessons/`: NOT replaced, because none of them is a work item and a
+  tracker object needs an owner, a lifecycle and a done state. Proposal is to
+  move those three onto the CODE branch as `docs/decisions|kept-behaviours|lessons/<party>.md`,
+  keeping the per-party partition that was proved to merge cleanly, with a
+  `CLAUDE.md` pointer. NOT into `CLAUDE.md` itself: that is the one shared file
+  and it already conflicted substantively on 2026-09-10.
+- Review verdict. Require the checks, do NOT require blanket human review. Both
+  parties drive agents producing hours of change in an afternoon, so an
+  enforced review either bottlenecks or becomes a rubber stamp, and this repo
+  has already written the general form down in `claude-code-review.yml`.
+  Required: both python test legs, `skip audit` (green means nothing without
+  it), `javascript syntax`, `gitleaks`, and the `web/` vitest parity suite plus
+  `scripts/web-build-check.sh` once they reach the release line, since the
+  parity suite is what caught the LED port going silently stale. NOT required:
+  `Claude Code Review`, which passes without reviewing when the OAuth secret is
+  absent, and it is absent on `origin`.
+- CODEOWNERS proposed only for paths with an incident behind them: the hook
+  token and adoption identity cluster (4h24m of dead hooks, 4,325 rejections),
+  `src/core/session_manager.py` (the file both parties rewrote this week),
+  the security surface plus `.github/workflows/**`, `src/config.py`, schema and
+  migrations, and `client/js/status-led.js` with `session-status-ui.js`.
+  Explicitly NOT `client/js/**` or `web/**` broadly.
+- Meantime, so this stays reversible: keep writing `now/`, the `## approach`
+  paragraph on every claim, and `settled` / `wants` / `lessons` entries. STOP
+  investing in coord TOOLING (the overlap detector, expiry, the lock, the sync
+  two-step) and in `tests/test_coord_skill_upstream_sync.py`, all of which a
+  shared repo discards. We have already paid this once this week, retiring 727
+  lines of our own `scripts/coord.sh` for Adam's skill.
+- Adam's agent told on the `coord` branch via `notes/ccsliinc-to-adoom666-team-workflow-proposal.md`.
+- NOT VERIFIED: whether any of the 54 / 20 / 19 tags disagree on a shared name
+  (that is checklist step 5 and was not run), and whether a fork's PR base
+  default can be changed per-repo rather than only per-PR.
