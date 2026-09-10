@@ -1390,16 +1390,28 @@ derivation, and measured on live 2026-09-09 the owner opened
 from `status_source: seed_row`, a green dot over a session he had just
 read.
 
-**THE OUTER RING MEANS ACTIVITY AND NOTHING ELSE**, restoring the owner's
-original spec ("colored and pulsing on activity and steady on done"):
-`working` breathes, a live-but-stopped turn (`question` / `notice` / the
-startup gate) is lit and still, and every resting or dead state leaves it
-off, with the outer `unread` state and its `--led-color-unread` hue
-retired. Unread now rides the INNER dot alone - green `done` against grey
-`idle` - because a breathing amber ring on a finished conversation read
-as background work, which is exactly what the owner reported: "the ring
+**THE OUTER RING CARRIES ACTIVITY AND THE FINISHED TURN, AND THE OWNER
+SETTLED THAT ON 2026-09-09.** `working` breathes; a live-but-stopped turn
+(`question` / `notice` / the startup gate) breathes too, because the turn
+is still open; a finished turn nobody has read takes `unread`, a crisp
+STILL green ring; a read session at rest takes `steady`, lit and still in
+its own dot's grey; a dead pane or a lost transport takes `off`, no ring
+at all; an unmeasured one takes `dim`. The INNER dot carries the session's
+state. MOTION is the load-bearing distinction: `active` is the only state
+that animates, so a light that MOVES is a session that is moving.
+
+That ruling settled a same-day reversal, and the reversal is HISTORY, not
+a live rule. Both lines of this project were fixing one report - "the ring
 around some of the leds are not gray, which means there should be
-background tasks. i dont think those few have any background tasks."
+background tasks. i dont think those few have any background tasks" - and
+fixed it opposite ways within hours. One retired the outer `unread` state
+and its `--led-color-unread` hue and moved unread onto the inner dot
+alone; the other kept the ring and simply stopped it breathing. The owner
+picked the ring, so `unread` IS an outer state, `--led-color-unread` DOES
+exist, and the `done` bucket stays in the summary priority. Anything in
+this file or in `docs/session-status.md` that reads as though unread lives
+on the inner dot is describing the branch that lost; fix it rather than
+working around it (gotcha 8).
 
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
 dot for the chat's status AND an outer ring for activity and attention,
@@ -1408,25 +1420,18 @@ group header. `dotHtml` delegates to it, so every surface renders the
 same component - and every surface must PASS IT SIGNALS (`unread`,
 `startup_gate`, `status_source`, `transport`), not just the status
 string, or the finished-turn ring, the disconnected red and the
-provenance tooltip can never render. A WORKING session is solid green
-whatever its unread flag says, and `unknown` never takes the ring at
-all: the ring asserts that a turn FINISHED here, and neither of those
-measured one.
+provenance tooltip can never render. A WORKING session is solid green and
+BREATHING whatever its unread flag says, and `unknown` never takes the
+GREEN ring at all (it takes the faint grey `dim` one): that green is a
+claim a turn FINISHED here, and neither of those two measured one.
 
-**UNREAD RIDES THE RING, AND THE OWNER SETTLED THAT ON 2026-09-09.** Two
-lines of this project fixed the same reported defect - a ring pulsing on
-sessions with nothing running in them, "the ring around some of the leds
-are not gray, which means there should be background tasks. i dont think
-those few have any background tasks" - and they fixed it in opposite
-ways. One retired the outer `unread` state and moved unread onto the
-inner dot; this one KEPT the ring, stopped it breathing, and made it a
-crisp still green. **The owner chose the ring.** So `unread` is an outer
-state, `--led-color-unread` exists, the `done` bucket stays in the
-summary priority, and MOTION is what carries the original complaint: only
-`active` animates, so a light that moves is a session that is moving.
-`client/js/session-status-key.js` is the legend that teaches the
-vocabulary, and it describes this model. Do not reintroduce the
-inner-dot-unread model - it was decided against, not forgotten.
+**THE VOCABULARY IS TAUGHT, NOT GUESSED AT.**
+`client/js/session-status-key.js` is the legend at the foot of the
+sidebar, and it describes the model above - nine inner states resolving
+onto five hues, plus the one two-part treatment. A nine-state colour
+vocabulary with no legend is a vocabulary nobody learns. If the legend and
+the light ever disagree, the light is not the thing to change quietly: one
+of them is wrong and a user has already learned the wrong one.
 
 BOTH RINGS ARE ONE ELEMENT: the inner is the span's `background-color`
 and the outer is a four-layer `box-shadow` on that same span (an optional
