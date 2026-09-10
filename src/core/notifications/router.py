@@ -4,10 +4,14 @@ Design contract:
 - ``emit()`` is SYNCHRONOUS and non-blocking. It is called from the
   WebSocket / PTY chunk handler (Item 7's IdleWatcher) and MUST NOT
   await or stall - that would back up the terminal stream.
-- The worker task drains the queue async and calls ``ntfy.send()``,
-  ``slack.send()``, and ``pushover.send()`` per event, in that order.
-  Send failures never propagate - each backend's ``send`` already
-  catches and logs.
+- The worker task drains the queue async and hands each event to
+  ``channel_dispatch.dispatch_channels``, which contacts ntfy, slack
+  and pushover CONCURRENTLY under a per-channel bound. Send failures
+  never propagate - each backend's ``send`` already catches and logs,
+  and the dispatcher reports one outcome per channel on top of that.
+  THE ORDER THE NETWORK IS CONTACTED IN IS NO LONGER GUARANTEED; the
+  queue itself is still strictly sequential. See
+  ``src/core/notifications/channel_dispatch.py``.
 - Queue size 100. On overflow we drop the OLDEST event (best-effort:
   the most recent signal is usually most relevant) and log both the
   drop and the enqueue at WARN.
@@ -31,7 +35,8 @@ from typing import Optional
 
 import structlog
 
-from src.core.notifications import ntfy, pushover, slack
+from src.core.notifications import channel_dispatch
+from src.core.notifications.channel_dispatch import CHANNEL_TIMEOUT_SECONDS
 from src.core.notifications.events import NotificationEvent
 from src.core.notifications.rate_limit import RateLimiter
 from src.core.session_notification_policy import (
@@ -89,6 +94,18 @@ class NotificationRouter:
         # existed, which is what keeps every non-session producer and
         # every existing test unaffected. See ``attach_policy_store``.
         self._policy_store: Optional[NotificationPolicyStore] = None
+        # Per-channel bound on one dispatch. Read through ``getattr``
+        # like every other knob above so a config field can be added
+        # without touching this line; the default is DERIVED from the
+        # channels' own httpx budget and never fires on a healthy send.
+        # See ``channel_dispatch.CHANNEL_TIMEOUT_SECONDS``.
+        self._channel_timeout_s: float = float(
+            getattr(
+                config,
+                "channel_dispatch_timeout_seconds",
+                CHANNEL_TIMEOUT_SECONDS,
+            )
+        )
 
     def attach_policy_store(self, store: NotificationPolicyStore) -> None:
         """Give the router the durable notification-mute policy to obey.
@@ -332,38 +349,31 @@ class NotificationRouter:
                     )
                     self._queue.task_done()
                     continue
+                # ALL CHANNELS AT ONCE, EACH UNDER ITS OWN BOUND. This
+                # used to be three sequential awaits, so a channel that
+                # accepted the connection and never answered cost its
+                # own 5s read timeout AND delayed the other two behind
+                # it - and every entry behind THIS one by the sum.
+                # ``dispatch_channels`` never raises for a channel-level
+                # problem, so one channel failing or hanging can neither
+                # cancel its siblings nor take the queue entry with it.
                 try:
-                    await ntfy.send(event, public_base_url=self._public_base_url)
-                except Exception as e:  # pragma: no cover - ntfy already catches
-                    logger.warning(
-                        "notifications.worker_dispatch_error",
-                        error=str(e),
-                        kind=event.kind.value,
+                    await channel_dispatch.dispatch_channels(
+                        event,
+                        public_base_url=self._public_base_url,
+                        timeout_s=self._channel_timeout_s,
                     )
-                # v0.7.0 Part 4 - Slack fanout. Always called after ntfy
-                # so a slow Slack request never delays the (typically
-                # snappier) ntfy push. ``slack.send`` already swallows
-                # its own exceptions, but we wrap defensively for symmetry.
-                try:
-                    await slack.send(event)
-                except Exception as e:  # pragma: no cover - slack already catches
+                except Exception as e:  # pragma: no cover - dispatcher catches
+                    # Reachable only if the dispatcher itself broke.
+                    # Logged with the event's own context rather than
+                    # swallowed, and the entry is still marked done -
+                    # a wedged worker would stop every later
+                    # notification, which is the worse failure.
                     logger.warning(
                         "notifications.worker_dispatch_error",
                         error=str(e),
+                        error_type=type(e).__name__,
                         kind=event.kind.value,
-                        channel="slack",
-                    )
-                # Pushover fanout - same fire-and-forget posture as ntfy
-                # and slack above. Dispatched last so it never delays
-                # either of the other two channels.
-                try:
-                    await pushover.send(event, public_base_url=self._public_base_url)
-                except Exception as e:  # pragma: no cover - pushover already catches
-                    logger.warning(
-                        "notifications.worker_dispatch_error",
-                        error=str(e),
-                        kind=event.kind.value,
-                        channel="pushover",
                     )
                 finally:
                     # Always mark done so queue.join() in tests resolves.
