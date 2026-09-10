@@ -1315,6 +1315,11 @@
          it. Must load BEFORE config-editor-panel.js, which renders against
          window.ConfigEditorTreeState. -->
     <script src="/static/js/config-editor-tree-state.js"></script>
+    <!-- Fetching one directory's children on expand, so the server never
+         walks a level nobody opened. Must load AFTER api.js and
+         config-editor-roots.js, and BEFORE config-editor-panel.js, which
+         reads window.ConfigEditorLazy while building every directory row. -->
+    <script src="/static/js/config-editor-lazy.js"></script>
     <script src="/static/js/config-editor-panel.js"></script>
     <!-- Docking the file drawer open. Must load AFTER
          config-editor-panel.js (reads window.ConfigEditorPanel.isOpen) and

@@ -74,6 +74,7 @@ from src.core.config_files_constants import (
     HIDE_NAMES,
     HIDE_PREFIXES,
     MAX_READ_BYTES,
+    TREE_MAX_DEPTH,
 )
 # classify/atomic_write/is_sensitive_name live in config_files_io so this
 # module and config_files_create share ONE implementation of each - see
@@ -123,11 +124,27 @@ class TreeNode:
       (bool) - True for anything under a READONLY_COLLAPSED_DIRS root;
       collapsed (bool) - hint to the frontend to render this subtree
       closed by default; children (list[TreeNode]) - populated for
-      directories; list_error (str|None) - set instead of an empty
-      `children` when THIS directory's own entries could not be
-      enumerated (OSError) - the three-outcome rule's "could not
-      evaluate", kept distinct from a directory that was read
-      successfully and is simply empty.
+      directories; children_loaded (bool) - whether `children` is the
+      COMPLETE answer for this node (see below); list_error (str|None) -
+      set instead of an empty `children` when THIS directory's own
+      entries could not be enumerated (OSError) - the three-outcome
+      rule's "could not evaluate", kept distinct from a directory that
+      was read successfully and is simply empty.
+
+    THE THREE-OUTCOME RULE APPLIES TO `children` TOO, and until
+    ``children_loaded`` existed there was no way to say the third
+    outcome. An empty ``children`` list meant BOTH "this directory was
+    read and is genuinely empty" AND "the walk stopped here because it
+    hit the depth cap" - and, once shallow reads exist, also "nobody has
+    asked for this level yet". A client cannot tell those apart, so it
+    renders "not looked at" as "nothing here", which is this project's
+    single most repeated defect shape. ``children_loaded`` is True only
+    when this directory's entries were ACTUALLY enumerated (a successful
+    read, a genuinely empty one, or one that failed and set
+    ``list_error`` - in every case we looked). It is False when the walk
+    declined to descend, which is the caller's cue to ask for that level
+    separately. Files carry True: a file has no children and that is a
+    measured fact, not an unread one.
     """
     name: str
     rel_path: str
@@ -137,6 +154,7 @@ class TreeNode:
     read_only: bool = False
     collapsed: bool = False
     children: list = field(default_factory=list)
+    children_loaded: bool = True
     list_error: Optional[str] = None
 
 
@@ -245,6 +263,46 @@ def resolve_safe_path(root_id: str, rel_path: str, project_path: Optional[str]) 
     return candidate
 
 
+def _sorted_entries(directory: Path) -> list:
+    """
+    Description: list one directory's entries in the tree's display order -
+      directories first, then files, alphabetical (case-insensitive) within
+      each group. The ONE place that ordering is expressed, so a shallow
+      read of a directory returns it in the same order the full-tree walk
+      would have.
+    Inputs: directory (Path) - an existing directory.
+    Output: list[Path] - the entries, ordered.
+    Raises: OSError - propagated; callers decide whether an unreadable
+      directory is this request's "could not evaluate" (503) or one bad
+      node inside an otherwise good tree (TreeNode.list_error).
+    """
+    return sorted(directory.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+
+
+def _node_to_dict(n: TreeNode) -> dict:
+    """
+    Description: convert one TreeNode (and its children, recursively) to the
+      JSON-serializable dict the API returns. Module-level rather than
+      nested in a single builder so every tree-producing function emits
+      byte-identical shape - a shallow read and a full read must be
+      indistinguishable to a client apart from what they chose to load.
+    Inputs: n (TreeNode).
+    Output: dict - keys as documented on TreeNode.
+    """
+    return {
+        "name": n.name,
+        "rel_path": n.rel_path,
+        "is_dir": n.is_dir,
+        "is_executable": n.is_executable,
+        "is_sensitive": n.is_sensitive,
+        "read_only": n.read_only,
+        "collapsed": n.collapsed,
+        "children": [_node_to_dict(c) for c in n.children],
+        "children_loaded": n.children_loaded,
+        "list_error": n.list_error,
+    }
+
+
 def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str) -> Optional[TreeNode]:
     """
     Description: recursively build one TreeNode for a path, applying the
@@ -269,19 +327,24 @@ def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str
     is_executable, is_sensitive, read_only = classify(root, path)
     rel = str(path.relative_to(root)).replace(os.sep, "/")
     collapsed = read_only  # plugins/ (and any future read-only root) starts collapsed.
+    is_dir = path.is_dir()
     node = TreeNode(
         name=name,
         rel_path=rel,
-        is_dir=path.is_dir(),
+        is_dir=is_dir,
         is_executable=is_executable,
         is_sensitive=is_sensitive,
         read_only=read_only,
         collapsed=collapsed,
+        # A directory we are about to decline to descend into has NOT been
+        # looked at, and must not read as an empty one. See TreeNode's
+        # docstring: this is the whole reason the field exists.
+        children_loaded=(not is_dir) or depth < max_depth,
     )
 
-    if path.is_dir() and depth < max_depth:
+    if is_dir and depth < max_depth:
         try:
-            entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+            entries = _sorted_entries(path)
         except OSError as exc:
             # THREE-OUTCOME RULE: this directory could not be evaluated -
             # do NOT leave it looking like a successfully-listed empty
@@ -299,16 +362,138 @@ def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str
     return node
 
 
-def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> list:
+def list_subtree(
+    root_id: str,
+    rel_path: str,
+    project_path: Optional[str],
+    levels: int = TREE_MAX_DEPTH + 1,
+) -> list:
+    """
+    Description: list the entries directly inside ONE directory of a root,
+      recursing ``levels - 1`` further levels beneath them. This is the
+      single tree-walking implementation; ``list_tree`` is this function
+      called on the root itself. A shallow read and a full read therefore
+      cannot drift in ordering, filtering, flags or shape - there is only
+      one code path producing any of them.
+    Inputs:
+      root_id (str) - "user", "project", or "workdir".
+      rel_path (str) - directory to list, relative to the root, forward
+        slash separated. "" (or ".") means the root itself.
+      project_path (str|None) - required for "project"/"workdir".
+      levels (int) - how many LEVELS of nodes to return. 1 returns the
+        directory's own entries with no children; the default returns the
+        same full depth ``list_tree`` always has.
+    Output: list[dict] - the directory's entries, JSON-serializable, each
+      shaped exactly as ``list_tree`` shapes a node, and each ``rel_path``
+      relative to the ROOT (never to ``rel_path``) so it can be handed
+      straight back to this function or to ``read_file``.
+    Raises:
+      ConfigFileError - unknown/unavailable root, a path that fails
+        ``resolve_safe_path`` (traversal, absolute, hidden component, not
+        allow-listed), or a path that is not a directory.
+      ConfigFileUnreadableError - the requested directory exists but its
+        own entries could not be enumerated (OSError - typically
+        permissions). The three-outcome rule's third state for THIS
+        request, exactly as it is for a root: NOT the same as "listed,
+        zero entries", which returns an empty list normally.
+
+    SECURITY. The requested directory goes through ``resolve_safe_path``,
+    which is the same and only guard ``read_file`` and ``write_file`` use:
+    absolute paths refused, ``..`` refused, hidden components refused,
+    allow-list applied for non-BLOCKLIST_ONLY_ROOTS, and containment
+    checked COMPONENT-WISE with ``Path.relative_to`` after ``resolve()``
+    rather than with a string prefix test - so a sibling directory whose
+    name merely starts with the root's name ("/Users/jsugamelevil" against
+    "/Users/jsugamele") is not inside it, and a symlink bridge out of the
+    root resolves to where it really points and is refused there. Because
+    ``resolve()`` runs on every expansion, listing a directory one level at
+    a time is STRICTER than the full-tree walk, not weaker: the recursive
+    walk descends through a symlink without re-resolving, while every
+    shallow expansion re-checks containment from the root.
+
+    The depth-0 allow-list gate inside ``_build_node`` is keyed on the
+    node's TRUE depth below the root, which this function computes from
+    the resolved path rather than restarting the count at zero. Restarting
+    it would apply a top-level allow-list to entries that are not
+    top-level, and, worse, would let a caller reach a non-allow-listed
+    top-level name one segment at a time.
+    Example: list_subtree("user", "hooks", None, levels=1)
+      -> [{"name": "op-readonly-guard.py", "rel_path": "hooks/op-...", ...}]
+    """
+    roots = resolve_roots(project_path)
+    root = roots.get(root_id)
+    if root is None:
+        raise ConfigFileError(f"unknown or unavailable root: {root_id}")
+
+    # resolve_safe_path is the security boundary. It returns the root
+    # unchanged for an empty rel_path, which is the list_tree case, and the
+    # RESOLVED path otherwise.
+    resolved = resolve_safe_path(root_id, rel_path, project_path)
+    requested = (rel_path or "").strip().strip("/")
+    is_root = requested in ("", ".")
+
+    if not resolved.is_dir():
+        if is_root:
+            # An absent root is a measured absence, not a failure: this is
+            # the pre-existing contract and the client renders no row for
+            # it at all. Only a NAMED subdirectory that is not a directory
+            # is a client mistake worth a 400.
+            return []
+        raise ConfigFileError("not a directory")
+
+    # WALK THE SPELLING THE CALLER NAVIGATED, NOT THE RESOLVED ONE, so a
+    # symlinked directory's children come back under the path the client
+    # clicked ("self/ok.txt") rather than under the link's target
+    # ("real/ok.txt"). The recursive walk descends without re-resolving and
+    # therefore already names them that way, and these two must agree: the
+    # rel_path is what the client hands back to expand again, to read a
+    # file, and to key its own collapsed-state storage on. Security is
+    # unaffected - containment was checked on ``resolved`` above, and
+    # iterating this path dereferences the same links to the same verified
+    # directory. ``resolve_safe_path`` composed exactly this path before
+    # resolving it, so its components have already been validated.
+    parts = requested.split("/") if not is_root else []
+    walk_base = root if is_root else root / Path(*parts)
+    base_depth = len(parts)
+    max_depth = base_depth + max(0, levels - 1)
+
+    try:
+        entries = _sorted_entries(walk_base)
+    except OSError as exc:
+        logger.warning(
+            "config_files_list_root_failed",
+            path=str(walk_base),
+            root=root_id,
+            rel_path=rel_path,
+            error=str(exc),
+        )
+        raise ConfigFileUnreadableError(
+            f"{root_id} root could not be read: {exc.strerror or exc}"
+            if is_root
+            else f"'{rel_path}' could not be read: {exc.strerror or exc}"
+        ) from exc
+
+    nodes = []
+    for entry in entries:
+        node = _build_node(root, entry, depth=base_depth, max_depth=max_depth, root_id=root_id)
+        if node is not None:
+            nodes.append(node)
+    return [_node_to_dict(n) for n in nodes]
+
+
+def list_tree(root_id: str, project_path: Optional[str], max_depth: int = TREE_MAX_DEPTH) -> list:
     """
     Description: build the full hide-list-filtered file tree for one
       root ("user"/"project" are additionally allow-listed; "workdir" is
-      not).
+      not). A thin alias for ``list_subtree`` on the root itself, kept
+      because it is the name every existing caller and test uses and
+      because "the whole tree for this root" is worth saying directly.
     Inputs:
       root_id (str) - "user", "project", or "workdir".
       project_path (str|None) - required for "project"/"workdir".
-      max_depth (int) - recursion cap (default 6 - deep enough for
-        skills/<name>/SKILL.md, shallow enough to bound one request).
+      max_depth (int) - recursion cap as a DEPTH (a root's direct children
+        are depth 0), so it permits ``max_depth + 1`` levels of nodes.
+        Defaults to TREE_MAX_DEPTH.
     Output: list[dict] - top-level TreeNode entries, JSON-serializable
       (dataclasses.asdict shape). For allow-listed roots the order is
       ALLOWED_TOP_LEVEL_FILES then ALLOWED_TOP_LEVEL_DIRS then
@@ -322,40 +507,7 @@ def list_tree(root_id: str, project_path: Optional[str], max_depth: int = 6) -> 
         is the three-outcome rule's third state: NOT the same as "root
         exists, zero entries", which returns an empty list normally.
     """
-    roots = resolve_roots(project_path)
-    root = roots.get(root_id)
-    if root is None:
-        raise ConfigFileError(f"unknown or unavailable root: {root_id}")
-    if not root.is_dir():
-        return []
-
-    nodes = []
-    try:
-        entries = sorted(root.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-    except OSError as exc:
-        logger.warning("config_files_list_root_failed", path=str(root), error=str(exc))
-        raise ConfigFileUnreadableError(
-            f"{root_id} root could not be read: {exc.strerror or exc}"
-        ) from exc
-    for entry in entries:
-        node = _build_node(root, entry, depth=0, max_depth=max_depth, root_id=root_id)
-        if node is not None:
-            nodes.append(node)
-
-    def _to_dict(n: TreeNode) -> dict:
-        return {
-            "name": n.name,
-            "rel_path": n.rel_path,
-            "is_dir": n.is_dir,
-            "is_executable": n.is_executable,
-            "is_sensitive": n.is_sensitive,
-            "read_only": n.read_only,
-            "collapsed": n.collapsed,
-            "children": [_to_dict(c) for c in n.children],
-            "list_error": n.list_error,
-        }
-
-    return [_to_dict(n) for n in nodes]
+    return list_subtree(root_id, "", project_path, levels=max_depth + 1)
 
 
 def read_file(root_id: str, rel_path: str, project_path: Optional[str]) -> dict:

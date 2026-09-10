@@ -14,6 +14,7 @@ level (never file content) - see the ``logger.info`` calls below and in
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,7 +22,7 @@ from pydantic import BaseModel, Field
 import structlog
 
 from src.api.auth import require_auth
-from src.core import config_files, config_files_create
+from src.core import config_files, config_files_create, config_files_tree_request
 
 logger = structlog.get_logger()
 
@@ -99,26 +100,62 @@ class ConfigFileWriteResponse(BaseModel):
 async def get_config_file_tree(
     root: str = Query(..., description='"user", "project", or "workdir"'),
     project_path: Optional[str] = Query(None),
+    path: Optional[str] = Query(
+        None,
+        description="directory to list, relative to the root; omit for the root itself",
+    ),
+    depth: Optional[int] = Query(
+        None,
+        description="levels of nodes to return; omit for the whole tree",
+    ),
 ):
     """
     Description: list the hide-list-filtered claude-config/project file
       tree for one root ("user"/"project" are also allow-listed;
-      "workdir" is not).
+      "workdir" is not). ``path`` and ``depth`` are both OPTIONAL and
+      additive: send neither and this returns the whole tree exactly as
+      it always has, which is what a client built before those
+      parameters existed asks for and still gets.
     Inputs: root (str, query) - "user", "project", or "workdir";
-      project_path (str|None, query) - required for root != "user".
+      project_path (str|None, query) - required for root != "user";
+      path (str|None, query) - the directory to list, relative to the
+        root, for expanding one node;
+      depth (int|None, query) - how many levels of nodes to return.
     Output: ConfigFileTreeResponse.
     Raises:
-      HTTPException(400) - unknown/unavailable root (translated from
+      HTTPException(400) - unknown/unavailable root, an out-of-range
+        ``depth``, or a ``path`` that fails the containment/allow-list
+        guard (translated from ValueError and
         config_files.ConfigFileError).
-      HTTPException(503) - the root exists but could not be read
-        (translated from config_files.ConfigFileUnreadableError, which
-        is checked FIRST since it subclasses ConfigFileError - a
+      HTTPException(503) - the requested directory exists but could not
+        be read (translated from config_files.ConfigFileUnreadableError,
+        which is checked FIRST since it subclasses ConfigFileError - a
         permissions problem is "could not evaluate", not "bad request",
         per this project's three-outcome rule; the client renders this
         as a distinct error row rather than folding it into "empty").
+
+    THE WALK RUNS IN A THREAD, AND THAT IS THIS ENDPOINT'S WHOLE
+    PERFORMANCE STORY. ``config_files.list_subtree`` is a recursive
+    filesystem walk whose cost is thousands of ``stat`` syscalls, and an
+    ``async def`` body that never awaits holds the event loop for its
+    entire duration - during which the server cannot read the tmux pipe
+    carrying terminal output, cannot deliver a keystroke, and cannot
+    answer any other request. Measured on this repository before the
+    offload: the walk cost 264 to 477 ms, and a concurrent coroutine
+    standing in for the pipe reader was stalled for essentially that
+    same interval on every single call. The user experiences that as
+    typing lag, not as a slow file tree. Do not call the walk directly
+    from this coroutine, and do not add other synchronous filesystem or
+    database work beside it.
     """
     try:
-        tree = config_files.list_tree(root, project_path)
+        plan = config_files_tree_request.plan_tree_request(path, depth)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        tree = await asyncio.to_thread(
+            config_files.list_subtree, root, plan.rel_path, project_path, plan.levels,
+        )
     except config_files.ConfigFileUnreadableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except config_files.ConfigFileError as exc:

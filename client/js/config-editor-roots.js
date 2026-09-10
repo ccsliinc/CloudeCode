@@ -173,6 +173,29 @@ function listErrorNotice(listError) {
 }
 
 /**
+ * The user-facing sentence for ONE directory the panel asked the server to
+ * expand and did not get an answer for - the network failed, or the server
+ * refused (a 503 when the directory exists but could not be enumerated, a
+ * 400 when it has been deleted or renamed since the parent was listed).
+ *
+ * THIS SENTENCE EXISTS BECAUSE LAZY EXPANSION ADDS A FAILURE MODE THE EAGER
+ * TREE DID NOT HAVE. When the whole tree arrived in one response, a
+ * directory's contents were either present or carried `list_error`, and both
+ * were decided before anything rendered. Fetching on expand means the answer
+ * can fail to arrive AFTER the user has clicked, and an expansion that
+ * silently reveals nothing is indistinguishable from a directory that is
+ * genuinely empty. That is THE THREE-OUTCOME RULE at the level of one click:
+ * listed / measured-empty / could-not-evaluate, and this is the third.
+ * @param {string} detail  The server's own reason, or a network error's
+ *   message. Never null/undefined when called.
+ * @returns {string}  One lowercase sentence, never conflated with "this
+ *   directory is empty".
+ */
+function expandFailedNotice(detail) {
+    return `could not load contents: ${detail}`;
+}
+
+/**
  * Turn a project context into the ordered list of things the tree must
  * render. Every root is either fetched or explained - nothing is dropped
  * silently, which is the whole point of this function existing.
@@ -199,6 +222,7 @@ window.ConfigEditorRoots = {
     resolveProjectContext,
     projectRootsNotice,
     listErrorNotice,
+    expandFailedNotice,
     workdirUnavailableNotice,
     planRoots,
 };

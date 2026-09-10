@@ -1563,14 +1563,30 @@ class API {
     }
 
     /**
-     * File editor: list the file tree for one root.
-     * @param {string} root - "user" or "project".
-     * @param {string|null} [projectPath] - required for root === "project".
+     * File editor: list the file tree for one root, or one directory of it.
+     *
+     * Both members of `opts` are OPTIONAL and additive. Omit them and the
+     * server returns the whole tree, which is exactly what this method did
+     * before they existed - so an old client and a new server agree, and so
+     * do a new client and an old server (an old server ignores unknown query
+     * parameters and returns the full tree, which still renders correctly,
+     * just eagerly). Send `depth` to bound the read: the walk is thousands of
+     * stat syscalls over a real project directory, and the point of asking
+     * for one level at a time is that the levels nobody expands are never
+     * walked at all.
+     *
+     * @param {string} root - "user", "project" or "workdir".
+     * @param {string|null} [projectPath] - required for root !== "user".
+     * @param {{path?: string, depth?: number}} [opts] - `path` is a directory
+     *   relative to the root (omit for the root itself); `depth` is how many
+     *   levels of nodes to return (omit for the whole tree).
      * @returns {Promise<{root: string, tree: object[]}>}
      */
-    async getConfigFileTree(root, projectPath = null) {
+    async getConfigFileTree(root, projectPath = null, opts = {}) {
         const params = new URLSearchParams({ root });
         if (projectPath) params.set('project_path', projectPath);
+        if (opts && opts.path) params.set('path', opts.path);
+        if (opts && opts.depth != null) params.set('depth', String(opts.depth));
         return await this.call(`/config-files/tree?${params.toString()}`);
     }
 
