@@ -49,7 +49,10 @@ gh pr list   -R $R --state open                                           # take
 gh pr list   -R $R --state open --author @me                              # yours
 ```
 
-Then read `docs/DECISIONS.md`. It is short and it binds.
+Then read `docs/DECISIONS.md`, which is short and binds, and
+`docs/LESSONS.md`, which is the accumulated fixes for defects this project
+has hit more than once. Add to LESSONS.md when a pattern repeats: once is an
+incident, twice is a pattern.
 
 ## Before starting any distinct piece of work
 
