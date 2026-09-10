@@ -22,8 +22,11 @@ Key design points:
 
 - **Output streaming**: ``tmux pipe-pane -o 'cat >> <fifo>'`` streams every
   pane byte to a file. We tail that file asynchronously and call
-  `on_output(bytes)` for every chunk. The file is rotated when it exceeds
-  ``MAX_LOG_BYTES`` or is older than ``ROTATE_AGE_HOURS``.
+  `on_output(bytes)` for every chunk. The file is trimmed IN PLACE when it
+  exceeds ``MAX_LOG_BYTES`` or is older than ``ROTATE_AGE_HOURS``: the shell
+  running ``cat >>`` opened that path once and holds the descriptor, so
+  renaming the file would strand the rotation on a decoy rather than
+  reclaim anything. See ``src/core/pipe_rotation.py``.
 
 - **Single-active invariant**: the backend itself does NOT enforce
   one-at-a-time; `SessionManager` does. This backend DOES refuse to start
@@ -42,7 +45,6 @@ import os
 import re
 import shlex
 import shutil
-import stat
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -52,6 +54,7 @@ import structlog
 from src.core import debug_trace
 
 from src.core.pane_locale import apply_pane_locale
+from src.core.pipe_rotation import rotation_reason, truncate_in_place
 from src.core.pipe_wakeup import PipeWaiter
 from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
 from src.core.tmux_listing_parse import (
@@ -2687,8 +2690,11 @@ class TmuxBackend(SessionBackend):
                     recorded=self._adopt_tail_start_offset,
                     file_size=current_size,
                 )
-                # Single-use - clear so subsequent fd reopens (rotation)
-                # use SEEK_END like the normal path.
+                # Single-use. There is no reopen to inherit it: a
+                # rotation trims THIS inode in place and seeks this
+                # same fd back to 0, so the descriptor really is
+                # stable for the life of the loop. Cleared so a later
+                # rehydrate starts from EOF like the normal path.
                 self._adopt_tail_start_offset = None
             else:
                 try:
@@ -2733,13 +2739,7 @@ class TmuxBackend(SessionBackend):
                     await waiter.wait(PIPE_IDLE_POLL_SECONDS)
                     continue
 
-                if self.on_output is not None:
-                    try:
-                        result = self.on_output(chunk)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception as exc:
-                        logger.error("tmux_on_output_error", error=str(exc))
+                await self._emit_output(chunk)
 
         except asyncio.CancelledError:
             raise
@@ -2757,14 +2757,78 @@ class TmuxBackend(SessionBackend):
             except OSError:
                 pass
 
-    async def _maybe_rotate(self, pipe_path: Path, current_fd: int) -> None:
-        """Rotate the pipe file if it's too big or too old.
+    async def _emit_output(self, chunk: bytes) -> None:
+        """Hand one chunk of pane output to the ``on_output`` callback.
 
-        We rename the current file to ``<name>.1``, then truncate the pipe
-        back to zero. tmux's ``cat >> file`` keeps appending after our
-        rename because the shell re-opens the path each time the pipe-pane
-        hook fires - no tmux restart needed. We re-point our read fd at the
-        freshly-truncated file.
+        Shared by the tail loop and by the pre-truncate drain so both
+        deliver bytes the same way, including the guard that stops a
+        caller's exception from killing the reader.
+
+        Inputs: chunk (bytes) - raw pane output, never empty.
+        Output: None.
+        Example: await self._emit_output(b'hello\\r\\n')
+        """
+        if self.on_output is None:
+            return
+        try:
+            result = self.on_output(chunk)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            logger.error("tmux_on_output_error", error=str(exc))
+
+    async def _drain_to_eof(self, current_fd: int) -> int:
+        """Read whatever is left in the pipe file and emit it.
+
+        Called immediately before a truncate. The rotation check runs at
+        the TOP of a loop iteration, so it can fire while the previous
+        read left bytes unread; truncating without draining first would
+        destroy exactly those bytes.
+
+        Inputs: current_fd (int) - the tail loop's read descriptor.
+        Output: int - how many bytes were drained, for the rotation log.
+        Example: drained = await self._drain_to_eof(fd)
+        """
+        drained = 0
+        while True:
+            try:
+                chunk = os.read(current_fd, 8192)
+            except BlockingIOError:
+                break
+            except OSError as exc:
+                logger.warning("tmux_pipe_drain_read_error", error=str(exc))
+                break
+            if not chunk:
+                break
+            drained += len(chunk)
+            await self._emit_output(chunk)
+        return drained
+
+    async def _maybe_rotate(self, pipe_path: Path, current_fd: int) -> None:
+        """Trim the pipe file in place if it is too big or too old.
+
+        THE FILE IS NEVER RENAMED, and that is the whole correction.
+        ``pipe-pane`` runs ``cat >> <path>``, which opens the path ONCE
+        and holds the descriptor, so a rename moves the live file out
+        from under its own name and leaves a decoy: nothing is
+        reclaimed, later size checks stat the 0-byte decoy and can never
+        fire again, and the following rotation unlinks the file the
+        writer is still filling. Measured against real tmux 2026-09-10.
+        See ``src/core/pipe_rotation.py`` for the measurements and for
+        why ``O_APPEND`` makes truncating in place correct.
+
+        ``current_fd`` is the loop's own read descriptor and it is
+        genuinely used: the truncate resets the file to zero while that
+        descriptor is still parked at the old end of file, so the same
+        step seeks it back to the start. The two must not be separated.
+
+        Inputs: pipe_path (Path) - the managed pipe file, which must not
+            have been renamed. current_fd (int) - the tail loop's read
+            descriptor on that file.
+        Output: None. Trims the file and re-seeks the descriptor as a
+            side effect, and leaves both untouched on failure so the
+            next check retries.
+        Example: await self._maybe_rotate(pipe_path, fd)
         """
         try:
             st = os.stat(str(pipe_path))
@@ -2772,30 +2836,32 @@ class TmuxBackend(SessionBackend):
             return
 
         age_hours = (time.monotonic() - self._rotation_started_at) / 3600.0
-        too_big = st.st_size > MAX_LOG_BYTES
-        too_old = age_hours > ROTATE_AGE_HOURS
-
-        if not (too_big or too_old):
+        reason = rotation_reason(
+            st.st_size, age_hours, MAX_LOG_BYTES, ROTATE_AGE_HOURS
+        )
+        if reason is None:
             return
 
         logger.info(
             "tmux_pipe_rotating",
             size=st.st_size,
             age_hours=round(age_hours, 2),
-            reason="size" if too_big else "age",
+            reason=reason,
         )
 
-        rotated = pipe_path.with_suffix(pipe_path.suffix + ".1")
-        try:
-            if rotated.exists():
-                rotated.unlink()
-            os.rename(str(pipe_path), str(rotated))
-            # Truncate by creating a new empty file at the original path.
-            pipe_path.touch()
-            # Permissive perms so tmux (same uid) can keep writing.
-            os.chmod(str(pipe_path), stat.S_IRUSR | stat.S_IWUSR)
-        except OSError as exc:
-            logger.warning("tmux_pipe_rotate_failed", error=str(exc))
+        # Drain BEFORE the truncate, or these bytes are destroyed rather
+        # than delivered.
+        drained = await self._drain_to_eof(current_fd)
+
+        if not truncate_in_place(pipe_path, current_fd):
+            # Already logged with the specific errno. Leave the stamp
+            # alone so the next check tries again.
             return
 
         self._rotation_started_at = time.monotonic()
+        logger.info(
+            "tmux_pipe_rotated",
+            session=self.tmux_session,
+            reason=reason,
+            drained_bytes=drained,
+        )
