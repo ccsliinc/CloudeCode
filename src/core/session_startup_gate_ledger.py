@@ -38,6 +38,12 @@ class _InstanceRecord:
     pane_pid: Optional[int] = None
     first_hook_at: Optional[datetime] = None
     toasted: bool = False
+    #: The verdict of the last ``capture-pane`` read for THIS instance,
+    #: and when it was taken. Both are dropped with the record when the
+    #: instance moves, exactly like ``first_hook_at`` and ``toasted``,
+    #: because a new process has proved nothing.
+    last_tail_match: Optional[bool] = None
+    last_tail_at: Optional[datetime] = None
 
 
 class StartupGateLedger:
@@ -185,6 +191,107 @@ class StartupGateLedger:
             return None
         record = self._records.get(tmux_name)
         return record.first_hook_at if record else None
+
+    def record_tail_read(
+        self,
+        tmux_name: Optional[str],
+        *,
+        matched: Optional[bool],
+        now: Optional[datetime] = None,
+    ) -> None:
+        """Remember what the last pane-tail read for this instance found.
+
+        Description: the capture is the only expensive input the startup
+            gate has - one ``tmux capture-pane`` subprocess per session
+            per listing poll - and until this was recorded it was paid on
+            EVERY poll, forever, for every session that will never fire a
+            hook into this server process. Measured on the owner's box
+            2026-09-09: 13 sessions, 13 captures per poll, 349 ms of the
+            1008 ms the pass spent in tmux.
+
+            Recording the verdict lets the caller re-read at its own
+            interval instead of at the listing's, and lets the gate keep
+            ANSWERING in between rather than falling back to ``unknown``
+            - a throttle that made the row flap between ``ready`` and
+            ``unknown`` would be a worse bug than the cost it saved.
+
+            LAST WRITE WINS, unlike ``record_hook``. This field is "what
+            is on the pane NOW", so a newer reading must replace an older
+            one; the first-hook time is "when did startup finish", which
+            is why that one keeps the first value instead.
+
+            A ``matched`` of None - the capture failed, or produced
+            nothing - CHANGES NOTHING AT ALL. It neither overwrites the
+            verdict nor stamps the clock, which is the same rule the rest
+            of this codebase applies to a reading that did not answer:
+            not having managed to look is not evidence, so it must not
+            erase what was measured last time, and it must not start a
+            throttle window either. Writing the None through would leave
+            the row answering ``unknown`` for the rest of the window
+            while a perfectly good measurement sat one field away.
+        Inputs:
+            tmux_name: tmux session name; falsy is a no-op.
+            matched: True (a startup-prompt marker was on the pane),
+                False (the pane was read and held none), None (the read
+                did not produce anything).
+            now: injectable clock. Defaults to ``datetime.utcnow()``.
+        Output: None.
+        Example:
+            >>> led = StartupGateLedger()
+            >>> led.record_tail_read("a", matched=False)
+            >>> led.last_tail_match("a")
+            False
+        """
+        if not tmux_name:
+            return
+        if matched is None:
+            return
+        record = self._records.setdefault(tmux_name, _InstanceRecord())
+        record.last_tail_match = matched
+        record.last_tail_at = now or datetime.utcnow()
+
+    def last_tail_match(self, tmux_name: Optional[str]) -> Optional[bool]:
+        """What the last tail read for the CURRENT instance found.
+
+        Inputs: tmux_name (str | None).
+        Output: bool | None. None means no usable reading is on record
+            for the instance currently under this name - including the
+            case where one was taken for a PREVIOUS instance and
+            ``observe_instance`` has since dropped it.
+        Example:
+            >>> StartupGateLedger().last_tail_match("a") is None
+            True
+        """
+        if not tmux_name:
+            return None
+        record = self._records.get(tmux_name)
+        return record.last_tail_match if record else None
+
+    def tail_age_seconds(
+        self, tmux_name: Optional[str], *, now: Optional[datetime] = None
+    ) -> Optional[float]:
+        """Seconds since the last usable tail read, or None if never.
+
+        Description: the input the cost gate throttles on. None is the
+            honest answer for "never read for this instance", and it is
+            what lets the FIRST look happen immediately - only re-looks
+            are throttled, so a session that becomes stuck after it was
+            last read is still detected within one recheck interval, and
+            one that is stuck the first time it is examined is detected
+            with no delay at all.
+        Inputs: tmux_name (str | None). now: injectable clock.
+        Output: float | None - age in seconds, never negative.
+        Example:
+            >>> StartupGateLedger().tail_age_seconds("a") is None
+            True
+        """
+        if not tmux_name:
+            return None
+        record = self._records.get(tmux_name)
+        if record is None or record.last_tail_at is None:
+            return None
+        delta = (now or datetime.utcnow()) - record.last_tail_at
+        return max(0.0, delta.total_seconds())
 
     def claim_toast(self, tmux_name: Optional[str]) -> bool:
         """Claim the one toast this instance is allowed, exactly once.

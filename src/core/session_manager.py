@@ -73,10 +73,15 @@ from src.core.session_activity import (
     SessionActivityTracker,
     map_tmux_fallback,
 )
+from src.core.session_status_map import (
+    StatusMap,
+    listing_proves_alive,
+)
 from src.core.session_startup_gate import (
     GATE_AWAITING,
     GATE_UNKNOWN,
     STARTUP_TOAST_KIND,
+    detect_startup_prompt,
     resolve_startup_gate,
     should_capture_tail,
     startup_toast_copy,
@@ -4291,7 +4296,7 @@ class SessionManager:
         if len(buf) > settings.log_buffer_size:
             del buf[: len(buf) - settings.log_buffer_size]
 
-    def _build_tmux_status_map(self) -> dict:
+    def _build_tmux_status_map(self) -> StatusMap:
         """One bulk tmux query, resolved into ``{tmux_session_name: row}``.
 
         Description: Single source of truth for activity-status lookups.
@@ -4311,10 +4316,20 @@ class SessionManager:
         Inputs: none (reads live tmux state via the probe backend).
 
         Output:
-            dict[str, dict]: tmux session name -> row from
+            StatusMap: tmux session name -> row from
                 ``TmuxBackend.list_pane_status_all()`` (has "status", "pid",
-                "pane_dead", "pane_current_command"). Empty dict on any
+                "pane_dead", "pane_current_command"). Empty on any
                 failure or when tmux isn't the active backend type.
+
+                It is a ``dict`` and every existing consumer reads it as
+                one. What it adds is ``complete``: True only when the
+                probe RAN, including a real answer of zero sessions. Only
+                that flag lets ``_session_info_for`` take a NAMED row as
+                proof the session is alive instead of paying a second
+                ``tmux has-session`` per session. An absent name proves
+                nothing and still costs the probe; see
+                ``src/core/session_status_map.py`` for why the negative
+                is not trusted.
 
         Example:
             >>> mgr._build_tmux_status_map()
@@ -4328,7 +4343,7 @@ class SessionManager:
                 on_output=None,
             )
             if not hasattr(probe, "list_pane_status_all"):
-                return {}
+                return StatusMap()
             listing = coerce_listing(probe.list_pane_status_all())
             if not listing.ok:
                 # An empty map is the RIGHT degradation here, and it is
@@ -4343,13 +4358,18 @@ class SessionManager:
                     detail=listing.detail,
                     note="every session status falls back to unknown",
                 )
-                return {}
-            return {
-                row["name"]: row for row in listing.sessions if row.get("name")
-            }
+                return StatusMap()
+            return StatusMap(
+                {
+                    row["name"]: row
+                    for row in listing.sessions
+                    if row.get("name")
+                },
+                complete=True,
+            )
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             logger.warning("tmux_status_map_build_failed", error=str(exc))
-            return {}
+            return StatusMap()
 
     def _startup_gate_for(
         self,
@@ -4423,21 +4443,44 @@ class SessionManager:
             except (TypeError, ValueError):
                 age_seconds = None
 
+        # THE ONE EXPENSIVE INPUT, AND THE THROTTLE IN FRONT OF IT. The
+        # capture is a ``tmux capture-pane`` subprocess, taken here on
+        # the synchronous listing path, so on a box with many live
+        # sessions it is paid once per session per poll while the event
+        # loop can do nothing else - which is how a listing cost became
+        # keystroke lag in the terminal. The ledger remembers what the
+        # last read found so a still-fresh reading stands instead of
+        # being re-taken, and so the gate keeps ANSWERING in between
+        # rather than flapping to ``unknown``. See
+        # ``STARTUP_TAIL_RECHECK_SECONDS`` for the measurement.
         tail: Optional[str] = None
+        took_tail = False
         if should_capture_tail(
             pane_alive=pane_alive,
             first_hook_at=first_hook_at,
             instance_age_seconds=age_seconds,
+            tail_age_seconds=self._startup_gate_ledger.tail_age_seconds(
+                tmux_name
+            ),
         ):
             socket_name = getattr(backend, "socket_name", None)
             if socket_name:
                 tail = capture_pane_tail(socket=socket_name, name=tmux_name)
+                took_tail = True
+
+        if took_tail:
+            self._startup_gate_ledger.record_tail_read(
+                tmux_name, matched=detect_startup_prompt(tail)
+            )
 
         gate = resolve_startup_gate(
             pane_alive=pane_alive,
             first_hook_at=first_hook_at,
             instance_age_seconds=age_seconds,
             tail=tail,
+            remembered_match=self._startup_gate_ledger.last_tail_match(
+                tmux_name
+            ),
         )
         if gate == GATE_AWAITING and self._startup_gate_ledger.claim_toast(
             tmux_name
@@ -4513,8 +4556,40 @@ class SessionManager:
         # whole time. The pane status resolved just above is the
         # measurement that separates the two, and it is free: it comes
         # from the bulk probe this function already fetched.
+        #
+        # AND EXISTENCE IS ALREADY IN THE BULK ROW. ``is_alive()`` is
+        # ``tmux has-session``: a SECOND subprocess, per session, per
+        # poll, answering the question the ``list-panes -a`` above has
+        # already answered by enumerating every live session by name.
+        # Measured 2026-09-09 with 13 live sessions, it was 377 ms of a
+        # 1008 ms pass that runs synchronously inside ``async def
+        # list_session_infos`` - for that whole second the event loop
+        # cannot read the tmux pipe carrying terminal output, cannot
+        # spawn the ``send-keys`` that delivers a keystroke, and cannot
+        # answer any other request, which is why a redundant call in a
+        # LISTING was felt by the user as lag in the TERMINAL.
+        #
+        # THE EVIDENCE IS ASYMMETRIC AND ONLY THE POSITIVE HALF IS TAKEN.
+        # A completed listing that NAMES this session proves it exists, so
+        # the probe is skipped. A listing that does not name it proves
+        # much less: it covers only the socket the probe was bound to and
+        # it is one moment in time, so an absent name is "not shown to be
+        # alive", never "shown to be dead". Dropping a row on that
+        # negative would delete a LIVE session off the sidebar, which is a
+        # far worse bug than the cost being removed - so the ``or`` below
+        # still runs ``is_alive()`` for exactly those rows.
+        #
+        # It costs nothing in practice: in steady state every registered
+        # session is in the listing (13 of 13 on the owner's box), so the
+        # probe is reached only for rows that are about to be dropped.
+        # ``listing_proves_alive`` also answers False for any caller
+        # passing a plain dict, so every pre-``StatusMap`` test double
+        # keeps the behaviour it had.
         liveness = resolve_listing_liveness(
-            exists=backend.is_alive(),
+            exists=(
+                listing_proves_alive(status_map, tmux_session_name)
+                or backend.is_alive()
+            ),
             pane_status=raw_tmux_status if tmux_session_name else None,
         )
         # A ROW THAT DISAPPEARS IS WORSE THAN A ROW THAT SAYS DEAD, and

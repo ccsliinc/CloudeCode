@@ -382,10 +382,60 @@ the transcript-presence guard uses, for the same reason. `ready` claims only
 "not blocked on a startup prompt", NOT "healthy": a pane measured dead answers
 `ready` here, and `activity_status` is what says it died.
 
-**Steady state costs nothing, because the tail is only read when the cheap
-signals already point at a stuck session.** `should_capture_tail` gates the one
-`capture-pane` on alive + past the grace window + no hook, which on a working
-box is the empty set. Do not move that capture up into the unconditional path.
+**THE TAIL READ WAS CLAIMED TO BE FREE IN STEADY STATE AND IT WAS NOT, AND
+THAT SENTENCE IS WHY THE TERMINAL LAGGED.** `should_capture_tail` gates the one
+`capture-pane` on alive + past the grace window + no hook, and this file used to
+say that set "on a working box is the empty set". It is not. The hook record
+lives in `StartupGateLedger`, which is IN-MEMORY and per server process, so a
+session that fired its last hook before this process started has none and never
+acquires one. Measured 2026-09-09 on the owner's box: **13 of 13 live sessions,
+all healthy, took a capture on every 5s listing poll, forever.** The fourth
+refusal closes it - a reading younger than `STARTUP_TAIL_RECHECK_SECONDS` (30s)
+stands instead of being re-taken, the ledger carries the verdict
+(`record_tail_read` / `last_tail_match` / `tail_age_seconds`), and
+`resolve_startup_gate` consults that remembered verdict ONLY at rung 5, where
+the alternative is refusing. Only a RE-look is throttled: an instance with
+nothing on record is read immediately, so a session parked on its trust dialog
+since birth is detected exactly as promptly as before. A throttle without the
+remembered verdict would flap the row between a measured answer and `unknown`
+on alternating polls, which is worse than the cost it saves. Do not move that
+capture up into the unconditional path.
+
+**THE LISTING PASS RUNS ON THE EVENT LOOP, SO ITS COST IS TERMINAL LATENCY.**
+This is the rule the two paragraphs above and the section below all serve.
+`list_session_infos` is `async def` whose body is entirely SYNCHRONOUS, so for
+as long as it runs the server does nothing else at all: it cannot read the tmux
+pipe carrying terminal output, cannot spawn the `send-keys` that delivers a
+keystroke, and cannot answer another request. Measured 2026-09-09, 13 live
+sessions: **27 tmux subprocesses and 1008 ms per pass** (one bulk
+`list-panes -a` at 282 ms, then `has-session` x13 at 377 ms and `capture-pane`
+x13 at 349 ms), polled every 5s by the sidebar and again by the launchpad. The
+user reported it as typing lag and as a sidebar click taking two seconds; the
+click's own endpoint measured **45-64 ms**, so essentially all of that two
+seconds was queueing. The control that proves the mechanism is
+`GET /sessions/records`, which does its work in a threadpool: its own cost is
+5.8 ms and its p99 was 161 ms, all of it spent waiting to be served.
+
+**A SECOND SUBPROCESS MUST NEVER ASK WHAT THE BULK ROW ALREADY SAYS, BUT ONLY
+THE POSITIVE HALF OF THAT ROW IS EVIDENCE.** `backend.is_alive()` is
+`tmux has-session`, and `list-panes -a` in the same pass already enumerates
+every live session BY NAME. `src/core/session_status_map.py` is where the fact
+that makes the row usable travels with the data: `StatusMap` is a `dict`
+subclass carrying `complete`, so every existing consumer and every plain-dict
+test double is untouched. **The asymmetry is the design.** A completed listing
+that NAMES a session proves it exists, so `listing_proves_alive` returns True
+and the probe is skipped. A listing that does not name it proves much less - it
+covers only the socket the probe was bound to and it is one moment in time - so
+it returns False meaning "not established", and `_session_info_for` still runs
+`is_alive()` for exactly those rows. **Trusting the negative was tried and it
+was wrong**: it dropped every row whose backend the listing could not see,
+which four `tests/test_session_rename.py` cases caught immediately and which in
+production would delete a LIVE session off the sidebar. Costing the probe only
+for rows about to be dropped costs nothing in steady state, where all 13
+sessions are in the listing. `tests/test_listing_subprocess_cost.py` pins it
+against REAL tmux by COUNTING subprocesses rather than timing anything: the
+count is the defect exactly, and a wall clock on a loaded box would either flake
+or be too loose to prove anything.
 
 **The ledger is keyed by the tmux INSTANCE, not by `session_id`, and that is not
 interchangeable with `SessionActivityTracker.hooks_seen`.** A confirmed live
@@ -432,16 +482,16 @@ claude - a resolver that always finds something is worse than useless.
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-08 after the status-split and hook-token-recovery round
-  (`117823d..6934965`), is 5274 passed / 3 failed / 21 skipped (the extra
-  nine are `tests/test_led_real_hooks.py`, skipping because
-  `CLOUDE_REAL_HOOK_TESTS=1` is not set); the three failures are the same
-  ones as before, environmental and pre-existing:
-  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
-  `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
-  and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
-  Your job is to add no NEW ones. Watch for a broken environment
+  repo root. Current baseline, re-measured 2026-09-09 on a CLEAN tree
+  immediately before the listing-cost round, is **5329 passed / 2 failed /
+  18 skipped** in about 6m30s; the same tree with that round applied reads
+  5332 passed / 2 failed / 18 skipped, the three extra being its own new
+  tests. Both failures are environmental and pre-existing:
+  `test_nuke_sandbox.py::test_dry_run_deletes_nothing` and
+  `test_version_probe.py::test_current_version_empty_when_unresolvable`.
+  TAKE YOUR OWN BASELINE ON A CLEAN TREE BEFORE YOU JUDGE YOUR OWN RUN -
+  this figure has been stale twice, and the population of environmental
+  failures moves. Your job is to add no NEW ones. Watch for a broken environment
   manufacturing a fake baseline: a `venv` symlink pointing at a
   `venv.nosync` directory that no longer exists lets the suite limp
   along and undercount silently, rather than failing outright. If the
@@ -455,9 +505,10 @@ claude - a resolver that always finds something is worse than useless.
   minutes apart) - it drives the real `cloude` tmux socket, which is the
   same class of flakiness INFRA-49 already names. A lone failure there
   without a code change behind it is not a new regression; re-run before
-  chasing it. Node: 185 tracked files (re-counted 2026-09-08; the earlier
-  "169" figure undercounted and predates this round), only the pre-existing
-  `test_archive_full_page_mode.node.mjs` fails. The piped-stdin CLI helper for
+  chasing it. Node: 192 suites, ALL PASSING (re-counted 2026-09-09 the way
+  `.github/workflows/tests.yml` runs them, one `node <suite>` per
+  `tests/*.node.mjs`; the previously-noted
+  `test_archive_full_page_mode.node.mjs` failure is gone). The piped-stdin CLI helper for
   the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
   exits non-zero when run with no input.
