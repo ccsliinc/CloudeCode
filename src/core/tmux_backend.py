@@ -397,21 +397,6 @@ class TmuxBackend(SessionBackend):
             note="pre_spawn_options",
         )
 
-    async def _apply_history_limit(self) -> None:
-        """Set this socket's scrollback depth to :data:`HISTORY_LIMIT`.
-
-        Idempotent and cheap; tmux ignores a repeat set of the same value.
-        ``check=False`` because a socket that cannot take the option is not
-        a reason to refuse the session - the pane just keeps the stock
-        depth, which is what it had before this existed.
-
-        Returns:
-            None.
-        """
-        await self._run_tmux(
-            "set-option", "-g", "history-limit", str(HISTORY_LIMIT), check=False
-        )
-
     async def read_history_limit(self) -> Optional[int]:
         """Read the socket's current global ``history-limit``.
 
