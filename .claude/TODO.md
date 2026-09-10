@@ -5998,3 +5998,188 @@ reading the merged code, NOT by clicking the app on the owner's box.
 His `test_terminal_theme_survives_agent_renders.py` and
 `test_session_row_menu_renders.py` drive real Chromium; the former runs
 here, the latter was removed with the menu.
+
+## 2026-09-10 later: the row action menu reconciled into ONE superset
+
+**OWNER'S RULING, verbatim:** "reconcile the two menus into ONE superset",
+and then the correction that shaped the rest of it: **"dont remove the
+rename. i said merge not take everything."**
+
+That correction became the general rule for the whole reconcile: WHERE
+HIS CHANGE REMOVES A BEHAVIOUR OF OURS, WE KEEP OURS AND ADD HIS
+ALONGSIDE, and a genuine either-or stops for the owner rather than being
+decided in the merge. Nothing hit that second case; every conflict here
+turned out to be additive once looked at.
+
+Third instruction, and it set the effort budget: **"dont forget we are
+rewriting this. so much of this is going to be rewritten properly."** The
+vanilla `client/js` menu is THROWAWAY - `feat/svelte-1.3` rebuilds this
+exact surface on the plugin registry - so the JS is the smallest correct
+diff and nothing was restructured for elegance. The TESTS were written to
+full care instead, because they are the specification that rewrite has to
+satisfy.
+
+### What the menu contains, on a LIVE row
+
+rename (R), mark unread (U), move to group (G), fork session (F), new
+session in folder (N), mute notifications (M), then a separator, then
+restart the agent (T) and close session (C). Pin is INLINE, adam's
+placement. Restart and close sit below the separator because both end the
+process running right now - on a live row a restart kills the pane and
+respawns it, so it is every bit as destructive as close.
+
+On a DEAD row: inline restart and remove, and NO menu, per decision 4. A
+dead row also still belongs in Recent rather than on the live list; this
+is only the honest rendering of one the reaper has not taken yet.
+
+### What was taken from each side
+
+- **HIS, as the base:** the three-module split
+  (`session-row-menu.js` item table + captured context,
+  `-actions.js` runners, `-open.js` panel/focus/keyboard), because a
+  declarative item table is what makes an eight-item superset a table
+  edit rather than a rewrite. With it: identity captured at PAINT TIME
+  (the list repaints every 5s), the capture-phase key handling that stops
+  a shortcut letter reaching the terminal, `aria-disabled` with a
+  reachable reason rather than the `disabled` attribute, and pin inline.
+- **OURS, kept:** `session-row-actions.js` ENTIRELY - `LIVE_STATUSES` and
+  `actionsFor` returning `[CLOSE, RESTART]` for a live row, which is
+  decision 3 - plus the three items (restart, mark unread, move to
+  group), the `ui.show_mark_unread_control` gate, the gestures module
+  (right click and long press, which his menu has no answer for), and the
+  open-menu repaint guard in `project-list-render-guard.js` that his
+  version had dropped.
+- **HIS `offersMenu`, taken and rewired:** it is DERIVED from `actionsFor`
+  rather than from a second status list, so pointing it at OUR
+  `actionsFor` gives the right answer for free - live and unknown get the
+  menu, dead keeps its inline pair - with no change to decision 3's logic.
+
+### The rename pair, which is the point of the correction
+
+**BOTH ENTRY POINTS SHIP, DRIVING ONE IMPLEMENTATION.** Double-click
+rename is untouched (`session-sidebar-rename.js` keeps `onDblClick`,
+`deferActivation` and `clearPending`; `session-sidebar.js` keeps its
+`dblclick` listener; `session-sidebar-clicks.js` keeps the deferral on the
+name). The menu's rename calls `SessionSidebarRename.beginEdit`, which is
+the SAME function both gestures already ended in - so there are in fact
+THREE doors (double-click, F2, menu) onto one editor, one seed, one
+validator and one commit path. `tests/test_session_row_menu_dispatch.node.mjs`
+drives all three and asserts they land in the same place, and that all
+three refuse an unrenameable row identically.
+
+**THE COST THE OWNER IS ACCEPTING BY KEEPING IT**, stated because his
+commit message is the only place it was written down: the deferral holds
+every click on a RENAMEABLE row's name for a measured ~250 ms before the
+row switches, so a double-click can claim it. That is the most-used
+interaction in the list paying for the rarest. Keeping the gesture keeps
+the delay. Worth a look on a phone; not changed here.
+
+### Everything in his commit that DELETES rather than adds
+
+Audited on request, so nothing goes through unseen:
+
+1. **Double-click rename** (`-94` in rename.js, the `dblclick` listener in
+   sidebar.js, the deferral in clicks.js). REFUSED, kept, per the owner.
+2. **The open-menu repaint guard** in `project-list-render-guard.js`.
+   KEPT, repointed at `SessionRowMenuOpen`.
+3. **The live row's inline close X.** Taken - it becomes the `close
+   session` item, which is what the ruling asks for.
+4. **`LIVE_STATUSES` / live-row restart** - not in this commit but in the
+   base it sits on. REFUSED; ours stands, and there is now a test that
+   fails if it goes again.
+
+Nothing else in the commit is a deletion. His launchpad menu wiring was
+NOT taken: our launchpad keeps its inline controls, so nothing of ours is
+lost there and the diff stays small.
+
+### The trap that would have compiled and lied
+
+`session-sidebar-clicks.js` `runRestart` read the row status off
+`data-row-status`, which OUR kebab stamped. Adam's trigger spells it
+`data-row-menu-status`. Reading the old spelling against the new trigger
+returns null and the picker reports EVERY restart as "unknown" with
+nothing failing - the exact defect `.claude/notes/compare-1.2/sidebar.md`
+flagged. Repointed, and called out in a comment at the site.
+
+### Tests: extended, never replaced
+
+- NEW `tests/test_session_row_menu_superset.node.mjs` (16 cases): the
+  eight items and their order, the separator group, distinct shortcuts,
+  restart on every measured-live status, the negative control that an
+  UNDETERMINED row offers none, restart availability being IDENTICAL to
+  `actionsFor` wherever a menu is drawn, the mark-unread flag with its
+  negative control, both flipping labels, move-to-group withheld off the
+  sidebar, fork and rename refusing WITH a reason, decision 4's dead row,
+  and the context round-tripping through the trigger unchanged.
+- NEW `tests/test_session_row_menu_dispatch.node.mjs` (8 cases): the three
+  rename doors, the identical refusal, and where restart / mark unread /
+  move to group actually go, including that a missing collaborator is a
+  no-op rather than an exception.
+- UPDATED behaviourally, not deleted: the row and parity suites now ask
+  what a row OFFERS (inline plus menu) instead of matching tooltip
+  strings, so they survive the Svelte port.
+
+**THE NEW GUARDS WERE MUTATION-TESTED**, because a test that cannot fail
+is worse than none. Dropping restart from a live row (adam's regression,
+reproduced deliberately) failed 5 superset cases and 1 row case; giving
+the menu a private rename instead of `beginEdit` failed 2 dispatch cases.
+Both mutations reverted.
+
+**Note for the Svelte port:** the two updated suites had assertions on
+generated HTML (`title="close session"`, inline-icon counts). Those are
+gone, replaced by action-set assertions. What remains markup-coupled and
+would need rework in 1.3: the trigger attribute round-trip case in
+`test_session_sidebar_rows.node.mjs` and the `offeredFor` regex helper in
+`test_session_row_actions.node.mjs`, both of which parse rendered HTML
+because this repo bundles no DOM.
+
+### Verification
+
+- pytest **5708 passed / 2 failed / 19 skipped**, identical to the
+  post-merge baseline; the two are the known environmental pair. This
+  round is client-side, so no Python moved.
+- Node **200 suites, 0 failing** (198 before, plus the two new files).
+- `node --check` clean on every JS file touched.
+- `scan_secrets.py` exit 0. Version confirmed still **1.2.1**.
+
+### Follow-ups, split by whether the code survives
+
+**PERMANENT, under `src/` - the Python is NOT being rewritten, so these
+should not quietly become permanent:**
+
+- [ ] `src/core/session_notification_policy.py` is **563 lines**, over the
+      500 rule. Suggested split: lift the durable-row half (hydration
+      query, `apply`, the generation counter) into
+      `session_notification_policy_store.py` and leave the pure verdict
+      ladder and its three values behind, which is the same seam
+      `session_startup_gate` / `_ledger` already uses.
+- [ ] `src/core/notifications/idle_watcher.py` is **513 lines**, newly
+      over after the mute gate landed. Suggested split: move the policy
+      consultation and its refusal reasons into a small
+      `idle_watcher_policy.py`, keeping the watcher loop itself under the
+      cap.
+
+**THROWAWAY, under `client/js` - deleted by the 1.3 Svelte rebuild, so
+NOT split here on purpose:**
+
+- `client/js/session-row-actions.js` 552 lines (already 519 and over
+  before this round).
+- `client/js/session-row-menu.js` 535 lines.
+
+### For the 1.3 re-port
+
+`feat/svelte-1.3` has this surface on a plugin registry with mark-unread
+already a plugin, so the eight items above are the target shape. Files it
+must reconcile: `client/js/session-row-menu.js` (the item table, the
+`available` vs `enabled` split, and the captured context),
+`session-row-menu-actions.js` (where each item goes),
+`session-row-menu-open.js` (focus, the capture-phase keyboard, the
+optional point placement), `session-row-menu-gestures.js` (right click and
+long press), `session-row-actions.js` (`actionsFor` / `offersMenu`),
+`session-sidebar-rows.js` (pin inline plus trigger),
+`session-sidebar-clicks.js` (the `data-row-menu-status` read),
+`session-sidebar-rename.js` (three doors, one `beginEdit`),
+`session-sidebar.js` (the dblclick listener),
+`project-list-render-guard.js`, `client/css/session-row-menu.css` and
+`client/index.html`. The two new test files are the specification and
+should port before the code does.

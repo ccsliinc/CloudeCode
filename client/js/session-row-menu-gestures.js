@@ -3,9 +3,12 @@
  * ----------------------------------------------------------------------
  * client/js/session-row-menu.js owns the menu - what is in it and how it
  * behaves. This file owns only the gestures that ask for it, and every
- * one of them ends in the same two calls (`openForKebab` /
- * `openAtPoint`), so the three entry points cannot come to mean three
- * different menus.
+ * one of them ends in the same call (`SessionRowMenuOpen.open`), so the
+ * three entry points cannot come to mean three different menus.
+ *
+ * THE TRIGGER TAP IS NOT WIRED HERE. session-row-menu-open.js binds its
+ * own capture listener for that, so this file owns only the two gestures
+ * that module has no answer for: right click and long press.
  *
  *   TAP / CLICK the kebab   the primary affordance, and the only one
  *                           that is visible. A phone has no right click
@@ -129,7 +132,7 @@ console.log('[SessionRowMenuGestures Module] Loading...');
         if (!target || typeof target.closest !== 'function') return null;
         var row = target.closest('.session-sidebar-row');
         if (!row) return null;
-        return window.SessionRowMenu.kebabIn(row);
+        return row.querySelector('[' + window.SessionRowMenu.TRIGGER_ATTR + ']');
     }
 
     /**
@@ -139,8 +142,10 @@ console.log('[SessionRowMenuGestures Module] Loading...');
      * Output: void.
      */
     function openAt(kebab, x, y) {
-        if (coarsePointer()) window.SessionRowMenu.openForKebab(kebab);
-        else window.SessionRowMenu.openAtPoint(kebab, x, y);
+        var open = window.SessionRowMenuOpen;
+        if (!open) return;
+        if (coarsePointer()) open.open(kebab);
+        else open.open(kebab, { point: { x: x, y: y } });
     }
 
     /**
@@ -156,19 +161,12 @@ console.log('[SessionRowMenuGestures Module] Loading...');
             e.stopPropagation();
             return;
         }
-        var kebab = e.target.closest && e.target.closest(
-            '[' + window.SessionRowMenu.KEBAB_ATTR + ']');
-        if (!kebab) return;
-        // The row's click handler must not also run: a tap on the kebab
-        // is not a request to switch conversation.
-        e.preventDefault();
-        e.stopPropagation();
-        var name = kebab.getAttribute(window.SessionRowMenu.KEBAB_ATTR);
-        if (window.SessionRowMenu.isOpen() && window.SessionRowMenu.openFor() === name) {
-            window.SessionRowMenu.close();
-            return;
-        }
-        window.SessionRowMenu.openForKebab(kebab);
+        // A TAP ON THE TRIGGER IS NOT HANDLED HERE ANY MORE.
+        // session-row-menu-open.js binds its own capture-phase click
+        // listener on `[data-row-menu]`, so opening it here as well would
+        // close and immediately reopen the panel. This handler keeps only
+        // the job that module does not do: swallowing the click that ends
+        // a long press. See that file's `onDocumentClickCapture`.
     }
 
     /**
@@ -180,10 +178,11 @@ console.log('[SessionRowMenuGestures Module] Loading...');
         if (!kebab) return;
         e.preventDefault();
         cancelPress();
-        var name = kebab.getAttribute(window.SessionRowMenu.KEBAB_ATTR);
+        var name = kebab.getAttribute(window.SessionRowMenu.TRIGGER_ATTR);
         // Android raises this DURING a long press we may have already
         // answered. Rebuilding would make the panel jump.
-        if (window.SessionRowMenu.isOpen() && window.SessionRowMenu.openFor() === name) {
+        var openMod = window.SessionRowMenuOpen;
+        if (openMod && openMod.isOpen() && openMod.openFor() === name) {
             return;
         }
         openAt(kebab, e.clientX, e.clientY);
@@ -213,7 +212,9 @@ console.log('[SessionRowMenuGestures Module] Loading...');
                 // press is already on its way and must not activate the
                 // row behind the panel.
                 swallowClick = true;
-                window.SessionRowMenu.openForKebab(kebab);
+                if (window.SessionRowMenuOpen) {
+                    window.SessionRowMenuOpen.open(kebab);
+                }
             }, LONG_PRESS_MS),
         };
     }

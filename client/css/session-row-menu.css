@@ -1,46 +1,50 @@
-/* Session sidebar ROW OVERFLOW MENU - the kebab on a conversation row
- * and the panel it opens. Behaviour lives in
- * client/js/session-row-menu.js; this file is only what it looks like.
+/* Session row ACTION MENU - the three-dot trigger on a session row and
+ * the panel it opens. Behaviour is in client/js/session-row-menu-open.js;
+ * this file is only what it looks like.
  *
- * NO CIRCLES, AND PREFERABLY NO BORDER. The owner's words: "just dont
- * want any circles around icons on left menu. squared is ok like close,
- * but no border is probably better." So the kebab has no chip, no ring
- * and no radius of its own - it is a glyph on the row's own background,
- * and hover is expressed as COLOUR only. The row's group chip used to
- * carry the same rule in client/css/session-sidebar-groups.css; it is
- * gone now, folded into this menu, so the kebab is the only thing left
- * on the row that opens anything.
+ * Every colour here is a token, so the menu follows whichever theme is
+ * on. There is no hardcoded light or dark value anywhere below: the app
+ * repaints these variables per theme, and a literal would be the one
+ * element on screen that did not follow.
  *
- * THIN GLYPH, WIDE TARGET. "thin 3 dots" is the mark; a phone still
- * needs something a thumb can hit. The dots render at 16px and the
- * button is padded out horizontally, to a 44px-wide target on a coarse
- * pointer. The target is widened HORIZONTALLY and never vertically: the
- * row's own height is the vertical extent, so a 44px-tall hitbox at
- * compact density (24px rows) would overlap the rows above and below and
- * steal their taps. Width is free - the kebab is the last thing on the
- * line and nothing sits to its right.
+ * NO CIRCLE AROUND THE GLYPH. The owner's standing rule for the left
+ * list: "just dont want any circles around icons on left menu. squared
+ * is ok like close, but no border is probably better." So the trigger is
+ * a mark on the row's own background and hover is expressed as COLOUR.
+ * The focus ring is the one exception, and it is an outline, which draws
+ * outside the box and so cannot re-introduce a chip.
  *
- * THE PANEL IS `position: fixed` AND MOUNTED ON THE BODY. It has to be:
- * `.session-sidebar-panel` carries a `translateX` for its slide, and a
+ * THIN GLYPH, WIDE TARGET. The dots render at 16px; a thumb needs 44.
+ * The target is widened HORIZONTALLY on the real box and grown
+ * VERTICALLY only through a transparent overlay, because the row's
+ * height is declared per density in
+ * client/css/session-sidebar-density.css - a taller button would grow
+ * the row, and a 44px overlay on a 24px compact row would reach into its
+ * neighbours and steal two taps to save one.
+ *
+ * THE PANEL IS position: fixed AND MOUNTED ON THE BODY, because
+ * `.session-sidebar-panel` carries a translateX for its slide and a
  * transformed ancestor becomes the containing block for a fixed
- * descendant. Placement (above the kebab, right edges flush, flipped and
- * clamped into the visual viewport) comes from
- * client/js/anchor-popover.js.
+ * descendant. Placement comes from client/js/anchor-popover.js; the
+ * height cap is applied in JS against the VISUAL viewport and the
+ * declarations here are the floor under it.
+ *
+ * MUST load AFTER session-sidebar.css, session-sidebar-density.css and
+ * session-row-inline-controls.css: those size row controls as small
+ * square icon buttons, and this file has to win over them.
  */
 
-/* ---- The row's kebab ------------------------------------------------- */
+/* ---- The row's trigger ------------------------------------------------ */
 
-.session-sidebar-row-kebab {
+.session-row-menu-trigger {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    margin-left: auto;
     /* The containing block for the tap-area overlay below. */
     position: relative;
-    /* Padding, not a wider glyph, is what makes the target. */
-    padding: 0 8px;
-    min-width: 28px;
+    padding: 0 6px;
+    min-width: 24px;
     align-self: stretch;
     background: transparent;
     border: none;
@@ -51,27 +55,21 @@
     transition: color 120ms ease;
 }
 
-.session-sidebar-row-kebab:hover,
-.session-sidebar-row-kebab[aria-expanded="true"] {
+.session-row-menu-trigger:hover,
+.session-row-menu-trigger[aria-expanded="true"] {
     color: var(--color-fg-strong);
 }
 
-/* The focus ring is the one exception to "no border": a keyboard user
- * must be able to see where they are. It is an outline, which draws
- * outside the box and so cannot re-introduce a chip. */
-.session-sidebar-row-kebab:focus-visible {
+.session-row-menu-trigger:focus-visible {
     outline: 2px solid var(--color-accent-border);
     outline-offset: -2px;
 }
 
-/* THE TAP AREA IS AN OVERLAY, NOT A TALLER BUTTON. The button's own
- * height is the row's content height (22px at cozy), and growing it to
- * 44 would grow the ROW - the opposite of the thin row that was asked
- * for. A transparent positioned pseudo-element belongs to its
- * originating element for hit testing, so this gives the kebab a
- * thumb-sized target without adding a single pixel to the layout. It is
- * `left/right: 0`, so it never reaches sideways into the name. */
-.session-sidebar-row-kebab::after {
+/* A transparent positioned pseudo-element belongs to its originating
+ * element for hit testing, so this gives the trigger a thumb-sized
+ * target without adding a pixel to the layout. `left/right: 0` keeps it
+ * from reaching sideways into the control next to it. */
+.session-row-menu-trigger::after {
     content: '';
     position: absolute;
     left: 0;
@@ -82,19 +80,16 @@
 }
 
 @media (pointer: coarse) {
-    .session-sidebar-row-kebab {
-        min-width: 44px;
-        padding: 0 14px;
+    .session-row-menu-trigger {
+        min-width: 36px;
+        padding: 0 10px;
     }
 
-    /* 44px tall, but only where the row is tall enough to hold it. A
-     * compact row is 24px with a 1px gap, so a 44px hitbox there would
-     * reach 10px into the row above and the row below and steal their
-     * taps - trading one missed control for two. At compact the target
-     * is the row's own height, which is the most that can be offered
-     * honestly, and the extra width still applies. */
-    .session-sidebar-panel[data-density="cozy"] .session-sidebar-row-kebab::after,
-    .session-sidebar-panel[data-density="detailed"] .session-sidebar-row-kebab::after {
+    /* 44px tall, but only where the row is tall enough to hold it. See
+     * the file header for why compact is excluded. */
+    .session-sidebar-panel[data-density="cozy"] .session-row-menu-trigger::after,
+    .session-sidebar-panel[data-density="detailed"] .session-row-menu-trigger::after,
+    .running-session-row .session-row-menu-trigger::after {
         height: 44px;
     }
 }
@@ -104,57 +99,58 @@
 .session-row-menu {
     position: fixed;
     z-index: 1200;
-    min-width: 184px;
-    /* Never wider than the screen. AnchorPopover clamps a popover into
-     * the viewport, but a panel wider than the viewport has no position
-     * that satisfies both edges, so the width is capped first. */
+    min-width: 224px;
+    /* Never wider than the screen. The placement rule clamps a popover
+     * into the viewport, but a panel wider than the viewport has no
+     * position that satisfies both edges, so the width is capped first.
+     *
+     * AND NEVER WIDER THAN A MENU SHOULD BE. The refusal text on an
+     * unavailable item is a whole sentence, and a grid track sizes to its
+     * content: measured, one refusal stretched the panel to 730px, which
+     * is not a menu any more, it is a dialog. The 320px cap is what makes
+     * `white-space: normal` on the reason actually wrap. Two declarations,
+     * plainest first: an engine without `min()` still gets the viewport
+     * clamp, which is the one that keeps the panel reachable. */
     max-width: calc(100vw - 16px);
+    max-width: min(320px, calc(100vw - 16px));
     padding: 4px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     background: var(--color-bg-elevated, var(--color-bg));
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34);
-    /* A MENU TALLER THAN THE SCREEN SCROLLS ITSELF. Nothing here emits
-     * that many items today, but a panel that simply overflowed the
-     * viewport would put its last entry somewhere no finger can reach,
-     * and the placement rule cannot rescue a box that does not fit. This
-     * plus the flip-and-clamp in client/js/anchor-popover.js is what
-     * makes "the menu is always fully on screen" true rather than usually
-     * true. */
-    /* vh then dvh, in that order: the raw unit is the fallback for an
-     * engine with no dvh, and the dynamic one is what stops a mobile
-     * browser's collapsing URL bar from sizing this against a viewport
-     * the user cannot see. Asserted by tests/test_viewport_units.node.mjs. */
+    box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 8px 28px rgba(0, 0, 0, 0.34);
+    /* A MENU TALLER THAN THE SCREEN SCROLLS ITSELF. The JS cap measures
+     * the visual viewport and wins over these; they are the fallback for
+     * a run where it has not been applied yet. vh then dvh, in that
+     * order: the raw unit is the fallback for an engine with no dvh, and
+     * the dynamic one is what stops a mobile browser's collapsing URL bar
+     * from sizing this against a viewport the user cannot see. Asserted
+     * by tests/test_viewport_units.node.mjs. */
     max-height: calc(100vh - 16px);
     max-height: calc(100dvh - 16px);
     overflow-y: auto;
     overflow-x: hidden;
+    overscroll-behavior: contain;
 }
 
-/* Menu items are the ROW'S OWN CONTROLS, re-decorated - the same
- * elements `.session-sidebar-row-pin`, `.mark-unread-toggle` and
- * `.session-sidebar-row-delete` are styled for on the row. Those rules
- * size them as small square icon buttons, which is wrong in a menu, so
- * every one of them is overridden here to a full-width labelled row. The
- * selectors are deliberately specific enough to win without !important. */
+/* ---- One item --------------------------------------------------------- */
 
 .session-row-menu .session-row-menu__item {
-    display: flex;
+    display: grid;
+    /* Label takes the room, the shortcut letter is pinned to the right
+     * edge in its own column so every letter lines up whatever the label
+     * length. The reason, when there is one, spans both under them. */
+    grid-template-columns: 1fr auto;
     align-items: center;
-    /* EXPLICIT, because the row versions of these controls are
-     * `justify-content: center` icon buttons and that would otherwise
-     * win here, floating each glyph and its label in the middle of the
-     * panel with the icons in no column at all. */
-    justify-content: flex-start;
-    gap: 10px;
+    gap: 2px 12px;
     width: 100%;
     min-width: 0;
-    height: auto;
     min-height: 40px;
-    padding: 6px 10px;
+    padding: 7px 10px;
     box-sizing: border-box;
     background: transparent;
     border: none;
@@ -167,10 +163,6 @@
     transition: background 120ms ease, color 120ms ease;
 }
 
-.session-row-menu .session-row-menu__item svg {
-    flex-shrink: 0;
-}
-
 .session-row-menu .session-row-menu__label {
     min-width: 0;
     overflow: hidden;
@@ -178,11 +170,33 @@
     white-space: nowrap;
 }
 
+/* The shortcut letter. Muted, right-aligned, and never the thing the eye
+ * lands on first - it is a hint about the keyboard, not part of the
+ * label. */
+.session-row-menu .session-row-menu__key {
+    justify-self: end;
+    color: var(--color-fg-faint);
+    font-size: 0.74rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+/* The explanation on an item that cannot run. It is TEXT in the item,
+ * not a tooltip, because a keyboard user never opens a tooltip and this
+ * is exactly who needs to read it. */
+.session-row-menu .session-row-menu__reason {
+    grid-column: 1 / -1;
+    color: var(--color-fg-subtle);
+    font-size: 0.72rem;
+    line-height: 1.35;
+    white-space: normal;
+}
+
 .session-row-menu .session-row-menu__item:hover,
 .session-row-menu .session-row-menu__item:focus-visible {
     background: var(--color-bg-hover);
     color: var(--color-fg-strong);
-    border-color: transparent;
     outline: none;
 }
 
@@ -190,22 +204,43 @@
     box-shadow: inset 0 0 0 2px var(--color-accent-border);
 }
 
-/* Pinned reads as pinned in the menu too - the same accent the inline
- * toggle used, so the state did not become invisible by moving. */
-.session-row-menu .session-sidebar-row-pin[aria-pressed="true"],
-.session-row-menu .mark-unread-toggle--active {
-    color: var(--color-accent);
+/* AN UNAVAILABLE ITEM STILL TAKES FOCUS, so it still gets a focus ring
+ * and still highlights - what it loses is the pointer cursor and the
+ * full-strength label. Dimming it to unreadable would hide the reason
+ * text that is the entire point of rendering it. */
+.session-row-menu .session-row-menu__item[aria-disabled="true"] {
+    cursor: default;
+    color: var(--color-fg-subtle);
 }
 
-.session-row-menu .mark-unread-toggle--active {
-    color: var(--color-warning);
+.session-row-menu .session-row-menu__item[aria-disabled="true"]:hover,
+.session-row-menu .session-row-menu__item[aria-disabled="true"]:focus-visible {
+    background: var(--color-bg-overlay-soft, var(--color-bg-hover));
+    color: var(--color-fg-subtle);
 }
 
-/* Destructive stays neutral until pointed at, exactly as it did on the
- * row - a destructive control that always looks alarming stops being
- * read. RESTART is not destructive and is excluded. */
-.session-row-menu .session-sidebar-row-delete:not(.session-row-action-restart):hover,
-.session-row-menu .session-sidebar-row-delete:not(.session-row-action-restart):focus-visible {
+/* ---- The separator ----------------------------------------------------- */
+
+/* Close is the only destructive entry in this menu, and it sits apart
+ * from the four that are not, so a mis-aimed thumb lands on empty space
+ * rather than on the control that kills a process. */
+.session-row-menu .session-row-menu__sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--color-border-subtle);
+}
+
+/* Destructive stays neutral until pointed at - a control that always
+ * looks alarming stops being read. */
+.session-row-menu .session-row-menu__item[data-row-menu-item="close"]:hover,
+.session-row-menu .session-row-menu__item[data-row-menu-item="close"]:focus-visible {
     background: var(--color-danger-bg-hover);
+    color: var(--color-danger);
+}
+
+.session-row-menu .session-row-menu__item[data-row-menu-item="close"]:hover
+    .session-row-menu__key,
+.session-row-menu .session-row-menu__item[data-row-menu-item="close"]:focus-visible
+    .session-row-menu__key {
     color: var(--color-danger);
 }

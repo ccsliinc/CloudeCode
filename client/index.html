@@ -1194,16 +1194,21 @@
          load AFTER it: reuses its showMenu/announce/repaint rather than
          a second copy of any of the three. -->
     <script src="/static/js/session-sidebar-band-menu.js"></script>
-    <!-- The row's overflow menu, and the three gestures that open it.
-         session-row-menu.js composes the row's own control builders
-         (session-sidebar-rows.js, session-status-ui.js,
-         session-row-actions.js, session-sidebar-group-actions.js for the
-         group picker item), places itself with anchor-popover.js and
-         routes its clicks into session-sidebar-clicks.js, so it must load
-         after all of them. The gesture module must load after the menu
+    <!-- The row's action menu, and the gestures that open it. Three
+         modules: session-row-menu.js is the item table and the captured
+         context, -actions.js runs a chosen item, -open.js owns the panel,
+         focus and the keyboard. -actions.js delegates into
+         session-sidebar-clicks.js (restart, mark unread),
+         session-sidebar-group-actions.js (move to group) and
+         session-sidebar-rename.js (rename), so it must load after all of
+         them; -open.js calls -actions.js and places itself with
+         anchor-popover.js. The gesture module must load after the menu
          AND after session-sidebar.js, whose #session-sidebar-list it
-         attaches to. -->
+         attaches to; it owns right click and long press only, because
+         -open.js binds the trigger tap itself. -->
     <script src="/static/js/session-row-menu.js"></script>
+    <script src="/static/js/session-row-menu-actions.js"></script>
+    <script src="/static/js/session-row-menu-open.js"></script>
     <script src="/static/js/session-row-menu-gestures.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser

@@ -10,62 +10,44 @@
  * fold into. This module is the row that composes them, nothing else -
  * it holds no state and touches no DOM, it only returns strings.
  *
- * THE ACTION ICONS ARE NO LONGER DRAWN INLINE: pin, mark-unread and
- * close/restart/remove live in the row's overflow menu. Their builders
- * are unchanged and still have exactly one caller each - now
- * session-row-menu.js rather than rowHtml(). `pinButtonHtml` is exported
- * for it and must stay exported.
+ * PIN IS INLINE, EVERY OTHER ACTION IS IN THE MENU (owner's ruling,
+ * 2026-09-10). A live row draws the pin toggle and one three-dot
+ * trigger; rename, mark unread, move to group, fork, new session in
+ * folder, mute, restart and close are items inside it. A DEAD row draws
+ * inline restart and remove and no menu. `pinButtonHtml` is exported and
+ * must stay exported.
  *
- * NO GROUP CHIP EITHER, AS OF THIS ROUND. "no i dont need to see the
- * group name in the item. its in the group i can see the group on the
- * sidebar." The chip used to name the group a row was filed in AND open
- * the group picker; the display half is simply gone, and the action half
- * moved into the kebab menu the same way pin/mark-unread/close did -
- * see `rowMenuItemHtml` in client/js/session-sidebar-group-actions.js,
- * pulled in by client/js/session-row-menu.js. Group membership itself is
- * untouched: it is still DB-backed and it is still how the sidebar's
- * OWN group headers file each row, which is the only place the filing
- * is shown now.
+ * NO GROUP CHIP. "no i dont need to see the group name in the item. its
+ * in the group i can see the group on the sidebar." The display half is
+ * gone; the action half is the menu's `move to group` item.
  *
  * WHAT EACH DENSITY DRAWS (see client/js/session-sidebar-density.js for
  * the modes and where the preference lives):
- *   compact   grip, dot, name, kebab
+ *   compact   grip, dot, name, pin, menu (restart/remove when dead)
  *   cozy      the above plus the tmux/external badge  (DEFAULT)
  *   detailed  the above, with the badge moved DOWN to a second line that
  *             also carries the session's age
  *
- * NO AGENT-FAMILY PILL, AT ANY DENSITY, SINCE THIS ROUND. "i dont think
- * we need the pills in the sidebar take out for now." The pill is still
- * drawn on the HOME screen by client/js/launchpad.js, which owns its own
- * builder; nothing here feeds that one, so removing this row's pill
- * cannot change what the home screen renders.
+ * NO AGENT-FAMILY PILL, AT ANY DENSITY. "i dont think we need the pills
+ * in the sidebar take out for now." The HOME screen still draws one from
+ * its own builder in client/js/launchpad.js, which nothing here feeds.
  *
- * REMOVING IT ALSO REMOVED A REAL DEFECT, which is worth recording
- * because the shape of it recurs. This module's builder put a literal
- * `~` in front of a guessed family, AND `.family-pill--guess::before` in
- * client/css/styles.css adds another one - so a guessed family rendered
- * as `~~claude` on screen while every DOM assertion about the label read
- * a single, correct `~claude`. The launcher's builder never added the
- * literal, so only this surface was wrong. A test that reads DOM text
- * cannot see a `::before`; only a rendered pixel or a computed style can,
- * which is why the pill assertions in scripts/verify_sidebar_sessions.py
- * were the ones that could have caught it.
+ * REMOVING IT ALSO REMOVED A REAL DEFECT whose shape recurs: this
+ * builder put a literal `~` before a guessed family AND
+ * `.family-pill--guess::before` adds another, so it rendered `~~claude`
+ * while every DOM assertion read a correct `~claude`. A test that reads
+ * DOM text cannot see a `::before`; only a rendered pixel can, which is
+ * why scripts/verify_sidebar_sessions.py was what could have caught it.
  *
- * WHAT NOW FILLS DETAILED'S SECOND LINE: the tmux/external badge, moved
- * down off the first line, plus the age it already carried. The badge is
- * emitted exactly once per row at every density either way - line one at
- * cozy, line two at detailed, and not at all at compact, which is
- * unchanged. The second line is therefore still a line about where the
- * session came from and how old it is, which is what it always was.
+ * DETAILED'S SECOND LINE carries the tmux/external badge moved down off
+ * the first line, plus the age it already had.
  *
- * THE ROW HEIGHTS ARE DECLARED, NOT EMERGENT. Removing a glyph from a
- * row would otherwise shorten it by however tall that glyph happened to
- * be, so `client/css/session-sidebar-density.css` now pins a `min-height`
- * per density. The density contract is a number the stylesheet states,
- * not an accident of whichever controls currently ride the line.
+ * ROW HEIGHTS ARE DECLARED, NOT EMERGENT: removing a glyph would
+ * otherwise shorten the row, so session-sidebar-density.css pins a
+ * `min-height` per density rather than letting the line's contents
+ * decide it.
  *
- * A RESTART CONTROL IS EMITTED for a row whose status is `dead`, and it
- * now rides in the kebab menu with the rest of the actions. It
+ * A RESTART CONTROL IS EMITTED for a row whose status is `dead`. It
  * SUPERSEDES an older rule saying the sidebar could not know a session
  * was stopped rather than unknown. Both halves of that rule stopped
  * being true: `session-sidebar-fetch.js` `mergeLiveRow()` overwrites
@@ -436,14 +418,31 @@ console.log('[SessionSidebarRows Module] Loading...');
         const themeSwatch = window.SessionThemeTint
             ? window.SessionThemeTint.swatchHtml(r.pinned_theme)
             : '';
-        // ONE CONTROL WHERE THREE USED TO BE - "lets fold the icons a
-        // thin 3 dots up and down sub menu". The menu is built from the
-        // SAME builders that used to be called here, so nothing was
-        // dropped and no label was rewritten.
-        const kebab = window.SessionRowMenu
-            ? window.SessionRowMenu.kebabHtml(r)
-            : '';
+        // Pin stays inline: it is a state the eye reads at a glance.
+        const pin = pinButtonHtml(r.name, !!r.is_pinned);
         const rename = renameState(r);
+        // MENU OR INLINE, NEVER BOTH, and `offersMenu` is derived from
+        // `actionsFor` rather than from a second status list, so the row
+        // and the menu cannot disagree. A dead row keeps inline restart
+        // and remove (decision 4 sends it to Recent, so this is only the
+        // honest rendering of one the reaper has not taken yet).
+        const offersMenu = !!(window.SessionRowActions
+            && window.SessionRowActions.offersMenu(r.status));
+        const rowAction = (window.SessionRowActions && !offersMenu)
+            ? window.SessionRowActions.html(
+                r.status, r.name, 'session-sidebar-row-delete')
+            : '';
+        // Identity is captured HERE, at paint time: the list repaints
+        // every five seconds and an item that resolved its row later
+        // could act on whatever had taken its place.
+        const rowMenu = (offersMenu && window.SessionRowMenu)
+            ? window.SessionRowMenu.triggerHtml(
+                window.SessionRowMenu.contextFromRow(r, {
+                    surface: 'sidebar',
+                    renameable: rename.state === 'renameable',
+                    renameReason: rename.state === 'renameable' ? '' : rename.reason,
+                }))
+            : '';
         // The badge is the first thing to go when the user asks for thin
         // rows: "tmux" vs "external" is already carried by the row's
         // ownership styling, so at compact it is the most redundant glyph
@@ -483,7 +482,9 @@ console.log('[SessionSidebarRows Module] Loading...');
             themeSwatch +
             startupGate +
             inlineBadge +
-            kebab +
+            pin +
+            rowAction +
+            rowMenu +
             '</div>' +
             secondLine +
             '</div>'

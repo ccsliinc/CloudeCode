@@ -441,7 +441,7 @@ await test('an open row overflow menu blocks the repaint, and releases it when c
     const tick = h.startPoller();
     tick(); await h.settle();
     let open = true;
-    h.fakeWindow.SessionRowMenu = { isOpen() { return open; } };
+    h.fakeWindow.SessionRowMenuOpen = { isOpen() { return open; } };
     const paints0 = h.paints('project-list');
     h.lp.projects[0].name = 'project-changed-under-an-open-menu';
     tick(); await h.settle();

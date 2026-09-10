@@ -431,33 +431,49 @@ test('sidebar rows paint the same control with the same wording', () => {
         { name: 'cloude_alive', created_by_cloude: true, status: 'idle', is_active: true },
         { name: 'cloude_gone', created_by_cloude: true, status: 'dead', is_active: false },
     ]);
-    const menus = ['cloude_alive', 'cloude_gone'].map((name) => {
-        const kebab = { getAttribute: (attr) => ({
-            'data-row-menu': name,
-            'data-row-status': name === 'cloude_gone' ? 'dead' : 'idle',
-            'data-row-pinned': '0',
-            'data-row-unread': '0',
-        }[attr] || null) };
-        return win.SessionRowMenu.controlHtmlFor(kebab).join('');
-    }).join('');
-    const html = container.innerHTML + menus;
+    // WHAT EACH ROW OFFERS, gathered the way the row itself resolves it:
+    // inline controls carry `data-session-action`, and a live row's menu
+    // trigger resolves its items through the menu's own pure functions.
+    // Asserted over ACTIONS rather than over tooltip strings, so the
+    // Svelte rebuild on feat/svelte-1.3 can satisfy this unchanged.
+    function offeredFor(name) {
+        const rowHtml = container.innerHTML;
+        const rowRe = new RegExp(`<[^>]*data-name="${name}"[\\s\\S]*?(?=<div[^>]*data-name="|$)`);
+        const seg = (rowHtml.match(rowRe) || [''])[0];
+        const inline = [...seg.matchAll(/data-session-action="([^"]+)"/g)].map((m) => m[1]);
+        const tag = (seg.match(/<button[^>]*data-row-menu="[^"]*"[^>]*>/) || [])[0];
+        let menu = [];
+        if (tag) {
+            const stub = { getAttribute(a) {
+                const m = tag.match(new RegExp(`\\s${a}="([^"]*)"`));
+                return m ? m[1] : null;
+            } };
+            menu = win.SessionRowMenu
+                .itemsFor(win.SessionRowMenu.contextFromTrigger(stub))
+                .map((i) => i.id);
+        }
+        return { inline, menu, all: [...inline, ...menu] };
+    }
+
+    const alive = offeredFor('cloude_alive');
+    const gone = offeredFor('cloude_gone');
+
     assert.ok(container.innerHTML.includes('data-row-menu='),
-        'the row must paint a kebab to hang its actions off');
-    assert.ok(html.includes('title="close session"'), 'same tooltip wording as the launcher');
-    assert.ok(html.includes('title="remove from the list"'));
-    // 4, not 3: BOTH rows now draw two. The dead row draws restart and
-    // remove; the live row draws close and, since TODO item 22 part 2,
-    // restart as well - restarting a running session is a supported
-    // operation now (respawn-pane -k in place). Offering the control is
-    // not permitting the kill: it opens the picker, which needs an arm
-    // box and a confirm modal, and the server needs
-    // `confirm_restart_live` after that.
-    assert.ok(html.includes('title="restart the agent"'), 'a row lost its restart');
-    assert.equal((html.match(/data-session-action=/g) || []).length, 4);
-    assert.equal(
-        (html.match(/data-session-action="restart"/g) || []).length, 2,
-        'both the live row and the dead row must offer restart',
-    );
+        'a live row must paint a menu trigger to hang its actions off');
+    // The destructive pair, one per row, whichever surface carries it.
+    assert.ok(alive.all.includes('close'), 'a live row offers close');
+    assert.ok(gone.all.includes('remove'), 'a dead row offers remove');
+    assert.ok(!alive.all.includes('remove'), 'and never both on one row');
+    assert.ok(!gone.all.includes('close'));
+    // BOTH rows offer restart, by two different routes. The live row's is
+    // the one decision 3 settled on 2026-09-09; the dead row's is the one
+    // that was never in dispute. Offering it is not permitting the kill -
+    // it opens the picker, which needs an arm box and a confirm modal,
+    // and the server needs `confirm_restart_live` after that.
+    assert.ok(alive.menu.includes('restart'),
+        'a LIVE row must offer restart, in its menu');
+    assert.ok(gone.inline.includes('restart'),
+        'a DEAD row must offer restart, inline');
 });
 
 await runQueue();

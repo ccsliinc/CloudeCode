@@ -780,16 +780,19 @@ records every hook event, still resolves to `question` when it is blocked
 on a permission prompt, still flips unread on a `Stop`, and still paints
 its LED exactly as it would have. What is skipped is the interruption.
 
-**NO CLIENT CONTROL SHIPS ON THIS BRANCH YET, and that is a pending owner
-decision rather than an oversight.** Everything described in this section is
-server side and reachable only through
-`PATCH /sessions/records/{session_uuid}/notifications`. The "mute
-notifications" item named above lives in a session row action menu that
-release/1.2.1 did NOT take, because that menu also drops restart from a live
-row and the owner settled that surface the other way on 2026-09-09 (see
-`.claude/TODO.md`, "1.2 merge decisions (owner)", decision 3). Until the
-owner rules, a mute can be set by the endpoint and by nothing the user can
-click. Do not describe the menu item as present.
+**THE CONTROL IS THE ROW'S ACTION MENU.** "mute notifications" is one of
+the eight items in a session row's three-dot menu, and it is the only one
+of them with no other owner, so its request lives in the menu's own action
+module: `PATCH /sessions/records/{session_uuid}/notifications` with
+`{muted}`, keyed on the DURABLE record because tmux reuses names. The
+label states the result and flips with the row, so a muted session offers
+"unmute notifications". See `client/js/session-row-menu.js` (the item
+table) and `client/js/session-row-menu-actions.js` (`runToggleMute`).
+
+The menu is a reconciled superset settled by the owner on 2026-09-10:
+rename, mark unread, move to group, fork session, new session in folder,
+mute, then restart and close below a separator. Pin stays inline. A DEAD
+row draws inline restart and remove and no menu at all.
 
 | Piece | File |
 |---|---|

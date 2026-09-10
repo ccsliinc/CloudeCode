@@ -88,7 +88,12 @@ function loadArrangement(seed, throws = false) {
 function loadRows() {
     const { window } = loadModules(['session-listing-state.js', 'session-sidebar-rows.js']);
     window.SessionStatusUI = { dotHtml: () => '<span class="status-dot"></span>', markUnreadHtml: () => '' };
-    window.SessionRowActions = { html: () => '<button data-session-action="close"></button>' };
+    window.SessionRowActions = {
+        html: () => '<button data-session-action="close"></button>',
+        // rows.js asks this to decide menu vs inline controls. A live row
+        // gets the menu; only `dead` keeps its inline pair.
+        offersMenu: (status) => status !== 'dead',
+    };
     return window.SessionSidebarRows;
 }
 

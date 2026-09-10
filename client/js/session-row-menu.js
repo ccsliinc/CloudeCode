@@ -1,64 +1,52 @@
 /**
- * Session sidebar ROW OVERFLOW MENU - the kebab on a conversation row,
- * and the one menu behind it.
+ * Session row ACTION MENU - the definition half.
  * ----------------------------------------------------------------------
- * "on the left menu, the menu items. lets fold the icons a thin 3 dots
- * up and down sub menu, like in main sites top right. and right click on
- * item should open the same submenu"
+ * The vertical three-dot control on a session row, and the five items
+ * behind it. This file is PURE: it takes a row payload and returns
+ * strings. Nothing here touches the document beyond escaping, so every
+ * claim it makes is provable without a browser. Opening, focus and the
+ * keyboard live in client/js/session-row-menu-open.js; what each item
+ * DOES lives in client/js/session-row-menu-actions.js.
  *
- * "main sites top right" is this app's own header overflow
- * (client/js/header-menu.js). The MARK is literally the same object -
- * both call client/js/kebab-icon.js - and the pattern is the same:
- * a real <button> carrying aria-haspopup/aria-expanded/aria-controls,
- * a role="menu" panel, Escape to close, focus returned to the trigger.
- * It is NOT the same INSTANCE, and it cannot be: the header folds two
- * singleton nodes addressed by id, while a sidebar row is destroyed and
- * rebuilt on every repaint, so re-parenting live nodes into a floating
- * panel would leave the menu holding detached elements.
+ * WHY A MENU AGAIN, AFTER ONE WAS REMOVED. Commit ad359bc took a kebab
+ * off the row and put pin and close back inline, because by then the
+ * menu held four controls the owner did not want in it. This is not that
+ * menu coming back: the CONTENTS are different and so is what it
+ * replaces. It carries rename, fork, new-session-in-folder, mute and
+ * close - four of which have never had a control on a row at all - and
+ * it takes the place of the live row's close X, which is the one thing
+ * it inherits. PIN STAYS INLINE. A dead row is untouched: it keeps its
+ * inline restart and remove and gets no menu, because none of these five
+ * items is the thing a stopped session needs.
  *
- * WHAT MOVED INTO THE MENU, and nothing was dropped or renamed. All
- * three of the row's old inline controls are now menu items built by THE
- * SAME BUILDERS that drew them: pin/unpin (SessionSidebarRows
- * .pinButtonHtml), mark unread (SessionStatusUI.markUnreadHtml) and
- * close/remove plus RESTART on a dead row (SessionRowActions.html, which
- * already emitted restart alongside remove). Each item therefore carries
- * the identical data attribute, aria state and glyph, and its LABEL is
- * that control's own `title` - no string is written twice.
+ * IDENTITY IS CAPTURED, NOT LOOKED UP. Every fact an item needs - the
+ * tmux name, the live session id, the label, ownership, the rename
+ * verdict and the mute state - is stamped on the trigger when the row is
+ * PAINTED, and read off it once when the menu OPENS. From then on the
+ * open menu holds a frozen snapshot. This matters because the sidebar
+ * repaints itself every five seconds and the launchpad repaints on its
+ * own poll: an item that re-read the DOM on activation could find a row
+ * that had been rebuilt, reordered, or replaced by a different session
+ * that reused the same tmux name, and would then run against whatever
+ * was under the cursor rather than what the user opened the menu on.
  *
- * THE GROUP CHIP FOLDED IN TOO, A ROUND LATER. "no i dont need to see the
- * group name in the item. its in the group i can see the group on the
- * sidebar" - so the chip's DISPLAY half is simply gone, and its ACTION
- * half (opening the group picker) rides in here as one more menu item,
- * built by SessionSidebarGroupActions.rowMenuItemHtml, the module that
- * already owns the group-picking domain.
+ * SHORTCUT LETTERS ARE PART OF THE DEFINITION, not a decoration. Each
+ * item owns its letter here, the panel renders it, and the key handler
+ * in the open module matches on the same table - so a letter cannot be
+ * shown for one item and bound to another. They are unique by
+ * construction and ``uniqueShortcuts()`` says so out loud.
  *
- * WHAT STAYED ON THE ROW: the drag grip (a handle, not an action), the
- * status dot, the name, the theme swatch and the tmux/external badge -
- * none of them are actions, and none of them name a group any more.
+ * AN UNAVAILABLE ITEM IS STILL RENDERED, STILL FOCUSABLE, AND CARRIES
+ * ITS REASON. Hiding it would make the menu change shape between rows
+ * and leave a keyboard user wondering which entry moved; disabling it
+ * silently would leave them pressing a key that does nothing. So it
+ * paints, it takes focus, it states why in text an assistive technology
+ * reads, and it refuses to activate.
  *
- * WHY THE PANEL IS MOUNTED ON document.body AND NOT IN THE ROW. This is
- * a measured constraint, not a preference: `.session-sidebar-panel`
- * carries `transform: translateX(-100%)` (client/css/session-sidebar.css)
- * for its open/close slide, and a transformed ancestor becomes the
- * containing block for `position: fixed` descendants. A fixed panel
- * rendered inside the row would therefore be positioned against the
- * sliding sidebar instead of the viewport, and would be clipped by the
- * list's own overflow. Mounting on the body is what makes the viewport
- * clamp in client/js/anchor-popover.js mean what it says.
- *
- * That choice costs two things, both handled: the list-scoped click
- * router in session-sidebar-clicks.js never sees these clicks, so
- * ``dispatch`` below routes them into the same exported handlers by
- * hand; and ``onRowActionClick`` walks up to `.session-sidebar-row` for
- * `data-active` and `data-session-id`, which from the body finds
- * nothing, so it gained a by-name lookup fallback.
- *
- * SCROLL CLOSES IT. A fixed panel over a scrolling list would otherwise
- * hang in space while the row it belongs to slid away.
- *
- * Load AFTER kebab-icon.js, session-status-ui.js, session-row-actions.js,
- * anchor-popover.js and session-sidebar-rows.js; BEFORE
- * session-row-menu-gestures.js.
+ * No dependencies beyond an optional SessionSidebarRows for escaping and
+ * an optional KebabIcon for the glyph. Must load BEFORE
+ * session-row-menu-actions.js and session-row-menu-open.js, and before
+ * session-sidebar-rows.js and launchpad.js paint anything.
  */
 
 console.log('[SessionRowMenu Module] Loading...');
@@ -66,455 +54,481 @@ console.log('[SessionRowMenu Module] Loading...');
 (function () {
     'use strict';
 
-    /** The open panel element, or null. Only ever one, app-wide. */
-    var panelEl = null;
-
-    /** The kebab the open panel belongs to, so focus can go home. */
-    var triggerEl = null;
-
-    /** Document-level dismiss handlers, bound only while open. */
-    var onDocPointer = null;
-    var onDocKey = null;
-
-    /** The list element the open panel is scrolling with, or null. */
-    var scrollEl = null;
-
-    /** Bound scroll/resize closer, so it can be removed again. */
-    var onReflow = null;
-
-    /** DOM contract. Read by the gestures module and by the tests. */
-    var KEBAB_ATTR = 'data-row-menu';
-    var KEBAB_CLASS = 'session-sidebar-row-kebab';
+    /** DOM contract. Read by the other two halves and by the tests. */
+    var TRIGGER_ATTR = 'data-row-menu';
+    var TRIGGER_CLASS = 'session-row-menu-trigger';
     var PANEL_ID = 'session-row-menu-panel';
     var PANEL_CLASS = 'session-row-menu';
     var ITEM_CLASS = 'session-row-menu__item';
+    var ITEM_ATTR = 'data-row-menu-item';
+    var DISABLED_ATTR = 'data-row-menu-disabled';
+    var SEPARATOR_CLASS = 'session-row-menu__sep';
+    var KEY_CLASS = 'session-row-menu__key';
+    var LABEL_CLASS = 'session-row-menu__label';
+    var REASON_CLASS = 'session-row-menu__reason';
+
+    /**
+     * The eight items, in render order, each with the letter that runs it.
+     *
+     * RECONCILED 2026-09-10, and the shape is the owner's ruling rather
+     * than either side's design: "merge not take everything". Four items
+     * come from adam's menu (rename, fork, new session in folder, mute),
+     * three from ours (mark unread, move to group, restart the agent),
+     * and close is the one both sides already had. See `.claude/TODO.md`,
+     * "1.2 merge decisions (owner)" decisions 2 and 3.
+     *
+     * ``available`` decides whether the item is RENDERED AT ALL;
+     * ``enabled`` decides whether a rendered item can run. They are two
+     * questions and collapsing them would break both callers:
+     *   - mark unread must VANISH when ``ui.show_mark_unread_control``
+     *     is off (decision 2's one gate), and a disabled-but-visible
+     *     control would still advertise a feature the operator turned
+     *     off.
+     *   - a rename that cannot run must STAY VISIBLE and say why, which
+     *     is the whole point of the aria-disabled treatment below.
+     *
+     * ``reason`` is only consulted when ``enabled`` is false, and must
+     * return a sentence a user can act on, never a code.
+     *
+     * ``separatorBefore`` is true on exactly one item. RESTART AND CLOSE
+     * SIT BELOW IT because both end the process that is running right
+     * now - restart kills the pane and respawns it, so on a live row it
+     * is every bit as destructive as close, and it only ever appears on
+     * a live row (a dead row draws inline restart and remove, and no
+     * menu at all). A mis-aimed keystroke or thumb lands on empty space
+     * rather than on either.
+     * @type {Array<object>}
+     */
+    var ITEMS = [
+        {
+            id: 'rename',
+            shortcut: 'R',
+            separatorBefore: false,
+            label: function () { return 'rename'; },
+            available: function () { return true; },
+            enabled: function (ctx) { return !!ctx.renameable; },
+            reason: function (ctx) {
+                return ctx.renameReason
+                    || 'cannot rename: this session has no live backend to send the change to';
+            },
+        },
+        {
+            id: 'mark-unread',
+            shortcut: 'U',
+            separatorBefore: false,
+            // OURS. The label states the RESULT of activating it, so it
+            // flips with the row's current flag exactly as the inline
+            // control's title did.
+            label: function (ctx) {
+                return ctx.unread ? 'clear unread flag' : 'mark unread for followup';
+            },
+            // THE ONE GATE, asked rather than re-implemented: the surface
+            // stamps this from SessionStatusUI.markUnreadHtml() returning
+            // empty, so `ui.show_mark_unread_control` hides the menu item
+            // and the inline control together and there is no second
+            // place to remember. See client/js/ui-flags.js.
+            available: function (ctx) { return !!ctx.markUnreadAvailable; },
+            enabled: function () { return true; },
+            reason: function () { return ''; },
+        },
+        {
+            id: 'move-to-group',
+            shortcut: 'G',
+            separatorBefore: false,
+            // OURS. Only the sidebar files sessions into groups, so the
+            // launchpad stamps this false rather than offering an item
+            // that would open a picker with nothing behind it.
+            label: function () { return 'move to group'; },
+            available: function (ctx) { return !!ctx.groupable; },
+            enabled: function () { return true; },
+            reason: function () { return ''; },
+        },
+        {
+            id: 'fork',
+            shortcut: 'F',
+            separatorBefore: false,
+            label: function () { return 'fork session'; },
+            available: function () { return true; },
+            enabled: function (ctx) { return !!ctx.forkable; },
+            reason: function (ctx) {
+                return ctx.forkReason
+                    || 'cannot fork: cloudecode did not create this session, so it '
+                    + 'has no recorded conversation to branch from';
+            },
+        },
+        {
+            id: 'new-in-folder',
+            shortcut: 'N',
+            separatorBefore: false,
+            label: function () { return 'new session in folder'; },
+            available: function () { return true; },
+            // ALWAYS OFFERED, and that is a measured choice rather than
+            // an oversight. The folder is read from the stored session
+            // record when the item is ACTIVATED, not when the row is
+            // painted, so at paint time nothing here knows whether one
+            // will be found. Painting it disabled would be a claim
+            // nobody checked; a lookup that comes back empty says so
+            // then, naming the session it could not place.
+            enabled: function () { return true; },
+            reason: function () { return ''; },
+        },
+        {
+            id: 'mute',
+            shortcut: 'M',
+            separatorBefore: false,
+            label: function (ctx) {
+                return ctx.muted ? 'unmute notifications' : 'mute notifications';
+            },
+            available: function () { return true; },
+            enabled: function () { return true; },
+            reason: function () { return ''; },
+        },
+        {
+            id: 'restart',
+            shortcut: 'T',
+            separatorBefore: true,
+            // OURS, AND THIS IS DECISION 3. A live row offers restart;
+            // adam's branch had removed it and the owner ruled it back on
+            // 2026-09-09. Availability is DERIVED FROM SessionRowActions
+            // .actionsFor() rather than from a second status list, so the
+            // row and the menu cannot come to disagree - an `unknown` row
+            // gets no restart here for the same reason it never had one
+            // inline: a control that kills a running process is not
+            // something to offer on a guess.
+            label: function () { return 'restart the agent'; },
+            available: function (ctx) { return !!ctx.restartable; },
+            enabled: function () { return true; },
+            reason: function () { return ''; },
+        },
+        {
+            id: 'close',
+            shortcut: 'C',
+            separatorBefore: false,
+            label: function () { return 'close session'; },
+            available: function () { return true; },
+            enabled: function () { return true; },
+            reason: function () { return ''; },
+        },
+    ];
 
     /**
      * Description: HTML-escape for an attribute, routed through
-     *   SessionSidebarRows so this module owns no second escaper.
+     *   SessionSidebarRows so this module owns no second escaper. The
+     *   local fallback exists only for the load orders that do not have
+     *   that module (the node tests load this file alone).
      * Inputs: value (any). Output: string.
      */
     function esc(value) {
-        if (window.SessionSidebarRows) return window.SessionSidebarRows.esc(value);
+        if (window.SessionSidebarRows
+            && typeof window.SessionSidebarRows.esc === 'function') {
+            return window.SessionSidebarRows.esc(value).replace(/"/g, '&quot;');
+        }
         var div = document.createElement('div');
         div.textContent = value == null ? '' : String(value);
         return div.innerHTML.replace(/"/g, '&quot;');
     }
 
     /**
-     * Description: the row's kebab trigger. It carries the state the menu
-     *   is built from, so the menu is always painted from the same
-     *   payload the row was, rather than from whatever the DOM has drifted
-     *   to since.
+     * Description: the mute state this row should PAINT, which is not
+     *   always the field on the payload. A toggle the user just made is
+     *   held in an in-memory override so the label does not flip back on
+     *   the next repaint while the server-side field catches up; the
+     *   payload is what answers for every row the user has not touched.
      *
-     *   THIN GLYPH, WIDE TARGET. The mark is 16px; padding and an
-     *   overlay give it a 44px tap area on a coarse pointer
-     *   (client/css/session-row-menu.css), and it carries no chip, ring
-     *   or circle - "just dont want any circles around icons on left
-     *   menu ... no border is probably better".
-     * Inputs:
-     *   r (object) - one merged session row, as session-sidebar-rows.js
-     *     builds from. Reads `name`, `status`, `is_pinned`, `unread`.
-     * Output:
-     *   string - HTML for one `<button>`.
-     * Example:
-     *   kebabHtml({name: 'cloude_api', status: 'working'})
+     *   An ABSENT field reads false. That is the old-server case named in
+     *   the contract, and it is also what a payload that simply does not
+     *   carry the field yet looks like. False means "no suppression is
+     *   recorded", which is the safe direction: a session whose alerts we
+     *   cannot confirm are muted keeps alerting.
+     * Inputs: name (string) - tmux session name. payload (boolean|
+     *   undefined|null) - ``notifications_muted`` off the row.
+     * Output: boolean.
+     * Example: mutedFor('cloude_api', undefined) -> false
      */
-    function kebabHtml(r) {
-        var name = (r && r.name) || '';
-        var label = 'more actions for ' + name;
+    var muteOverride = Object.create(null);
+
+    function mutedFor(name, payload) {
+        if (name && Object.prototype.hasOwnProperty.call(muteOverride, name)) {
+            return !!muteOverride[name];
+        }
+        return payload === true;
+    }
+
+    /**
+     * Description: record what this browser now believes about a
+     *   session's mute state, so the next repaint paints the label the
+     *   user just chose rather than the one the last poll carried.
+     *   Passing null FORGETS the override, which is what a rollback does
+     *   when the row's own payload was the truth all along.
+     * Inputs: name (string), muted (boolean|null).
+     * Output: void.
+     */
+    function setMuteOverride(name, muted) {
+        if (!name) return;
+        if (muted === null) { delete muteOverride[name]; return; }
+        muteOverride[name] = !!muted;
+    }
+
+    /**
+     * Description: the frozen identity of one row, built from its payload
+     *   at PAINT time. Every field an item can need is in here, because
+     *   the whole point is that nothing is looked up again later.
+     *
+     *   `renameable` mirrors each surface's own rename verdict rather
+     *   than being re-derived, so the menu cannot offer a rename the row
+     *   itself says is impossible. The caller passes it in.
+     * Inputs:
+     *   r (object) - one row payload (a merged sidebar row, or a
+     *     launchpad running-session row; the fields read are common to
+     *     both).
+     *   opts (object|null) - {surface (string), renameable (boolean),
+     *     renameReason (string)}.
+     * Output: object - the context, all primitives.
+     * Example:
+     *   contextFromRow({name: 'cloude_api', created_by_cloude: true},
+     *                  {surface: 'sidebar', renameable: true})
+     */
+    function contextFromRow(r, opts) {
+        var row = r || {};
+        var o = opts || {};
+        var owned = !!row.created_by_cloude;
+        var sid = row.session_id || null;
+        var forkable = owned && !!row.name;
+        var status = row.status || 'unknown';
+        // DERIVED, NEVER RE-LISTED. SessionRowActions.actionsFor is the
+        // one place that decides which controls a status gets, so asking
+        // it is what keeps decision 3's live-row restart and this menu
+        // from drifting apart. No module here keeps a second status list.
+        var actions = (window.SessionRowActions
+            && typeof window.SessionRowActions.actionsFor === 'function')
+            ? window.SessionRowActions.actionsFor(status)
+            : [];
+        var restartable = actions.indexOf(
+            window.SessionRowActions ? window.SessionRowActions.ACTION_RESTART : 'restart'
+        ) !== -1;
+        // ASK THE ONE GATE rather than reading the flag again. An empty
+        // return is how markUnreadHtml hides the control everywhere, so
+        // an empty return is how this item disappears too.
+        var markUnreadAvailable = !!(window.SessionStatusUI
+            && typeof window.SessionStatusUI.markUnreadHtml === 'function'
+            && window.SessionStatusUI.markUnreadHtml(row.name || '', false) !== '');
+        var groupable = (o.surface || 'sidebar') === 'sidebar'
+            && !!window.SessionSidebarGroupActions;
+        return {
+            name: row.name || '',
+            label: (row.label != null && String(row.label)) || '',
+            sessionId: sid,
+            surface: o.surface || 'sidebar',
+            owned: owned,
+            status: status,
+            unread: !!row.unread,
+            restartable: restartable,
+            markUnreadAvailable: markUnreadAvailable,
+            groupable: groupable,
+            renameable: !!o.renameable,
+            renameReason: o.renameReason || '',
+            forkable: forkable,
+            forkReason: forkable
+                ? ''
+                : 'cannot fork: cloudecode did not create this session, so it has '
+                  + 'no recorded conversation to branch from',
+            muted: mutedFor(row.name, row.notifications_muted),
+        };
+    }
+
+    /**
+     * Description: the trigger button, carrying the whole captured
+     *   context in data attributes. It is a real ``<button>`` with
+     *   ``aria-haspopup="menu"`` and ``aria-expanded``, so it is operable
+     *   by Enter and Space without this module handling either.
+     *
+     *   ``tabindex="-1"`` matches the row's other inline controls: the
+     *   sidebar list owns the tab stop and moves focus between rows
+     *   itself. The menu's own items are the tab-reachable things once it
+     *   is open.
+     * Inputs: ctx (object) - from contextFromRow.
+     * Output: string - HTML for one button.
+     */
+    function triggerHtml(ctx) {
+        var c = ctx || {};
+        var shown = c.label || c.name;
         return (
-            '<button type="button" class="' + KEBAB_CLASS + '" '
-            + KEBAB_ATTR + '="' + esc(name) + '" '
-            + 'data-row-status="' + esc((r && r.status) || 'unknown') + '" '
-            + 'data-row-pinned="' + ((r && r.is_pinned) ? '1' : '0') + '" '
-            + 'data-row-unread="' + ((r && r.unread) ? '1' : '0') + '" '
+            '<button type="button" class="' + TRIGGER_CLASS + '" '
+            + TRIGGER_ATTR + '="' + esc(c.name) + '" '
+            + 'data-row-menu-label="' + esc(c.label) + '" '
+            + 'data-row-menu-session-id="' + esc(c.sessionId || '') + '" '
+            + 'data-row-menu-surface="' + esc(c.surface) + '" '
+            + 'data-row-menu-owned="' + (c.owned ? '1' : '0') + '" '
+            + 'data-row-menu-status="' + esc(c.status) + '" '
+            + 'data-row-menu-unread="' + (c.unread ? '1' : '0') + '" '
+            + 'data-row-menu-restartable="' + (c.restartable ? '1' : '0') + '" '
+            + 'data-row-menu-mark-unread="' + (c.markUnreadAvailable ? '1' : '0') + '" '
+            + 'data-row-menu-groupable="' + (c.groupable ? '1' : '0') + '" '
+            + 'data-row-menu-renameable="' + (c.renameable ? '1' : '0') + '" '
+            + 'data-row-menu-rename-reason="' + esc(c.renameReason) + '" '
+            + 'data-row-menu-forkable="' + (c.forkable ? '1' : '0') + '" '
+            + 'data-row-menu-fork-reason="' + esc(c.forkReason) + '" '
+            + 'data-row-menu-muted="' + (c.muted ? '1' : '0') + '" '
             + 'tabindex="-1" aria-haspopup="menu" aria-expanded="false" '
             + 'aria-controls="' + PANEL_ID + '" '
-            + 'title="more" aria-label="' + esc(label) + '">'
+            + 'title="session actions" '
+            + 'aria-label="' + esc('session actions for ' + shown) + '">'
             + (window.KebabIcon ? window.KebabIcon.svg(16) : '')
             + '</button>'
         );
     }
 
     /**
-     * Description: the raw HTML of every control this row's menu offers,
-     *   in order, FROM THE MODULES THAT ALREADY OWN THOSE CONTROLS. This
-     *   is the single definition the kebab tap, the right click and the
-     *   long press all share: three entry points, one list.
-     *
-     *   A builder may emit more than one button (restart AND remove for
-     *   a dead row), so this returns strings to be expanded.
-     * Inputs:
-     *   kebab (Element) - the trigger, carrying the row's state.
-     * Output:
-     *   Array<string> - HTML fragments, one or more controls each.
+     * Description: read the captured context back off a rendered trigger.
+     *   THE ONE PLACE the open module learns what row it is acting on.
+     * Inputs: el (Element) - a rendered trigger.
+     * Output: object|null - the context, or null with no element.
      */
-    function controlHtmlFor(kebab) {
-        var name = kebab.getAttribute(KEBAB_ATTR) || '';
-        var status = kebab.getAttribute('data-row-status') || 'unknown';
-        var pinned = kebab.getAttribute('data-row-pinned') === '1';
-        var unread = kebab.getAttribute('data-row-unread') === '1';
-        var out = [];
-        if (window.SessionSidebarRows) {
-            out.push(window.SessionSidebarRows.pinButtonHtml(name, pinned));
-        }
-        if (window.SessionStatusUI) {
-            out.push(window.SessionStatusUI.markUnreadHtml(name, unread));
-        }
-        if (window.SessionSidebarGroupActions) {
-            out.push(window.SessionSidebarGroupActions.rowMenuItemHtml(name));
-        }
-        if (window.SessionRowActions) {
-            out.push(window.SessionRowActions.html(
-                status, name, 'session-sidebar-row-delete'));
-        }
-        return out;
+    function contextFromTrigger(el) {
+        if (!el || typeof el.getAttribute !== 'function') return null;
+        function attr(n) { return el.getAttribute(n) || ''; }
+        return {
+            name: attr(TRIGGER_ATTR),
+            label: attr('data-row-menu-label'),
+            sessionId: attr('data-row-menu-session-id') || null,
+            surface: attr('data-row-menu-surface') || 'sidebar',
+            owned: attr('data-row-menu-owned') === '1',
+            status: attr('data-row-menu-status') || 'unknown',
+            unread: attr('data-row-menu-unread') === '1',
+            restartable: attr('data-row-menu-restartable') === '1',
+            markUnreadAvailable: attr('data-row-menu-mark-unread') === '1',
+            groupable: attr('data-row-menu-groupable') === '1',
+            renameable: attr('data-row-menu-renameable') === '1',
+            renameReason: attr('data-row-menu-rename-reason'),
+            forkable: attr('data-row-menu-forkable') === '1',
+            forkReason: attr('data-row-menu-fork-reason'),
+            muted: attr('data-row-menu-muted') === '1',
+        };
     }
 
     /**
-     * Description: turn one control's own markup into a labelled menu
-     *   item, in place. It keeps its element, classes, data attributes
-     *   and aria state, and GAINS `role="menuitem"`, a tab stop and a
-     *   visible label taken from its own `title` - reading the label
-     *   rather than restating it is why this menu cannot drift from the
-     *   row.
-     * Inputs:
-     *   el (Element) - a control built by one of the row builders.
-     * Output:
-     *   Element - the same element, prepared for the menu.
+     * Description: resolve every item against one context - its label
+     *   now, whether it can run now, and why not when it cannot.
+     * Inputs: ctx (object). Output: Array<object>.
+     * Example: itemsFor(ctx)[3].label -> 'mute notifications'
      */
-    function decorateItem(el) {
-        el.classList.add(ITEM_CLASS);
-        el.setAttribute('role', 'menuitem');
-        // The inline pin is `tabindex="-1"` because the ROW owns the tab
-        // stop in the list. A menu item must be reachable on its own.
-        el.setAttribute('tabindex', '0');
-        var label = el.getAttribute('title') || el.getAttribute('aria-label') || '';
-        // A control that already renders its own text is not given a
-        // second label. Nothing folded in today has that shape - every
-        // one of them is icon-only - but the guard costs nothing to keep
-        // and protects whatever the next folded control turns out to be.
-        if (label && !el.textContent.trim()) {
-            var span = document.createElement('span');
-            span.className = 'session-row-menu__label';
-            span.textContent = label;
-            el.appendChild(span);
-        }
-        return el;
+    function itemsFor(ctx) {
+        var c = ctx || {};
+        return ITEMS.filter(function (item) {
+            // An item with no `available` predicate is always rendered,
+            // so a new entry cannot vanish by forgetting to write one.
+            return typeof item.available !== 'function' || !!item.available(c);
+        }).map(function (item) {
+            var ok = !!item.enabled(c);
+            return {
+                id: item.id,
+                shortcut: item.shortcut,
+                separatorBefore: !!item.separatorBefore,
+                label: item.label(c),
+                enabled: ok,
+                reason: ok ? '' : (item.reason(c) || ''),
+            };
+        });
     }
 
     /**
-     * Description: build the panel for one row, unmounted.
-     * Inputs: kebab (Element) - the trigger.
-     * Output: Element|null - null when no control could be built.
-     */
-    function buildPanel(kebab) {
-        var name = kebab.getAttribute(KEBAB_ATTR) || '';
-        var holder = document.createElement('div');
-        holder.innerHTML = controlHtmlFor(kebab).join('');
-        var items = Array.prototype.slice.call(holder.children);
-        if (!items.length) return null;
-
-        var panel = document.createElement('div');
-        panel.id = PANEL_ID;
-        panel.className = PANEL_CLASS;
-        panel.setAttribute('role', 'menu');
-        panel.setAttribute('aria-label', 'actions for ' + name);
-        panel.setAttribute('data-row-menu-for', name);
-        items.forEach(function (el) { panel.appendChild(decorateItem(el)); });
-        return panel;
-    }
-
-    /**
-     * Description: every focusable item in the open panel, in order.
-     * Inputs: none. Output: Array<Element>.
-     */
-    function items() {
-        if (!panelEl) return [];
-        return Array.prototype.slice.call(
-            panelEl.querySelectorAll('[role="menuitem"]'));
-    }
-
-    /**
-     * Description: move focus within the open menu.
-     * Inputs: delta (number) - +1 next, -1 prev, 0 first, Infinity last.
-     * Output: void.
-     */
-    function moveFocus(delta) {
-        var list = items();
-        if (!list.length) return;
-        var at = list.indexOf(document.activeElement);
-        var next;
-        if (delta === 0) next = 0;
-        else if (delta === Infinity) next = list.length - 1;
-        else if (at === -1) next = delta > 0 ? 0 : list.length - 1;
-        else next = (at + delta + list.length) % list.length;
-        list[next].focus();
-    }
-
-    /**
-     * Description: is a menu open right now?
+     * Description: whether the shortcut letters are all distinct. Stated
+     *   as a function rather than trusted, because the failure it guards
+     *   is silent: two items sharing a letter would render two identical
+     *   hints and the key would only ever reach the first.
      * Inputs: none. Output: boolean.
      */
-    function isOpen() {
-        return !!panelEl;
-    }
-
-    /**
-     * Description: the tmux name the open menu belongs to, or null, so a
-     *   second gesture on the SAME row does not tear the menu down and
-     *   rebuild it in a new place.
-     * Inputs: none. Output: string|null.
-     */
-    function openFor() {
-        return panelEl ? panelEl.getAttribute('data-row-menu-for') : null;
-    }
-
-    /**
-     * Description: close the open menu, if any, and put focus back where
-     *   the user left it. Focus is only MOVED when it is currently inside
-     *   the menu - closing because the user clicked elsewhere must not
-     *   yank focus off whatever they just clicked.
-     * Inputs: none. Output: void.
-     */
-    function close() {
-        if (onDocPointer) {
-            document.removeEventListener('pointerdown', onDocPointer, true);
-            onDocPointer = null;
+    function uniqueShortcuts() {
+        var seen = Object.create(null);
+        for (var i = 0; i < ITEMS.length; i++) {
+            var k = String(ITEMS[i].shortcut).toUpperCase();
+            if (seen[k]) return false;
+            seen[k] = true;
         }
-        if (onDocKey) {
-            document.removeEventListener('keydown', onDocKey, true);
-            onDocKey = null;
-        }
-        if (onReflow) {
-            if (scrollEl) scrollEl.removeEventListener('scroll', onReflow);
-            window.removeEventListener('resize', onReflow);
-            onReflow = null;
-            scrollEl = null;
-        }
-        var hadFocus = !!(panelEl && panelEl.contains(document.activeElement));
-        var forName = panelEl ? panelEl.getAttribute('data-row-menu-for') : null;
-        if (panelEl && panelEl.parentNode) panelEl.parentNode.removeChild(panelEl);
-        panelEl = null;
-        var trigger = triggerEl;
-        triggerEl = null;
-        if (!trigger) return;
-        // A POLL REPAINT REWRITES THE WHOLE LIST, so the kebab we opened
-        // from can be a detached node by now. Re-resolve it by name: that
-        // way `aria-expanded` is cleared on the button the user can
-        // actually see rather than on a corpse, and focus goes back to a
-        // real control instead of to <body>, off screen. Commit 7bf95e5
-        // fixed the same class of bug one level up.
-        var live = document.contains(trigger)
-            ? trigger
-            : (forName && document.querySelector(
-                '[' + KEBAB_ATTR + '="' + CSS.escape(forName) + '"]'));
-        (live || trigger).setAttribute('aria-expanded', 'false');
-        if (!hadFocus) return;
-        if (live) { live.focus(); return; }
-        var list = document.getElementById('session-sidebar-list');
-        if (list && typeof list.focus === 'function') list.focus();
-    }
-
-    /**
-     * Description: run the action a menu item stands for, by handing it
-     *   to the module that already owns that action. The menu adds no
-     *   behaviour of its own - it is a second place to reach the same
-     *   handlers the inline controls reached.
-     *
-     *   The menu is closed FIRST. Every one of these ends in a repaint
-     *   that rewrites the list, and a panel still holding focus while its
-     *   row is destroyed is the focus-stranding bug all over again.
-     * Inputs:
-     *   e (Event) - the click inside the panel.
-     * Output: void.
-     */
-    function dispatch(e) {
-        var target = e.target;
-        if (!target || typeof target.closest !== 'function') return;
-        var ctrl = window.SessionSidebar;
-        var clicks = window.SessionSidebarClicks;
-
-        var actionEl = window.SessionRowActions
-            ? target.closest('[' + window.SessionRowActions.ATTR_ACTION + ']')
-            : null;
-        if (actionEl && clicks) {
-            e.preventDefault();
-            close();
-            clicks.onRowActionClick(ctrl, actionEl);
-            return;
-        }
-        var unreadEl = target.closest('[data-mark-unread]');
-        if (unreadEl && clicks) {
-            e.preventDefault();
-            close();
-            clicks.onMarkUnreadClick(ctrl, unreadEl);
-            return;
-        }
-        var pinEl = target.closest('[data-pin-session]');
-        if (pinEl && window.SessionSidebarReorder) {
-            // onPinClick reads the control back off the event and does its
-            // own preventDefault/stopPropagation, so it is given the real
-            // event rather than a name.
-            window.SessionSidebarReorder.onPinClick(e);
-            close();
-            return;
-        }
-        var groupEl = target.closest('[data-group-pick]');
-        if (groupEl && window.SessionSidebarGroupActions) {
-            e.preventDefault();
-            // The anchor for the picker has to be captured BEFORE close(),
-            // which nulls triggerEl and detaches groupEl along with the
-            // rest of this panel - an anchor with no box would open the
-            // picker at the viewport's top-left corner instead of near
-            // the row it belongs to.
-            var anchor = triggerEl || groupEl;
-            var pickName = groupEl.getAttribute('data-group-pick');
-            close();
-            window.SessionSidebarGroupActions.openPickerFor(anchor, pickName);
-            return;
-        }
-        // A click on the panel's own padding is not an action. Swallow it
-        // so it cannot reach anything behind the menu.
-        e.preventDefault();
-    }
-
-    /**
-     * Description: mount and show the panel for a kebab, placed by the
-     *   given placer. THE ONE OPEN PATH - the kebab tap, the right click
-     *   and the long press all arrive here, so there is one menu, one
-     *   set of items and one set of dismiss rules however it was opened.
-     *
-     *   Opening closes whatever was open first, including the group
-     *   picker, so there is never a second menu on screen.
-     * Inputs:
-     *   kebab (Element) - the row's trigger.
-     *   place (function(Element): void) - positions the mounted panel.
-     * Output: boolean - whether a menu is now open.
-     */
-    function openWith(kebab, place) {
-        close();
-        if (window.SessionSidebarGroupActions
-            && typeof window.SessionSidebarGroupActions.closeMenu === 'function') {
-            window.SessionSidebarGroupActions.closeMenu();
-        }
-        if (!kebab) return false;
-        var panel = buildPanel(kebab);
-        if (!panel) return false;
-
-        document.body.appendChild(panel);
-        panelEl = panel;
-        triggerEl = kebab;
-        kebab.setAttribute('aria-expanded', 'true');
-        place(panel);
-
-        panel.addEventListener('click', dispatch);
-
-        onDocPointer = function (ev) {
-            if (!panelEl) return;
-            if (panelEl.contains(ev.target)) return;
-            if (triggerEl && triggerEl.contains(ev.target)) return;
-            close();
-        };
-        onDocKey = function (ev) {
-            if (!panelEl) return;
-            if (ev.key === 'Escape') {
-                ev.preventDefault();
-                ev.stopPropagation();
-                close();
-                return;
-            }
-            if (!panelEl.contains(document.activeElement)) return;
-            if (ev.key === 'ArrowDown') { ev.preventDefault(); moveFocus(1); }
-            else if (ev.key === 'ArrowUp') { ev.preventDefault(); moveFocus(-1); }
-            else if (ev.key === 'Home') { ev.preventDefault(); moveFocus(0); }
-            else if (ev.key === 'End') { ev.preventDefault(); moveFocus(Infinity); }
-        };
-        // ESCAPE IS BOUND SYNCHRONOUSLY. It used to be deferred with the
-        // pointer handler below, and there was a real window - measured
-        // in Chromium - in which the menu was on screen and Escape did
-        // nothing. A person is unlikely to be that fast; a keyboard macro
-        // and an automated test are not, and "the control works unless
-        // you are quick" is not a state worth shipping. There is nothing
-        // for the defer to protect against here anyway: the keydown that
-        // opens a menu (Enter or Space on the kebab) is delivered before
-        // the click it synthesises, so it can never be seen by a listener
-        // this call has not bound yet.
-        document.addEventListener('keydown', onDocKey, true);
-        // The POINTER handler stays deferred a tick, so the pointerdown
-        // that opened this does not immediately dismiss it. Same guard
-        // session-theme-menu.js uses.
-        setTimeout(function () {
-            if (!panelEl) return;
-            document.addEventListener('pointerdown', onDocPointer, true);
-        }, 0);
-
-        // A FIXED PANEL OVER A SCROLLING LIST MUST NOT HANG IN SPACE.
-        // Closing is the honest answer: the row it belongs to has moved,
-        // and re-placing it every frame would make a phone scroll stutter.
-        onReflow = function () { close(); };
-        scrollEl = document.getElementById('session-sidebar-list');
-        if (scrollEl) scrollEl.addEventListener('scroll', onReflow, { passive: true });
-        window.addEventListener('resize', onReflow, { passive: true });
-
-        moveFocus(0);
         return true;
     }
 
     /**
-     * Description: open the menu against the row's kebab - above it with
-     *   right edges flush, dropping below when there is no room, clamped
-     *   into the visible viewport. The placement rule is the app's one
-     *   rule (client/js/anchor-popover.js), not a copy.
-     * Inputs: kebab (Element).
-     * Output: boolean.
+     * Description: the panel's inner markup for one context.
+     *
+     *   A disabled item keeps ``tabindex="0"`` and gains
+     *   ``aria-disabled="true"`` rather than the ``disabled`` attribute.
+     *   A natively disabled button is skipped by focus entirely, so the
+     *   explanation would be unreachable by exactly the users who most
+     *   need it. The reason is rendered as TEXT inside the item and
+     *   referenced by ``aria-describedby``, so it is announced rather
+     *   than left in a tooltip a keyboard never opens.
+     * Inputs: ctx (object). Output: string - HTML.
      */
-    function openForKebab(kebab) {
-        return openWith(kebab, function (panel) {
-            if (window.AnchorPopover) window.AnchorPopover.place(panel, kebab);
-        });
+    function panelHtml(ctx) {
+        var c = ctx || {};
+        return itemsFor(c).map(function (item, i) {
+            var sep = item.separatorBefore
+                ? '<div class="' + SEPARATOR_CLASS + '" role="separator"></div>'
+                : '';
+            var reasonId = PANEL_ID + '-reason-' + i;
+            var reason = (!item.enabled && item.reason)
+                ? '<span class="' + REASON_CLASS + '" id="' + reasonId + '">'
+                  + esc(item.reason) + '</span>'
+                : '';
+            return sep
+                + '<button type="button" class="' + ITEM_CLASS + '" role="menuitem" '
+                + ITEM_ATTR + '="' + esc(item.id) + '" '
+                + 'data-row-menu-key="' + esc(item.shortcut) + '" '
+                + 'tabindex="0" '
+                + (item.enabled
+                    ? ''
+                    : ('aria-disabled="true" ' + DISABLED_ATTR + '="1" '
+                       + 'aria-describedby="' + reasonId + '" '
+                       + 'title="' + esc(item.reason) + '" '))
+                + '>'
+                + '<span class="' + LABEL_CLASS + '">' + esc(item.label) + '</span>'
+                + '<span class="' + KEY_CLASS + '" aria-hidden="true">'
+                + esc(item.shortcut) + '</span>'
+                + reason
+                + '</button>';
+        }).join('');
     }
 
     /**
-     * Description: open the menu at a pointer position - what a right
-     *   click means. Same panel, same items, same dismiss rules.
-     * Inputs: kebab (Element) - still the trigger, so focus goes home to
-     *   a visible control rather than to the pointer's last position.
-     *   x (number), y (number) - client coordinates.
-     * Output: boolean.
+     * Description: the item id one letter runs, or null. Case-insensitive
+     *   because a user holding shift for a capital letter means the same
+     *   thing; MODIFIERS are the caller's problem, not this table's.
+     * Inputs: key (string) - a KeyboardEvent.key value.
+     * Output: string|null - an item id.
      */
-    function openAtPoint(kebab, x, y) {
-        return openWith(kebab, function (panel) {
-            if (window.AnchorPopover) window.AnchorPopover.placeAt(panel, x, y);
-        });
-    }
-
-    /**
-     * Description: the kebab belonging to a row element, or null.
-     * Inputs: rowEl (Element|null). Output: Element|null.
-     */
-    function kebabIn(rowEl) {
-        if (!rowEl || typeof rowEl.querySelector !== 'function') return null;
-        return rowEl.querySelector('[' + KEBAB_ATTR + ']');
+    function itemIdForKey(key) {
+        if (typeof key !== 'string' || key.length !== 1) return null;
+        var want = key.toUpperCase();
+        for (var i = 0; i < ITEMS.length; i++) {
+            if (ITEMS[i].shortcut === want) return ITEMS[i].id;
+        }
+        return null;
     }
 
     window.SessionRowMenu = {
-        KEBAB_ATTR: KEBAB_ATTR,
-        KEBAB_CLASS: KEBAB_CLASS,
+        TRIGGER_ATTR: TRIGGER_ATTR,
+        TRIGGER_CLASS: TRIGGER_CLASS,
         PANEL_ID: PANEL_ID,
         PANEL_CLASS: PANEL_CLASS,
         ITEM_CLASS: ITEM_CLASS,
-        kebabHtml: kebabHtml,
-        kebabIn: kebabIn,
-        controlHtmlFor: controlHtmlFor,
-        buildPanel: buildPanel,
-        openForKebab: openForKebab,
-        openAtPoint: openAtPoint,
-        close: close,
-        isOpen: isOpen,
-        openFor: openFor,
-        items: items,
+        ITEM_ATTR: ITEM_ATTR,
+        DISABLED_ATTR: DISABLED_ATTR,
+        SEPARATOR_CLASS: SEPARATOR_CLASS,
+        KEY_CLASS: KEY_CLASS,
+        LABEL_CLASS: LABEL_CLASS,
+        REASON_CLASS: REASON_CLASS,
+        ITEMS: ITEMS,
+        esc: esc,
+        mutedFor: mutedFor,
+        setMuteOverride: setMuteOverride,
+        contextFromRow: contextFromRow,
+        contextFromTrigger: contextFromTrigger,
+        triggerHtml: triggerHtml,
+        itemsFor: itemsFor,
+        panelHtml: panelHtml,
+        itemIdForKey: itemIdForKey,
+        uniqueShortcuts: uniqueShortcuts,
     };
 })();
 

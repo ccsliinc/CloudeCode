@@ -268,6 +268,38 @@ console.log('[SessionRowActions Module] Loading...');
     }
 
     /**
+     * Whether a row with this status draws the three-dot ACTION MENU.
+     *
+     * Description: the menu carries every action except pin, so the
+     *   question "does this row get a menu" is the same question as
+     *   "would this row have painted a close X" - a running row gets the
+     *   menu, and `close session` is an item inside it.
+     *
+     *   DERIVED FROM ``actionsFor``, never from a second status list, so
+     *   the row and the menu cannot come to disagree about which one a
+     *   status gets. That matters here more than usual: OUR ``actionsFor``
+     *   keeps RESTART on a live row (decision 3 of the 1.2 merge, settled
+     *   by the owner on 2026-09-09), and the menu's own restart item
+     *   asks this same function whether to offer it.
+     *
+     *   A DEAD row answers false. It keeps its inline restart and remove
+     *   and gets no menu, because the menu's items are what a RUNNING
+     *   session needs. A dead row is also not meant to be on the live
+     *   list at all - decision 4 sends it to Recent.
+     * Inputs:
+     *   status (string|null|undefined) - raw activity status.
+     * Output:
+     *   boolean - true when the row draws the menu instead of an X.
+     * Example:
+     *   offersMenu('working') -> true
+     *   offersMenu('dead')    -> false
+     *   offersMenu(undefined) -> true   // unknown still closes
+     */
+    function offersMenu(status) {
+        return actionsFor(status).indexOf(ACTION_CLOSE) !== -1;
+    }
+
+    /**
      * Back-compat single-action accessor.
      *
      * Description: kept so no existing call site has to change in the
@@ -507,6 +539,7 @@ console.log('[SessionRowActions Module] Loading...');
         BASE_CLASS,
         actionFor,
         actionsFor,
+        offersMenu,
         requiresConfirm,
         labelFor,
         iconFor,

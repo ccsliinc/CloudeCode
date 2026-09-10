@@ -310,15 +310,25 @@ console.log('[SessionSidebarClicks Module] Loading...');
             alert(`could not restart "${name}": the restart picker did not load.`);
             return;
         }
-        // The row does not carry its own status; the KEBAB does
-        // (`data-row-status`, set in SessionRowMenu.kebabHtml). Read it
-        // from there rather than adding a second copy of the same fact to
-        // the row, and resolve it by NAME so this works identically
-        // whether the button was clicked on the row or inside the
-        // body-mounted overflow panel.
-        const kebab = document.querySelector(
+        // The row does not carry its own status; the MENU TRIGGER does
+        // (`data-row-menu-status`, stamped by SessionRowMenu.triggerHtml).
+        // Read it from there rather than adding a second copy of the same
+        // fact to the row, and resolve it by NAME so this works
+        // identically whether restart was chosen from the row's menu or
+        // reached some other way.
+        //
+        // THE ATTRIBUTE NAME IS LOAD-BEARING: it was `data-row-status` on
+        // our own kebab until the 2026-09-10 reconcile moved us onto
+        // adam's trigger, which spells it `data-row-menu-status`. Reading
+        // the old spelling against the new trigger returns null and the
+        // picker reports every restart as "unknown" with nothing failing,
+        // which is the exact defect the sidebar compare report flagged as
+        // "a merge that compiles and lies".
+        const trigger = document.querySelector(
             `[data-row-menu="${CSS.escape(name)}"]`);
-        const status = kebab ? kebab.getAttribute('data-row-status') : null;
+        const status = trigger
+            ? trigger.getAttribute('data-row-menu-status')
+            : null;
         // The name column's TEXT is the display label - the same value
         // SessionLabel resolved when the row was painted. A dialog that
         // names the session differently than the row does is the bug the

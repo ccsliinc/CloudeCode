@@ -145,7 +145,10 @@ console.log('[ProjectListRenderGuard Module] Loading...');
         var doc = (opts && opts.doc) || (typeof document !== 'undefined' ? document : null);
         if (!container) return false;
 
-        var menu = typeof window !== 'undefined' ? window.SessionRowMenu : null;
+        // OURS, KEPT. A repaint under an open row menu is guarded here.
+        // The open/close state moved to SessionRowMenuOpen in the
+        // 2026-09-10 reconcile; the predicate is the same one.
+        var menu = typeof window !== 'undefined' ? window.SessionRowMenuOpen : null;
         if (menu && typeof menu.isOpen === 'function' && menu.isOpen()) return true;
 
         if (typeof container.querySelector === 'function') {
