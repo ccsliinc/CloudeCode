@@ -722,8 +722,20 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // why the keyboard and the D-pad deliberately do not, and why a
     // stale claim drops rather than queues - lives in
     // client/js/terminal-input-ownership.js.
+    // RAISED 2492 -> 2570, with the stated reason this comment demands.
+    // The xterm write queue is bounded and is released on a session
+    // switch. enqueue() now admits under a byte budget and sheds the
+    // OLDEST chunks with one announced marker in their place; flush()
+    // tracks the single in-flight write; and both entry paths discard the
+    // outgoing session's queue and then WAIT for that write before
+    // term.reset(), because resetting under a write xterm has already
+    // accepted is undefined and is what produced a half-cleared screen
+    // showing the previous session's tail. The budget, the shed rule and
+    // the marker's wording are all in client/js/terminal-write-queue.js;
+    // what is here is the queue itself and the two-step teardown, which
+    // cannot live anywhere else because they are this object's state.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2492, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2570, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {

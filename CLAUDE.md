@@ -2160,6 +2160,53 @@ the ticket BEFORE its "clipboard is empty" and "terminal not connected"
 reports, because those would be misleading answers to "why did my paste
 vanish". A dropped upload also raises no attachment card.
 
+**AND THE WRITE QUEUE IS BOUNDED AND IS RELEASED ON A SWITCH.**
+`Terminal#enqueue` pushed every incoming chunk with no size or count
+limit, and `flush()` re-scheduled itself while the queue had anything in
+it - so bytes that arrived for the OLD session were still being written
+after navigation began, and the `term.reset()` that followed raced a write
+xterm had already accepted. That is the half-cleared screen showing the
+previous session's tail. `client/js/terminal-write-queue.js` is the
+policy; terminal.js keeps the queue.
+
+**THE TWO HALVES OF THE QUEUE ARE DIFFERENT THINGS, and the teardown turns
+on that.** Bytes still in `this.queue` are OURS - nobody has seen them and
+they belong to the outgoing session - so they are discardable. Bytes
+already handed to `term.write()` belong to XTERM, and resetting under an
+accepted write is undefined. So `_releaseQueueForSwitch()` is two steps in
+one order: discard what is ours, then AWAIT the in-flight write's own
+callback, and only then reset. NO TIMER - guessing when a write finished
+is how you reset under one anyway, and if the callback never arrives the
+terminal is being torn down regardless. It runs only when the reconnect
+buffer's plan is not `keep`, because a `keep` is the SAME session and its
+bytes are still its own. `_writeInFlight` is cleared in exactly ONE place,
+inside that callback, and a test counts it: a second clear would let a
+switch wait forever on a resolver nobody calls.
+
+**A BYTE BUDGET, NOT A CHUNK COUNT**, because chunk sizes vary by four
+orders of magnitude between a keystroke echo and a `cat` of a large file.
+`MAX_QUEUED_BYTES` is 4 MiB, the SAME number the server-side viewer queues
+use - one number in the system beats two separately tuned ones - and the
+point of the bound is to make the worst case FINITE, not fast.
+`MARKER_RESERVE` (128 bytes) is held back so the drop marker itself fits
+INSIDE the ceiling; without it the queue lands a marker's worth over on
+every shed, and a bound that does not hold is a number nobody can reason
+from.
+
+**DROP FROM THE FRONT, WHOLE CHUNKS, AND SAY SO.** The newest output is
+what the user is looking at, so shedding the tail would throw away the
+very thing the pressure is producing. Whole chunks because slicing to hit
+the budget exactly would cut an escape sequence in half, which does not
+corrupt one cell - it puts the VT parser into a state that garbles
+everything after. Whole chunks are not a guarantee of alignment either
+(one sequence can straddle two frames), which is exactly why the drop is
+ANNOUNCED: a terminal that silently loses ANSI bytes lies, and that is
+worse than a slow one. `_queuedBytes` is a running total rather than a
+re-sum, so admission is O(1) per chunk instead of growing precisely when
+the queue is longest. The scrollback follow decision is still sampled
+BEFORE the write, where `terminal-scroll.js` put it, and a test pins that
+it did not move.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,

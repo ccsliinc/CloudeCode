@@ -51,9 +51,18 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // WebSocket keepalive
         this.keepaliveInterval = null;
 
-        // Single-writer queue for PTY data
+        // Single-writer queue for PTY data. `_queuedBytes` is the queue's
+        // running size, kept rather than re-summed, so admission is O(1)
+        // per chunk instead of O(queue) - the cost would otherwise grow
+        // exactly when the queue is longest. `_writeInFlight` is the fact
+        // the switch teardown waits on: bytes already handed to
+        // term.write() belong to xterm, and resetting under an accepted
+        // write is undefined. See client/js/terminal-write-queue.js.
         this.queue = [];
         this.flushing = false;
+        this._queuedBytes = 0;
+        this._writeInFlight = false;
+        this._writeDrained = null;
 
         // Auto-scroll behavior
         this.autoScrollEnabled = true;
@@ -648,14 +657,62 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     }
 
     /**
-     * Enqueue PTY data for writing
+     * Enqueue PTY data for writing, under a byte budget.
+     *
+     * A BYTE BUDGET AND NOT A CHUNK COUNT, because chunk sizes vary by
+     * four orders of magnitude between a keystroke echo and a `cat` of a
+     * large file. On overflow the OLDEST chunks go and a marker is
+     * written in their place: the newest output is what the user is
+     * looking at, and a drop that is not announced makes the terminal
+     * lie. The policy, the budget and the wording all live in
+     * client/js/terminal-write-queue.js.
+     *
+     * @param {Uint8Array} bytes - one frame of pane output.
+     * @returns {void}
      */
     enqueue(bytes) {
+        const policy = window.TerminalWriteQueue;
+        if (policy) {
+            const over = policy.overflowBytes(this._queuedBytes, bytes.length);
+            if (over > 0) {
+                const dropped = policy.shedFront(this.queue, over);
+                this._queuedBytes -= dropped;
+                if (this._queuedBytes < 0) this._queuedBytes = 0;
+                // The marker goes to the FRONT of what survived, because
+                // that is where the gap is in the stream.
+                const mark = new TextEncoder().encode(policy.dropMarker(dropped));
+                this.queue.unshift(mark);
+                this._queuedBytes += mark.length;
+                console.warn('[terminal] shed', dropped, 'bytes of unwritten output');
+            }
+        }
         this.queue.push(bytes);
+        this._queuedBytes += bytes.length;
         if (!this.flushing) {
             this.flushing = true;
             requestAnimationFrame(() => this.flush());
         }
+    }
+
+    /**
+     * Description: release the outgoing session's bytes and wait for the
+     *   one write xterm has already accepted, in that order, so a reset
+     *   never lands under a write in progress. The two halves are
+     *   different things: the queue is OURS and is discardable, the
+     *   in-flight write is XTERM'S and is not.
+     * Inputs: none.
+     * Output: Promise<void>. Resolves immediately when nothing is in
+     *   flight, which is the ordinary case.
+     *
+     * NO TIMER. Guessing when a write finished is how you reset under one
+     * anyway, and if the callback never arrives the terminal is being
+     * torn down regardless.
+     */
+    _releaseQueueForSwitch() {
+        this.queue.length = 0;
+        this._queuedBytes = 0;
+        if (!this._writeInFlight) return Promise.resolve();
+        return new Promise((resolve) => { this._writeDrained = resolve; });
     }
 
     /**
@@ -680,8 +737,19 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             ? window.TerminalScroll.shouldFollowOutput(this.term)
             : this.autoScrollEnabled;
 
+        this._queuedBytes = 0;
+        this._writeInFlight = true;
         this.term.write(merged, () => {
             this.flushing = false;
+            this._writeInFlight = false;
+            // THE ONE PLACE the in-flight fact is cleared, so a switch
+            // waiting on it cannot be left waiting by a second clear
+            // somewhere else.
+            if (this._writeDrained) {
+                const drained = this._writeDrained;
+                this._writeDrained = null;
+                drained();
+            }
 
             if (follow && this.term) {
                 this.term.scrollToBottom();
@@ -867,6 +935,14 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // alt-buffer + wraps state; term.clear() only clears the visible screen.
         // We want reset() so the VT parser starts fresh for the new session.
         if (this.term && paintPlan !== 'keep') {
+            // TWO-STEP TEARDOWN, AND THE ORDER IS THE WHOLE CLAIM. The
+            // socket is closed above, so nothing new arrives; this drops
+            // the bytes still queued for the OUTGOING session and then
+            // waits for the one write xterm has already accepted, so the
+            // reset below cannot land under it. A 'keep' plan is the same
+            // session and its bytes are still its own, which is why this
+            // sits inside the branch. See client/js/terminal-write-queue.js.
+            await this._releaseQueueForSwitch();
             try {
                 this.term.reset();
             } catch (e) {
@@ -1010,6 +1086,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // alt-buffer + wraps state; term.clear() only clears the visible screen.
         // We want reset() so the VT parser starts fresh for the new session.
         if (this.term && paintPlan !== 'keep') {
+            // Same two-step teardown as connectToSession() - see the
+            // comment on its copy for why the order is the whole claim.
+            await this._releaseQueueForSwitch();
             try {
                 this.term.reset();
             } catch (e) {

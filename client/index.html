@@ -1053,6 +1053,14 @@
          confusing, input in the wrong pane runs a command. Must load
          BEFORE terminal.js and before clipboard.js. -->
     <script src="/static/js/terminal-input-ownership.js"></script>
+    <!-- The admission policy for bytes on their way into xterm: a byte
+         budget, drop from the FRONT, and one announced marker in place
+         of what went. PURE - measurements in, a number out - so
+         terminal.js keeps the queue and this keeps the rule. Must load
+         BEFORE terminal.js, whose enqueue() reads it on every frame; if
+         it is missing the queue is unbounded, which is the behaviour
+         that shipped. -->
+    <script src="/static/js/terminal-write-queue.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Punchlist item 1: after a measured absence, OFFER full history, a
          summary of what happened, or just carry on, instead of the app
