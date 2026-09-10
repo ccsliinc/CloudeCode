@@ -35,3 +35,13 @@ must get a row in CLAUDE.md's docs index or that test fails.
 ## Agent findings
 
 (append below, format: [AGENT] [TIME]: finding)
+
+[ORCH] 2026-09-10 19:07: full suite on merged master read 3 failed / 5769 passed.
+All three drive the REAL tmux socket with a 6.0s wall-clock deadline in _wait_for.
+Box was at load average 19.7 with 11 concurrent pytest processes from parallel
+agents. Verified: the same two fail identically at base commit 53ed219, which was
+measured 0 failed on a quiet box. test_tmux_backend_respawn passes in isolation.
+This is contention, not a regression. A clean full-suite number is OWED on a quiet
+box. Candidate follow-up: the real_tmux marker added for #59 should cover
+tests/test_session_restart_wrapper_choice.py, whose 6s deadline is the tightest
+in the real-tmux family.
