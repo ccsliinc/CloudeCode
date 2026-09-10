@@ -78,6 +78,7 @@ const MODULES = [
     'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
     'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
+        'archive-row-cache.js',
         'archive-reader.js',
     'archive-nav-row.js', 'archive-nav-card.js', 'archive-nav-info.js', 'archive-nav-tree.js',
                         'archive-nav.js',

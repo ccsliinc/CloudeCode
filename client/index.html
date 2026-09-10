@@ -1441,6 +1441,9 @@
     <script src="/static/js/archive-reader-paging.js"></script>
     <script src="/static/js/archive-reader-select.js"></script>
     <script src="/static/js/archive-reader-body.js"></script>
+    <!-- The reused-row node cache. Must load before archive-reader.js,
+         which asks window.ArchiveRowCache for one per reader instance. -->
+    <script src="/static/js/archive-row-cache.js"></script>
     <script src="/static/js/archive-reader.js"></script>
     <script src="/static/js/archive-search-render.js"></script>
     <script src="/static/js/archive-search.js"></script>
