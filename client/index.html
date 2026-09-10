@@ -812,6 +812,13 @@
          fetch: no DOM, so its position here is about who reads it, not
          about what it paints. -->
     <script src="/static/js/preferences.js"></script>
+    <!-- Where the preference block meets the terminal socket: the
+         preferences.changed branch and the authoritative refresh on
+         reconnect. Its own file so terminal.js keeps one delegating line
+         each instead of the reasoning, the same split
+         terminal-socket-abandon.js already uses. Loads after
+         preferences.js and before terminal.js. -->
+    <script src="/static/js/preferences-transport.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->
