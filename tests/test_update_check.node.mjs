@@ -103,6 +103,36 @@ await atest('checkForUpdate never throws', async () => {
   }
 });
 
+// ---- which repo the feed points at ---------------------------------
+// PINNED ON PURPOSE. The feed URL is an outward-facing contract with every
+// installed copy of this app, and it has already moved once. A change here
+// must be a decision someone made, not a change someone made in passing.
+test('the feed is the upstream product repo, by the 2026-09-10 ruling', () => {
+  assert.equal(
+    U.UPDATE_FEED_URL,
+    'https://api.github.com/repos/Adoom666/CloudeCode/releases/latest',
+    'both checkers point at Adoom666/CloudeCode; see docs/DECISIONS.md'
+  );
+});
+
+await atest('a latest OLDER than the install is current, never a downgrade', async () => {
+  // The measured state on 2026-09-10: the feed repo publishes v1.0.36 while
+  // this line ships 1.2.1. The figure reported is wrong and that is a known,
+  // recorded consequence. What must NEVER happen is a prompt to "upgrade"
+  // onto an older release, so it is asserted with the real numbers.
+  const feed = async () => ({
+    ok: true, status: 200,
+    json: async () => ({
+      tag_name: 'v1.0.36',
+      html_url: 'https://github.com/Adoom666/CloudeCode/releases/tag/v1.0.36'
+    })
+  });
+  const r = await U.checkForUpdate('1.2.1', feed);
+  assert.equal(r.result, U.RESULT_CURRENT, 'an older latest must not offer an upgrade');
+  assert.notEqual(r.result, U.RESULT_AVAILABLE);
+  assert.equal(r.latest, '1.0.36', 'the wrong-but-honest figure is still reported');
+});
+
 console.log(`${passes} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);
 console.log('ALL PASS');

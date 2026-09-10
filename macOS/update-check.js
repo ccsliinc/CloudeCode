@@ -18,8 +18,25 @@
  * actively tells the user a falsehood they will act on.
  */
 
+/**
+ * WHICH REPO THIS ASKS, and it is a decision rather than an accident.
+ *
+ * Adoom666/CloudeCode is the upstream product, and by the owner's ruling of
+ * 2026-09-10 ("use adams main repo") BOTH update checkers consult it: this
+ * one, and the server's `src/core/update_check.py` (FALLBACK_REMOTE and
+ * DEFAULT_UPGRADE_COMMAND). It previously pointed at ccsliinc/CloudeCode,
+ * so the two disagreed about what "latest" even meant.
+ *
+ * KNOWN CONSEQUENCE, stated here rather than discovered later. That repo
+ * publishes v1.0.36 while this line ships 1.2.1, so an install is told the
+ * latest release is OLDER than the one it is running. It does NOT prompt a
+ * downgrade: compareVersions('1.2.1', '1.0.36') is 1, checkForUpdate only
+ * reports RESULT_AVAILABLE when the comparison is negative, so the outcome
+ * is RESULT_CURRENT. What IS wrong is the figure reported alongside it, and
+ * the release the upgrade link opens. See docs/DECISIONS.md, 2026-09-10.
+ */
 const UPDATE_FEED_URL =
-  'https://api.github.com/repos/ccsliinc/CloudeCode/releases/latest';
+  'https://api.github.com/repos/Adoom666/CloudeCode/releases/latest';
 
 const CHECK_TIMEOUT_MS = 6000;
 
