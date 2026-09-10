@@ -6535,3 +6535,58 @@ the upstream this project may not push to, and reports
 sorts above 1.0.36, so the visible symptom is a bogus "latest" figure and an
 `upgrade_command` pointing at the forbidden fork's releases page rather than a
 false update prompt. Where the update checker SHOULD point is the owner's call.
+
+## 2026-09-10 - backend decomposition, claim plus plan (no code)
+
+**What this round was.** Measurement and design only. No product code written,
+nothing deployed. Two artifacts: a coordination claim and a plan.
+
+**The claim.** `claims/ccsliinc-backend-decomposition.md` on the orphan `coord`
+branch, committed `dc5db2d`, pushed to `adamdev` and `origin`. Filed BEFORE any
+code, which is what that branch exists for. `scripts/scan_secrets.py` clean
+(1,367 files, exit 0) and `gitleaks protect` clean on the working tree before
+pushing; `gitleaks detect` reports 7 historical findings, all in `THEPROBLEM.md`
+and `worklog.md` from commits dated 2025-10-28 and 2026-04-19/24, files that are
+not in the current tree.
+
+**What Adam has, and where we intersect.** His two active claims are the session
+row menu (client side) and the web UI performance waves
+(`docs/webui-performance-and-session-menu-plan.md`, `scripts/perf/*`,
+`tests/test_perf_*.py`, `client/js/app.js`, `client/js/terminal.js`,
+`src/api/websocket.py`). No path overlap with anything planned here. The
+non-textual overlap is his queued wave 3, "move blocking tmux, SQLite and
+filesystem work off the event loop", which lands in `_session_info_for` and
+`create_session`, our slices 8 and 9. Three files he asked not to have
+rewritten (`session_status_map.py`, `session_instance_index.py`,
+`pipe_wakeup.py`) are READ by slice 8 and rewritten by none of it. His mute work
+(`session_notification_policy.py` 563, `notifications/idle_watcher.py` 513) is
+out of scope even though both are over the 500 guideline. No schema version
+moves.
+
+**Measured, on `release/1.2.1`.** `src/core/session_manager.py` is 8,340 lines,
+one class of 8,055, 136 methods, 68 public, 36 written instance fields, 85 call
+sites from `src/` and 490 from `tests/`, 108 constructions of which 107 are in
+tests, and the constructor takes no arguments. Eleven methods carry 3,045 lines,
+37 percent of the class. By I/O: 43 pure, 62 tmux only, 5 database only, 26
+both. The 36 fields cluster into ten groups with almost no cross traffic;
+`_wipe_session_state` is the only method touching nine at once.
+`src/api/routes.py` is 61 module functions, 51 routes, ZERO instance state.
+`tmux_backend.py` is 38 methods and 12 fields. `config.py` is 14 dataclasses
+plus a 1,426-line `Settings`.
+
+**The design.** Seven collaborator classes (session registry, hook token
+authority, toast inbox, theme store, owned tmux ledger, probe health recorder,
+attachment sidecars), three structural `Protocol`s (tmux reader, session record
+store, clock), and the 71 pure ladder modules left exactly where they are.
+`SessionManager` keeps its name and all 68 public methods as a facade. Two hard
+rules: every slice moves the state and never a copy of it (proved with `is`, not
+by value), and the constructor keeps taking no required arguments.
+
+**Twelve slices**, ordered by how LOUD the failure is rather than how tight the
+cluster is. Probe health first, hook tokens and adoption last, because every
+incident this file has caused was silent from inside the pane. Slices 1 to 7 run
+parallel to Adam; 8 onward waits on `now/adoom666.md`.
+
+**Plan:** `.claude/notes/backend-decomposition-plan.md`, 499 lines, on
+`feat/backend-decomposition`. Force-added, because `.gitignore:183` ignores
+`.claude/*`.
