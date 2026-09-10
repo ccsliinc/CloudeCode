@@ -45,6 +45,11 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 import { Doc, results, test } from './lib-sidebar-sessions.mjs';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_JS = path.join(__dirname, '..', 'client', 'js');
@@ -132,6 +137,7 @@ function harness() {
         alert() {},
     };
     vm.createContext(ctx);
+    installCloudeWeb(ctx);
     for (const f of ['session-label.js', 'launchpad.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(CLIENT_JS, f), 'utf8'), ctx, { filename: f });

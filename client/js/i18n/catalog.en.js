@@ -217,6 +217,28 @@ export default {
     // the link back to its parent did not land. Said out loud.
     'session.fork.lineage_unrecorded': 'forked, but the link back to the parent was not recorded',
 
+    // ---- the session listing's three-outcome block ---------------------
+    // The SECOND LINE under a CANNOT DETERMINE row. The first line is a
+    // machine reason token (`http_500`, `tmux_missing`), which is an
+    // identifier compared against the server's own vocabulary and is
+    // deliberately NOT translated - see client/js/labels/session-listing.js.
+    // The server's own `listing_detail` outranks every one of these when it
+    // sent one, because it knows which tmux command failed and this does not.
+    'session.listing.detail.unauthorized': 'sign in again to see your sessions',
+    'session.listing.detail.tmux_unreadable': 'the server could not read the tmux session list',
+    'session.listing.detail.http_status': 'the server answered HTTP {status}',
+    // A 200 whose body is not the array it promised is an UNPARSEABLE list,
+    // never an empty one. Two keys rather than one because the two probes
+    // answer different questions and a translator may want to name each.
+    'session.listing.detail.malformed_sessions': 'the server did not return a session array',
+    'session.listing.detail.malformed_records': 'the server did not return a session record array',
+
+    // ---- the project list ----------------------------------------------
+    // Replaces a `'failed to load projects: ' + error.message` concatenation.
+    // The colon and the word order belong to the message now, which is
+    // exactly what a translation needs to be able to move.
+    'project.list.load_failed': 'failed to load projects: {reason}',
+
     // ---- generic failure reasons --------------------------------------
     // The `{reason}` slot's value when an error carried no message.
     'error.server_unreachable': 'the server could not be reached',

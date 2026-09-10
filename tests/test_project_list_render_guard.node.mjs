@@ -34,6 +34,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb, stubPanelMounts } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -240,6 +245,14 @@ async function boot(opts) {
         alert() {},
     };
     vm.createContext(context);
+    // The store is REAL; only the two Svelte panel mounts are stubbed.
+    // This file measures the PROJECT LIST guard - paint counts and
+    // listener registrations on `#project-list` - and mounting a
+    // compiled component into this hand-built fake document would
+    // throw from inside Svelte over something the guard has nothing to
+    // do with. Those two panels have their own vitest coverage against
+    // a real DOM.
+    stubPanelMounts(installCloudeWeb(context));
     const files = withGuard
         ? ['project-list-render-guard.js', 'launchpad.js']
         : ['launchpad.js'];

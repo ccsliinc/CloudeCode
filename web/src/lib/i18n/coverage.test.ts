@@ -76,6 +76,20 @@ const PORTED_FILES = [
     'web/src/lib/launchpad/RecentSessions.svelte',
     'web/src/lib/sessions/store.svelte.ts',
     'web/src/lib/ui/prefs.svelte.ts',
+    // Slice 3, the session data layer. The assembler first, then every
+    // module the layer is built from. `listing.ts` is on the list even
+    // though it deliberately holds no copy at all - a reason token is an
+    // identifier, not a sentence - because the way that rule breaks is
+    // somebody adding a human explanation beside a token, and the scan is
+    // what catches it.
+    'client/js/labels/session-listing.js',
+    'web/src/lib/sessions/listing.ts',
+    'web/src/lib/sessions/running.ts',
+    'web/src/lib/sessions/attribution.ts',
+    'web/src/lib/sessions/poller.ts',
+    'web/src/lib/sessions/host.ts',
+    'web/src/lib/sessions/env.ts',
+    'web/src/lib/sessions/types.ts',
 ];
 
 interface I18nLike {

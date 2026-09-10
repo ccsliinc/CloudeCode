@@ -101,16 +101,30 @@ const NAME_KEYED_FIND = /\.find(?:Index)?\(\s*\(?[\w$]*\)?\s*=>[^;]*?(?:\.name|t
  */
 function clientJsFiles() {
     const out = [];
-    const walk = (dir) => {
+    const walk = (dir, exts) => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            // `dist` IS EXCLUDED, and that is not a hole in the guard.
+            // client/dist/app.js is the EMITTED bundle: it is generated,
+            // it is minified, and its snippet text changes shape on every
+            // build, so an allowlist keyed on that text would need
+            // rewriting whenever anything unrelated was compiled. Its
+            // SOURCE is web/src, which this function now walks, so every
+            // line that reaches the bundle is still read - once, in the
+            // spelling a human wrote and a reviewer can judge.
             if (entry.name === 'node_modules' || entry.name === 'vendor'
-                || entry.name.startsWith('.')) continue;
+                || entry.name === 'dist' || entry.name.startsWith('.')) continue;
             const full = path.join(dir, entry.name);
-            if (entry.isDirectory()) walk(full);
-            else if (entry.name.endsWith('.js')) out.push(full);
+            if (entry.isDirectory()) walk(full, exts);
+            else if (exts.some((e) => entry.name.endsWith(e))) out.push(full);
         }
     };
-    walk(path.join(ROOT, 'client'));
+    walk(path.join(ROOT, 'client'), ['.js']);
+    // THE COMPILED TREE IS SCANNED TOO, because the migration is moving
+    // this exact code into it. Slice 3 took the session merge out of
+    // launchpad.js; a guard that only read client/js would have gone
+    // quietly green on the day the thing it guards moved house, which is
+    // the quietest way for a test to stop testing.
+    walk(path.join(ROOT, 'web', 'src'), ['.ts', '.svelte']);
     return out;
 }
 
@@ -193,10 +207,15 @@ function findHits(root) {
 // does not have to re-derive it from scratch.
 // ---------------------------------------------------------------------
 const ALLOWED_MATCHES = {
-    'client/js/launchpad.js::.find(s => s.name === tmuxName': [
-        'KNOWN BUG, unfixed by this guard. this.runningSessions.find by',
-        'name - launchpad.js is excluded from edits by this task (another',
-        'agent is in it); flagged here, not fixed here.',
+    'web/src/lib/sessions/running.ts::.find((s) => s.name === tmuxName': [
+        'KNOWN BUG, MOVED NOT INTRODUCED. This is the same lookup that',
+        'stood in launchpad.js as `.find(s => s.name === tmuxName)`,',
+        'ported line by line by slice 3 of the svelte migration. It is',
+        'listed here rather than fixed because slice 3 is a MOVE: fixing',
+        'a behaviour while relocating it makes a regression impossible to',
+        'bisect. The fix needs the server to ship a durable key on the',
+        'live row that the attachable row also carries, which is its own',
+        'change.',
     ].join(' '),
     'client/js/launchpad.js::.find(x => x.name === name': [
         'KNOWN BUG, unfixed by this guard. Same shape as the entry above,',

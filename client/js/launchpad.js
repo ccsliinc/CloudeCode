@@ -7,7 +7,6 @@ console.log('[Launchpad Module] Loading...');
 class Launchpad {
     constructor() {
         this.launchpadScreen = null;
-        this.projects = [];
         // The markup `#project-list` is currently showing, kept so the
         // 5s poller can tell a repaint that would change something from
         // one that would rebuild ~800 identical nodes. null means nothing
@@ -15,27 +14,6 @@ class Launchpad {
         // client/js/project-list-render-guard.js for why the signature is
         // the markup itself rather than a hand-listed set of fields.
         this._lastProjectListSig = null;
-        // feat/db-is-authoritative - the provenance report for the list
-        // above: which source answered, and whether cloude.db and
-        // config.json agree. null means the check has not answered, which
-        // the banner renders as CANNOT DETERMINE, never as healthy.
-        this.projectAuthority = null;
-        // feat/projects-table (S3) - presence for each DB-tracked project,
-        // keyed by the project's raw config path (matches config.json's
-        // ProjectConfig.path, which is also what the DB import stored
-        // verbatim into projects.raw_path - see project_store.py). A
-        // project with no entry here has not reached the DB yet (created
-        // via config write after the one-time boot import) and renders
-        // as if 'unchecked': normal, no badge, actions allowed. Populated
-        // by loadProjectPresence(), called from loadProjects().
-        this.projectPresence = new Map();
-        // Running tmux sessions on the `cloude` socket. Populated by
-        // loadRunningSessions() - a merged view of:
-        //   (a) the currently-active backend (from GET /sessions), and
-        //   (b) attachable/external sessions (from GET /sessions/attachable).
-        // Each row carries an is_active flag so the render pass can style
-        // the live one differently without a second DOM query.
-        this.runningSessions = [];
         // GUARD (deep-link duplicate-session regression fix): set true
         // for the duration of openProjectByName()'s resolution. selectProject()
         // checks this flag and refuses to create a session while it's set -
@@ -45,76 +23,6 @@ class Launchpad {
         // order, so a future edit that re-wires openProjectByName() into
         // selectProject() fails loudly instead of silently regressing.
         this._resolvingDeepLink = false;
-        // feat/project-session-tree (S8) - per-running-session project
-        // attribution, keyed by tmux name. Sourced from
-        // GET /sessions/records (the datastore, S7's backfilled
-        // project_id / project_attribution columns), NOT from the live
-        // tmux probe - neither SessionInfo nor AttachableSession carry
-        // these fields, only the stored sessions row does. Populated by
-        // loadSessionAttribution(), consumed by
-        // _buildProjectSessionGroups() to decide which project (or "no
-        // project", or NEEDS ATTENTION) each running session belongs
-        // under in the home-screen tree.
-        //
-        // NAME-ONLY FALLBACK MAP. Two stored rows can share a tmux_name
-        // (a session recreated after its pane died reuses the name with
-        // a new tmux_created_epoch), so this is keyed on tmux_name but
-        // built to exclude archived rows and to prefer the newest
-        // tmux_created_epoch among the rest - see
-        // _resolveSessionAttribution(). Consulted only when
-        // sessionAttributionByInstance misses. Never populated with an
-        // archived row: an archived row must never shadow a live
-        // session under a name-only join.
-        this.sessionAttribution = new Map();
-        // INSTANCE-EXACT MAP, keyed on `${tmux_name}\u0000${tmux_created_
-        // epoch}` (a NUL separator, so no tmux name can ever collide with
-        // one that only differs by where the epoch digits start). Both SessionInfo and AttachableSession DO carry the
-        // tmux creation epoch on the wire - as `created_at_epoch`, the
-        // same underlying tmux `#{session_created}` value
-        // `tmux_created_epoch` names on the stored row (see
-        // AttachableSession.created_at_epoch / SessionInfo.session_row_id
-        // merge in loadRunningSessions()) - so a caller holding a live
-        // session's own name+epoch can resolve its EXACT stored row,
-        // including one the user archived: that row still comes back
-        // (this map, unlike the name-only one, does not exclude
-        // archived rows), and the caller drops it on `archived_at`,
-        // which is what makes "delete this session's record" keep
-        // working for the exact instance the user deleted without
-        // letting an unrelated archived row from an older instance of
-        // the same name shadow a live one.
-        this.sessionAttributionByInstance = new Map();
-        // Names where two or more non-archived stored rows could not be
-        // ranked against each other (equal or unmeasurable
-        // tmux_created_epoch). Deliberately absent from
-        // sessionAttribution - a caller must treat this as
-        // could-not-evaluate, never silently pick one.
-        this.sessionAttributionAmbiguous = new Set();
-        // Three-outcome latch for the WHOLE attribution fetch, mirrored
-        // on `runningSessionsListing` above: true only when the last
-        // GET /sessions/records call actually returned rows to read. A
-        // false value means every running session renders into NEEDS
-        // ATTENTION, because "we could not read the attribution table"
-        // must never be silently mistaken for "these sessions belong to
-        // no project" - see _buildProjectSessionGroups().
-        this.sessionAttributionListingOk = true;
-        this.sessionAttributionListingDetail = null;
-        // feat/ended-sessions-visibility - the SAME GET /sessions/records
-        // payload `sessionAttribution` is keyed from, kept as a flat list
-        // because the tree needs the rows whose tmux session is GONE, and
-        // those are exactly the ones no live probe can name. Empty until
-        // the fetch answers; a FAILED fetch leaves it empty AND drops
-        // `sessionAttributionListingOk`, so "we could not read the table"
-        // never renders as "you have no ended sessions".
-        this.sessionRecords = [];
-        // tmux name -> newest `last_work_at`, the key the session lists
-        // are ORDERED by. Built from the same GET /sessions/records
-        // payload (see _buildWorkStampIndex). An absent name means NO
-        // WORK RECORDED, which is a third outcome: those rows sort below
-        // every measured row and are labelled, never treated as work at
-        // the epoch. Empty until the fetch answers, and emptied again by
-        // a FAILED fetch, so a listing that could not be read degrades to
-        // "nothing measured" rather than to a stale order.
-        this._workStampByName = new Map();
         // In-memory only (not persisted across reload, unlike the
         // section-level collapse state in localStorage below) - per-
         // project expand/collapse state for the tree's child-session
@@ -122,28 +30,26 @@ class Launchpad {
         // literal "__no_project__"). Survives re-renders because it
         // lives on the instance, not in the DOM.
         this._collapsedProjectNodes = new Set();
-        // Three-outcome latch for GET /projects, the same shape as
-        // sessionAttributionListingOk above. null = never asked, true =
-        // the list was read (so an empty list really means "no
-        // projects"), false = the fetch failed and the empty list is an
-        // absence of evidence, not evidence of absence. The "new
-        // session" picker reads this so a failed fetch is never
-        // presented to the user as "you have no projects".
-        this.projectsListingOk = null;
         // SHOW-ARCHIVED, per device, read once here and thereafter the
         // single source of truth for what the last /projects fetch asked
         // for. Kept as its own field rather than re-read from
         // localStorage at render time so a render can never disagree
-        // with the request that produced the rows it is drawing.
+        // with the request that produced the rows it is drawing. Moves to
+        // the compiled tree with the rest of the tree's preferences in
+        // slice 4; it is still a real field here because the two toggles
+        // that write it are still in this file.
         this._archivedVisible = this.getArchivedVisiblePref();
-        // THREE OUTCOMES for the archived dimension, and they must never
-        // collapse: null = not asked (the toggle is off, so this build
-        // has no opinion about archived projects and says so rather than
-        // implying there are none), true = asked and the server answered,
-        // false = asked and the fetch FAILED, so an absence of archived
-        // rows on screen is an absence of evidence. Set only in
-        // loadProjects().
-        this._archivedFetchOk = null;
+        //
+        // EVERYTHING ELSE THIS CONSTRUCTOR USED TO SET NOW LIVES IN THE
+        // COMPILED TREE, and reading it here would be a second copy.
+        // `projects`, `projectsListingOk`, `_archivedFetchOk`,
+        // `projectAuthority`, `projectPresence`, `runningSessions`,
+        // `runningSessionsListing`, the three attribution structures and
+        // their latch, `sessionRecords` and `_workStampByName` are all
+        // ACCESSOR PROPERTIES on the prototype now, delegating to
+        // web/src/lib/sessions/store.svelte.ts. The comments that
+        // documented them went with them, to the field that holds the
+        // value. See the block at the bottom of this file.
     }
 
     /**
@@ -433,45 +339,160 @@ class Launchpad {
     }
 
     /**
-     * Kick off a 5s interval that re-fetches the running-sessions list.
+     * Start the one 5s running-sessions tick.
      *
-     * Idempotent - guarded by ``this._runningPollInterval`` so repeated
-     * calls (e.g. re-entering the launchpad after a session swap) don't
-     * stack multiple intervals. Auth-gated per tick: skips the fetch
-     * entirely when the user isn't logged in, so we don't hammer /sessions
-     * with anonymous requests before the OTP flow completes.
+     * SLICE 3 MOVED THE TIMER, AND THE POINT IS THE HALF THAT DID NOT
+     * EXIST HERE. This method used to call ``setInterval`` and store the
+     * handle purely as an idempotence flag; the word ``clearInterval``
+     * appeared NOWHERE in this file, so the tick outlived every teardown
+     * there has ever been. It lives in web/src/lib/sessions/poller.ts
+     * now, with ``stopRunningSessionsPoller()`` below as its other half.
      *
-     * Runs forever; does not pause on tab hide - external tmux sessions
-     * born while the tab is backgrounded should still surface the moment
-     * the user returns.
+     * THE TWO GATES ARE UNCHANGED and still read the same globals. A tick
+     * is skipped when the user is not signed in, so we do not hammer
+     * /sessions with anonymous requests before the OTP flow completes,
+     * and skipped when the launchpad is not the screen on display -
+     * ``ProjectListRenderGuard.shouldPoll``, which is a different thing
+     * from a hidden tab. Nothing this tick fetches is read anywhere but
+     * the launchpad's own two lists, so while the terminal or the archive
+     * is up it was spending four HTTP requests and two full DOM rebuilds
+     * every five seconds to update a screen nobody could see. A SKIP IS
+     * NOT A STOP: the interval keeps running and the next tick re-asks,
+     * so returning to the screen resumes with nothing to restart, and
+     * App.showLaunchpad() ends in loadProjects() anyway.
      *
-     * IT DOES PAUSE WHEN THE LAUNCHPAD IS NOT THE SCREEN ON DISPLAY, and
-     * that is a different thing from a hidden tab. Nothing this tick
-     * fetches is read anywhere but the launchpad's own two lists, so
-     * while the terminal or the archive is up it was spending four HTTP
-     * requests and two full DOM rebuilds every five seconds to update a
-     * screen nobody could see. Resuming is already wired and needs
-     * nothing here: App.showLaunchpad() ends in loadProjects(), which is
-     * a complete refresh. Only a MEASURED `hidden` pauses - see
-     * ProjectListRenderGuard.shouldPoll for why an unreadable screen
-     * state keeps polling.
+     * The tick's WORK is passed in, because a tick refetches AND
+     * repaints, and both renderers are still legacy until slices 4 and 5.
      */
     _startRunningSessionsPoller() {
-        if (this._runningPollInterval) return;
-        this._runningPollInterval = setInterval(() => {
-            if (!(window.Auth && typeof window.Auth.isAuthenticated === 'function' && window.Auth.isAuthenticated())) {
-                return;
-            }
-            if (window.ProjectListRenderGuard
-                    && !window.ProjectListRenderGuard.shouldPoll(document)) {
-                return;
-            }
-            this.loadRunningSessions().catch(err => {
-                console.warn('Launchpad: running-sessions poll tick failed:', err);
-            });
-        }, 5000);
+        const web = this._web('the running-sessions poller cannot start');
+        if (!web) return;
+        web.startSessionPolling(() => this.loadRunningSessions());
         console.log('Launchpad: running-sessions poller started (5s)');
     }
+
+    /**
+     * Stop that tick and clear its interval.
+     *
+     * THE LINE THIS FILE NEVER HAD. Idempotent. Nothing in the legacy
+     * shell calls it yet, because the legacy shell has no teardown - the
+     * launchpad is created once and lives for the page. It exists so the
+     * timer has an owner that can end it, which is what slice 7's shell
+     * will use, and so the behaviour is provable rather than asserted.
+     */
+    stopRunningSessionsPoller() {
+        const web = this._web('the running-sessions poller cannot stop');
+        if (!web) return;
+        web.stopSessionPolling();
+    }
+
+    /**
+     * Load and display projects, then refresh the running-sessions list.
+     *
+     * SLICE 3: THIS IS A SEQUENCER NOW AND HOLDS NOTHING. The fetch, the
+     * two sidecars and all three three-outcome latches live in
+     * web/src/lib/sessions/store.svelte.ts; what stays here is the order
+     * the still-legacy renderers are called in.
+     *
+     * RE-RENDERS ON FAILURE, and that is not defensive noise. Without it
+     * the archived notice keeps whatever the last SUCCESSFUL fetch
+     * painted - a confident "showing archived: N" sitting on screen after
+     * the request that would have told you failed. The count and the
+     * failure render identically then, which is the exact false green the
+     * three-outcome notice exists to remove. Measured 2026-09-06 in the
+     * live browser: the state went to false and the screen kept reading
+     * "showing archived: 1".
+     */
+    async loadProjects() {
+        const web = this._web('the project list cannot load');
+        if (web) {
+            const result = await web.loadProjects(this._archivedVisible);
+            if (!result.ok && result.error) this.showError(result.error);
+            this.renderProjectList();
+        }
+        // Refresh running sessions in parallel with the projects view.
+        // Failure is non-fatal and handled inside loadRunningSessions.
+        this.loadRunningSessions();
+        // S9 - RECENT is datastore-backed, not a live probe, so it does
+        // not need the 5s running-sessions poller; refreshed here (home
+        // screen load) and after any restart action. It is a Svelte
+        // component now (web/src/lib/launchpad/RecentSessions.svelte),
+        // which fetches as it mounts exactly as loadRecentSessions() did
+        // and also owns the count, the archive filter and the section's
+        // own visibility.
+        if (window.CloudeWeb) {
+            window.CloudeWeb.launchpad.mountRecentSessions();
+        } else {
+            console.error('Launchpad: compiled bundle not loaded, the recent sessions section cannot mount');
+        }
+        // STAGE C, and the one line the launchpad hands to the compiled
+        // tree. The card is a Svelte component now (web/src/lib/launchpad/
+        // AttributionPrompt.svelte); it fetches its own question set as it
+        // mounts, exactly as loadAttributionPrompt() did. Independent of the
+        // project load: a failure there must not stop the projects rendering,
+        // and a failure here must not swallow the question set.
+        if (window.CloudeWeb) {
+            window.CloudeWeb.launchpad.mountAttributionPrompt();
+        } else {
+            console.error('Launchpad: compiled bundle not loaded, the attribution prompt cannot mount');
+        }
+    }
+
+    /**
+     * Refetch the unified "running sessions" list and repaint both lists.
+     *
+     * SLICE 3: A SEQUENCER. The two-endpoint merge, the six fields that
+     * are never ``||``-defaulted, the dead-pane filter, the three-outcome
+     * listing latch, the attribution join, the work-stamp index and the
+     * sort are all in web/src/lib/sessions/. What stays here is the pair
+     * of render calls, because both renderers are still legacy - the
+     * running list is slice 5 and the project tree is slice 4.
+     */
+    async loadRunningSessions() {
+        const web = this._web('the running sessions cannot load');
+        if (!web) return;
+        await web.loadRunningSessions();
+        this.renderRunningSessions();
+        this.renderProjectList();
+    }
+
+    /**
+     * Refetch the stored session records alone.
+     *
+     * SLICE 3: A DELEGATE. Kept as a method because the RECENT row
+     * actions call ``Launchpad.loadSessionAttribution`` by name after a
+     * fork or an archive, which refreshes the tree without re-probing
+     * tmux. Same join, same work index, same three-outcome latch.
+     */
+    async loadSessionAttribution() {
+        const web = this._web('session attribution cannot load');
+        if (!web) return;
+        await web.loadSessionAttribution();
+    }
+
+    /**
+     * The compiled tree's launchpad namespace, or null with a loud line.
+     *
+     * THE GUARD IS LOUD BECAUSE A SILENT ONE IS A FALSE GREEN.
+     * client/index.html loads the bundle as a deferred module, so in a
+     * browser it is always there by the time a screen renders. It is
+     * absent in a node harness that loads this file alone, and it would
+     * be absent if the bundle ever failed to load. Returning null rather
+     * than throwing keeps one missing bundle from rejecting the promise
+     * every caller awaits and taking the whole home screen down; saying
+     * so on the console is what stops that reading as "nothing to do".
+     *
+     * @param {string} what - what will not happen, named in the log line.
+     * @returns {object|null}
+     */
+    _web(what) {
+        if (window.CloudeWeb && window.CloudeWeb.launchpad) {
+            return window.CloudeWeb.launchpad;
+        }
+        console.error('Launchpad: compiled bundle not loaded, ' + what);
+        return null;
+    }
+
 
     /**
      * Best-effort: get current xterm cell-grid dims from the live Terminal
@@ -490,123 +511,7 @@ class Launchpad {
         return {};
     }
 
-    /**
-     * Load and display projects, then refresh the running-sessions list.
-     * Both fetches are non-fatal - the projects error path shows a UI
-     * error, the sessions path is logged and silently renders empty.
-     */
-    async loadProjects() {
-        try {
-            const archivedVisible = this._archivedVisible;
-            this.projects = await window.API.getProjects(archivedVisible);
-            this.projectsListingOk = true;
-            // Only a fetch that ASKED for archived rows can report on
-            // them. With the toggle off this stays null - "not asked" -
-            // so the UI never renders "no archived projects" off the back
-            // of a request that excluded them by construction.
-            this._archivedFetchOk = archivedVisible ? true : null;
-            // Presence and authority are BOTH fetched before the first
-            // paint so neither a missing project nor a degraded datastore
-            // flashes as normal for one frame - renderProjectList() reads
-            // this.projectPresence and this.projectAuthority
-            // synchronously, so both have to be populated first.
-            await Promise.all([
-                this.loadProjectPresence(),
-                this.loadProjectAuthority(),
-            ]);
-            this.renderProjectList();
-        } catch (error) {
-            this.projectsListingOk = false;
-            // The archived rows were part of THIS failed fetch, so their
-            // outcome is "could not evaluate", not "none". Only latched
-            // false when we actually asked for them.
-            this._archivedFetchOk = this._archivedVisible ? false : null;
-            console.error('Launchpad: Failed to load projects:', error);
-            this.showError('failed to load projects: ' + error.message);
-            // RE-RENDER ON FAILURE. Without this the archived notice keeps
-            // whatever the last SUCCESSFUL fetch painted - a confident
-            // "showing archived: N" sitting on screen after the request
-            // that would have told you failed. The count and the failure
-            // render identically then, which is the exact false green the
-            // three-outcome notice exists to remove, so the state has to
-            // reach the DOM on the one path it was built for.
-            // Measured 2026-09-06 in the live browser: state went to
-            // false, the screen kept reading "showing archived: 1".
-            this.renderProjectList();
-        }
-        // Refresh running sessions in parallel with the projects view.
-        // Failure is non-fatal and handled inside loadRunningSessions.
-        this.loadRunningSessions();
-        // S9 - RECENT is datastore-backed, not a live probe, so it does
-        // not need the 5s running-sessions poller; refreshed here (home
-        // screen load) and after any restart action. It is a Svelte
-        // component now (web/src/lib/launchpad/RecentSessions.svelte),
-        // which fetches as it mounts exactly as loadRecentSessions() did
-        // and also owns the count, the archive filter and the section's
-        // own visibility. Guarded with the attribution card below, and
-        // for the same reason - see that comment.
-        if (window.CloudeWeb) {
-            window.CloudeWeb.launchpad.mountRecentSessions();
-        } else {
-            console.error('Launchpad: compiled bundle not loaded, the recent sessions section cannot mount');
-        }
-        // STAGE C, and the one line the launchpad hands to the compiled
-        // tree. The card is a Svelte component now (web/src/lib/launchpad/
-        // AttributionPrompt.svelte); it fetches its own question set as it
-        // mounts, exactly as loadAttributionPrompt() did. Independent of the
-        // project load: a failure there must not stop the projects rendering,
-        // and a failure here must not swallow the question set.
-        //
-        // GUARDED, AND THE GUARD IS LOUD. client/index.html loads the bundle
-        // as a deferred module, so in the browser it is always there by the
-        // time a screen renders. It is absent in the node harnesses, and it
-        // would be absent if the bundle ever failed to load - and this is the
-        // LAST statement in loadProjects(), so an unguarded throw here would
-        // reject the promise every caller awaits and take the whole home
-        // screen down over a card. It is logged rather than swallowed: a
-        // prompt that silently never mounts is the same false green the card
-        // itself exists to remove.
-        if (window.CloudeWeb) {
-            window.CloudeWeb.launchpad.mountAttributionPrompt();
-        } else {
-            console.error('Launchpad: compiled bundle not loaded, the attribution prompt cannot mount');
-        }
-    }
 
-    /**
-     * Fetch live filesystem presence for every DB-tracked project and
-     * index it by raw config path for renderProjectList() to consult.
-     *
-     * Non-fatal: a failed fetch (server datastore unreachable, network
-     * hiccup) clears the map rather than throwing, so every project
-     * renders as 'unchecked' (normal, actions allowed) rather than the
-     * whole launchpad erroring out over a presence sidecar. This is a
-     * deliberate choice not to invent a worse verdict than "could not
-     * ask" - the same three-outcome discipline the server side applies,
-     * mirrored here: failing to LOAD presence is not evidence anything
-     * is missing or unreachable.
-     */
-    /**
-     * Fetch which source the project list came from, and any DB/config
-     * disagreement, for the banner renderProjectList() draws.
-     *
-     * feat/db-is-authoritative. Non-fatal, and its failure is its OWN
-     * state rather than an assumption of health: a failed fetch sets
-     * `projectAuthority` to null, which the banner renders as "could not
-     * determine which source is authoritative" - never as the healthy
-     * `db` mode. Assuming health here would reintroduce the exact false
-     * green the authority endpoint exists to expose.
-     *
-     * @returns {Promise<void>}
-     */
-    async loadProjectAuthority() {
-        try {
-            this.projectAuthority = await window.API.getProjectsAuthority();
-        } catch (error) {
-            console.warn('Launchpad: failed to load project authority:', error);
-            this.projectAuthority = null;
-        }
-    }
 
     /**
      * Build the ONE banner that names where the project list came from.
@@ -647,357 +552,9 @@ class Launchpad {
         return `<div class="project-authority-banner project-authority-banner-unreadable" data-authority-state="${this._escapeHtml(a.mode)}" data-writable="${a.writable ? 'true' : 'false'}">${this._escapeHtml(a.message || a.mode)}</div>`;
     }
 
-    async loadProjectPresence() {
-        this.projectPresence = new Map();
-        try {
-            const result = await window.API.getProjectsPresence();
-            if (result && result.status === 'ok' && Array.isArray(result.projects)) {
-                for (const row of result.projects) {
-                    this.projectPresence.set(row.raw_path, row);
-                    // feat/db-is-authoritative - also index by normalised
-                    // root, which is what GET /projects now returns as a
-                    // project's identity. Indexing by raw_path alone made
-                    // the badge miss whenever the two spellings differed.
-                    if (row.root) {
-                        this.projectPresence.set(row.root, row);
-                    }
-                }
-            }
-        } catch (error) {
-            console.warn('Launchpad: failed to load project presence:', error);
-        }
-    }
 
-    /**
-     * Fetch the unified "running sessions" list and repaint the section.
-     *
-     * Combines two server endpoints:
-     *   - ``GET /sessions/attachable`` - external tmux sessions on the
-     *     cloude socket, plus cloude-owned sessions NOT currently bound
-     *     to an active backend (detached-but-alive).
-     *   - ``GET /sessions`` - the currently-active backend, if any. The
-     *     server's /attachable filter drops this row to prevent a
-     *     self-adopt footgun, so we refetch and merge it in here.
-     *
-     * Each merged row gains an ``is_active`` flag and the list is sorted:
-     * active first, then owned (cloude-created), then external; within
-     * each bucket, newest first by ``created_at_epoch``.
-     */
-    async loadRunningSessions() {
-        // Reset the verdict for this poll tick. It is set to "not ok" by
-        // either fetch below and consumed by renderRunningSessions().
-        this.runningSessionsListing = { ok: true, reason: null, detail: null, sources: [] };
-        // The owner's UI switches, measured once per page load. Memoized
-        // onto one promise inside the module, so a poll costs nothing
-        // after the first tick, and NOT awaited - a flag must never be
-        // able to delay the session list. Same call in
-        // session-sidebar-fetch.js, because either surface may be the
-        // first one a page load reaches. See client/js/ui-flags.js.
-        if (window.UIFlags && typeof window.UIFlags.ensure === 'function') {
-            window.UIFlags.ensure();
-        }
-        try {
-            const list = await window.API.listAttachableSessions();
-            if (Array.isArray(list)) {
-                this.runningSessions = list;
-            } else {
-                // A 200 whose body is not an array is not an empty list,
-                // it is an unparseable one. Saying zero here would be
-                // the same invented verdict as the catch below.
-                this.runningSessions = [];
-                this._noteListingUnknown('attachable', 'malformed_response',
-                    'the server did not return a session array');
-            }
-        } catch (err) {
-            // THIS IS THE THIRD OUTCOME, NOT A LOG LINE. The previous
-            // version of this catch logged loudly and then fell back to
-            // `[]`, which is worse than a silent catch: the console tells
-            // the truth while the screen renders a dead tmux server as a
-            // healthy machine with zero sessions, and the loud log made
-            // the problem LOOK solved. A failed probe is the absence of
-            // an answer, so the row set stays empty AND the section is
-            // marked not-evaluated so the user sees "cannot determine".
-            //
-            // Status extraction: the `call()` wrapper in api.js throws
-            // Error("HTTP <code>") for non-401s and Error("Authentication
-            // required...") for 401s after refresh fails. Parse what we
-            // can from the message so the log line is actionable.
-            let status = null;
-            if (err && typeof err.status === 'number') {
-                status = err.status;
-            } else if (err && typeof err.message === 'string') {
-                const m = err.message.match(/HTTP\s+(\d{3})/);
-                if (m) status = parseInt(m[1], 10);
-                else if (/Authentication required/i.test(err.message)) status = 401;
-            }
-            console.error(
-                '[launchpad] loadRunningSessions failed:',
-                status !== null ? `status=${status}` : '(no status)',
-                err
-            );
-            // On 401, fire a reauth event for the auth layer to pick up.
-            // NOTE: api.js:call() already dispatches `auth-required` on 401
-            // after refresh fails, so this is defense-in-depth only. If
-            // Auth.js doesn't listen for `cloude:reauth-needed` that's fine
-            // - `auth-required` remains the primary signal.
-            if (status === 401) {
-                try {
-                    window.dispatchEvent(new CustomEvent('cloude:reauth-needed', {
-                        detail: { source: 'launchpad.loadRunningSessions' }
-                    }));
-                } catch (_) { /* non-fatal */ }
-            }
-            this.runningSessions = [];
-            this._noteListingUnknown('attachable',
-                this._listingReasonFromError(err, status),
-                this._listingDetailFromError(err, status));
-        }
-        // Augment with EVERY currently-live session, which the server
-        // filters out of /sessions/attachable to prevent self-adopt.
-        // Multi-session: two tabs can each be on a different session, so
-        // we pull the full list via GET /sessions/list (oldest first) and
-        // merge each one in, tagging is_active + carrying its session id.
-        try {
-            let liveSessions = [];
-            if (typeof window.API.listSessions === 'function') {
-                liveSessions = await window.API.listSessions();
-            }
-            if (!Array.isArray(liveSessions) || liveSessions.length === 0) {
-                // Back-compat fallback: single-session server.
-                const current = await window.API.getCurrentSession();
-                liveSessions = current ? [current] : [];
-            }
-            for (const live of liveSessions) {
-                const tmuxName = live && live.tmux_session;
-                if (!tmuxName) continue;
-                // activity_status comes from the server's bulk tmux pane
-                // query (src/core/session_status.py) - 'running' | 'idle' |
-                // 'dead' | 'unknown'. Never fabricated client-side.
-                const liveStatus = (live && live.activity_status) || 'unknown';
-                const liveUnread = !!(live && live.unread);
-                const liveId = (live.session && live.session.id) || live.id || null;
-                const existing = this.runningSessions.find(s => s.name === tmuxName);
-                if (existing) {
-                    existing.is_active = true;
-                    existing.session_id = liveId || existing.session_id;
-                    existing.status = liveStatus;
-                    existing.unread = liveUnread;
-                    existing.created_by_cloude = !!live.created_by_cloude;
-                    // punchlist 19 - whether this session is parked on an
-                    // unanswered startup prompt. Overwritten
-                    // unconditionally for the same reason the family and
-                    // wrapper above are: a session that has just answered
-                    // its trust prompt must STOP saying it needs a
-                    // keypress, and a `||` would keep the stale value.
-                    existing.startup_gate = live.startup_gate;
-                    // Provenance for the status above, rendered in the
-                    // tooltip only (see session-status-ui.js). Overwritten
-                    // unconditionally for the same reason the gate is: a
-                    // status that stops being hook-fed must stop claiming
-                    // it was.
-                    existing.status_source = live.status_source;
-                    // feat/agent-family-pills - THREE-OUTCOME family
-                    // display. ``agent_family`` is null (not a string)
-                    // whenever the server could not determine it -
-                    // overwritten unconditionally (never `||`'d against
-                    // the previous value) so a session whose wrapper was
-                    // deleted mid-session correctly flips to unknown
-                    // instead of keeping a stale guess.
-                    existing.agent_family = live.agent_family !== undefined ? live.agent_family : null;
-                    existing.agent_family_source = live.agent_family_source !== undefined ? live.agent_family_source : null;
-                    // The wrapper pill's text, overwritten unconditionally
-                    // for the same reason the family is: a wrapper deleted
-                    // or renamed mid-session must stop being named, not
-                    // keep the label it had when the row was first built.
-                    existing.agent_wrapper_label = live.agent_wrapper_label !== undefined
-                        ? live.agent_wrapper_label : null;
-                    if (live.pinned_theme) existing.pinned_theme = live.pinned_theme;
-                    // The durable row id, so an OPEN session shows the same
-                    // "#7" a detached one does. Without this the id appeared
-                    // and vanished depending on whether you happened to have
-                    // the session open, which reads as a glitch rather than
-                    // as two code paths.
-                    existing.session_row_id = live.session_row_id !== undefined ? live.session_row_id : null;
-                    existing.parent_session_id = live.parent_session_id !== undefined ? live.parent_session_id : null;
-                    // The user's chosen name. This merge builds its row
-                    // field by field, so anything not copied here simply
-                    // does not exist on it - and the renderer then falls
-                    // back to the tmux handle. A rename that persisted,
-                    // resolved and was served correctly still vanished on
-                    // screen for want of this line.
-                    if (live.label !== undefined) existing.label = live.label;
-                } else {
-                    this.runningSessions.unshift({
-                        name: tmuxName,
-                        // The badge means: did THIS APP CREATE this tmux
-                        // session, or did it merely ADOPT one started
-                        // outside the app? That is a fact about origin, so
-                        // it must not flip when the session is opened or
-                        // closed, and it must survive a server restart.
-                        //
-                        // Never derived here. The server answers it from
-                        // its persisted `owned_tmux_sessions` set and ships
-                        // it on SessionInfo.created_by_cloude - the same
-                        // source AttachableSession uses, so a row merged
-                        // from either endpoint agrees. Two previous local
-                        // derivations were both wrong: a hardcoded `true`
-                        // badged every OPEN session TMUX (open sessions
-                        // reach us only here, because /sessions/attachable
-                        // filters them out), and an `adopted:`-id-prefix
-                        // test badged nearly everything EXTERNAL, because a
-                        // server restart re-attaches to still-running tmux
-                        // sessions through the adopt path and mints
-                        // `adopted:` ids for sessions the server still
-                        // owns. The id is not durable; the NAME is.
-                        created_by_cloude: !!live.created_by_cloude,
-                        created_at_epoch: live.created_at_epoch || 0,
-                        window_count: 1,
-                        is_active: true,
-                        session_id: liveId,
-                        status: liveStatus,
-                        unread: liveUnread,
-                        pinned_theme: live.pinned_theme || null,
-                        // feat/agent-family-pills - see the `existing`
-                        // branch above for why this is never defaulted
-                        // to a guessed string.
-                        agent_family: live.agent_family !== undefined ? live.agent_family : null,
-                        agent_family_source: live.agent_family_source !== undefined ? live.agent_family_source : null,
-                        // See the `existing` branch above.
-                        agent_wrapper_label: live.agent_wrapper_label !== undefined
-                            ? live.agent_wrapper_label : null,
-                        // See the `existing` branch above.
-                        session_row_id: live.session_row_id !== undefined ? live.session_row_id : null,
-                        parent_session_id: live.parent_session_id !== undefined ? live.parent_session_id : null,
-                        // See the `existing` branch above.
-                        label: live.label !== undefined ? live.label : null,
-                        // See the `existing` branch above. Left undefined
-                        // when the server sent nothing, which the
-                        // renderer normalizes to 'unknown' and paints as
-                        // nothing at all.
-                        startup_gate: live.startup_gate,
-                    });
-                }
-            }
-        } catch (err) {
-            // A 404 from GET /sessions IS an answer: there is no active
-            // session. Anything else is not - it is a merge that did not
-            // run, so the row set below is INCOMPLETE and may be missing
-            // every currently-open session. The old bare
-            // `// 404 = no active session, fine` treated both the same
-            // and let a failed merge render as "these are all your
-            // sessions".
-            const status = (err && typeof err.status === 'number') ? err.status : null;
-            if (status !== 404) {
-                console.error('[launchpad] live-session merge failed:',
-                    status !== null ? `status=${status}` : '(no status)', err);
-                this._noteListingUnknown('live',
-                    this._listingReasonFromError(err, status),
-                    this._listingDetailFromError(err, status));
-            }
-        }
-        // A DEAD PANE IS NOT A RUNNING SESSION. tmux `has-session`
-        // stays true for a pane held open by `remain-on-exit` after its
-        // foreground process exited, so a husk arrives here from
-        // GET /sessions/attachable - which enumerates the socket and
-        // MUST keep returning it, because the lifecycle reaper depends
-        // on that enumeration being complete. Membership of the
-        // "running" section is this function's decision, not the
-        // enumeration's, so the filter belongs here and nowhere else.
-        // Until now the husk was rendered among the running rows and
-        // counted in the heading, while its own red dot - read from
-        // `#{pane_dead}` - had been telling the truth all along.
-        //
-        // THREE OUTCOMES: only a MEASURED `dead` is dropped. `unknown`
-        // stays, because "the probe could not tell" is not "it ended";
-        // dropping it would assert a death nobody measured, which is
-        // the same false verdict in the opposite direction. See
-        // tests/test_running_sessions_unknown.node.mjs, which pins the
-        // unknown row's rendering, and
-        // tests/test_dead_pane_not_running.node.mjs for this filter.
-        this.runningSessions = this.runningSessions.filter(
-            s => !s || s.status !== 'dead'
-        );
-        // feat/project-session-tree (S8) - the tree needs to know which
-        // project (if any) each row belongs to, so re-fetch attribution
-        // every time the running-session set changes (poller tick
-        // included). Non-fatal; a failure here degrades the tree to
-        // NEEDS ATTENTION, it never throws out of loadRunningSessions().
-        //
-        // IT NOW RUNS BEFORE THE SORT, NOT AFTER. The same fetch carries
-        // ``last_work_at``, which is the sort key below, so sorting first
-        // would have ordered every first paint by a value that had not
-        // arrived yet - and then never re-sorted, because the sort is not
-        // repeated after this call.
-        await this.loadSessionAttribution();
-        this._sortRunningSessionsByWork();
-        this.renderRunningSessions();
-        this.renderProjectList();
-    }
 
-    /**
-     * Order the running-session rows by WORK, newest work first.
-     *
-     * Description: THIS LIST IS A TIMELINE, and it is read by scanning
-     *   down it to recall what is in flight. The previous order led with
-     *   ``is_active`` - "is this the session I am attached to" - so
-     *   clicking a row to look at it hoisted that row to the top and the
-     *   timeline was destroyed by the act of reading it. That term is
-     *   gone, and no term that a click can change has replaced it.
-     *
-     *   ``last_work_at`` comes from the sessions table (see
-     *   ``loadSessionAttribution`` and src/core/session_work_stamp.py)
-     *   and is stamped ONLY from Claude Code hook events that mean the
-     *   conversation did something. Attaching, selecting or deep-linking
-     *   never moves it.
-     *
-     *   THREE OUTCOMES, AND UNRECORDED IS THE THIRD. A session with no
-     *   ``last_work_at`` has not been measured working - which is true of
-     *   every session that predates this feature, and of one started
-     *   seconds ago that has not run a turn yet. It is NOT treated as
-     *   work at the epoch and NOT as work now: those rows sort BELOW
-     *   every measured row, keep their own newest-created-first order
-     *   among themselves, and are labelled in the row itself (see
-     *   ``_workRecencyAttrs``) so they are visibly distinct rather than
-     *   silently blended into the tail of the measured ones.
-     *
-     *   ``created_by_cloude`` is kept as a tie-break only, below the work
-     *   key. It is an ORIGIN fact that no click can flip, so it never
-     *   reintroduces the defect.
-     * Inputs: none. Sorts ``this.runningSessions`` in place.
-     * Output: void.
-     */
-    _sortRunningSessionsByWork() {
-        this.runningSessions.sort((a, b) => {
-            const aw = this._workStampFor(a);
-            const bw = this._workStampFor(b);
-            if (!!aw !== !!bw) return aw ? -1 : 1;
-            if (aw && bw && aw !== bw) return aw < bw ? 1 : -1;
-            if (!!a.created_by_cloude !== !!b.created_by_cloude) {
-                return a.created_by_cloude ? -1 : 1;
-            }
-            return (b.created_at_epoch || 0) - (a.created_at_epoch || 0);
-        });
-    }
 
-    /**
-     * Description: the ``last_work_at`` for one running-session row, or
-     *   null when none has been recorded. Read out of the attribution
-     *   fetch's own records rather than off the row, because the row
-     *   comes from the tmux probe and the stamp lives in the database.
-     *
-     *   Keyed by tmux NAME and resolved to the MAXIMUM stamp under that
-     *   name. A name is reusable and a dead instance can hold an older
-     *   row under it; the newest stamp is the live instance's by
-     *   construction, because a dead session cannot have worked more
-     *   recently than the one that replaced it.
-     * Inputs: session (object) - a running-session row with ``name``.
-     * Output: string|null - an ISO timestamp, or null for unrecorded.
-     */
-    _workStampFor(session) {
-        if (!session || !session.name) return null;
-        if (!this._workStampByName) return null;
-        return this._workStampByName.get(session.name) || null;
-    }
 
     /**
      * Description: the DOM attributes that make an unrecorded row visibly
@@ -1007,7 +564,32 @@ class Launchpad {
      *   here yet" never reads as "this is the stalest thing you own".
      * Inputs: session (object). Output: string - HTML attributes.
      */
+    /**
+     * The ``last_work_at`` for one running-session row, or null.
+     *
+     * SLICE 3: A DELEGATE. The lookup and the index it reads both live in
+     * web/src/lib/sessions/attribution.ts now. It is kept as a method
+     * only because ``_workRecencyAttrs`` below is a tree renderer that
+     * stays here until slice 4, and it is the one surviving caller. A
+     * missing bundle answers null, which is the same third outcome an
+     * unrecorded session already has - so the row is LABELLED unrecorded
+     * rather than the render throwing.
+     *
+     * @param {object} session - a running-session row with ``name``.
+     * @returns {string|null} - an ISO timestamp, or null for unrecorded.
+     */
+    _workStampFor(session) {
+        const web = this._web('a work stamp cannot be read');
+        if (!web) return null;
+        return web.workStampFor(session);
+    }
+
     _workRecencyAttrs(session) {
+        // The helper moved to web/src/lib/sessions/attribution.ts with
+        // the ordering it exists for; this reads the same index through
+        // the same function rather than keeping a second copy of the
+        // lookup, because two copies are two answers the moment one of
+        // them is updated.
         const stamp = this._workStampFor(session);
         if (stamp) {
             return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
@@ -1016,294 +598,11 @@ class Launchpad {
             + ' below every session that has been worked in"';
     }
 
-    /**
-     * Fetch per-session project attribution (S8) from the datastore and
-     * index it for _buildProjectSessionGroups() to consult.
-     *
-     * Description: THREE-OUTCOME, latched on
-     *   ``this.sessionAttributionListingOk``. A successful fetch
-     *   populates ``sessionAttribution`` / ``sessionAttributionByInstance``
-     *   / ``sessionAttributionAmbiguous`` via ``_resolveSessionAttribution``
-     *   and every resolved row's ``project_attribution`` is trusted as
-     *   read (including the literal strings ``'none'`` and ``'unknown'``,
-     *   which mean different things - see ``_buildProjectSessionGroups``).
-     *   A failed fetch clears all three AND sets the flag false, which
-     *   is what forces every running session into NEEDS ATTENTION rather
-     *   than rendering "no project" for a question that was never asked.
-     * Inputs: none.
-     * Output: Promise<void>. Mutates ``this.sessionAttribution``,
-     *   ``this.sessionAttributionByInstance``,
-     *   ``this.sessionAttributionAmbiguous``,
-     *   ``this.sessionAttributionListingOk``,
-     *   ``this.sessionAttributionListingDetail``.
-     */
-    async loadSessionAttribution() {
-        try {
-            const rows = await window.API.listSessionRecords();
-            if (!Array.isArray(rows)) {
-                this.sessionAttribution = new Map();
-                this.sessionAttributionByInstance = new Map();
-                this.sessionAttributionAmbiguous = new Set();
-                this.sessionRecords = [];
-                this._workStampByName = new Map();
-                this.sessionAttributionListingOk = false;
-                this.sessionAttributionListingDetail =
-                    'the server did not return a session record array';
-                return;
-            }
-            const resolved = this._resolveSessionAttribution(rows);
-            this.sessionAttribution = resolved.byName;
-            this.sessionAttributionByInstance = resolved.byInstance;
-            this.sessionAttributionAmbiguous = resolved.ambiguous;
-            this.sessionRecords = rows;
-            this._workStampByName = this._buildWorkStampIndex(rows);
-            this.sessionAttributionListingOk = true;
-            this.sessionAttributionListingDetail = null;
-        } catch (error) {
-            console.warn('Launchpad: failed to load session attribution:', error);
-            this.sessionAttribution = new Map();
-            this.sessionAttributionByInstance = new Map();
-            this.sessionAttributionAmbiguous = new Set();
-            this.sessionRecords = [];
-            // A FAILED FETCH IS NOT AN EMPTY WORK HISTORY, and the two
-            // must not render alike. Cleared to empty so every row reads
-            // as unrecorded and is LABELLED as such, which is honest -
-            // rather than keeping a stale index and ordering the list by
-            // stamps that may no longer be current.
-            this._workStampByName = new Map();
-            this.sessionAttributionListingOk = false;
-            this.sessionAttributionListingDetail =
-                (error && error.message) || 'the server could not be reached';
-        }
-    }
 
-    /**
-     * Build the tmux-name -> newest ``last_work_at`` index the session
-     * ordering reads.
-     *
-     * Description: the MAXIMUM stamp per tmux name, not the stamp on
-     *   whichever row happened to be scanned last. A name is reusable -
-     *   this app itself re-mints one with a -2/-3 uniquifier, and a
-     *   session recreated after its pane died takes the name back with a
-     *   new creation epoch - so several rows can carry one name. Taking
-     *   the maximum is correct without needing to know which row is live,
-     *   because a dead instance cannot have worked more recently than the
-     *   one that replaced it.
-     *
-     *   ARCHIVED ROWS ARE INCLUDED, deliberately and unlike ``byName``.
-     *   Archiving is the user saying "take this off my screen"; it says
-     *   nothing about when work happened, and a row that is off screen
-     *   contributes no row to order anyway. Excluding it could only
-     *   understate a live session's own history if the two shared a name.
-     *
-     *   A row with no ``last_work_at`` contributes NOTHING rather than a
-     *   zero - an absent name in this map is the third outcome the
-     *   callers read as "unrecorded".
-     * Inputs: rows (SessionRecord[]) - GET /sessions/records payload.
-     * Output: Map<string, string> - tmux name -> ISO stamp.
-     */
-    _buildWorkStampIndex(rows) {
-        const index = new Map();
-        for (const row of (Array.isArray(rows) ? rows : [])) {
-            if (!row || !row.tmux_name || !row.last_work_at) continue;
-            const seen = index.get(row.tmux_name);
-            if (!seen || row.last_work_at > seen) {
-                index.set(row.tmux_name, row.last_work_at);
-            }
-        }
-        return index;
-    }
 
-    /**
-     * Resolve the tmux-identity -> stored-row join used for project
-     * attribution, from a raw GET /sessions/records payload.
-     *
-     * Description: A tmux_name is NOT a stable identity - two rows can
-     *   legitimately share one, because a session recreated after its
-     *   pane died reuses the name with a new ``tmux_created_epoch``. The
-     *   old code built a single ``Map<tmux_name, row>`` over a
-     *   newest-first, archived-rows-included list with plain
-     *   ``map.set()``, so the OLDEST row in the list won (last write
-     *   wins) and an archived row was never excluded - which is how a
-     *   stopped-then-archived row shadowed a running session of the same
-     *   name and made it vanish from its project entirely (measured live:
-     *   row id 3, archived, epoch 1787686975 beat row id 4, running,
-     *   epoch 1788016091).
-     *
-     *   Builds three structures instead of one map:
-     *     - ``byInstance``: keyed on the composite instance identity
-     *       ``${tmux_name}\u0000${tmux_created_epoch}`` (NUL-separated,
-     *       so no tmux name can collide with the key of another). INCLUDES
-     *       archived rows on purpose - a caller holding a live session's
-     *       own creation epoch (both ``SessionInfo`` and
-     *       ``AttachableSession`` carry it, as ``created_at_epoch``; see
-     *       the merge in ``loadRunningSessions()``) can resolve its EXACT
-     *       row this way, including the case where the user archived
-     *       that exact instance's record - the row still comes back and
-     *       the caller drops it on ``archived_at``, which is what keeps
-     *       "delete this session's record" working without letting an
-     *       unrelated archived row from an OLDER instance of the same
-     *       name shadow a live one.
-     *     - ``byName``: the weaker name-only fallback, for a caller that
-     *       cannot supply an epoch (or when the exact instance key is not
-     *       found - e.g. legacy rows with no recorded epoch). NEVER
-     *       contains an archived row. Among the remaining non-archived
-     *       candidates for a name, the row with the newest
-     *       ``tmux_created_epoch`` wins - resolved by scanning every
-     *       candidate for the true maximum, so the winner does not depend
-     *       on the order rows arrived in.
-     *     - ``ambiguous``: names where two or more non-archived
-     *       candidates could not be ranked (a real tie on the newest
-     *       epoch, or a candidate with no epoch recorded at all). Such a
-     *       name is deliberately ABSENT from ``byName`` - this is a
-     *       COULD-NOT-EVALUATE, and the caller must report it as one
-     *       rather than silently picking a row.
-     *
-     *   A genuine collision inside ``byInstance`` itself (two distinct
-     *   rows claiming the identical ``tmux_name`` + ``tmux_created_epoch``
-     *   pair, which should not happen but is not assumed impossible) is
-     *   treated the same way: the key is dropped from ``byInstance`` so a
-     *   lookup reports "not found" rather than an arbitrary pick, and the
-     *   caller falls through to ``byName`` / ``ambiguous``.
-     * Inputs: rows (SessionRecord[]) - as returned by
-     *   GET /sessions/records: newest first, archived rows included.
-     * Output: {byName: Map<string, object>, byInstance: Map<string, object>,
-     *   ambiguous: Set<string>}
-     * Example:
-     *   const { byName } = lp._resolveSessionAttribution(rows);
-     *   byName.get('cloude_a')  // the SessionRecord for the live instance
-     */
-    _resolveSessionAttribution(rows) {
-        const byInstance = new Map();
-        const instanceCollisions = new Set();
-        const candidatesByName = new Map();
 
-        for (const row of rows) {
-            if (!row || !row.tmux_name) continue;
-            const name = row.tmux_name;
-            const epoch = (row.tmux_created_epoch === null || row.tmux_created_epoch === undefined)
-                ? null
-                : row.tmux_created_epoch;
 
-            if (epoch !== null) {
-                const instanceKey = name + '\u0000' + epoch;
-                if (byInstance.has(instanceKey)) {
-                    instanceCollisions.add(instanceKey);
-                } else {
-                    byInstance.set(instanceKey, row);
-                }
-            }
 
-            // Archived rows are never a candidate for the name-only
-            // fallback - see the docstring above.
-            if (row.archived_at) continue;
-
-            if (!candidatesByName.has(name)) candidatesByName.set(name, []);
-            candidatesByName.get(name).push({ row, epoch });
-        }
-
-        for (const key of instanceCollisions) byInstance.delete(key);
-
-        const byName = new Map();
-        const ambiguous = new Set();
-        for (const [name, candidates] of candidatesByName) {
-            if (candidates.length === 1) {
-                byName.set(name, candidates[0].row);
-                continue;
-            }
-            // Two or more non-archived rows share this name. A row with
-            // no recorded epoch can never be ranked against another, so
-            // its mere presence makes the whole name ambiguous.
-            if (candidates.some((c) => c.epoch === null)) {
-                ambiguous.add(name);
-                continue;
-            }
-            const maxEpoch = Math.max(...candidates.map((c) => c.epoch));
-            const winners = candidates.filter((c) => c.epoch === maxEpoch);
-            if (winners.length > 1) {
-                ambiguous.add(name);
-                continue;
-            }
-            byName.set(name, winners[0].row);
-        }
-
-        return { byName, byInstance, ambiguous };
-    }
-
-    /**
-     * Record that one of the two session probes did not produce an answer.
-     *
-     * Description: Latches ``runningSessionsListing.ok`` to false for this
-     *   poll tick. Once false it never flips back within the tick - a
-     *   second probe succeeding does not un-break the first, because the
-     *   row set is still incomplete.
-     * Inputs: source (string) - 'attachable' | 'live', which fetch failed.
-     *   reason (string) - short machine token, mirrors the server's
-     *   TmuxListing reason vocabulary where one is available.
-     *   detail (string|null) - human text for the row's second line.
-     * Output: undefined. Mutates ``this.runningSessionsListing``.
-     * Example: this._noteListingUnknown('attachable', 'timeout', '...');
-     */
-    _noteListingUnknown(source, reason, detail) {
-        if (!this.runningSessionsListing) {
-            this.runningSessionsListing = { ok: true, reason: null, detail: null, sources: [] };
-        }
-        const st = this.runningSessionsListing;
-        st.ok = false;
-        if (!st.reason) st.reason = reason || 'probe_error';
-        if (!st.detail) st.detail = detail || null;
-        if (st.sources.indexOf(source) === -1) st.sources.push(source);
-    }
-
-    /**
-     * Derive a machine-readable reason token from a rejected API call.
-     *
-     * Description: Prefers the server's own ``listing_reason`` (shipped in
-     *   the structured 503 detail from GET /sessions/attachable, preserved
-     *   on ``err.detail`` by api.js) so the client repeats the server's
-     *   verdict rather than inventing a parallel one. Falls back to the
-     *   transport-level facts we do have.
-     * Inputs: err (Error) - the rejection. status (number|null) - HTTP
-     *   status already parsed by the caller.
-     * Output: string - e.g. 'tmux_missing', 'timeout', 'exit_2',
-     *   'unauthorized', 'http_500', 'network_error'.
-     * Example: this._listingReasonFromError(err, 503) // 'timeout'
-     */
-    _listingReasonFromError(err, status) {
-        const d = err && err.detail;
-        if (d && typeof d === 'object' && typeof d.listing_reason === 'string' && d.listing_reason) {
-            return d.listing_reason;
-        }
-        if (status === 401) return 'unauthorized';
-        if (typeof status === 'number' && status > 0) return `http_${status}`;
-        return 'network_error';
-    }
-
-    /**
-     * Derive the human explanation shown under a CANNOT DETERMINE row.
-     *
-     * Description: Same precedence as ``_listingReasonFromError`` - the
-     *   server's own ``listing_detail`` or ``message`` wins, because it
-     *   knows things the browser cannot (which tmux command failed, what
-     *   stderr said). Never returns an empty string; a blank cell is not
-     *   an explanation.
-     * Inputs: err (Error) - the rejection. status (number|null) - HTTP
-     *   status already parsed by the caller.
-     * Output: string - one short sentence.
-     * Example: this._listingDetailFromError(err, 0) // 'the server could not be reached'
-     */
-    _listingDetailFromError(err, status) {
-        const d = err && err.detail;
-        if (d && typeof d === 'object') {
-            if (typeof d.listing_detail === 'string' && d.listing_detail) return d.listing_detail;
-            if (typeof d.message === 'string' && d.message) return d.message;
-        }
-        if (status === 401) return 'sign in again to see your sessions';
-        if (status === 503) return 'the server could not read the tmux session list';
-        if (typeof status === 'number' && status > 0) return `the server answered HTTP ${status}`;
-        if (err && typeof err.message === 'string' && err.message) return err.message;
-        return 'the server could not be reached';
-    }
 
     /**
      * Build the NEEDS ATTENTION block shown when a probe did not answer.
@@ -5719,6 +5018,87 @@ class Launchpad {
             console.error('Launchpad: could not render error banner:', err);
         }
     }
+}
+
+/**
+ * THE SESSION DATA LAYER LIVES IN THE COMPILED TREE NOW, AND THIS IS THE
+ * SEAM. Slice 3 of the launchpad migration moved thirteen methods and
+ * every field they wrote into web/src/lib/sessions/. What is left here is
+ * a set of ACCESSOR PROPERTIES that read and write that one store.
+ *
+ * WHY ACCESSORS RATHER THAN EDITING EVERY READER. Roughly forty places in
+ * this file still say `this.runningSessions` or `this.projects`, and all
+ * of them belong to renderers slices 4 and 5 will delete outright. A
+ * property is the change that makes every one of those a store read
+ * TODAY, in one place, without touching a line of markup - so there is
+ * exactly one data path during the overlap, rather than a legacy copy
+ * that drifts from the store between ticks. That drift is the whole
+ * failure this slice exists to prevent.
+ *
+ * THERE IS NO FALLBACK OBJECT BEHIND THEM, DELIBERATELY. An accessor that
+ * quietly fell back to a local field when the bundle was missing would be
+ * a SECOND data owner: it would work, it would look right, and the two
+ * copies would answer differently the moment anything wrote to one. So a
+ * missing bundle throws here, loudly and by name. In a browser it cannot
+ * happen - client/index.html loads the bundle as a deferred module above
+ * this file's consumers. In a node harness it means the harness has to
+ * evaluate client/dist/app.js in its sandbox, which is what
+ * tests/helpers/cloude-web-sandbox.mjs is for, and which is strictly
+ * better than a stub: those tests then exercise the REAL store.
+ *
+ * SETTERS EXIST BECAUSE THE FIELDS WERE WRITABLE. A test that used to say
+ * `lp.runningSessions = rows` still says exactly that, and it now writes
+ * the store. Removing the setters would make the seam one-directional and
+ * force every one of those tests to learn a second API for no gain.
+ */
+const SESSION_STORE_FIELDS = [
+    // The project list and its three latches.
+    ['projects', 'projects'],
+    ['projectsListingOk', 'projectsListingOk'],
+    ['_archivedFetchOk', 'archivedFetchOk'],
+    ['projectAuthority', 'projectAuthority'],
+    ['projectPresence', 'projectPresence'],
+    // The running rows, and this tick's verdict on the two probes.
+    ['runningSessions', 'runningSessions'],
+    ['runningSessionsListing', 'runningSessionsListing'],
+    // The attribution join: both rungs, the refusal set and the latch.
+    ['sessionAttribution', 'sessionAttribution'],
+    ['sessionAttributionByInstance', 'sessionAttributionByInstance'],
+    ['sessionAttributionAmbiguous', 'sessionAttributionAmbiguous'],
+    ['sessionAttributionListingOk', 'sessionAttributionListingOk'],
+    ['sessionAttributionListingDetail', 'sessionAttributionListingDetail'],
+    ['sessionRecords', 'sessionRecords'],
+    ['_workStampByName', 'workStampByName'],
+];
+
+/**
+ * The one store, or a throw naming what is missing.
+ *
+ * @returns {object} window.CloudeWeb.launchpad.sessions
+ */
+function sessionStoreOrThrow() {
+    const web = window.CloudeWeb;
+    if (web && web.launchpad && web.launchpad.sessions) {
+        return web.launchpad.sessions;
+    }
+    throw new Error(
+        'Launchpad: the compiled bundle is not loaded, so the session store '
+        + 'cannot be read. In a browser client/index.html loads it; in a node '
+        + 'harness see tests/helpers/cloude-web-sandbox.mjs.'
+    );
+}
+
+for (const [legacyName, storeName] of SESSION_STORE_FIELDS) {
+    Object.defineProperty(Launchpad.prototype, legacyName, {
+        configurable: true,
+        enumerable: true,
+        get() {
+            return sessionStoreOrThrow()[storeName];
+        },
+        set(value) {
+            sessionStoreOrThrow()[storeName] = value;
+        },
+    });
 }
 
 // Export singleton instance

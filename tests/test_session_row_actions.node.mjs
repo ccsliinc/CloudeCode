@@ -19,6 +19,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -109,6 +114,7 @@ function makeSandbox() {
 
     const context = { window: fakeWindow, document: fakeDocument, console };
     vm.createContext(context);
+    installCloudeWeb(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
@@ -382,6 +388,7 @@ function makeRenderSandbox(moduleFile, containerId) {
         setTimeout() { return 0; },
     };
     vm.createContext(context);
+    installCloudeWeb(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);

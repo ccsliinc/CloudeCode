@@ -45,7 +45,9 @@ under `/static` exactly as it serves everything else.
 | THE ONE MOUNT PATH, used by every migration slice | `web/src/lib/mount.ts` |
 | Slice 1, the attribution prompt card | `web/src/lib/launchpad/AttributionPrompt.svelte`, `attribution.ts` |
 | Slice 2, the recent sessions section | `web/src/lib/launchpad/RecentSessions.svelte`, `recent.ts`, `recent-actions.ts`, `recent-chrome.ts`, `recent-visibility.ts` |
-| The shared session store, recent slice only | `web/src/lib/sessions/store.svelte.ts` |
+| Slice 3, the session data layer | `web/src/lib/sessions/store.svelte.ts`, `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`, `env.ts`, `types.ts` |
+| The copy the data layer prints | `client/js/labels/session-listing.js` |
+| Put the REAL bundle in a node test's sandbox | `tests/helpers/cloude-web-sandbox.mjs` |
 | Per-device UI preferences, on the legacy keys | `web/src/lib/ui/prefs.svelte.ts` |
 | Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.test.ts` |
 | Slice 1's tests | `web/src/lib/launchpad/attribution.test.ts` |
@@ -175,7 +177,11 @@ compiled, never half of each.
   The shared store starts here holding the recent slice only. Every user-visible
   string goes through `client/js/i18n/catalog.en.js`; 33 keys added.
   Proven in a real browser under the production CSP.
-- **Slices 3 to 7** - PAUSED pending the 1.2 merge with Adam. See the
+- **Slice 3, the session data layer** - DONE (issue #70, PR #71 on
+  `Adoom666/CloudeCodeDev`). 787 legacy lines gone: thirteen methods and
+  the twelve instance fields they wrote, out of `client/js/launchpad.js`.
+  See "The launchpad's session data layer" below.
+- **Slices 4 to 7** - PAUSED pending the 1.2 merge with Adam. See the
   2026-09-09 release-plan entry in `.claude/TODO.md`: his work sits in the
   status, toast and sidebar cluster, which is slices 4 and 5, and porting it
   before the merge ports it twice.
@@ -222,6 +228,83 @@ failed. The call site tests for the bundle and `console.error`s when it is
 missing, because a panel that silently never mounts is the same false green
 this project keeps paying for. Any later slice's call site needs the same
 shape.
+
+## The launchpad's session data layer
+
+Slice 3 of the launchpad migration. The four fetches, the attribution
+join, the work-stamp index, the three-outcome listing latch and the 5s
+poll left `client/js/launchpad.js` and now live in
+`web/src/lib/sessions/`.
+
+**THE LEGACY FIELDS ARE ACCESSORS, SO THERE IS EXACTLY ONE DATA PATH.**
+`this.projects`, `this.runningSessions`, `this.sessionAttribution*`,
+`this.sessionRecords`, `this._workStampByName`, `this.projectPresence`,
+`this.projectAuthority`, `this.projectsListingOk`, `this._archivedFetchOk`
+and `this.runningSessionsListing` are no longer instance fields: they are
+properties on `Launchpad.prototype` that read and write `sessionStore`.
+Roughly forty renderer lines still SAY `this.runningSessions` and every
+one of them is now a store read, which is what stops a renderer painting a
+stale array while the store holds a fresh one. **There is no fallback
+object behind them, deliberately** - an accessor that quietly fell back to
+a local field when the bundle was missing would be a second data owner
+that works, looks right, and disagrees the moment either side is written
+to. A missing bundle throws by name. In a browser it cannot happen;
+a node harness evaluates the real `client/dist/app.js` in its sandbox
+through `tests/helpers/cloude-web-sandbox.mjs`, which is strictly better
+than a stub because those tests then exercise the shipped store.
+
+**`loadRunningSessions` WAS PORTED LINE BY LINE AND NOT TIDIED.** Seven
+fields are overwritten UNCONDITIONALLY and must never be `||`-defaulted:
+`agent_family`, `agent_family_source`, `agent_wrapper_label`,
+`startup_gate`, `status_source`, `label`, and the wrapper-level `status`.
+Each is a three-outcome field whose null is a real answer meaning "the
+server could not determine it", so a `||` keeps the previous tick's value
+and a session whose wrapper was deleted mid-session goes on being named
+after it. Note `!== undefined ? x : null` is NOT `|| null`: the first
+preserves a server-sent null, zero, false or empty string as itself.
+`web/src/lib/sessions/running.test.ts` is written so each of those goes
+RED on a default. **KNOWN GAP, LEFT ALONE:** the merge's live-only
+unshift branch never set `status_source`, so a session reaching the
+launchpad ONLY through `/sessions/list` carries no status provenance. It
+reads like a missing line and it may be one; it was pinned by a test
+rather than fixed, because slice 3 is a MOVE and fixing a behaviour while
+relocating it makes a regression impossible to bisect. It belongs to
+slice 5, which owns that tooltip.
+
+**BOTH JOIN RUNGS SURVIVE, AND WHICH ONE A ROW TAKES IS A PROPERTY OF THE
+TWO ENDPOINTS DISAGREEING.** `sessionAttributionByInstance` keys on
+`${tmux_name}\u0000${created_at_epoch}`; `sessionAttribution` is the
+name-only fallback and never holds an archived row. `/sessions/attachable`
+excludes live sessions and `SessionInfo` carries NO `created_at_epoch`, so
+a live-only row is unshifted with `created_at_epoch: live.created_at_epoch
+|| 0` and therefore ALWAYS takes the name-only rung. `ambiguous` and
+`listingOk === false` are refusals that route to NEEDS ATTENTION and must
+never render as "no project" - empty maps alone say the second thing, and
+the latch is the only thing that makes them say the first.
+
+**THE POLL FINALLY HAS A TEARDOWN.** `_startRunningSessionsPoller` called
+`setInterval` and the word `clearInterval` appeared NOWHERE in
+`launchpad.js`; the handle was stored purely as an idempotence flag.
+`web/src/lib/sessions/poller.ts` owns the interval and `stopPolling()`
+clears it. The two gates are unchanged - signed in, and
+`ProjectListRenderGuard.shouldPoll(document)` - and A SKIP IS NOT A STOP:
+the interval keeps running while the launchpad is not the screen on
+display, so returning to it resumes with nothing to restart. Measured in
+a real browser under the production CSP: 3 ticks in a 11.5s window with
+home up, ZERO with `#launchpad-screen` off `.active`, 3 again on return
+with nothing restarting it, and zero after `stopPolling()`.
+
+**`window` IS NOT `globalThis`, AND THAT COST A DEBUGGING ROUND.** The
+methods that moved read `window.Auth`, `window.UIFlags` and
+`window.ProjectListRenderGuard`. Those are the same object in a browser
+and are NOT in a node `vm` sandbox, where the harness builds a plain
+object and hangs it on the context. A first draft reached for
+`globalThis`, the poller's auth gate answered false, and the tick silently
+never ran - it surfaced in `tests/test_project_list_render_guard.node.mjs`
+looking exactly like a repaint bug. A BARE `window` reference also THROWS
+where a property read would not, because vitest runs this tree in the
+`node` environment on purpose. `web/src/lib/sessions/env.ts` is the one
+place both are handled; anything new in this tree reads through it.
 
 ## The plugin surface registry
 

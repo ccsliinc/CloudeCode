@@ -7272,3 +7272,101 @@ Open items, stated rather than discovered:
 - [ ] `_deriveRunningSessionDisplayName` is still legacy (slice 5) and reached
   through the host. When it is absent the name ladder falls to the working
   directory rather than guessing at the mapping.
+
+## 2026-09-10 - svelte slice 3, the session data layer into one store (issue #70, PR #71)
+
+Branched off `feat/svelte-slice-2` (`722e903`) onto `feat/svelte-slice-3`.
+The highest-risk slice of the seven, per the carve plan, and it is done.
+
+**787 legacy lines out of `client/js/launchpad.js`** (5726 -> 5162 after the
+sequencers went back in). Thirteen methods: `loadProjects`,
+`loadProjectAuthority`, `loadProjectPresence`, `loadRunningSessions`,
+`loadSessionAttribution`, `_buildWorkStampIndex`, `_resolveSessionAttribution`,
+`_noteListingUnknown`, `_listingReasonFromError`, `_listingDetailFromError`,
+`_sortRunningSessionsByWork`, `_workStampFor`, `_startRunningSessionsPoller`,
+plus the twelve constructor fields they wrote and one misfiled docstring.
+
+**The store is the only data owner now.** `web/src/lib/sessions/store.svelte.ts`
+(487 lines) holds fourteen `$state` fields behind accessors; the pure rules live
+next door in `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`,
+`env.ts` and `types.ts`, each under the 500-line guideline. `launchpad.js` keeps
+four thin sequencers (`loadProjects`, `loadRunningSessions`,
+`loadSessionAttribution`, `_startRunningSessionsPoller`) that hold nothing and
+only order the still-legacy render calls, plus `stopRunningSessionsPoller`, which
+is new. The twelve fields became accessor properties on `Launchpad.prototype`
+with NO fallback object behind them, so a missing bundle throws by name rather
+than quietly becoming a second data owner.
+
+**Four mutations, all measured red, all reverted byte-identical (sha256 checked):**
+
+| mutation | named tests that failed |
+|---|---|
+| `agent_wrapper_label` given a `\|\|` default | 3 in `running.test.ts` |
+| the epoch-keyed rung disabled so the join is always name-only | `attribution.test.ts` + `store.test.ts` |
+| a failed records fetch latching `listingOk` true | 2 in `store.test.ts`, plus the node tree test |
+| `clearInterval` removed from `stop()` | 3 in `poller.test.ts` |
+
+Mutation 3 initially went red only in vitest, because no test walked the whole
+route from a rejected fetch to a rendered group. A case was added to
+`test_session_attribution_join.node.mjs` that starts at the endpoint refusing and
+asserts the row lands in `needsAttention` and NOT in `noProject`; the mutation
+then goes red at both levels. That gap is the reason the mutations are run.
+
+**Counts.** vitest 302 -> 458 (5 new suites, 156 cases). Node suite 196 files,
+0 failures, unchanged from baseline. `svelte-check` 0 errors over 311 files.
+`scan_secrets.py` exit 0. `tests/test_no_remote_assets.py` 15 passed.
+
+**i18n.** 8 keys added under `session.listing.*` and `project.list.*`, assembled
+by the new `client/js/labels/session-listing.js`. 8 files added to `PORTED_FILES`.
+Pseudo-locale: 8 of 8 assembled sentences fully bracketed, with a negative
+control asserting a SERVER-supplied `listing_detail` is passed through and is NOT
+localised - server strings stay out of scope this round, deliberately, and the
+guard is capable of telling the difference. A reason token (`http_500`,
+`tmux_missing`) is an identifier and stays untranslated.
+
+**Browser proof**, against a throwaway server importing `src.security_headers`,
+never the live install and never the owner's sessions. Home up: 3 ticks in 11.5s.
+`#launchpad-screen` off `.active`: ZERO requests, interval still alive. Back to
+home: 3 ticks again with nothing restarting it - which is what makes the zero
+evidence rather than a coincidence. After `stopSessionPolling()`: zero, and
+`polling` false. CSP: exactly 2 violations, both planted controls (`img-src` and
+`script-src-elem`), zero from the bundle.
+
+Two instrument bugs were found and fixed while measuring, and both would have
+produced a false green: a control planted in the HTML fires before a DEFERRED
+module listener exists and is silently missed, so the controls are planted by the
+listener's own module now; and Chrome throttles `setInterval` in a hidden tab, so
+a phase measured while backgrounded reported one tick per 16s. Every phase
+records its own `visibilityState` for that reason.
+
+Findings left alone, on purpose:
+- [ ] The live-only merge branch never sets `status_source`, so a session that
+  reaches the launchpad ONLY through `/sessions/list` carries no status
+  provenance and its tooltip says nothing. It looks like a missing line. Pinned
+  by a test rather than fixed: slice 3 is a MOVE, and fixing a behaviour while
+  relocating it makes a regression impossible to bisect. Slice 5 owns that
+  tooltip.
+- [ ] The name-keyed `.find(s => s.name === tmuxName)` in the merge is the same
+  known-bad lookup that stood in `launchpad.js`, moved rather than fixed, and it
+  is re-registered in `test_no_name_keyed_session_row_lookup`. Fixing it needs the
+  server to ship a durable key on the live row that the attachable row also
+  carries.
+- [ ] `_archivedVisible` is still a real field on `Launchpad`, because the two
+  toggles that write it are still in that file. It moves with the tree prefs in
+  slice 4.
+- [ ] There is still no caller for `stopRunningSessionsPoller` in the legacy
+  shell, because the legacy shell has no teardown. Slice 7's shell is what will
+  use it; until then the store owns a timer that CAN be stopped, which is the
+  half that was missing.
+
+Protocol notes for the next slice:
+- The name-key guard now scans `web/src` as well as `client/js`, and SKIPS
+  `client/dist`. The emitted bundle is generated and minified, so an allowlist
+  keyed on its text would churn on every build; its source is scanned instead.
+  Without that change the guard would have gone quietly green on the day the code
+  it guards moved house.
+- `tests/helpers/cloude-web-sandbox.mjs` is how a node harness gets the store.
+  Nineteen harnesses use it. It supplies the timing globals Svelte's runtime
+  needs (`queueMicrotask` and friends) and the locale ladder's two reads
+  (`navigator`, `localStorage`), because a vm context carries none of them and
+  the failures surface as a ReferenceError from inside minified Svelte.

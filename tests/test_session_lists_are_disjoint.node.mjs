@@ -28,6 +28,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -150,6 +155,7 @@ async function loadBoth({ attachable, recent }) {
         alert() {},
     };
     vm.createContext(context);
+    installCloudeWeb(context);
     // ONE SCRIPT NOW. `session-recent-visibility.js` was deleted with
     // slice 2 and its rule is imported into the bundle instead; see the
     // note above the first test for where it is asserted.

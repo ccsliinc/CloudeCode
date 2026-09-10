@@ -19,6 +19,10 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the `Launchpad` data fields every harness built on this lib
+// drives are accessors over the compiled tree's one session store, so
+// the REAL client/dist/app.js is evaluated in each sandbox.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..');
@@ -178,6 +182,7 @@ export function loadLaunchpad(docOverrides = {}) {
         alert() {},
     };
     vm.createContext(ctx);
+    installCloudeWeb(ctx);
     vm.runInContext(LAUNCHPAD_SRC, ctx, { filename: 'launchpad.js' });
     return { lp: ctx.window.Launchpad, doc, body, win: ctx.window };
 }

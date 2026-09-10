@@ -37,6 +37,8 @@ import {
 } from './lib/launchpad/recent-actions';
 import type { RestartOptions } from './lib/launchpad/recent';
 import { sessionStore } from './lib/sessions/store.svelte';
+import { workStampFor } from './lib/sessions/attribution';
+import type { RunningSessionRow } from './lib/sessions/types';
 import { uiPrefs } from './lib/ui/prefs.svelte';
 // Imported for its side effect: this is what registers the shipped
 // plugins on the surface registry. Nothing reads a binding from it.
@@ -165,6 +167,100 @@ function restartRecentSessionForLegacy(
 }
 
 /**
+ * Load the project list and both its sidecars, for a legacy caller.
+ *
+ * Description: SLICE 3, AND THE STORE IS THE ONLY OWNER OF THE RESULT.
+ *   `Launchpad.loadProjects()` is now a sequencer: it awaits this, paints
+ *   through its own still-legacy renderers, and holds nothing. The
+ *   failure sentence comes back rather than being shown from in here,
+ *   because the inline error line is a legacy surface this tree does not
+ *   own yet.
+ * Inputs: includeArchived - the per-device toggle as it stands now.
+ * Output: Promise with `ok` and, on failure, the message to show.
+ * Example: await window.CloudeWeb.launchpad.loadProjects(false);
+ */
+function loadProjectsForLegacy(
+    includeArchived: boolean,
+): Promise<{ ok: boolean; error: string | null }> {
+    return sessionStore.loadProjects(!!includeArchived, t);
+}
+
+/**
+ * Refetch and re-merge the running-session set, for a legacy caller.
+ *
+ * Description: the two-endpoint merge, the dead-pane filter, the
+ *   attribution join, the work-stamp index and the sort - everything the
+ *   274-line `loadRunningSessions` did except the two render calls, which
+ *   stay with the renderers that slices 4 and 5 own.
+ * Inputs: none.
+ * Output: Promise<void>. Never rejects.
+ * Example: await window.CloudeWeb.launchpad.loadRunningSessions();
+ */
+function loadRunningSessionsForLegacy(): Promise<void> {
+    return sessionStore.loadRunningSessions(t);
+}
+
+/**
+ * Refetch the stored session records alone, for a legacy caller.
+ *
+ * Description: the row actions refresh attribution without re-probing
+ *   tmux. Same join, same work index, same three-outcome latch.
+ * Inputs: none. Output: Promise<void>. Never rejects.
+ * Example: await window.CloudeWeb.launchpad.loadSessionAttribution();
+ */
+function loadSessionAttributionForLegacy(): Promise<void> {
+    return sessionStore.loadSessionAttribution(t);
+}
+
+/**
+ * The `last_work_at` for one running-session row, for a legacy caller.
+ *
+ * Description: `_workRecencyAttrs` is a tree renderer and stays in
+ *   `launchpad.js` until slice 4, and it is the one surviving caller of
+ *   the lookup that moved. Exported so it reads the SAME index the sort
+ *   reads, rather than keeping a second copy of a three-line map get -
+ *   two copies of a lookup are two answers the moment one is updated.
+ * Inputs: row - a running-session row with `name`.
+ * Output: string | null - an ISO stamp, or null for UNRECORDED.
+ * Example: window.CloudeWeb.launchpad.workStampFor(row);
+ */
+function workStampForLegacy(row: RunningSessionRow | null): string | null {
+    return workStampFor(row, sessionStore.workStampByName);
+}
+
+/**
+ * Start the one 5s running-sessions tick.
+ *
+ * Description: THE POLL AND ITS TEARDOWN NOW LIVE TOGETHER.
+ *   `Launchpad._startRunningSessionsPoller` called `setInterval` and the
+ *   word `clearInterval` appeared nowhere in that file, so the tick
+ *   outlived every teardown there has ever been. `stopSessionPolling` is
+ *   the missing half.
+ *
+ *   The tick's own work is passed IN, because what a tick does is
+ *   refetch AND repaint, and the repaint is still legacy until slices 4
+ *   and 5. The two gates - signed in, and the launchpad screen still
+ *   active - live in the poller and read the same globals they always
+ *   did.
+ * Inputs: tick - what one tick does.
+ * Output: void.
+ * Example: window.CloudeWeb.launchpad.startSessionPolling(() => lp.loadRunningSessions());
+ */
+function startSessionPolling(tick: () => Promise<unknown> | unknown): void {
+    sessionStore.startPolling({ tick });
+}
+
+/**
+ * Stop that tick and clear its interval.
+ *
+ * Inputs: none. Output: void.
+ * Example: window.CloudeWeb.launchpad.stopSessionPolling();
+ */
+function stopSessionPolling(): void {
+    sessionStore.stopPolling();
+}
+
+/**
  * Render the StatusLed component once, off-document, and hand back its
  * markup.
  *
@@ -235,6 +331,23 @@ const CloudeWeb = {
     launchpad: {
         mountAttributionPrompt,
         mountRecentSessions,
+        /**
+         * SLICE 3: THE SESSION DATA LAYER, AND THE ONLY COPY OF IT.
+         * `client/js/launchpad.js` holds no `projects`, no
+         * `runningSessions`, no attribution maps and no work-stamp index
+         * any more - the fields its surviving renderers read are accessor
+         * properties delegating to `sessionStore`. Exposed as the store
+         * itself rather than as a set of forwarding methods because the
+         * accessors need to READ it, and a read through a method call is
+         * a snapshot that goes stale the moment the next tick lands.
+         */
+        sessions: sessionStore,
+        loadProjects: loadProjectsForLegacy,
+        loadRunningSessions: loadRunningSessionsForLegacy,
+        loadSessionAttribution: loadSessionAttributionForLegacy,
+        startSessionPolling,
+        stopSessionPolling,
+        workStampFor: workStampForLegacy,
         /**
          * THE THREE RECENT ACTIONS, AS THE STILL-LEGACY ROWS SEE THEM.
          * The project tree (slice 4) archives and restarts; the running

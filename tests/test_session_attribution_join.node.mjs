@@ -32,6 +32,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -113,12 +118,46 @@ function loadLaunchpad() {
         alert() {},
     };
     vm.createContext(context);
+    installCloudeWeb(context);
     vm.runInContext(
         fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8'),
         context,
         { filename: 'launchpad.js' }
     );
     return context.window.Launchpad;
+}
+
+/**
+ * Resolve the join the way the running app does: through the fetch.
+ *
+ * SLICE 3 MOVED THE RESOLVER. `_resolveSessionAttribution` was a method
+ * on the Launchpad singleton and is now
+ * `web/src/lib/sessions/attribution.ts`, whose own cases live in
+ * `web/src/lib/sessions/attribution.test.ts`. This file kept the half
+ * that matters HERE: what `_buildProjectSessionGroups` does with the
+ * result, which is still legacy and belongs to slice 4.
+ *
+ * IT DRIVES THE ENDPOINT RATHER THAN REACHING FOR THE FUNCTION, and that
+ * is an improvement rather than a workaround. Stubbing
+ * `listSessionRecords` and calling `loadSessionAttribution()` exercises
+ * the fetch, the three-outcome latch and the join in one pass, so the
+ * three cannot drift apart the way a direct call to the pure resolver
+ * would allow.
+ *
+ * @param {object} lp - the Launchpad singleton.
+ * @param {Array} rows - the GET /sessions/records payload to serve.
+ * @returns {Promise<object>} - {byName, byInstance, ambiguous}.
+ */
+async function resolveVia(lp, rows) {
+    lp._web('').sessions.useHost({
+        listSessionRecords: async () => rows,
+    });
+    await lp.loadSessionAttribution();
+    return {
+        byName: lp.sessionAttribution,
+        byInstance: lp.sessionAttributionByInstance,
+        ambiguous: lp.sessionAttributionAmbiguous,
+    };
 }
 
 /**
@@ -198,7 +237,7 @@ for (const order of ['newest-first (server order)', 'oldest-first']) {
         const rows = order === 'newest-first (server order)'
             ? [liveNew, archivedOld]
             : [archivedOld, liveNew];
-        const { byName, byInstance, ambiguous } = lp._resolveSessionAttribution(rows);
+        const { byName, byInstance, ambiguous } = await resolveVia(lp, rows);
 
         assert.equal(ambiguous.has('Media_Compression'), false,
             'two rows with DIFFERENT epochs must not be ambiguous');
@@ -250,7 +289,7 @@ for (const order of ['old-then-new', 'new-then-old']) {
         const older = record({ session_uuid: 'r-old', tmux_name: 'cloude_x', tmux_created_epoch: 500, project_id: 1 });
         const newer = record({ session_uuid: 'r-new', tmux_name: 'cloude_x', tmux_created_epoch: 900, project_id: 2 });
         const rows = order === 'old-then-new' ? [older, newer] : [newer, older];
-        const { byName, ambiguous } = lp._resolveSessionAttribution(rows);
+        const { byName, ambiguous } = await resolveVia(lp, rows);
         assert.equal(ambiguous.has('cloude_x'), false);
         assert.equal(byName.get('cloude_x').session_uuid, 'r-new');
     });
@@ -269,7 +308,7 @@ await test('a tie on the true maximum epoch is ambiguous even with an older thir
         record({ session_uuid: 'r-tie-a', tmux_name: 'cloude_y', tmux_created_epoch: 900, project_id: 2 }),
         record({ session_uuid: 'r-tie-b', tmux_name: 'cloude_y', tmux_created_epoch: 900, project_id: 3 }),
     ];
-    const { byName, ambiguous } = lp._resolveSessionAttribution(rows);
+    const { byName, ambiguous } = await resolveVia(lp, rows);
     assert.equal(ambiguous.has('cloude_y'), true);
     assert.equal(byName.has('cloude_y'), false,
         'an ambiguous name must be absent from byName, never an arbitrary pick');
@@ -287,7 +326,7 @@ await test('an indistinguishable (tied-epoch) attribution renders as NEEDS ATTEN
         record({ session_uuid: 'r-tie-a', tmux_name: 'cloude_z', tmux_created_epoch: 4242, project_id: 1 }),
         record({ session_uuid: 'r-tie-b', tmux_name: 'cloude_z', tmux_created_epoch: 4242, project_id: 5 }),
     ];
-    const { byName, byInstance, ambiguous } = lp._resolveSessionAttribution(rows);
+    const { byName, byInstance, ambiguous } = await resolveVia(lp, rows);
     // The instance-exact key itself collides too (same name AND epoch),
     // so it must be absent from byInstance as well.
     assert.equal(byInstance.has(`cloude_z${SEP}4242`), false);
@@ -323,7 +362,7 @@ await test('a same-name row with no recorded epoch cannot be ranked and is ambig
         record({ session_uuid: 'r-noepoch', tmux_name: 'cloude_w', tmux_created_epoch: null, project_id: 1 }),
         record({ session_uuid: 'r-epoch', tmux_name: 'cloude_w', tmux_created_epoch: 777, project_id: 2 }),
     ];
-    const { byName, ambiguous } = lp._resolveSessionAttribution(rows);
+    const { byName, ambiguous } = await resolveVia(lp, rows);
     assert.equal(ambiguous.has('cloude_w'), true);
     assert.equal(byName.has('cloude_w'), false);
 });
@@ -344,7 +383,7 @@ await test('deleting the CURRENTLY-RUNNING instance\'s own record still hides it
             project_id: 1,
         }),
     ];
-    const { byName, byInstance, ambiguous } = lp._resolveSessionAttribution(rows);
+    const { byName, byInstance, ambiguous } = await resolveVia(lp, rows);
     lp.runningSessions = [running({ name: 'cloude_v', created_at_epoch: 2000 })];
     lp.sessionAttribution = byName;
     lp.sessionAttributionByInstance = byInstance;
@@ -357,6 +396,30 @@ await test('deleting the CURRENTLY-RUNNING instance\'s own record still hides it
     assert.equal(groups.byProjectId.size, 0,
         'a deliberately-deleted record must not attach the session to its old project either');
     assert.equal(groups.noProject.length, 0);
+});
+
+await test('a records fetch that FAILED renders NEEDS ATTENTION, never "no project"', async () => {
+    // THE WHOLE LOOP, FROM THE REJECTED FETCH TO THE RENDERED GROUP.
+    // Every other case here hands the tree a resolved join; this one
+    // starts at the endpoint refusing to answer, because that is the
+    // path where the two facts can come apart. Empty maps ALONE say
+    // "these sessions belong to no project"; the latch is what makes them
+    // say "we could not read the table", and a mutation that sets the
+    // latch true on failure passes every assertion that only checks the
+    // maps are empty.
+    const lp = loadLaunchpad();
+    lp._web('').sessions.useHost({
+        listSessionRecords: async () => { throw new Error('HTTP 500'); },
+    });
+    await lp.loadSessionAttribution();
+    assert.equal(lp.sessionAttributionListingOk, false,
+        'a rejected records fetch must drop the latch');
+    lp.runningSessions = [running({ name: 'cloude_orphan', created_at_epoch: 42 })];
+    const groups = lp._buildProjectSessionGroups();
+    assert.equal(groups.needsAttention.length, 1,
+        'an unreadable attribution table must route the row to NEEDS ATTENTION');
+    assert.equal(groups.noProject.length, 0,
+        'it must NOT render as "no project" - that is a claim nobody measured');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);
