@@ -27,8 +27,8 @@ import { ledHtml, ledStateFor } from './led';
  */
 export const STATUS_LABELS: Record<string, string> = {
     dead: 'dead - process exited',
-    question: 'waiting for permission',
-    notice: 'wants your attention',
+    question: 'your turn - claude needs your permission',
+    notice: 'your turn - claude wants your attention',
     working_subagent: 'working - a subagent is active',
     working: 'working',
     finished_unread: 'done - unread',
@@ -112,12 +112,20 @@ export function labelWithSource(status: unknown, statusSource: unknown): string 
 
 /** The wrapper-level fields the LED needs beyond the bare status string. */
 export interface StatusSignals {
-    /** Selects the green `done` dot over the grey `idle` one at rest. */
+    /** Drives the green finished-turn RING - see web/src/lib/led.ts. */
     unread?: boolean | null | undefined;
     /** `awaiting_startup_prompt` means the pane needs a keypress. */
     startup_gate?: string | null | undefined;
     /** Where the status came from; renders in the tooltip only. */
     status_source?: string | null | undefined;
+    /**
+     * Whether THIS browser's socket to the session is up. No server
+     * response can report it - see client/js/session-transport.js. Only
+     * the literal `disconnected` changes the LED; every other value falls
+     * through, because this browser holds a socket to at most one session
+     * and knowing nothing about the rest is the normal case.
+     */
+    transport?: string | null | undefined;
     /** Optional CSS length override for the whole LED. */
     size?: string | null | undefined;
 }
@@ -154,6 +162,7 @@ export function ledHtmlForStatus(
         activity_status: key,
         unread: s.unread,
         startup_gate: s.startup_gate,
+        transport: s.transport,
     });
     return ledHtml({
         inner: led.inner,
