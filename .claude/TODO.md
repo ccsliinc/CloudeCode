@@ -6447,3 +6447,91 @@ returns nothing.
 the upstream this project may not push to, so a 1.2 install keeps being
 told it is behind a line it does not follow. The Electron bundle is still
 1.2.0 and would need a rebuild to make the footer read 1.2.1.
+
+---
+
+## 2026-09-10 - the electron bundle rebuilt at 1.2.1 and installed on live
+
+Closes the version mismatch left by the 1.2.1 source deploy: live ran 1.2.1
+source while the footer and `GET /api/v1/version` both read 1.2.0. The number
+comes from `CLOUDE_APP_VERSION`, which `macOS/server-manager.js` injects from
+`app.getVersion()`, which reads the PACKAGED `macOS/package.json`. A source
+deploy ships `git ls-files src client` and cannot rewrite `app.asar`, so only a
+bundle rebuild could move it. Same mechanism, same fix, as the 1.2.0 rebuild
+recorded above.
+
+**NO VERSION FILE WAS TOUCHED.** `macOS/package.json` already read 1.2.1, and it
+is the only hand written version source. This round changed no code at all.
+
+**Build.** From the `release/1.2.1` worktree at `ce7267d`:
+`cd macOS && npm install`, then `CSC_IDENTITY_AUTO_DISCOVERY=false npm run
+package`. electron-builder 24.13.3, electron 28.3.3, darwin arm64. The
+`afterPack` hook `macOS/scripts/adhoc-sign.js` ran and self verified
+("signature present and verified (ad-hoc, no identity)"). Outputs
+`macOS/dist/mac-arm64/Cloude Code.app` and
+`macOS/dist/Cloude Code-1.2.1-arm64.dmg`. The .app was installed with `ditto`;
+the dmg is the distributable and was not needed here. Build host is
+mac-mini-m4, which is also the target host.
+
+**BLAST RADIUS MEASURED BEFORE THE SWAP, and it is exactly one file.** The new
+bundle's `Contents/Resources/src` and `Contents/Resources/client` hash byte for
+byte identical to the installed 1.2.0 bundle's:
+src `7ee339d7f5616f67a1fd6beec9cdb22a12f3088c38cf1928c64b9786182bce73`
+(265 files) and client
+`1759da52668d758497f707b0ffb201c137e2f876217fcb399abe5756d68f9aea`
+(312 files), unchanged either side. Only `app.asar` moved,
+`20ee2119...` to `7f091e0d...`, plus the version in Info.plist. So the reinstall
+put back the same source the 1.2.1 deploy had already written.
+
+**Backup, one move from a rollback:**
+`/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538`.
+Nothing was deleted; the owner's settings deny `rm`. Rollback is a single `mv`
+back followed by a bootout/bootstrap.
+
+**The restart was bootout then bootstrap, NOT `kickstart -k`,** for the reason
+recorded in the 1.2.0 entry: `kickstart -k` SIGKILLs Electron and orphans the
+python server on port 8000, which the new bundle then refuses to adopt as a
+mismatch. Measured this round: `launchctl bootout gui/501/com.cloudecode.menubar`
+at 16:05:47Z freed port 8000 in **2 seconds**, and
+`launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.cloudecode.menubar.plist`
+brought `/health` back to 200 at **t+15s**. THE PROBE WAS A POLL, NOT A SAMPLE:
+the 1.2.1 deploy recorded startup holding the event loop for about 54 seconds
+after binding, so a single curl can return 000 and read exactly like a dead
+server.
+
+**Measured after the restart:**
+- 19 tmux sessions on `-L cloude` before and after, and the sorted NAME LISTS
+  diff clean. Nothing was typed into, restarted or closed.
+- `boot_readopt_complete` at 16:06:15.484584Z: `held: 18`, `skipped: 1`,
+  `failed: 0`, `live_count: 19`, `id_sources.hook_token: 18`. Held plus skipped
+  equals 19, the same shape as the last two good deploys.
+- ZERO `hook_post_rejected_invalid_token` after 16:05:47Z. The file holds 7,104
+  of them in total and the most recent is 2026-09-08T20:40:23.231960Z, which is
+  the storm CLAUDE.md already documents, not this round. The only token line
+  after the restart is one `hook_tokens_restored`.
+- Three independent version reads all agree:
+  `CFBundleShortVersionString` **1.2.1** on the installed bundle (and
+  `codesign --verify --deep --strict` on the INSTALLED copy: "valid on disk",
+  "satisfies its Designated Requirement");
+  `CLOUDE_APP_VERSION=1.2.1` in the RUNNING server process env
+  (`ps eww`, pid 28060); and `GET /api/v1/version` returning
+  `{"version": "1.2.1", ...}`. The server dir VERSION file also stamped 1.2.1.
+- Browser evidence, in a tab of our own opened via Claude in Chrome and closed
+  afterwards, the owner's tab untouched: after a hard reload the footer renders
+  `v1.2.1` in `.home-bar__version` and in both `.version` spans, the server
+  rendered `<meta name="cloude-app-version">` reads `v1.2.1`, and `v1.2.1` is
+  the ONLY version shaped string in the whole rendered page text.
+- Zero CSP violations and zero console errors across a full load that produced
+  268 console messages. THE NEGATIVE CONTROL RAN IN THE SAME PASS, because a
+  detector that never fires cannot prove a zero: an injected `img` pointed at
+  `cdn.jsdelivr.net` raised exactly one `img-src` violation on the same
+  listener, and the element was removed afterwards.
+
+**Still open, deliberately not touched this round:** the version endpoint's
+`update` block still points at `https://github.com/Adoom666/CloudeCode.git`,
+the upstream this project may not push to, and reports
+`latest_version: "1.0.36"` against `current_version: "1.2.1"`. Note the
+`status` field reads `current` rather than claiming an update, because 1.2.1
+sorts above 1.0.36, so the visible symptom is a bogus "latest" figure and an
+`upgrade_command` pointing at the forbidden fork's releases page rather than a
+false update prompt. Where the update checker SHOULD point is the owner's call.
