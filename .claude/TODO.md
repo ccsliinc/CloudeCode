@@ -6753,3 +6753,33 @@ full history repaints the current screen and replace"
   thrown away.
 - Related open question from an earlier session, still unanswered: what "show
   full history" is supposed to do, versus "show summary".
+
+## 2026-09-10 - TWO GATES before the backend line can reach a release
+
+Recorded now so they are not discovered at merge time.
+
+- [ ] **BOOT PATH VERIFICATION IS UNMEASURED.** v2 slice S3 (owned-tmux ledger,
+  `2c24423`) touches the boot re-adopt path, and nothing has been deployed, so
+  the plan's own live proofs were never run: `boot_readopt_complete` held plus
+  skipped against `/opt/homebrew/bin/tmux -L cloude list-sessions | wc -l`, and
+  the `/sessions/list` row count checked SEPARATELY from that log line. Those
+  two checks are exactly what caught the 22-rows-for-21-panes defect, where the
+  boot log read perfect while one pane carried two backends and two tailers on
+  one FIFO. A green suite is not a substitute. Run both against live before this
+  line merges to a release branch.
+- [ ] **ADAM'S MASTER HAS MOVED AND MUST BE INTEGRATED.** `feat/backend-
+  decomposition` sits on the 1.2.1 base and carries 12 slice commits; his master
+  has 11 commits our line does not. That integration is a real merge, not
+  bookkeeping, and it is the natural moment to run the boot verification above.
+  Do NOT do it as a side effect of tidying a branch name.
+- Bookkeeping already corrected: draft PR #19's head `feat/12-backend-
+  decomposition` holds only the claim commit; the real work is
+  `feat/backend-decomposition` @ `2c24423`. Commented on the PR rather than
+  force-repointing it, because repointing means the merge above.
+
+### A rule this session paid for twice
+`git checkout -- <path>` to revert a mutation destroyed uncommitted work in two
+separate slices (v1 S3 and v2 S3), both times recovered by re-running the
+worker's own script. When reverting a deliberate mutation, revert only the
+mutated hunk, or stash first, or work in a copy. A revert that also discards
+real edits is indistinguishable from a successful revert until the tests move.
