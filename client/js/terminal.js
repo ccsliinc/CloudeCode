@@ -1694,6 +1694,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                     });
             }
 
+            // Authoritative refresh, never a replay: preferences-transport.js.
+            if (globalThis.PreferencesTransport) globalThis.PreferencesTransport.refreshOnReconnect();
+
             // Send initial resize (legacy fallback path - the server's
             // request_dims handshake will also arrive and trigger a
             // handshake-tagged sendResize which dedupes if dims match).
@@ -1933,6 +1936,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             if (window.ToastManager && message && message.toast) {
                 window.ToastManager.add(message.toast);
             }
+        } else if (type === 'preferences.changed') {
+            // Rules in client/js/preferences-transport.js.
+            if (globalThis.PreferencesTransport) globalThis.PreferencesTransport.handleFrame(message);
         } else if (type === 'toast.ack') {
             // Another browser (or this one's POST) acked a toast. Dismiss
             // the local card without re-syncing to the server.

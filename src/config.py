@@ -26,6 +26,7 @@ from src.core.agent_families import (
     wrappers_for_family,
 )
 from src.core import wrapper_store
+from src.core import config_writer
 from src.core.agent_wrappers import (
     AgentWrapper,
     default_wrapper as _default_wrapper,
@@ -1804,72 +1805,43 @@ class Settings(BaseSettings):
         """
         config_path = Path(self.auth_config_file).expanduser()
 
-        if not config_path.exists():
-            raise FileNotFoundError(
-                f"Auth config file not found: {config_path}\n"
-                f"Run ./setup_auth.py to create it."
-            )
+        def merge(data: dict) -> dict:
+            data = dict(data)
+            if agents_update:
+                agents_data = dict(data.get("agents") or {})
+                agents_data.update(agents_update)
+                # Re-validate the merged block - raises on garbage before
+                # anything touches disk.
+                AgentsConfig(**agents_data)
+                data["agents"] = agents_data
 
-        try:
-            with open(config_path) as f:
-                raw = f.read()
-            data = json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Invalid JSON in auth config file: {e}\n"
-                f"Check {config_path}"
-            )
+            if notifications_update:
+                notifications_data = dict(data.get("notifications") or {})
+                notifications_data.update(notifications_update)
+                NotificationsConfig(**notifications_data)
+                data["notifications"] = notifications_data
 
-        if agents_update:
-            agents_data = dict(data.get("agents") or {})
-            agents_data.update(agents_update)
-            # Re-validate the merged block - raises on garbage before
-            # anything touches disk.
-            AgentsConfig(**agents_data)
-            data["agents"] = agents_data
+            # feat/settings-gui. Same partial-merge semantics as the two
+            # blocks above: an absent key is left untouched. ``env`` is the
+            # one exception and it is deliberate - it is a WHOLE MAP, so a
+            # merge would make a row impossible to delete (there is no way to
+            # express "remove FOO" in a key-wise merge of a dict). The client
+            # therefore sends the complete map or omits the key entirely.
+            if workspace_update:
+                workspace_data = dict(data.get(WORKSPACE_KEY) or {})
+                workspace_data.update(workspace_update)
+                WorkspaceConfig(**workspace_data)
+                data[WORKSPACE_KEY] = workspace_data
 
-        if notifications_update:
-            notifications_data = dict(data.get("notifications") or {})
-            notifications_data.update(notifications_update)
-            NotificationsConfig(**notifications_data)
-            data["notifications"] = notifications_data
+            if server_prefs_update:
+                prefs_data = dict(data.get(SERVER_PREFS_KEY) or {})
+                prefs_data.update(server_prefs_update)
+                ServerPrefsConfig(**prefs_data)
+                data[SERVER_PREFS_KEY] = prefs_data
 
-        # feat/settings-gui. Same partial-merge semantics as the two
-        # blocks above: an absent key is left untouched. ``env`` is the
-        # one exception and it is deliberate - it is a WHOLE MAP, so a
-        # merge would make a row impossible to delete (there is no way to
-        # express "remove FOO" in a key-wise merge of a dict). The client
-        # therefore sends the complete map or omits the key entirely.
-        if workspace_update:
-            workspace_data = dict(data.get(WORKSPACE_KEY) or {})
-            workspace_data.update(workspace_update)
-            WorkspaceConfig(**workspace_data)
-            data[WORKSPACE_KEY] = workspace_data
+            return data
 
-        if server_prefs_update:
-            prefs_data = dict(data.get(SERVER_PREFS_KEY) or {})
-            prefs_data.update(server_prefs_update)
-            ServerPrefsConfig(**prefs_data)
-            data[SERVER_PREFS_KEY] = prefs_data
-
-        # Backup the pre-write bytes. Best-effort: a backup failure must
-        # not block the write itself (matches the fail-soft posture the
-        # rest of this file uses for non-critical side effects).
-        try:
-            backup_path = config_path.with_suffix(config_path.suffix + ".bak")
-            backup_path.write_text(raw)
-        except OSError as e:
-            import structlog
-            structlog.get_logger().warning(
-                "config_settings_backup_failed", error=str(e)
-            )
-
-        tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-        with open(tmp_path, "w") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, config_path)
+        config_writer.commit(config_path, merge)
 
         self._auth_config_cache = None
         return self.get_settings_summary()
@@ -1894,38 +1866,6 @@ class Settings(BaseSettings):
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in auth config file: {e}\nCheck {config_path}")
 
-    def _write_wrappers(self, config_path: Path, agents_data: dict) -> None:
-        """Persist an updated ``agents`` block back to config.json.
-
-        Description: backs up the pre-write bytes to ``config.json.bak``
-          (same one-generation convention as ``update_settings_config``),
-          then writes atomically via tmp-file + fsync + os.replace.
-        Inputs: config_path (Path); agents_data (dict) - the full new
-          ``agents`` block (caller has already re-validated it via
-          ``AgentsConfig(**agents_data)``).
-        Output: None.
-        """
-        with open(config_path) as f:
-            raw = f.read()
-        data = json.loads(raw)
-        data["agents"] = agents_data
-
-        try:
-            backup_path = config_path.with_suffix(config_path.suffix + ".bak")
-            backup_path.write_text(raw)
-        except OSError as e:
-            import structlog
-            structlog.get_logger().warning("wrapper_write_backup_failed", error=str(e))
-
-        tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-        with open(tmp_path, "w") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, config_path)
-
-        self._auth_config_cache = None
-
     def _mutate_wrappers(self, mutation) -> List[dict]:
         """Read config.json, apply a pure wrapper-list mutation, write back.
 
@@ -1941,13 +1881,26 @@ class Settings(BaseSettings):
           invalid JSON in config.json).
         """
         config_path = Path(self.auth_config_file).expanduser()
-        data = self._read_config_dict(config_path)
-        agents_data = dict(data.get("agents") or {})
-        agents_data["wrappers"] = mutation(list(agents_data.get("wrappers") or []))
+        # THE MUTATION RUNS INSIDE THE WRITE LOCK, ON A FRESH READ. It
+        # used to read through ``_read_config_dict`` and write in a second
+        # step, so two wrapper edits arriving together each derived a list
+        # from the same base and the second one silently dropped the
+        # first one's wrapper.
+        wrappers: list = []
 
-        AgentsConfig(**agents_data)  # re-validate merged block before disk
-        self._write_wrappers(config_path, agents_data)
-        return agents_data["wrappers"]
+        def merge(data: dict) -> dict:
+            data = dict(data)
+            agents_data = dict(data.get("agents") or {})
+            agents_data["wrappers"] = mutation(list(agents_data.get("wrappers") or []))
+            AgentsConfig(**agents_data)  # re-validate merged block before disk
+            data["agents"] = agents_data
+            wrappers.clear()
+            wrappers.extend(agents_data["wrappers"])
+            return data
+
+        config_writer.commit(config_path, merge)
+        self._auth_config_cache = None
+        return wrappers
 
     def add_wrapper(self, wrapper: AgentWrapper) -> List[dict]:
         """Add a new launch wrapper to config.json's ``agents.wrappers``.

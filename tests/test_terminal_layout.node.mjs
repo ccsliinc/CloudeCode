@@ -750,13 +750,30 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // close asks for - are all in
     // client/js/terminal-reconnect-policy.js. What is here is the state
     // those rules read and the four call sites that act on them.
-    const lines = src.split('\n').length;
     // RAISED 2745 -> 2760 for two fixes found reviewing the above: a
     // second session switch used to overwrite the first one's drain
     // resolver, parking that teardown on a promise nobody could settle,
     // and connectWebSocket() cleared what the LIVE connection had
     // measured about itself before deciding it had nothing to do.
-    assert.ok(lines < 2760, `terminal.js must not grow, is ${lines} lines`);
+    // RAISED 2436 -> 2439, with the stated reason this comment demands.
+    // Preferences are server-owned now, which needs two things from the
+    // socket this file owns: a `preferences.changed` branch in the
+    // message dispatch, and an authoritative re-read when the socket
+    // comes back (nothing replays a frame that was not delivered while
+    // it was down). Neither rule is about the terminal, so neither is
+    // written here - client/js/preferences-transport.js holds why a
+    // frame is applied only when its revision is higher, and why a
+    // reconnect refreshes rather than replays. What is left in this file
+    // is one delegating line each plus a one-line pointer at that file:
+    // six lines, of which four fitted in the headroom this bound already
+    // had, so the ceiling moved by three. A branch in an else-if chain
+    // cannot be added in zero.
+    // RAISED 2470 -> 2765 AT THE MERGE OF THOSE TWO BRANCHES. Both
+    // reasons above stand and both sets of lines are present, so the
+    // bound is the sum rather than either branch's figure. Four lines
+    // of headroom, which is the same margin every earlier raise left.
+    const lines = src.split('\n').length;
+    assert.ok(lines < 2765, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {

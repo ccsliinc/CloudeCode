@@ -402,11 +402,102 @@ beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
 
-**Config writes are atomic and backed up.** Copy the pattern in
-`Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the
-pre-write bytes first, then temp file, `fsync`, `os.replace`. A half-written
-`config.json` costs the user their whole setup, so there is no "just dump the
-JSON" shortcut anywhere in this codebase.
+**Config writes are atomic and backed up, and they go through ONE
+boundary.** The sequence is unchanged and is not open to tidying: the `.bak` of
+the pre-write bytes FIRST, then a temp file, `fsync`, `os.replace`. A
+half-written `config.json` costs the user their whole setup, so there is no
+"just dump the JSON" shortcut anywhere in this codebase. What changed is WHERE
+it lives: `src/core/config_writer.py` is the only module that may perform it,
+and `tests/test_one_config_writer.py` fails the build if a second one appears.
+
+**ATOMIC AND SERIALIZED ARE DIFFERENT PROPERTIES, AND THIS ONLY HAD THE
+FIRST.** Five functions wrote `config.json` - `Settings.update_settings_config`,
+`Settings._write_wrappers`, `slash_favorites.write`,
+`terminal_commands.replace_terminal_commands` and
+`config_migration.migrate_config_file`. Every one was atomic, so a crash could
+never truncate the file, and every one read the document, merged its own block,
+and replaced. Two arriving together each merged into the SAME base and the
+second replace threw the first writer's block away: the file was never corrupt
+and the update was still lost. They also all used the same temp filename,
+`config.json.tmp`, which a lock hides and a second process does not.
+
+**THE FRESH READ INSIDE THE LOCK IS THE FIX, and it is enforced by the shape of
+the API rather than by remembering.** `config_writer.commit(path, mutate)` takes
+a MUTATOR, not a document: it acquires the path's lock, reads the file itself,
+and hands that dict over. A caller cannot supply a stale base because it never
+supplies a base. The temp file carries the pid plus a random suffix, a nested
+`commit` raises rather than deadlocking, and `on_commit` listeners see the
+committed document while the lock is still held. Four named outcomes, no silent
+ones: `committed` / `unchanged` / `stale_revision` / `backup_unavailable`.
+`unchanged` (the mutator returned `None`) touches NEITHER the config nor the
+backup, which is the no-op behaviour the migration has always had, and
+`backup_required=True` is what preserves that writer's FAIL-SAFE posture -
+alone among the five, it refuses to run at all rather than write without a
+rollback path.
+
+**`ui_preferences` IS THE TYPED, VERSIONED HOME FOR PREFERENCES WITH NO SERVER
+OWNER.** `src/core/ui_preferences.py` is the pure rules (the pydantic model, the
+validation, the merge), `src/core/ui_preferences_store.py` the seam that puts
+them on the lock and caches the read, and `src/api/preferences_routes.py` is
+`GET`/`PATCH /api/v1/preferences`. The field set comes from
+`docs/ui-preferences-inventory.md`, which classified all 24 durable
+browser-stored keys; the ten in its PER-VIEWER column are NOT here and
+`tests/test_ui_preferences.py` names every one of them, because a sync set that
+quietly grew would pass every positive test and push one device's layout onto
+every other device the user owns.
+
+Four things about it are load-bearing. **A READ TOUCHES NO DISK**: the
+projection is loaded once and refreshed by the `on_commit` listener, so a
+wrapper edit or a boot migration keeps it in step - a cache invalidated only by
+its own writer is wrong the moment anybody else writes. **AN UNRECOGNISED FIELD
+IS PRESERVED**, so a newer client's preference survives an older server and a
+downgrade destroys nothing; it is bounded rather than trusted, and a name that
+reads like a credential is refused outright, which is what stops the passthrough
+becoming a place to park a token. **ABSENT IS NOT A DEFAULT**: every field
+defaults to `None` and the server never fabricates a value, so hydrating from an
+empty or unreadable block cannot overwrite a real local setting - the client
+keeps its own default and, until a read SUCCEEDS, refuses to write at all.
+**THE REVISION MOVES ONLY ON A REAL CHANGE**, so a no-op `PATCH` does not make
+every other client refresh for something that did not happen.
+
+**A STALE WRITE IS A 409 THAT SAYS WHAT IS CURRENT, NEVER A SILENT
+OVERWRITE AND NEVER A BARE REFUSAL.** The check is evaluated INSIDE the lock
+against the document the write is about to merge into; checking it outside
+compares against a read another writer can invalidate first, which is the lost
+update wearing a check. The refusal carries the current revision AND the current
+values, because a client cannot reconcile against a number it was not told, and
+a bare 409 is how a retry loop against an unchanged conflict gets written. Same
+shape as `if_version` on the respawn path. `tests/test_ui_preferences_api.py`
+carries the NEGATIVE CONTROL: the identical request with the check declined,
+asserted to overwrite, so the 409 test cannot quietly stop proving anything.
+
+**`preferences.changed` IS AN OPTIMISATION AND THE REVISION IS THE ONLY
+ORDERING IT NEEDS.** `client/js/preferences.js` applies a frame ONLY when its
+revision is strictly HIGHER than the one it holds. That single rule survives
+everything hook events already taught this project: the same frame twice is an
+equal revision and ignored, a reordered pair has the older one lower and
+ignored, a dropped frame is closed by the next higher one or by the next
+refresh. It is a fold over a number, not an increment, so the socket promises
+nothing. **APPLYING A RECEIVED CHANGE MUST NEVER GENERATE A SAVE** or two
+browsers ping-pong forever, so `set()` refuses for the duration of the
+fan-out - the guard is at this layer rather than in every control. **A
+RECONNECT PERFORMS AN AUTHORITATIVE REFRESH, NOT AN EVENT REPLAY**
+(`terminal.js`'s `ws.onopen`), and it never uploads this browser's snapshot.
+Note the real limit: this app's WebSocket is SESSION-SCOPED, so a browser
+sitting on the launchpad holds no socket and receives no events at all - the
+hydration on entering a screen is what covers it, which is why the refresh is
+the half that has to be right.
+
+**PENDING IS NOT COMMITTED, AND A CONFLICT DROPS NEITHER SIDE.** A deliberate
+choice applies locally at once and reports `pending`; a failure keeps the user's
+value on screen as `failed` with the committed one still readable beside it, so
+a retry knows both; a stale refusal or a remote change landing on an unsaved
+edit becomes `conflict`, holding both values for the user to resolve. Silently
+dropping either is how somebody loses a setting they watched themselves change.
+Hydration runs BEFORE any preference-dependent control initialises, through
+`App._initAuthenticatedState()` - ONE function called by both post-auth paths,
+because two copies of that sequence is how one of them acquires a step the other
+never gets (gotcha 7's shape).
 
 **THE LOCAL SERVER DETECTOR IS FULLY WIRED, HAS NO CLIENT, AND IS KEPT ON
 PURPOSE.** `LocalServersTracker` (`src/core/local_servers.py`) scrapes a port
