@@ -690,7 +690,8 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // could live elsewhere does: the whole policy - why user input rather
     // than a dwell timer, why it acks rather than hides, why it is scoped
     // to one session - is written once on
-    // ToastManager.dismissForSessionActivity() in client/js/toast.js, and
+    // ToastManager.dismissForSessionActivity() in
+    // client/js/toast-lifecycle.js (issue #55 split it out of toast.js), and
     // this file's docstring points at it rather than repeating it.
     // RAISED 2425 -> 2436, with the stated reason this comment demands.
     // connectWebSocket() used to refuse only when the socket it held was

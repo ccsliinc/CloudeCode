@@ -40,14 +40,40 @@ def test_current_version_resolves_from_real_repo():
     assert isinstance(version, str)
 
 
-def test_current_version_empty_when_unresolvable(tmp_path):
-    # An empty directory has no .git, no VERSION file, no package.json —
+def test_current_version_empty_when_unresolvable(tmp_path, monkeypatch):
+    # An empty directory has no .git, no VERSION file, no package.json -
     # resolve_version must return "" rather than raising or guessing.
+    #
+    # CLOUDE_APP_VERSION IS RUNG 1 OF THAT RESOLVER AND IGNORES `root`
+    # ENTIRELY (src/core/version.py, resolve_version). It is set in the
+    # developer's own shell, so this test used to fail locally with
+    # `assert '0.8.1' == ''` while passing in CI, where nothing exports it.
+    # That is not a defect in either the resolver or the test: an env
+    # override that outranks the filesystem is the whole point of rung 1.
+    # It is simply a different question from the one this test asks, so it
+    # is cleared here rather than skipped. Skipping would delete the only
+    # coverage of the give-up-honestly case on every machine that has the
+    # variable set, which is every machine running the packaged app.
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
     (tmp_path / "src" / "core").mkdir(parents=True)
     # Copy just enough of version.py's behavior by pointing at a directory
     # with none of the five resolution sources present.
     version = version_probe.current_version(tmp_path)
     assert version == ""
+
+
+def test_env_override_outranks_an_unresolvable_directory(tmp_path, monkeypatch):
+    # The other half of the rule the test above has to work around, asserted
+    # rather than left as a comment. CLOUDE_APP_VERSION is rung 1 and beats
+    # the directory even when the directory could resolve nothing at all.
+    #
+    # This exists because the interaction was previously invisible: it showed
+    # up only as a test that failed on one machine and passed on another,
+    # with nothing anywhere naming the cause. A rung nobody has a test for is
+    # a rung the next person will "fix".
+    monkeypatch.setenv("CLOUDE_APP_VERSION", "9.9.9")
+    (tmp_path / "src" / "core").mkdir(parents=True)
+    assert version_probe.current_version(tmp_path) == "9.9.9"
 
 
 # ---------------------------------------------------------------------- #

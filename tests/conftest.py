@@ -347,3 +347,101 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
     for guarantee, reason in entries:
         terminalreporter.write_line(f"  NOT VERIFIED: {guarantee}")
         terminalreporter.write_line(f"    because: {reason}")
+
+
+# ---------------------------------------------------------------------------
+# The real_tmux marker, applied automatically rather than by hand.
+#
+# WHY THIS EXISTS. Two failure reports, both accurate and neither actionable
+# up front. ``test_respawn_refreshes_pane_env.py`` failed once beside three
+# passes in isolation, minutes apart on the same tree. And
+# ``test_session_restart_wrapper_choice`` failed twice while four agents were
+# working the box concurrently, then passed clean on a quiet one. The common
+# factor is not a defect in either test: both drive a REAL tmux server, so
+# their waits are real waits against a real process, and a contended machine
+# makes a real wait longer.
+#
+# CLAUDE.md's advice - "a lone failure there without a code change behind it
+# is not a new regression; re-run before chasing it" - is correct, and it only
+# helps someone who has already spent the time. A marker helps beforehand: the
+# group can be deselected for a fast local loop and selected deliberately for
+# a verification run, which is the distinction that did not exist.
+#
+# THE MARKER IS DERIVED, NOT WRITTEN DOWN. A hand-maintained list of file
+# names is wrong the first time somebody adds a test without knowing the list
+# exists. So it is computed from two signals a real-tmux test cannot avoid
+# carrying:
+#
+#   1. The test's module imported something from ``tests.socket_guard``. A
+#      test that spawns anything on the socket needs ``TEST_SOCKET_NAME`` to
+#      aim at it, and the guard raises on any tmux argv it cannot prove is
+#      pointed there.
+#   2. The test requests the ``tmux_test_socket`` fixture, which exists for
+#      exactly that purpose.
+#
+# IT MAY OVER-INCLUDE AND MUST NEVER UNDER-INCLUDE, and that asymmetry is
+# deliberate, the same way ``StatusMap.complete`` and ``hooks_seen`` are.
+# Marking a fast test costs a little coverage in the ``-m "not real_tmux"``
+# loop, and that loop is not a full verification anyway. MISSING a real-tmux
+# test puts a load-sensitive flake back into the fast loop and defeats the
+# whole reason for having the marker.
+#
+# NOTE WHAT THIS DOES NOT DO. It does not skip anything, it does not change a
+# timeout, and it does not touch an assertion. A plain ``pytest`` run collects
+# and runs exactly the tests it did before. All this adds is the ability to
+# name the group.
+# ---------------------------------------------------------------------------
+
+# Names exported by tests/socket_guard.py. A module holding any of them
+# imported the guard, which is what a real-tmux test has to do.
+_SOCKET_GUARD_NAMES = frozenset(
+    {
+        "socket_guard",
+        "TEST_SOCKET_NAME",
+        "TEST_SOCKET_PREFIX",
+        "FORBIDDEN_SOCKET_NAME",
+        "TmuxSocketGuardError",
+        "assert_safe_socket_name",
+        "classify_tmux_argv",
+    }
+)
+
+_REAL_TMUX_FIXTURE = "tmux_test_socket"
+
+
+def _drives_real_tmux(item) -> bool:
+    """Report whether one collected test drives a real tmux server.
+
+    Args:
+        item: a pytest collected item.
+
+    Returns:
+        bool: True when the item requests the tmux socket fixture, or its
+        module imported the socket guard. Deliberately generous: see the
+        over-include rule in the comment above.
+    """
+    if _REAL_TMUX_FIXTURE in getattr(item, "fixturenames", ()):
+        return True
+    module = getattr(item, "module", None)
+    if module is None:
+        return False
+    return bool(_SOCKET_GUARD_NAMES & set(vars(module)))
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """Stamp ``real_tmux`` on every collected test that drives a real tmux.
+
+    Args:
+        config: the pytest Config for this run.
+        items: the collected items, modified in place.
+
+    Returns:
+        None. Each qualifying item gains the ``real_tmux`` marker.
+
+    Example:
+        pytest -m "not real_tmux"   # fast loop, no real tmux
+        pytest -m real_tmux         # the contended group, on its own
+    """
+    for item in items:
+        if _drives_real_tmux(item):
+            item.add_marker(pytest.mark.real_tmux)

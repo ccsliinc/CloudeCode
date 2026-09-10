@@ -2,6 +2,58 @@
 
 What runs, when it runs, and what it does when something it needs is missing.
 
+## CI IS SWITCHED OFF RIGHT NOW, ON PURPOSE. READ THIS FIRST.
+
+**Three of the five workflows below are `disabled_manually` on
+`Adoom666/CloudeCodeDev`: `tests`, `secret scan` and `release`.** Nothing in
+this repository is being verified by CI. The rest of this document describes
+what those workflows DO when they are on, which is still accurate and still
+worth reading; it does not describe what is happening on a push today.
+
+The owner's ruling, 2026-09-10, verbatim: "P25 - kill the CI".
+
+**It was not a test failure.** Every run from 2026-09-10T13:47Z was REFUSED
+BEFORE IT STARTED, with the annotation "recent account payments have failed or
+your spending limit needs to be increased". Twelve consecutive red runs across
+two workflows, four jobs each, none of which ever executed. There is no log to
+read, which is why `gh run view --log-failed` answers `log not found` and the
+raw log endpoint answers `BlobNotFound`. A red badge meant a BILLING state, not
+a code state, and it emailed a failure on every push that said nothing about
+the push.
+
+**A check that could not run is not a check that failed.** This codebase draws
+that distinction everywhere else and says so in CLAUDE.md more than once:
+`StatusMap.complete`, `InstanceIndex.complete`, the recreate gate's `gone`
+versus `unknown`, `db_integrity`'s `cannot_determine` versus `failed`. GitHub
+does not draw it. Both render as a red X and both send the same email, so the
+distinction has to be drawn by whoever reads the board.
+
+**The workflows were DISABLED, not deleted, and no test was removed.** The
+files under `.github/workflows/` are untouched. Reversing this is one command
+per workflow once the billing block is cleared:
+
+```
+export GH_TOKEN=$(gh auth token --user Adoom666)
+gh workflow enable tests -R Adoom666/CloudeCodeDev
+gh workflow enable "secret scan" -R Adoom666/CloudeCodeDev
+gh workflow enable release -R Adoom666/CloudeCodeDev
+```
+
+`Claude Code Review` and `Claude Code` were deliberately left ACTIVE. They are
+the review bot rather than CI, and the ruling did not cover them.
+
+**What this costs, stated plainly so nobody is surprised.** `2b1fcb98` at
+03:00Z on 2026-09-10 is the last commit CI ever actually tested. Everything
+merged since, the v1.2.1 merge included, has never been through it. Anyone
+relying on CI to catch a regression on this repo has no such net right now, and
+any issue whose "How to verify" section names CI cannot be verified that way
+until it is back on. **Run the suites locally in the meantime** (see "Running
+the checks locally" below), and say in a PR which suites you actually ran.
+
+The local pre-commit secret hook still runs and is currently the only gate
+actually executing. Install it with `./scripts/install-secret-hook.sh`; it is
+not version controlled, so it is one run per clone.
+
 ## The workflows
 
 | Workflow | File | Triggers | Needs a secret |
@@ -296,6 +348,8 @@ on it.
 
 ## Running the checks locally
 
+
+
 ```
 cp config.example.json config.json
 python3 -m pip install --requirement requirements.txt
@@ -313,4 +367,76 @@ gitleaks dir . --config .gitleaks.toml --redact --no-banner
 `tests/test_setup_wizard_renders.py` skips locally and you are not measuring
 what CI measures. Note also that a local run is NOT a substitute for CI here:
 the whole class of bug this matrix exists to catch is one where local and CI
-disagree.
+disagree. **That is not a reason to skip the local run while CI is off, it is a
+reason to say what you actually ran.** A local pass on one machine is the only
+evidence available today, and it is evidence about that machine.
+
+### The `real_tmux` marker, and which subset to run when
+
+115 of the 5776 collected tests drive a REAL tmux server on this run's
+throwaway socket (counted 2026-09-10). They are the slowest part of the suite
+and the part most likely to flake under concurrent load, because their waits
+are real waits against a real process and a contended machine makes a real wait
+longer. Two measured examples, neither of them a defect in the test:
+`test_respawn_refreshes_pane_env.py::test_the_session_environment_itself_is_updated`
+failed once beside three passes in isolation on the same tree minutes apart,
+and `test_session_restart_wrapper_choice` failed twice with four agents working
+the box and passed clean on a quiet one.
+
+```
+venv/bin/python3 -m pytest -q -p no:randomly                        # everything
+venv/bin/python3 -m pytest -q -p no:randomly -m "not real_tmux"     # fast loop
+venv/bin/python3 -m pytest -q -p no:randomly -m real_tmux           # that group alone
+```
+
+Use `-m "not real_tmux"` for the loop you run while you are still writing the
+change. **It is not a verification run.** Before you claim anything works, run
+the whole suite, and if you touched anything tmux-shaped run the marked group
+more than once: one pass proves nothing about a flake.
+
+**The marker is applied automatically by `tests/conftest.py`, not written on a
+test by hand.** It is derived from two signals a real-tmux test cannot avoid
+carrying: its module imported `tests/socket_guard.py` (which is how a test
+names the throwaway socket it is allowed to touch), or it requested the
+`tmux_test_socket` fixture. A hand-maintained list would be wrong the first
+time somebody added a test without knowing the list existed. The derivation
+deliberately OVER-includes and must never under-include: marking a fast test
+costs a little coverage in a loop that was never a full verification anyway,
+while missing a real-tmux test puts a load-sensitive flake back into the fast
+loop and defeats the point of the marker.
+
+The marker adds no skip, changes no timeout and touches no assertion. A plain
+`pytest` run collects and runs exactly what it did before.
+
+`tests/test_led_real_hooks.py` is a separate thing and stays opt-in behind
+`CLOUDE_REAL_HOOK_TESTS=1`. It launches a real `claude`, spends real Claude
+turns and about 50 seconds. Without the variable, or without tmux, claude or
+node, every test in it skips with a reason naming what went unmeasured.
+
+### Two failures that are the machine, not the code, and are now fixed
+
+Both were named in CLAUDE.md as environmental for a long time without anyone
+recording WHY, which is most of the reason they stayed. Written down here so
+the next person does not re-diagnose them:
+
+- `tests/test_version_probe.py::test_current_version_empty_when_unresolvable`
+  asserts that a directory with no version source resolves to `""`.
+  `CLOUDE_APP_VERSION` is rung 1 of `src/core/version.py::resolve_version` and
+  ignores the directory entirely, and it is exported in the developer's own
+  shell, so the test failed locally with `assert '0.8.1' == ''` and passed in
+  CI where nothing exports it. The fixture now clears the variable for that one
+  test, and a second test asserts the override outranks the directory, so the
+  rung has coverage instead of being a booby trap.
+- `tests/test_nuke_sandbox.py::test_dry_run_deletes_nothing` asserts a
+  `--dry-run` leaves the sandbox manifest bit-identical. `nuke.sh` falls
+  through to the `python3` on PATH, and when that interpreter lives inside a
+  read-only bundle CPython redirects its bytecode cache to
+  `$HOME/Library/Caches/com.apple.python/...`. HOME is the sandbox, so the dry
+  run grew the manifest by 49 cache directories without deleting anything. On
+  the developer's box `/usr/bin/python3` is the Xcode-bundled Python 3.9, which
+  is exactly that case; CI uses `actions/setup-python`, which writes
+  `__pycache__` beside the source. The sandbox fixture now sets
+  `PYTHONDONTWRITEBYTECODE=1`, which suppresses only `.pyc` writing, so
+  anything `nuke.sh` itself creates in HOME is still measured.
+
+Neither fix weakened an assertion and neither skipped anything.
