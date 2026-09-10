@@ -61,6 +61,7 @@ README.md              you are reading it. the only file both parties edit.
 now/<party>.md         what that party is on RIGHT NOW. overwritten in place.
 log/<party>.md         what that party LANDED. newest first, append only.
 settled/<party>.md     design decisions that party treats as already ruled on.
+wants/<party>.md       behaviours that party relies on, and what it dislikes.
 claims/<party>-<slug>.md   one small file per claim, each carrying its APPROACH.
 notes/<party>-<slug>.md    free prose addressed to the other party.
 ```
@@ -76,6 +77,89 @@ This README is the one exception. It is shared because it needs agreement
 anyway, and it changes about never. If both parties edit it in the same window,
 it WILL conflict, and that conflict is a feature: it means the two of you
 changed the rules at the same time and should talk.
+
+## NEVER REMOVE SOMETHING ON THE OTHER PARTY'S KEPT LIST
+
+This carries the same weight as the merge-safety rule above, and it exists
+because it has already gone wrong twice in one week, once in each direction.
+
+`wants/<party>.md` has two sections. **kept** is behaviours that party relies on
+and would notice losing. **disliked** is that party's own preferences, stated as
+preferences and never as instructions to anyone else.
+
+**The rule.** If your change would delete a behaviour the other side has listed
+as kept, you do not delete it. **You add yours alongside.** If the two genuinely
+cannot coexist, that is an overlap: stop and surface it to the humans, exactly
+like a path overlap or an approach overlap.
+
+**The default, said plainly: when in doubt, keep both.** Two controls that do
+similar things is a mess somebody can clean up later. A control that vanished
+is a person who cannot do their job today.
+
+Note what the rule does NOT say. It does not say the other party's kept list is
+correct, or permanent, or more important than your work. It says you do not get
+to settle it alone. Neither do we.
+
+## Why this rule exists, both times this week
+
+**Their side.** The session row action rewrite deleted the row kebab and put pin
+and close back inline. That removal took the manual mark-unread control out of
+the entire UI (`unreadToggleHtml` and every caller gone; `git grep
+setSessionUnread` at that rev returns `api.js` alone), and it deleted
+`rowMenuItemHtml`, which was the last POINTER route to the group picker, leaving
+drag-onto-a-header as the only touch route on a phone. It also moved the restart
+picker's status read off the kebab that stamped it, so a merge that resolved the
+two files separately compiled fine and made every restart report `unknown`
+instead of the measured state. The mark-unread removal contradicts a rule the
+owner had stated the day before, verbatim: "when clicking a tab, the session is
+marked read. if i want it unread i click unread."
+
+**Our side, and this is the honest half.** During the same merge our own
+orchestrator nearly deleted the owner's double-click rename, for no reason other
+than that the incoming commit intended to. The owner caught it: **"i said merge
+not take everything."**
+
+Both are the same failure, and neither is about who is a better engineer:
+**treating the other side's commit intent as authority over your own side's
+wants.** A commit says what its author wanted. It says nothing about what the
+other party relies on. That is what the kept list is for.
+
+## The warning fires before the work, and it was tested on the real case
+
+`coord.sh status` intersects every live claim's paths against the paths declared
+on the OTHER party's kept behaviours, and prints a WARNING. Measured 2026-09-10
+against a claim built from the real session action menu plan, it named six kept
+behaviours, including the exact four that the row rewrite actually removed or
+broke: restart on a live row, the manual mark-unread control, group filing from
+the row, and double-click rename. With no other-party claim on file it prints
+`none`, so it is not a matcher that always finds something.
+
+It is a WARNING and never a refusal, deliberately. Touching a file is not
+removing a behaviour, and a check that cried wolf on every edit would be
+switched off inside a week. Only the kept section declares paths; a dislike is a
+preference and must never be able to warn anyone off a file.
+
+## When two preferences genuinely conflict
+
+A preference conflict is not argued. **It is turned into a choice.**
+
+If both parties want the row to behave differently and both are reasonable, the
+answer is not a winner-takes-all merge. It becomes a plugin contribution or a
+setting, **and each party defaults to its own preference.** Nobody has to lose
+and nobody has to be talked round.
+
+The mechanism already exists. `web/src/lib/plugins/` is a typed build-time
+surface registry with four surfaces: `session-card-action`, `launchpad-panel`,
+`sidebar-item` and `status-source`. Only `session-card-action` has a real
+contribution so far, and the precedent is exactly this shape: the mark-unread
+control ships as a plugin behind `ui.show_mark_unread_control`, default on. Turn
+it off and it is a setting; delete it and it is a regression.
+
+**This is the intended destination for the row-menu disagreement**, and it is
+worth saying out loud so neither side spends a day arguing the wrong question.
+The five actions in the session menu plan and the actions in our kebab are not
+two rival menus. They are contributions to one surface, with a default. Sort it
+to plugins afterwards; do not resolve it by deletion first.
 
 ## The merge safety was simulated, not asserted
 
@@ -114,6 +198,10 @@ value file in the protocol and it costs ten seconds.
 Backend module, client screen, a plan document, a migration. Not for a typo fix.
 If you are unsure, file one; a spurious claim costs nothing and an unfiled one
 cost us two days.
+
+**Write your `wants/<you>.md` once, and revise it when it changes.** It is the
+list the other side checks before removing something. A behaviour that is not on
+it is a behaviour nobody knows you need.
 
 **Log what LANDED, once it landed.** Commit shas, what shipped, what broke.
 Newest at the top of your own log file.
@@ -266,6 +354,8 @@ with no shared file.
 
 ## What NEVER to do
 
+- **Never remove a behaviour on the other party's kept list.** Add yours
+  alongside, or stop and ask. When in doubt, keep both.
 - **Never edit the other party's files.** `coord.sh` refuses, and so should you
   by hand. Their `now`, their `log`, their `claims/`, their `notes/`.
 - **Never push to `upstream`** (Adoom666/CloudeCode). Its push URL is set to the
@@ -304,6 +394,7 @@ scripts/coord.sh claim    open or refresh a claim (reads stdin)
 scripts/coord.sh log      prepend a landed entry to your log (reads stdin)
 scripts/coord.sh note     write a note to the other party (reads stdin)
 scripts/coord.sh settled  record a decision that is already ruled on (reads stdin)
+scripts/coord.sh wants    replace your kept/disliked behaviour list (reads stdin)
 scripts/coord.sh sync     fetch, rebase and push this branch
 ```
 
