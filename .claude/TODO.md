@@ -5633,3 +5633,93 @@ it is behind by a line it does not follow.
 
 **Not done, deliberately, because a and the step 3 version check failed:**
 no `v1.2.0` tag was created, and nothing was pushed to origin.
+
+---
+
+## 2026-09-10 - the electron bundle rebuilt at 1.2.0 and installed on live
+
+Closes the one failure recorded above: the footer read v1.0.33 because
+`CLOUDE_APP_VERSION` is set by the Electron shell from `app.getVersion()`,
+which is the PACKAGED bundle's own version. No source deploy can move it,
+so the bundle itself was rebuilt and reinstalled.
+
+**Build procedure, discovered rather than invented.** There is no build
+script under `scripts/`. The procedure is the one `.github/workflows/release.yml`
+encodes and the maintainer runs by hand: `cd macOS && npm install`, then
+`CSC_IDENTITY_AUTO_DISCOVERY=false npm run package`
+(`electron-builder --mac --publish never`). Built from the `release/1.2`
+worktree at `ecd0669`, electron-builder 24.13.3, electron 28.3.3,
+darwin arm64. The `afterPack` hook `macOS/scripts/adhoc-sign.js` ran and
+verified its own signature, which is not optional: without it the bundle
+carries no `Contents/_CodeSignature` at all. Outputs
+`macOS/dist/mac-arm64/Cloude Code.app` and
+`macOS/dist/Cloude Code-1.2.0-arm64.dmg` (120 MB). The .app was installed
+directly; the DMG is the distributable and was not needed for a local
+install.
+
+**NO VERSION SOURCE NEEDED FIXING.** `macOS/package.json` already read
+1.2.0 and it is the ONLY hand written source: electron-builder derives
+`CFBundleShortVersionString` and `CFBundleVersion` from it, `app.getVersion()`
+reads that, `server-manager.js:917` puts it in the spawn env, and
+`bootstrap.js` stamps the server dir's VERSION file from the same value.
+The repo carries no VERSION file (it is generated) and no Info.plist
+template. Every `1.0.x` literal found by grep across `macOS/`, `src/`,
+`client/` and `packaging/` is prose in a comment about the 2026-08-25
+adoption incident. So this round changed no code at all.
+
+**THE SOURCE DID NOT MOVE, AND THAT WAS MEASURED BEFORE THE SWAP.** The
+new bundle's `Contents/Resources/src` and `client` hash byte for byte
+identical to the installed 1.0.33 bundle's
+(`e14a7164...` and `0eaa57fa...`), because `deploy-mini.sh --target live`
+had already written `6768dcc` into both destinations and `ecd0669` is a
+docs only commit on top of it. The only thing that changed on disk is
+`app.asar` and the version. The same two hashes were re-measured on the
+server dir AFTER the restart, so the bundle resync put back what was
+already there.
+
+**Backup, one move from a rollback:**
+`/Applications/Cloude Code.app.rollback-1.0.33-20260910T085834`,
+matching the naming already beside it. Nothing was deleted; the owner's
+settings deny `rm`.
+
+**The restart was bootout then bootstrap, NOT `kickstart -k`, and the
+reason is the adoption gate.** `kickstart -k` SIGKILLs the Electron app,
+which orphans the python server onto launchd still holding port 8000. The
+new 1.2.0 bundle would then find a 1.0.33 server there,
+`decideAdoption` would answer `mismatch`, and `server-manager.js` would
+refuse to start OR stop it: a dead end wearing a correct log line. So
+`launchctl bootout gui/501/com.cloudecode.menubar` ran first, the app's
+own teardown took the server child with it (port 8000 free in 2s, measured,
+not assumed), and only then `launchctl bootstrap gui/501 <plist>`.
+
+**Measured after the restart (2026-09-10T12:59:09Z):**
+- 19 tmux sessions on `-L cloude` before and after, unchanged. Nothing was
+  typed into, restarted or closed.
+- `boot_readopt_complete` at 12:59:30.151048Z: `held: 18`, `skipped: 1`,
+  `live_count: 19`. Same shape as the last known good deploy.
+- ZERO `hook_post_rejected_invalid_token` in the whole post restart window.
+  The only hook token line is one `hook_tokens_restored`. The only warning
+  of any level is one `notifications.topic_missing`, which is unrelated.
+- The three version reads all agree: `CFBundleShortVersionString` 1.2.0 on
+  the installed bundle, `CLOUDE_APP_VERSION=1.2.0` in the RUNNING server
+  process env (`ps eww`, pid 66351), and the server dir VERSION file
+  stamped 1.2.0.
+- `GET /api/v1/version` returns `{"version": "1.2.0", ...}`, read through
+  the app's own authenticated client in a real browser.
+- The footer renders `v1.2.0` on a hard reload, in both `.home-bar__version`
+  and the sidebar `.version` span, and it is the ONLY version string in the
+  page text. It is fed by the server rendered
+  `<meta name="cloude-app-version" content="v1.2.0">`, so the painted value
+  and the endpoint have the same origin.
+- Zero CSP violations across a full load that produced 260 console
+  messages. THE NEGATIVE CONTROL WAS RUN IN THE SAME PASS, because a
+  detector that never fires cannot prove a zero: an injected image from
+  `cdn.jsdelivr.net` raised exactly one `img-src` violation on the same
+  listener, and was removed afterwards.
+
+**Still open, unchanged by this round:** the endpoint still reports
+`latest_version` 1.0.36 against `https://github.com/Adoom666/CloudeCode.git`,
+the upstream this project may not push to, so a 1.2 install keeps being
+told it is behind a line it does not follow. No `v1.2.0` git tag was
+created here either; that is a separate deliberate act and the release
+workflow triggers on it.
