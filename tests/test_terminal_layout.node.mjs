@@ -692,8 +692,19 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // to one session - is written once on
     // ToastManager.dismissForSessionActivity() in client/js/toast.js, and
     // this file's docstring points at it rather than repeating it.
+    // RAISED 2425 -> 2436, with the stated reason this comment demands.
+    // connectWebSocket() used to refuse only when the socket it held was
+    // OPEN, so one still mid-handshake was overwritten and never closed -
+    // and the server does not close on handshake timeout either, so the
+    // orphan stayed attached to the pane FIFO forever. Measured on live:
+    // 45 sockets opened and never closed. The whole rule, including why
+    // it CLOSES rather than refusing while CONNECTING (refusing would let
+    // one wedged socket block every future reconnect for the life of the
+    // page), lives in client/js/terminal-socket-abandon.js. What is left
+    // here is the call and the reference it drops: ten lines, of which
+    // five are the pointer at that file.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2425, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2436, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {

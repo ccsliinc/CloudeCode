@@ -1089,26 +1089,40 @@ class ToastManager {
       || (window.SessionLabel ? window.SessionLabel.UNKNOWN : 'unknown session');
     if (!resolved) session.dataset.unknown = '1';
     if (canNavigate) {
-      // SAME NAVIGATION THE SIDEBAR ROW USES, not a second path to it:
-      // SessionSidebarClicks.activateRow is the exact function a sidebar
-      // row's click runs, exported for exactly this kind of reuse. It
-      // wants a controller (only for the already-active-session check
-      // and closing the sidebar afterward, neither of which applies to a
-      // toast card) and a row element (only for `dataset.name` /
-      // `dataset.sessionId`), so both are the minimal stand-ins that let
-      // it run unmodified.
-      // No stopPropagation: the dismiss button is a SIBLING of this
-      // element, not a parent, and nothing on `.toast` itself listens
-      // for a click - there is no bubbling path for the two to fight
-      // over.
+      // THIS HANDLER DISMISSES. IT DOES NOT NAVIGATE, and the reason is
+      // that THE CARD IS A LISTENING ANCESTOR. `el` below binds a click
+      // handler that calls `ToastNavigate.go`, and this element is a
+      // CHILD of `el`, so a click on the name runs this handler and then
+      // bubbles to the card and runs that one. This block used to also
+      // call `SessionSidebarClicks.activateRow` with a stand-in
+      // controller, which made one click perform TWO independent
+      // navigations - and each one tears the live WebSocket down and
+      // opens a fresh one, so the session took about thirty seconds to
+      // settle while the transport indicator flickered. Measured on live:
+      // 161 connects against 116 disconnects, 45 sockets opened and never
+      // closed.
+      //
+      // An earlier comment here claimed nothing on `.toast` listens for a
+      // click and there was therefore no bubbling path. That was true on
+      // the branch it was written on; the merge that brought the card's
+      // own handler in compiled cleanly and made it false.
+      //
+      // THE CARD'S HANDLER IS THE ONE THAT SURVIVES, deliberately.
+      // `ToastNavigate.go` fetches the live list and hands
+      // `App.returnToExistingTerminal` the row the SERVER has, so
+      // `pinned_theme` and `tmux_session` arrive on the wrapper where that
+      // function reads them (gotcha 1), and a session that has since died
+      // is announced through the app's one error banner. `activateRow`
+      // reached through a fabricated `{_activeTmuxName: null}` controller
+      // carries neither, and that null also disables its
+      // already-in-this-session guard by construction.
+      //
+      // Still no stopPropagation, and now that matters more, not less:
+      // silencing this click would kill the card's navigation and leave
+      // nothing to enter the session with. The dismiss button is a
+      // SIBLING of this element and stops propagation itself, so
+      // dismissing still never navigates.
       session.addEventListener('click', () => {
-        if (window.SessionSidebarClicks
-            && typeof window.SessionSidebarClicks.activateRow === 'function') {
-          window.SessionSidebarClicks.activateRow(
-            { _activeTmuxName: null, _closeAfterSwitch: () => {} },
-            { dataset: { name: winner.session_name, sessionId: winner.session_id || '' } },
-          );
-        }
         // THE CLICK ALSO DISMISSES THE CARD. The user just arrived at the
         // session this card is about, which is the same "already seen it"
         // fact that keeps a card from appearing for the session on screen

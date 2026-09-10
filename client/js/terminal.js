@@ -1100,6 +1100,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             return;
         }
 
+        // A SOCKET STILL IN CONNECTING MUST BE CLOSED, NOT JUST DROPPED:
+        // the refusal above covers OPEN only, so one mid-handshake used to
+        // be overwritten below and left open forever against the pane
+        // FIFO. Why closed rather than refused, and why the handlers come
+        // off first, are in client/js/terminal-socket-abandon.js.
+        if (window.TerminalSocketAbandon?.abandonIfConnecting(this.ws, WebSocket)) {
+            this.ws = null;
+            console.log('Terminal: closed a superseded CONNECTING socket');
+        }
+
         this.updateStatus('Connecting to terminal...');
 
         // Wait for fonts and layout

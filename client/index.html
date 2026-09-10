@@ -1003,6 +1003,13 @@
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
     <script src="/static/js/terminal-layout-wait.js"></script>
+    <!-- Retires a socket a new connect is about to abandon. Must load
+         BEFORE terminal.js, whose connectWebSocket() asks it whether the
+         socket it holds was still mid-handshake. Absent, that connect
+         falls back to the old behaviour of overwriting the reference and
+         leaking the socket, so load order is the only thing making the
+         fix take effect. -->
+    <script src="/static/js/terminal-socket-abandon.js"></script>
     <!-- Transient-geometry guard. Must load BEFORE terminal-layout.js,
          whose requestFit() asks it how long to wait and whose flush()
          asks it whether a settled grid is worth a pty_resize at all. A

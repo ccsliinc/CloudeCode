@@ -59,13 +59,78 @@
     }
 
     /**
+     * Description: the tmux name a SessionInfo row would be entered
+     *   under. PURE, and it MIRRORS `App.returnToExistingTerminal`
+     *   exactly: `tmux_session` then `name`, on the wrapper first and
+     *   the nested `.session` second (CLAUDE.md gotcha 1, fields sit on
+     *   one level or the other and reading the wrong one silently yields
+     *   undefined). A second spelling of this rule would let the guard
+     *   below answer about a different string than the navigation it is
+     *   guarding, which is the whole way a guard becomes a lie.
+     * Inputs: info (object|null) - a SessionInfo, or the flatter inner
+     *   Session shape some older callers hold.
+     * Output: string|null - the tmux name, or null when undecidable.
+     * Example: tmuxNameOf({tmux_session: 'cloude_a'}) -> 'cloude_a'
+     */
+    function tmuxNameOf(info) {
+        if (!info) return null;
+        var inner = info.session || info;
+        return (info.tmux_session || info.name)
+            || (inner && (inner.tmux_session || inner.name))
+            || null;
+    }
+
+    /**
+     * Description: is this browser ALREADY attached to that tmux
+     *   session. Reads `SessionSidebar.activeTmuxName()`, which is
+     *   public for exactly this question and is the same answer
+     *   `session-sidebar-clicks.js` consults before re-entering a row.
+     *
+     *   IT ANSWERS TRUE ONLY ON A POSITIVE MATCH OF TWO NON-EMPTY
+     *   STRINGS. A missing sidebar, a null active name and a row whose
+     *   name cannot be derived all answer FALSE, meaning "navigate".
+     *   That asymmetry is deliberate and it is the safe direction: a
+     *   redundant navigation costs a reconnect, while a wrongly refused
+     *   one is a toast the user clicks and nothing happens, which is a
+     *   worse bug than the one this guard exists to fix.
+     * Inputs: name (string|null) - the resolved row's tmux name.
+     * Output: boolean.
+     * Example: alreadyAttachedTo('cloude_a') -> true while viewing it
+     */
+    function alreadyAttachedTo(name) {
+        if (!name) return false;
+        var sidebar = window.SessionSidebar;
+        if (!sidebar || typeof sidebar.activeTmuxName !== 'function') return false;
+        var active = sidebar.activeTmuxName();
+        return !!active && active === name;
+    }
+
+    /**
      * Description: navigate to the session a toast was raised by.
      *   Fetches the live list, resolves the row, and enters it through
      *   the SAME path the sidebar's row click uses, so the theme, the
      *   header identity, the URL sync and the sidebar's active marker all
      *   update exactly as they do from every other entry point.
+     *
+     *   IT IS IDEMPOTENT AGAINST THE SESSION ALREADY ON SCREEN, and that
+     *   is not a micro-optimisation. `App.returnToExistingTerminal` runs
+     *   `TerminalController.reconnectToExistingSession`, which CLOSES the
+     *   live WebSocket and schedules a fresh connect, so "re-enter the
+     *   session you are already in" destroys a healthy transport and
+     *   leaves the user watching the indicator flicker for seconds. The
+     *   sidebar has refused that self-click since it shipped
+     *   (`session-sidebar-clicks.js`); this is the same refusal, reached
+     *   through the same public reader, so the two cannot disagree.
+     *
+     *   IT STILL DOES NOT DISMISS OR ACK, on this path or any other.
+     *   Dismissal belongs to the card's own controls: the name element
+     *   dismisses in `toast.js` unconditionally, independently of what
+     *   this function decides, so the guard cannot swallow it. Reading a
+     *   notification is still not answering it.
      * Inputs: toast (object) - a server-shape toast carrying session_id.
-     * Output: Promise<boolean> - true when the jump happened.
+     * Output: Promise<boolean> - true when the user is in that session,
+     *   which INCLUDES already having been there. False is reserved for
+     *   "we could not get you there", so a caller can tell the two apart.
      * Example: await ToastNavigate.go({session_id: 'ses_a'}) -> true
      */
     function go(toast) {
@@ -77,6 +142,10 @@
                 if (!info) {
                     announceMissing(toast);
                     return false;
+                }
+                if (alreadyAttachedTo(tmuxNameOf(info))) {
+                    console.debug('[ToastNavigate] already attached, not re-entering');
+                    return true;
                 }
                 // Close the settings panel if the click came from the
                 // history list inside it; entering a session behind a
@@ -127,5 +196,7 @@
     window.ToastNavigate = {
         go: go,
         findSession: findSession,
+        tmuxNameOf: tmuxNameOf,
+        alreadyAttachedTo: alreadyAttachedTo,
     };
 }());
