@@ -13,6 +13,16 @@ produces the answer on its own, so there is still exactly one resolver.
 
 NEVER RAISES. A listing poll must not fail because one pane could not be read,
 and a permission light is not worth a 500 on the home screen.
+
+STEADY STATE COSTS NOTHING, AND THAT WAS CHECKED RATHER THAN CLAIMED.
+``should_capture_permission_tail`` is FAIL-CLOSED at every refusal: a session
+with no open claim and no stamp is refused, so a box with no dialog on any
+pane spends no subprocess here at all. That is the opposite of the startup
+gate's equivalent refusal, which was fail-OPEN and cost 13 of 13 healthy
+sessions a capture per poll. The one cost that WAS real is the re-look - both
+verdicts that keep the flag leave the gate passing next poll - and
+``session_permission_verify_ledger`` bounds it without touching the first
+look at any claim.
 """
 
 from __future__ import annotations
@@ -29,6 +39,7 @@ from src.core.session_permission_verify import (
     resolve_permission_check,
     should_capture_permission_tail,
 )
+from src.core.session_permission_verify_ledger import ledger_for
 
 logger = structlog.get_logger(__name__)
 
@@ -84,11 +95,18 @@ def verify_open_permission(
 
     try:
         opened_at = tracker.permission_open_since(session_id)
+        # THE THROTTLE IS ON THE RE-LOOK ONLY, and it is keyed on the
+        # CLAIM rather than on the session, so a new PermissionRequest
+        # always gets an immediate first look. See the ledger's module
+        # docstring for why a session-keyed record would have delayed
+        # exactly the case this verification exists for.
+        ledger = ledger_for(manager)
         if not should_capture_permission_tail(
             pane_alive=pane_alive,
             permission_open=opened_at is not None,
             opened_at=opened_at,
             now=now,
+            last_check_at=ledger.last_check_at(session_id, opened_at),
         ):
             return PERMISSION_NOT_CHECKED
 
@@ -105,6 +123,9 @@ def verify_open_permission(
         tail = capture_pane_tail(
             socket=socket_name, name=tmux_name, lines=PERMISSION_TAIL_LINES
         )
+        # Recorded only once a capture has ACTUALLY happened, so a
+        # refusal above can never start a throttle window.
+        ledger.record_check(session_id, opened_at, now=now)
         verdict = resolve_permission_check(captured=True, tail=tail)
 
         if verdict == PERMISSION_CLEARED_NO_DIALOG:

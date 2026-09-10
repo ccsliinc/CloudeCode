@@ -109,6 +109,40 @@ PERMISSION_TAIL_GRACE_SECONDS: int = 20
 #: conversation, where reading more is both slower and no more informative.
 PERMISSION_TAIL_LINES: int = 60
 
+#: How long one pane reading stands before the flag is re-checked, per
+#: session.
+#:
+#: MEASURED FIRST, AND THE PREMISE DID NOT HOLD THE WAY THE SIBLING'S DID.
+#: ``session_startup_gate.should_capture_tail`` claimed to be free in
+#: steady state and was not, because its "no hook on record" refusal is
+#: FAIL-OPEN: the ledger is in-memory, so a missing record made the gate
+#: PASS and 13 of 13 healthy sessions captured on every poll forever.
+#: ``should_capture_permission_tail`` is FAIL-CLOSED - a missing record
+#: means no open claim, no stamp, and it REFUSES - so on a box with no
+#: permission dialog open it really does spend nothing, and there was no
+#: version of this file that needed a fix for that.
+#:
+#: WHAT IS REAL IS THE RE-LOOK. Both outcomes that KEEP the flag (the
+#: dialog is on screen, or the tail could not be read) leave the gate
+#: passing on the next poll, so a session whose claim is genuinely open
+#: pays one ``capture-pane`` every 5s for as long as the human takes to
+#: answer it. Re-reading buys nothing while the dialog is still there:
+#: if it is really open, the pane's own claude clears the flag with a
+#: hook the moment it is answered, and if it is the stuck-bit case this
+#: module exists for, the FIRST look already cleared it.
+#:
+#: SO ONLY A RE-LOOK IS THROTTLED, never the first one. An instance with
+#: nothing on record is read the moment it is 20s past its claim, exactly
+#: as before, which is the case the feature was built for. What this
+#: bounds is how long a flag that becomes clearable LATER can linger, and
+#: the alternative to lingering is not "instant" - it is the indefinite
+#: wrong light this module was written to end.
+#:
+#: 30s matches ``STARTUP_TAIL_RECHECK_SECONDS`` deliberately: the two
+#: windows answer different questions but a reader holding one number for
+#: "how long a pane reading stands" is better served than by two.
+PERMISSION_TAIL_RECHECK_SECONDS: int = 30
+
 #: Verdicts. Four, because "kept" has two genuinely different reasons and
 #: collapsing them would make an unreadable pane indistinguishable from a
 #: pane that was read and showed a dialog - the difference between evidence
@@ -182,6 +216,8 @@ def should_capture_permission_tail(
     opened_at: Optional[datetime],
     now: datetime,
     grace_seconds: int = PERMISSION_TAIL_GRACE_SECONDS,
+    last_check_at: Optional[datetime] = None,
+    recheck_seconds: int = PERMISSION_TAIL_RECHECK_SECONDS,
 ) -> bool:
     """Is reading this pane's scrollback worth a subprocess call?
 
@@ -192,12 +228,27 @@ def should_capture_permission_tail(
         the caller must decide whether to PAY for a tail before it has
         one.
 
-        The gated set is normally EMPTY. It admits only a pane that is
-        measured alive, holds an OPEN permission claim, and has held it
-        for longer than the grace window. On a healthy box no session is
-        in that set, because a real permission prompt is answered and a
-        false one is what this exists to catch. Do not move this capture
-        into the unconditional listing path.
+        The gated set is normally EMPTY, and unlike its sibling in
+        ``session_startup_gate`` that claim has been checked. It admits
+        only a pane that is measured alive, holds an OPEN permission
+        claim, and has held it for longer than the grace window. Every
+        one of those refusals is FAIL-CLOSED: a session with no record at
+        all has no open claim and no stamp, so it refuses. The startup
+        gate's equivalent refusal is fail-OPEN (a missing in-memory hook
+        record makes it PASS), which is exactly why that one was costing
+        13 of 13 healthy sessions a capture per poll while this one costs
+        nothing. Do not move this capture into the unconditional listing
+        path.
+
+        THE FOURTH REFUSAL IS THE RE-LOOK, and it is the only cost that
+        was ever real here. Both verdicts that KEEP the flag leave this
+        gate passing again next poll, so a genuinely open claim paid one
+        subprocess every 5s until a human answered it. A reading younger
+        than ``recheck_seconds`` now stands instead. A ``last_check_at``
+        of None means nothing has been read for this claim, which reads
+        as "look now" - so the FIRST look is never delayed and the
+        stuck-flag case this module exists for is caught exactly as
+        promptly as before.
     Inputs:
         pane_alive: True/False/None from the caller's liveness read. Only
             True qualifies - a pane that could not be read cannot be
@@ -210,6 +261,10 @@ def should_capture_permission_tail(
             shown to be past its grace window.
         now: injectable clock.
         grace_seconds: override for tests.
+        last_check_at: when this claim's pane was last READ, or None when
+            it has not been. None never throttles - not having looked is
+            not a reason to keep not looking.
+        recheck_seconds: how long a reading stands. Override for tests.
     Output:
         bool - True when the caller should capture a tail and pass it to
         ``resolve_permission_check``.
@@ -227,7 +282,14 @@ def should_capture_permission_tail(
         return False
     if opened_at is None:
         return False
-    return (now - opened_at).total_seconds() >= grace_seconds
+    if (now - opened_at).total_seconds() < grace_seconds:
+        return False
+    if (
+        last_check_at is not None
+        and (now - last_check_at).total_seconds() < recheck_seconds
+    ):
+        return False
+    return True
 
 
 def resolve_permission_check(
