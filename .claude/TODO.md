@@ -6932,3 +6932,35 @@ symmetric and useless with one side filled in. Issue filed asking for one; #15
 was commented on rather than claimed, because opening a draft PR against it
 would mean pushing to `adamdev` and this session is origin-only, and because #15
 was deliberately left FREE so he could decline it.
+
+## 2026-09-10 - double-click rename gesture, tested
+
+**The open work above is closed.** `tests/test_session_sidebar_rename_gesture.node.mjs`
+drives the REAL `listEl.addEventListener('dblclick', ...)` registration that
+`SessionSidebar.init()` sets up in `client/js/session-sidebar.js` - a genuine
+bubbling event via lib-sidebar-sessions.mjs's `El` class, not a direct call to
+`onDblClick` or `beginEdit`. Seven cases: the gesture reaches `beginEdit` for
+the RIGHT session (a sibling row stays untouched), each of the three doors
+(double-click, F2, row menu) opens the same editor on its own, a fourth case
+proves all three land on identical observable state (same `data-editing`, same
+seeded `aria-label`), and two refusal cases (a not-renameable row, and a
+double-click with no `[data-row-name]` ancestor at all).
+
+Mutation-proved on a scratch copy, each reverted to a byte-identical tree
+after (`git diff` empty both times): removing the `addEventListener('dblclick'`
+registration failed 4 of 7 named tests; repointing it at a different function
+(`clearPending` instead of `onDblClick`) also failed the same 4, including the
+dedicated "all three doors land on IDENTICAL observable state" case.
+
+`docs/kept-behaviours/ccsliinc.md`'s double-click rename entry now names the
+test file instead of `tests: none`. `tests/test_kept_behaviours_guard.py::test_the_no_test_gap_is_recorded_rather_than_hidden`
+hardcoded that entry as its running example of an honest gap; since the gap it
+described no longer exists, that test now drives its assertion off the
+existing synthetic `_FIXTURE_DOC` fixture (the "second behaviour", which still
+declares `tests: none` on purpose) instead, and separately asserts the real
+ccsliinc.md entry now names the gesture test. `scripts/check_kept_behaviours.py`
+reports `0 with no test` on the real tree, down from 1.
+
+Node suite: 201 suites, 0 failures (`for suite in tests/*.node.mjs; ...`).
+`venv/bin/python3 -m pytest -q tests/test_kept_behaviours_guard.py`: 11 passed.
+`scripts/scan_secrets.py`: clean, exit 0.
