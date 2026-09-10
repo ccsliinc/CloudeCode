@@ -1172,6 +1172,65 @@ directory is fine; a non-empty one refuses.
 "clone from github" does NOT have this defect: it has collected a parent
 directory since it shipped (`launchpad.js`, `modal-clone-parent`).
 
+## A session's theme, and the two stores that hold one
+
+There are TWO durable theme stores and they are keyed on different
+things. `pinned_themes.json` (`Settings.get_pinned_themes_path`) is keyed
+on the bare tmux NAME and records a theme the user pinned to ONE session.
+`<working_dir>/.cc.theme` is keyed on the DIRECTORY and records the
+default a PROJECT carries, which is what gives a checkout its colours
+before any session exists and the only one of the two a user can commit.
+Both are wanted; neither may silently override the other.
+
+| Piece | File |
+|---|---|
+| The ladder, pure | `src/core/session_theme_resolution.py` |
+| Both stores, and the ladder's one caller | `src/core/session_manager.py` (`resolve_project_theme`) |
+| `PATCH /sessions/{name}/theme` | `src/api/routes.py` (`_apply_session_theme`) |
+| Painting it, client side | `client/js/theme-navigation.js` (`applyForTarget`) |
+
+**THE PIN WINS, AND IT SHIPPED THE OTHER WAY ROUND UNTIL 2026-09-10.**
+`resolve_project_theme` read the dotfile FIRST, so the three paths that
+seed `Session.pinned_theme` - create, adopt and the boot re-adopt - each
+threw away a pin that was sitting on disk the whole time. A pinned theme
+did not survive a server restart, and two sessions running out of one
+repo folder (routine on this box) could never hold two different themes.
+The rule is the one `session_agent_evidence` already states: a value
+written ABOUT this session outranks a value written about the place it
+happens to live. A default that beats an explicit choice is not a
+default, it is an override.
+
+**AND THE READ ORDER IS ONLY HALF OF IT. THE PATCH USED TO WRITE BOTH
+STORES.** That is the mechanism by which pinning session B rethemed
+session A: the dotfile is folder-wide, so a per-session control was
+writing a shared value. The theme PATCH now writes the pin alone, and
+`migrate_pinned_theme_to_dotfile` is GONE for the same reason - it
+ferried one session's pin into the folder-wide file, and its original
+job (carrying a v0.6.x pin forward) is moot once the pin store is read
+first. Setting a project default is a separate, deliberate act through
+`set_project_theme`, and it has no UI control yet, which is a known gap
+rather than an oversight.
+
+**A PIN NOW OUTLIVES ITS TMUX SESSION, which is a policy change that came
+with the read order.** The `_lifespan_tmux_reconcile` pass used to drop
+every `pinned_themes` entry absent from the live listing. That was free
+while the map was a decaying fallback and is DATA LOSS now it is the
+durable record: this app re-mints tmux names from project slugs, so the
+name is coming back, and the entry only ever exists because a human
+picked a colour. `discard_pinned_theme` on the explicit close is the one
+removal path. Note the asymmetry with the OWNERSHIP prune in the same
+pass, which stays: an ownership record claims a session is running, so a
+measured zero contradicts it; a pin claims only what to paint if the name
+returns, which a measured zero does not contradict at all.
+
+`_save_pinned_themes` takes a `.bak` of the pre-write bytes first, like
+`Settings.update_settings_config`. `_load_pinned_themes` starts from an
+EMPTY map when it cannot parse the file, so without that backup one
+corrupt read plus one pin would write the empty map over every pin the
+user has. No migration was needed for the inversion and nobody's screen
+changed colour on upgrade: an existing dotfile was written by a PATCH
+that wrote both stores, so the pin map already held the same value.
+
 ## The status lights, and what they are allowed to claim
 
 Full model in `docs/session-status.md`. The eight states are `working`,
