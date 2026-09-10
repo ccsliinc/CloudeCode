@@ -5872,6 +5872,51 @@ class SessionManager:
                 except Exception:
                     pass
 
+    def _instance_index_for_listing(self, *, socket, names):
+        """Read every listed instance's stored row on ONE connection.
+
+        Description: the bulk replacement for three per-row lookups that
+          each opened their own SQLite connection. Opens one connection,
+          issues one query, closes it, and hands back an index the
+          listing loop answers from - see
+          ``src/core/session_instance_index.py`` for the measurement and
+          for why the two differing selection rules are both preserved.
+
+          NEVER RAISES, and an unopenable datastore yields an EMPTY
+          index. That is not a silent degradation: an empty index answers
+          ``None`` for the label and identity and ``NOT_KNOWN`` for the
+          launch, which is exactly what each per-row reader returned when
+          it could not open the database either.
+        Inputs: socket (str) - the tmux socket the listing came from.
+          names (iterable[str | None]) - the listed tmux names; falsy
+          entries are ignored.
+        Output: InstanceIndex - possibly empty, never None.
+        Example: self._instance_index_for_listing(
+            socket='cloude', names=['cloude_a'])
+        """
+        from src.core.session_instance_index import (
+            InstanceIndex,
+            build_instance_index,
+        )
+
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return InstanceIndex()
+            return build_instance_index(
+                conn, socket=socket, names=[n for n in names if n]
+            )
+        except Exception as exc:  # noqa: BLE001 - a decoration read must not crash a listing
+            logger.debug("instance_index_for_listing_threw", error=str(exc))
+            return InstanceIndex()
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 - close failure is not the caller's problem
+                    pass
+
     def _identity_for_instance(self, tmux_name, epoch):
         """Read the stored ROW IDENTITY for one tmux INSTANCE, or None.
 
@@ -6178,6 +6223,23 @@ class SessionManager:
         # a single pass. Two rows resolving against two different reads
         # of config.json would be a listing that disagrees with itself.
         wrappers = _configured_wrappers()
+        # AND THE STORED ROW IS READ ONCE FOR THE WHOLE LISTING, for the
+        # same reason and with more at stake. The title, the durable row
+        # id and the recorded launch all live on the SAME ``sessions``
+        # row under the SAME instance triple, and each used to be fetched
+        # by its own function opening its own SQLite connection - three
+        # connections per row. Measured 2026-09-09 with 11 rows: 33
+        # connections costing about 33 ms of a 55 ms pass, roughly 60
+        # percent of it, and paid synchronously on the event loop where
+        # it is felt as terminal latency rather than as a slow list.
+        # ``session_instance_index`` is the same shape ``session_status_map``
+        # applies to tmux: fetch once, answer every row from it. An empty
+        # index answers exactly what the per-row reads answered when the
+        # datastore could not be opened.
+        instance_index = self._instance_index_for_listing(
+            socket=self._last_probe_socket or self._tmux_socket_name(),
+            names=[r.get("name") for r in rows],
+        )
         for row in rows:
             name = row.get("name")
             if name:
@@ -6189,7 +6251,7 @@ class SessionManager:
                 # carries its creation epoch - the exact key is free here,
                 # so there is no reason to accept the name-only read's
                 # weaker guarantee on a row a human reads as identity.
-                row["label"] = self._label_for_instance(
+                row["label"] = instance_index.label(
                     name, row.get("created_at_epoch")
                 )
                 # The durable row id the user can point at, plus its
@@ -6199,7 +6261,7 @@ class SessionManager:
                 # acceptable. An external session has no row and gets
                 # None, which the UI renders as nothing rather than an
                 # invented number.
-                identity = self._identity_for_instance(
+                identity = instance_index.identity(
                     name, row.get("created_at_epoch")
                 )
                 row["session_row_id"] = identity["id"] if identity else None
@@ -6245,10 +6307,8 @@ class SessionManager:
                 # the pill's dashed treatment tracks the actual
                 # provenance instead of the code path.
                 probe_socket = self._last_probe_socket or self._tmux_socket_name()
-                launch = self._stored_launch_for_listing(
-                    socket=probe_socket,
-                    name=name,
-                    epoch=row.get("created_at_epoch"),
+                launch = instance_index.stored_launch(
+                    name, row.get("created_at_epoch")
                 )
                 if launch.known:
                     effective_agent_type = launch.agent_type

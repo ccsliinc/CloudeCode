@@ -437,6 +437,58 @@ against REAL tmux by COUNTING subprocesses rather than timing anything: the
 count is the defect exactly, and a wall clock on a loaded box would either flake
 or be too loose to prove anything.
 
+**THE SIBLING LISTING'S COST WAS NOT SUBPROCESSES, AND ASSUMING IT WAS WOULD
+HAVE MISSED IT.** `/sessions/attachable` was already down to TWO tmux calls in
+steady state - its per-row pane fingerprint is cached per instance triple - so a
+subprocess count would have passed before any fix and proved nothing. What grew
+with the row count was SQLITE CONNECTIONS: the title, the durable row id and the
+recorded launch are three columns of ONE row under ONE key, and each was fetched
+by its own function opening its own connection. Measured 2026-09-09 with 11
+rows: **33 connections, about 33 ms of a 55 ms pass**, roughly 60 percent of it.
+`src/core/session_instance_index.py` reads them in one `SELECT` and answers every
+row from memory; the pass now opens the datastore **3 times regardless of row
+count** (`owned_tmux_instances`, `reconcile_lifecycle`, and the index), measured
+at **52-61 ms to 24-35 ms warm**. The two SELECTION RULES differ and both are
+preserved: `label_for_instance` asks for `ORDER BY id DESC LIMIT 1` while the
+other two take an unordered `fetchone()`, so the index keeps the FIRST row for
+identity and launch and the LAST for the title. Collapsing them would be a silent
+change in the duplicate case nobody looks at. **Measure what is actually wrong,
+not what the last fix happened to be.**
+
+**THE PIPE READER WAKES ON THE APPEND NOW, AND THE 20ms IS A BACKSTOP.**
+`TmuxBackend._tail_loop` used to `asyncio.sleep(0.02)` on every empty read, which
+made that interval a FLOOR ON KEYSTROKE LATENCY - the echo lands at a uniformly
+random point in the window, so it was seen about half an interval late on every
+keystroke. `src/core/pipe_wakeup.py` registers the pipe fd with kqueue
+(`EVFILT_VNODE`, `NOTE_WRITE | NOTE_EXTEND`) and hands the KQUEUE DESCRIPTOR to
+asyncio's own selector via `loop.add_reader`, so no thread is spent per session
+and no dependency is added. Measured interleaved A/B in one process, so the same
+load hit both arms, 100 keystrokes each through a real tmux pane: **p50 26.10 ->
+12.31 ms, p90 60.20 -> 28.44, p99 141.32 -> 77.59**, with idle CPU across 11 idle
+panes **0.97% against 0.98% of one core** - indistinguishable, which is the only
+reason this was kept rather than reverted.
+
+Three things about it are load-bearing. **The backstop is the safety argument**:
+an event-driven reader that misses an event does not read late, it STOPS reading,
+so every wait is still bounded by the same 20ms and the worst case is exactly the
+behaviour it replaces. **The latch is not optional**: the loop reads, gets
+nothing, and only THEN waits, so an append landing in that gap was already
+notified - `_pending_data` catches it, or the unlucky keystrokes would each cost
+a full backstop. And **it is one Future plus one timer, never
+`asyncio.wait_for(event.wait(), timeout)`**, which reads better and costs an
+extra Task per idle cycle; that version measured idle CPU going the wrong way.
+Linux has no `select.kqueue`, so CI runs the plain-sleep fallback, and
+`tests/test_pipe_wakeup.py` covers both. Its wake tests hand `wait` a FIVE SECOND
+timeout and allow half a second, so a pass cannot have come from the timer.
+
+**A TEST THAT TIMES A SUBPROCESS STARTING IS NOT TIMING WHAT IT CLAIMS.** Those
+wake tests flaked once in a full run at load average 14 and passed the same suite
+minutes later. The cause was in the test: `Popen` returns when the fork succeeds,
+not when `sh` has exec'd `cat` and opened the file, so bytes written before that
+sit in a pipe buffer producing no append and no notification. The fixture now
+warms up and waits for the file to actually grow before anything is measured. If
+you write a latency test against a real process, prove the process is live first.
+
 **The ledger is keyed by the tmux INSTANCE, not by `session_id`, and that is not
 interchangeable with `SessionActivityTracker.hooks_seen`.** A confirmed live
 restart (`respawn-pane -k`) keeps the session_id AND the epoch and moves only the

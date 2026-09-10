@@ -86,6 +86,21 @@ requires_tmux = pytest.mark.skipif(
     shutil.which("tmux") is None, reason="tmux not on PATH"
 )
 
+#: The most datastore connections one attachable listing may open,
+#: independent of how many rows it returns.
+#:
+#: MEASURED, NOT PICKED. A correct pass opens exactly three, and each is
+#: once PER PASS rather than per row: ``owned_tmux_instances``,
+#: ``reconcile_lifecycle``, and the bulk ``_instance_index_for_listing``
+#: this round added. The shipped code opened those three PLUS three per
+#: row, so at the four sessions this file uses it opened 15. The bound is
+#: therefore a constant with one open of headroom, and it is deliberately
+#: far below ``3 + 3 * LIVE_SESSIONS``: a single new per-row read pushes
+#: the count to 7 and fails this, which is the sensitivity that makes the
+#: test worth having. Raising it to accommodate a new per-row read would
+#: be re-introducing the defect with the alarm switched off.
+MAX_DATASTORE_OPENS_PER_LISTING = 4
+
 #: How many live sessions the pass is measured against. Small enough to
 #: keep the test quick, large enough that a per-session call is
 #: unmistakable against a per-pass one: the shipped code spends
@@ -370,3 +385,129 @@ async def test_the_throttled_pass_still_answers_the_startup_gate(
         f"changing: {first} then {second}. A throttled read must reuse "
         "the verdict it already measured, not fall back to 'unknown'."
     )
+
+
+# --------------------------------------------------------------------- #
+# The sibling listing, and the cost that was NOT subprocesses
+# --------------------------------------------------------------------- #
+
+
+class _DatastoreOpenCounter:
+    """Count how many times a code path OPENS the datastore.
+
+    Description: wraps ``src.core.db.connect``, which every datastore
+        open in the server goes through, and counts the calls. The real
+        call still runs, so the pass under measurement is the production
+        one.
+
+        THIS COUNTS CONNECTIONS, NOT SUBPROCESSES, AND THAT IS THE POINT.
+        ``list_attachable_sessions`` was already down to two tmux calls
+        in steady state - its per-row fingerprint is cached per instance
+        triple - so a subprocess count would have passed before the fix
+        and proved nothing. What grew with the row count was SQLite
+        connections: the title, the row identity and the recorded launch
+        each opened their own, per row. Measuring the thing that was
+        actually wrong is the whole discipline here.
+    Inputs: none.
+    Output: instances expose ``count`` (int).
+    Example:
+        >>> _DatastoreOpenCounter().count
+        0
+    """
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def install(self, monkeypatch) -> None:
+        """Wrap ``src.core.db.connect`` for the duration of one test.
+
+        Inputs: monkeypatch (pytest fixture).
+        Output: None.
+        """
+        from src.core import db as db_module
+
+        original = db_module.connect
+        counter = self
+
+        def counting(*args, **kwargs):
+            counter.count += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(db_module, "connect", counting)
+
+    def reset(self) -> None:
+        """Forget every open counted so far. Inputs: none. Output: None."""
+        self.count = 0
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_attachable_listing_opens_one_datastore_connection(
+    live_manager,
+    monkeypatch,
+):
+    """The attachable listing must not open a connection per row.
+
+    THE MEASUREMENT THAT FAILS ON THE SHIPPED CODE. Three decorations on
+    each row - the user-facing title, the durable row id and its parent,
+    and what the app recorded launching - all live on the SAME sessions
+    row under the SAME instance triple, and each was fetched by its own
+    function opening its own SQLite connection. That is 3N connections
+    for N rows: measured on the owner's box with 11 attachable rows, 33
+    connections costing about 33 ms of a 55 ms pass, roughly 60 percent
+    of it, paid synchronously on the event loop.
+
+    The bound is expressed against N rather than as a fixed number: a
+    pass that is correct spends a constant, so any growth term at all is
+    the defect returning.
+    """
+    manager, names = live_manager
+    counter = _DatastoreOpenCounter()
+    counter.install(monkeypatch)
+
+    listing = manager.list_attachable_sessions()
+    assert len(listing.sessions) >= LIVE_SESSIONS, (
+        "the pass must still return every attachable session - a cheaper "
+        f"pass that loses rows is not the fix. got {len(listing.sessions)}"
+    )
+    assert counter.count <= MAX_DATASTORE_OPENS_PER_LISTING, (
+        f"one attachable listing opened the datastore {counter.count} "
+        f"times for {len(listing.sessions)} rows, over the "
+        f"{MAX_DATASTORE_OPENS_PER_LISTING} a pass is allowed. The title, "
+        "the row identity and the recorded launch are three columns of "
+        "ONE row under ONE key; fetching them with three connections per "
+        "row is what put 33 ms of blocking SQLite on the event loop."
+    )
+
+
+@requires_tmux
+@pytest.mark.asyncio
+async def test_attachable_listing_still_decorates_every_row(
+    live_manager,
+    monkeypatch,
+):
+    """Reading the row once must not change what the row says.
+
+    The load-bearing companion to the count above: a "fix" that simply
+    stopped fetching the decorations would open zero connections and pass
+    that test perfectly. Every key the loop writes must still be present
+    on every row, and the two reads - one connection per row, and one for
+    the whole pass - must agree field for field.
+    """
+    manager, names = live_manager
+
+    listing = manager.list_attachable_sessions()
+    rows = {r["name"]: r for r in listing.sessions if r.get("name")}
+    for name in names:
+        assert name in rows, f"{name} vanished from the attachable listing"
+        row = rows[name]
+        for key in (
+            "label", "session_row_id", "parent_session_id",
+            "agent_type", "agent_family", "agent_family_source",
+            "agent_wrapper_label", "pinned_theme", "status", "unread",
+        ):
+            assert key in row, (
+                f"row {name} lost its {key!r} decoration - reading the "
+                "stored row once must change how many times it is "
+                "fetched, never what the listing says"
+            )
