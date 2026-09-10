@@ -13,6 +13,15 @@ it.
 2. **No module in the package exceeds 500 lines.** The file this package
    exists to shrink is 8,000-odd lines because nothing ever failed when
    it grew.
+3. **Nothing in the package may import the module-level ``settings``
+   singleton.** Added by slice S0. A collaborator takes a
+   ``SettingsReader`` port and is handed one by the composition root. This
+   is not tidiness: 41 places in this suite do
+   ``monkeypatch.setattr("src.core.session_manager.settings", stub)``,
+   which rebinds a name in ONE module's namespace, so a collaborator that
+   imported ``src.config.settings`` itself would be invisible to every one
+   of them and would READ AND WRITE the owner's real ``~/.cloude-sessions``
+   during a plain pytest run. Slice S2 nearly shipped exactly that.
 
 Run with:
     ./venv/bin/python3 -m pytest tests/test_sessions_package_rules.py -v
@@ -33,6 +42,13 @@ MAX_LINES = 500
 
 #: The module a collaborator may never depend on, in either spelling.
 FORBIDDEN_IMPORT = "session_manager"
+
+#: The module the ``settings`` singleton lives in. RULE 3 bans importing
+#: the NAME, not the module: ``from src.config import Settings`` for a type
+#: annotation is harmless, and ``from src.config import settings`` is the
+#: thing that cannot be monkeypatched from where the suite patches.
+SETTINGS_MODULE = "src.config"
+SETTINGS_SINGLETON = "settings"
 
 
 def _package_modules() -> list[Path]:
@@ -93,4 +109,45 @@ def test_no_collaborator_exceeds_the_line_guideline(module: Path):
     assert lines <= MAX_LINES, (
         f"{module.name} is {lines} lines, over the {MAX_LINES}-line guideline; "
         "split it rather than raising the number"
+    )
+
+
+@pytest.mark.parametrize("module", _package_modules(), ids=lambda p: p.name)
+def test_no_collaborator_imports_the_settings_singleton(module: Path):
+    """RULE 3. A collaborator is HANDED its configuration, never fetches it.
+
+    Description: parsed rather than grepped, because four of these modules
+      discuss ``settings`` at length in their docstrings and comments -
+      correctly, since explaining why they do NOT import it is the point.
+      Only a real import statement counts.
+
+      Both spellings are refused: ``from src.config import settings`` binds
+      the singleton directly, and ``import src.config`` puts the whole
+      module in reach of ``src.config.settings``. The second is the one a
+      well-meaning refactor reaches for when the first starts failing.
+    Inputs: module (Path) - one module in the package.
+    Output: None.
+    """
+    tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            offenders += [
+                f"import {a.name}"
+                for a in node.names
+                if a.name == SETTINGS_MODULE or a.name.startswith(SETTINGS_MODULE + ".")
+            ]
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == SETTINGS_MODULE:
+                offenders += [
+                    f"from {node.module} import {a.name}"
+                    for a in node.names
+                    if a.name == SETTINGS_SINGLETON
+                ]
+
+    assert offenders == [], (
+        f"{module.name} does {offenders}; a collaborator takes a "
+        "SettingsReader from the composition root, because the suite "
+        "patches the settings name somewhere this module cannot see"
     )

@@ -27,6 +27,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from src.config import settings, StateDirUnavailableError
 from src.security_headers import SECURITY_HEADERS
+from src.core.composition import build_services
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
 from src.core.local_servers import LocalServersTracker
@@ -286,8 +287,22 @@ async def lifespan(app: FastAPI):
             message=datastore_state.message,
         )
 
-    # Initialize core components
-    session_manager = SessionManager()
+    # Initialize core components.
+    #
+    # THE COMPOSITION ROOT (src/core/composition.py) is what constructs
+    # them, not this function. It builds every collaborator in dependency
+    # order and hands the facade the five it owns, so there is exactly one
+    # of each object and exactly one place in src/ that says so. See
+    # .claude/notes/backend-decomposition-plan.md section 3.
+    #
+    # ``app.state.session_manager`` stays beside ``app.state.services``
+    # while the slices migrate the 37 readers of it one cluster at a time.
+    # A route that needs the toast inbox will ask for ``services.toasts``;
+    # until its slice lands it keeps asking the manager, and both spellings
+    # reach the SAME object because the builder passed it in.
+    services = build_services()
+    session_manager = services.session_manager
+    app.state.services = services
     # Re-adopt a surviving tmux session (if any) from previous server run.
     # No-op for PTY backend (PTYs die with the parent).
     await session_manager.lifespan_startup()

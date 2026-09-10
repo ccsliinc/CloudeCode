@@ -7019,3 +7019,85 @@ in `src/core/session_notification_policy.py` and
 moves only the manager's MAP of watchers, not the watcher. His queued
 wave 3 lands in `_session_info_for` and `create_session`, which are
 slices 8 and 9, not these.
+
+---
+
+## 2026-09-10 - backend decomposition v2, slice S0: the composition root, the four ports, the fixture
+
+Plan v2 (`.claude/notes/backend-decomposition-plan.md` on
+`docs/backend-plan-v2`, `d70bb98`) replaces v1's permanent facade. This is
+its first slice. NO BEHAVIOUR MOVES.
+
+**What landed.**
+- `src/core/sessions/ports.py` - four `typing.Protocol` boundaries,
+  `runtime_checkable`, structural. Zero runtime imports from this project.
+- `src/core/live_ports.py` - `SystemClock`, `LiveSettings`,
+  `LiveSessionRecordStore`. `TmuxReader` gets NO adapter: `TmuxBackend`
+  already satisfies it by shape, which is the point of a structural port.
+- `src/core/composition.py` - `AppServices` (frozen) and `build_services`,
+  the one construction site. It builds the five collaborators the shipped
+  slices created and hands them to `SessionManager` through the keyword
+  seam those slices already added, so `services.themes is
+  manager._theme_store` holds BY CONSTRUCTION.
+- `src/main.py` - `lifespan` calls `build_services()` and publishes
+  `app.state.services` beside `app.state.session_manager`.
+- `tests/conftest.py` - the `app_services` fixture, written once.
+- CLAUDE.md - the pure-forwarder docstring exemption, verbatim from the
+  plan's section 5.
+- `tests/test_sessions_package_rules.py` - RULE 3, nothing under
+  `src/core/sessions/` may import the `settings` singleton.
+
+**Three places the PLAN and the CODE disagreed, and the code won.**
+1. `TmuxReader`'s methods. The plan sketched `list_sessions` /
+   `capture_pane` / `pane_status_all`; the real `TmuxBackend` spells them
+   `discover_existing` / `capture_scrollback` / `capture_visible_screen` /
+   `list_pane_status_all`. The sketch's spelling would have been satisfied
+   by nothing in the tree, which is a rung that can never be observed to
+   fire.
+2. `SessionRecordStore`'s members. `get_instance` is a module function in
+   `session_store.py`, `claim_instance` is one in `session_identity.py`,
+   and the nine `record_*` functions live in seven unrelated modules with
+   no shared shape. What the manager actually funnels every row read
+   through is `_datastore_connection` / `_writable_datastore_connection`,
+   so THAT pair is the port. `claim_instance` joins when S8 gives it a
+   call site to be substituted at.
+3. `AppServices` carries no `tmux` field. A `TmuxReader` is bound to ONE
+   pane; there is no process-wide instance to hold. Putting a per-pane
+   object in a process-wide container is the same category error as
+   keying unread state on a name when it describes an instance.
+
+**The S2 near miss is now a test, not a comment.** `LiveSettings` resolves
+`src.core.session_manager.settings` on EVERY call, because 41 places in
+the suite `monkeypatch.setattr` that name and a reader bound to
+`src.config.settings` would be invisible to all of them and would write
+the owner's real `~/.cloude-sessions` during a pytest run. Four tests fail
+if that indirection is removed. DELETE AFTER S5.
+
+**Mutations, all eight measured, every revert verified byte-identical by
+sha256.**
+1. Drop the `records` field from `AppServices` -> 2 red.
+2. `LiveSettings` reads `src.config.settings` -> 4 red.
+3. The facade's `pinned_themes` property returns a COPY -> 1 red.
+   NOTE, AND IT IS THE MOST USEFUL RESULT HERE: the identity test stayed
+   GREEN and so did the forward data leg. Only the REVERSE leg caught it.
+   `is` alone has now failed four times in this project, and a
+   one-directional data leg is not enough either.
+4. `build_services` hands `AppServices` a second `ThemeStore` -> 4 red.
+5. The manager-plus-collaborator refusal removed -> 1 red.
+6. The REAL `TmuxBackend.capture_scrollback` grows a required argument ->
+   the real conformance leg red, the double GREEN. That is the whole
+   reason both legs exist.
+7. A collaborator imports the settings singleton -> package rule 3 red.
+8. `lifespan` builds services then constructs a second manager -> 2 red.
+
+**Verification.** Control measured first-hand on `209947d`: 5,856 passed /
+2 failed / 19 skipped, 5,877 collected. The two failures are the known
+environmental pair (`test_home_write_guard`, `test_version_probe`).
+
+**Coordination.** Checked live before starting. PR #60 (draft,
+`fix/5-pipe-rotation-fd`) now CLAIMS issue #5, the p0 pipe rotation in
+`tmux_backend.py`. Plan v2 had already removed the tmux_backend split from
+this lane on the strength of #5 being free-but-his; it is now formally
+taken, which confirms rather than changes the plan. #28 and #32 remain
+free, both still labelled `blocked`. No new issue touches
+`session_manager.py`, `composition`, or the ports.

@@ -693,6 +693,19 @@ per server process and no subprocess at all.
 - **Every function documented**: one-line description, typed inputs, typed
   output, and an example when the usage is not obvious. Types belong in the
   Python signature, not only in the docstring.
+- **A pure forwarder is exempt from the full docstring rule.** A member whose
+  entire body is `return self._collaborator.method(...)` has no behaviour of
+  its own to document. Restating the collaborator's contract creates a SECOND
+  copy of it that can go stale, and a confidently wrong doc sends the next
+  agent to write a bug. Such a member carries one line naming its replacement
+  and its delete date, and nothing else. The exemption applies ONLY to a member
+  marked deprecated with a delete date, so it cannot be stretched to cover a
+  thin method that does anything at all: one argument reshaped, one default
+  filled in, one error translated, and the full rule applies again. Types still
+  belong in the signature, on the forwarder as on everything else. The
+  measurement behind this: the first five decomposition slices left 23 pure
+  forwarders costing 291 lines, an average of 12.7 lines to forward one call,
+  which is why two of those three slices GREW the file they were shrinking.
 - **DRY, single source of truth, named constants.** No magic strings. A literal
   like the hook marker or the socket name lives in exactly one module and gets
   imported.
