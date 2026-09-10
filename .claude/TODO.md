@@ -6256,3 +6256,194 @@ the three cost-ceiling suites `test_listing_seed_row_cost.py`,
 The two `src/` follow-ups recorded above (`session_notification_policy.py`
 563, `notifications/idle_watcher.py` 513) are UNCHANGED and still open -
 that code is not being rewritten, so they still want a real split.
+
+---
+
+## 2026-09-10 DEPLOY RECORD - release/1.2.1 at d074bbc to live (mac-mini-m4, port 8000)
+
+Deployed the merged 1.2.1 line from the release worktree, branch
+`release/1.2.1`, HEAD `d074bbc`, working tree clean. TAGGED `v1.2.1` AND
+PUSHED to `origin` and `adamdev`. All gates passed.
+
+**Deploy.** `./scripts/deploy-mini.sh --target live` selected "working tree
+is CLEAN, so deploying the committed state", 551 files, staged and hash
+checked 551/551 before production was touched, wrote the app bundle
+Resources then the server dir, pruned both, and re-verified after the
+restart. Banner `== DEPLOYED ==`. The re-run
+`./scripts/deploy-mini.sh --verify-only --target live` exited 0 with
+`== VERIFIED ==`, 551/551 on both destinations, mirror-clean, nothing
+copied. The pre-deploy verify showed the expected 1.2.0 drift, including
+eight files reading `target MISSING` that are new in this release.
+
+**The restart was the app's own, and no kickstart was needed.** Electron
+(pid 66329) stayed up throughout and its python child was replaced,
+66351 to 93038, at 2026-09-10T15:43:22Z. The `bootout` / `bootstrap`
+dance the 1.2.0 round needed was not required here because nothing
+SIGKILLed Electron, so nothing orphaned a server onto port 8000.
+
+**A HEALTH READ AT 32 SECONDS RETURNED 000 AND THAT WAS NOT A FAILURE.**
+The new process bound :8000 immediately but did not answer until
+15:44:16Z, about 54 seconds after spawn, because startup work held the
+event loop (`boot_readopt_complete` lands at 15:44:05.166Z and
+`status_seed_warm` at 15:44:05.210Z, both after the socket exists). A
+single probe inside that window reads exactly like a dead server. It was
+resolved by POLLING rather than by concluding from one sample, which is
+the only reason this record does not say the deploy failed. If a future
+round sees 000 here, poll for a minute before believing it.
+
+**Boot, 2026-09-10T15:44:05Z.** `boot_readopt_complete` held 18, skipped 1,
+failed 0, live_count 19. held + skipped = 19 = `tmux -L cloude
+list-sessions | wc -l` = 19. `id_sources` all `hook_token` (18), zero
+`legacy_row`, zero `derived`, `no_row` 0, so no id was minted and no hook
+token was rotated. `status_seed_warm` seeded 19 of 19 examined.
+
+**Hooks after the restart.** Zero `hook_post_rejected_invalid_token`, zero
+`hook_post_rejected_non_loopback`, zero 403s and zero 410s on
+`/api/v1/hooks/claude-event`. 6 hook POSTs accepted, all 200. Zero
+tracebacks and zero error-level lines in the post-restart window. Read off
+uvicorn's own access lines, so "none rejected" is distinguishable from
+"none received", which is the whole point of quoting the accepted count
+beside the rejected one.
+
+**Endpoints.** `GET /api/v1/features` returns
+`ui.show_mark_unread_control: true`. `GET /api/v1/sessions/list` returns
+19 rows for 19 live tmux sessions (idle 12, finished_unread 5, working 1,
+unknown 1; sources transcript 11, tmux 4, seed_row 3, hook 1).
+`GET /api/v1/version` reports `current_version` **1.2.0, and that is
+EXPECTED, not a failed deploy**: the field is `CLOUDE_APP_VERSION`, which
+the Electron shell sets from the PACKAGED bundle's `app.getVersion()`, and
+the bundle was deliberately not rebuilt this round. No source deploy can
+move it. The footer paints v1.2.0 for the same reason and from the same
+origin. The bearer was minted on the mini from `TOTP_SECRET` in the live
+install's `.env` via pyotp against `POST /api/v1/auth/verify`; the secret
+never left that box and neither it nor the token was printed. Negative
+control in the same pass on every measurement: a bogus bearer returns 401,
+so each 200 is evidence of the credential and not of an open endpoint.
+
+### The measurement, which is the point of this release
+
+Read-only, run ON the mini against loopback so network variance is out of
+it. 20 sequential `GET /api/v1/sessions/list`; 30 `/health` while quiet;
+30 `/health` while a `sessions/list` is CONTINUOUSLY in flight, which is
+the head-of-line blocking probe. Three warmup calls discarded. The BEFORE
+pass independently reproduced the figures already on record for 1.2.0
+(p50 272.9 against the recorded 270.1), which is what makes the two passes
+comparable rather than two different experiments.
+
+| measurement | 1.2.0 before | 1.2.1 after | 1.2.1 confirm | change |
+|---|---|---|---|---|
+| sessions/list p50 | 272.9 ms | 83.0 ms | 86.8 ms | 3.3x faster |
+| sessions/list p99 | 539.2 ms | 218.5 ms | 113.6 ms | 2.5x to 4.7x |
+| health p50, quiet | 34.4 ms | 31.4 ms | 29.2 ms | flat |
+| health p99, quiet | 197.4 ms | 47.4 ms | 39.4 ms | 4.2x |
+| health p50, under listing | 175.8 ms | 23.4 ms | 20.0 ms | 7.5x |
+| health p99, under listing | 655.4 ms | 54.8 ms | 62.8 ms | 11.9x |
+| listings completed in the probe window | 33 | 68 | 64 | about 2x |
+
+**THE HEAD-OF-LINE BLOCKING IS GONE, and that is the finding, not the
+p50.** On 1.2.0 a no-op `/health` cost 175.8 ms at p50 while a listing was
+running against 34.4 ms quiet, a 5.1x penalty for being unlucky about
+timing. On 1.2.1 it is 23.4 ms under load against 31.4 ms quiet, so there
+is NO measurable penalty at all. A concurrent listing no longer parks the
+event loop.
+
+**Attributable, with the confounder named.** Nothing else changed on the
+box between the two passes, both ran the same script against the same 19
+sessions, and the AFTER pass was repeated at a five minute interval with
+the same shape, so it is not a one-off. The one confounder that cuts the
+right way: the AFTER server had been up about 4 minutes against roughly
+2.7 hours for BEFORE, so its caches were COLDER, which works against the
+improvement rather than manufacturing it. Sample size is small (n=20 for
+the listing, n=30 per health condition), so read p99 as indicative;
+p50 and the load-versus-quiet ratio are the numbers to trust, and the
+tripled completion count is independent of the timings entirely.
+
+### Browser, live app, hard reloaded twice
+
+A tab open across a deploy does not refetch static assets, and the owner's
+own tab proved it: it was still reporting `meta cloude-app-version`
+**v1.0.33**. All checks below were run in a SEPARATE tab, hard reloaded,
+and the tab was closed afterwards. That the bytes are fresh is proven by
+PRESENCE rather than by a claim: `SessionEntryToasts`,
+`SessionRowActionsConfirm`, `SessionRowMenuActions`, `SessionRowMenuItems`
+and `SessionRowMenuOpen` are all defined on `window`, and every one of
+those five files read `target MISSING` in the pre-deploy verify.
+
+The Chrome MCP tab reports `document.hidden === true` even when fronted,
+so every interaction was driven through the app's OWN entry points
+(`SessionRowMenuOpen.open(kebab)`, the exact call
+`session-row-menu-gestures.js:216` makes) rather than physical clicks,
+which do not reach the element in that state.
+
+- a PASS. The kebab on live row `cloude_Media_Compression` opens a menu of
+  exactly 8 items and exactly 1 separator, in this order: rename, clear
+  unread flag, move to group, fork session, new session in folder, mute
+  notifications, SEPARATOR, restart the agent, close session. That is the
+  reconciled superset in the order `session-row-menu-items.js` declares.
+  The second item reads "clear unread flag" rather than "mark unread for
+  followup" because that row IS currently unread and the label states the
+  RESULT of activating it, which is the documented behaviour, not a
+  discrepancy. Pin is INLINE on the row
+  (`session-sidebar-row-pin`, title "pin to top") and `pin` appears
+  nowhere in the menu text.
+- b PASS. "restart the agent" opens the picker, which reads
+  `this row currently reads "working"`. That is a MEASURED status, not
+  `unknown`. The four gates were observed in force at the same time: the
+  arm checkbox renders UNCHECKED, and all six wrapper radios report
+  `disabled: true`. CANCELLED without restarting. Proven server-side
+  rather than by intent: zero `POST /api/v1/sessions/respawn` and zero
+  `POST .../recreate` in the whole window, and the only related request
+  is one read-only
+  `GET /api/v1/sessions/restart/preview?session_name=cloude_Media_Compression`
+  returning 200.
+- c PASS. A `dblclick` on the row name element enters rename mode:
+  `SessionSidebarRename.isEditing()` true, an input present, FOCUSED, and
+  carrying the current value "Media Compression". Escape exited it, the
+  editor is gone, `isEditing()` is false and the title is unchanged.
+  Nothing was committed, proven server-side: zero title/rename PATCHes and
+  zero `claude_rename_pushed` in the window. Note the handler requires the
+  event target to be inside `[data-row-name]`; a dispatch aimed at the row
+  container one level up is silently ignored, which reads exactly like a
+  dead control.
+- d PASS, and STATE WAS RESTORED. Run on `cloude_Fantasy_Hockey_2026`, the
+  oldest row that is genuinely idle and read (the single oldest by
+  `last_work_at` is Media Compression, but it reads `working`, so it was
+  not used). Recorded BEFORE the touch: `notifications_muted: False`. The
+  menu item is enabled and clickable; clicking it drove
+  `PATCH /api/v1/sessions/records/e8b81c54-.../notifications` to 200 and
+  the server then held `notifications_muted: True`. Reopening the menu
+  showed the label had flipped to "unmute notifications". Clicking that
+  restored `notifications_muted: False`, the value it started at. Exactly
+  2 PATCHes were issued against that uuid and nothing else was written.
+- e PASS. Zero CSP violations across a full hard reload plus 6 seconds,
+  both on a `securitypolicyviolation` listener and in the console reader.
+  THE NEGATIVE CONTROL IS WHAT MAKES THE ZERO MEAN ANYTHING: an injected
+  image from `cdn.jsdelivr.net` raised exactly one `img-src` violation on
+  that same listener, and the element was removed afterwards. Live header
+  carries no third-party origin in any directive:
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+  connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self' data:;
+  frame-ancestors 'none';`
+  Note the console reader only starts capturing when it is first called,
+  so the page had to be reloaded AGAIN after arming it; the first "no
+  messages" answer was a CANNOT DETERMINE wearing a pass.
+
+**The owner's sessions.** 19 before, 19 after, and the sorted session-name
+lists are byte-identical, so none was lost, renamed or added. Zero
+respawn, zero recreate, zero session DELETE and zero pane input POSTs for
+the entire window. The only writes this deploy made to the owner's data
+are the two mute PATCHes above, which cancel out.
+
+**Tag and push.** `v1.2.1` annotated on `d074bbc`, tag object
+`54d95d1`. Pushed `release/1.2.1` and `v1.2.1` to `origin`
+(ccsliinc/CloudeCode) and `adamdev` (Adoom666/CloudeCodeDev), verified
+independently with `git ls-remote` on both: branch `d074bbc`, tag
+`54d95d1` on each. NOTHING was pushed to `upstream` and its broken push
+sentinel was left exactly as it is; `git ls-remote upstream refs/tags/v1.2.1`
+returns nothing.
+
+**Still open, unchanged by this round:** the version endpoint reports
+`latest_version` 1.0.36 against `https://github.com/Adoom666/CloudeCode.git`,
+the upstream this project may not push to, so a 1.2 install keeps being
+told it is behind a line it does not follow. The Electron bundle is still
+1.2.0 and would need a rebuild to make the footer read 1.2.1.
