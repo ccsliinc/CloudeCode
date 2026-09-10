@@ -803,6 +803,15 @@
          than defining nothing. -->
     <script src="/static/js/api-toasts.js"></script>
     <script src="/static/js/auth.js"></script>
+    <!-- The client's copy of the server-owned ui_preferences block.
+         MUST load before any preference-dependent control, because a
+         control that initialises on its default and then SAVES it
+         overwrites the user's real setting. The module refuses every
+         write until hydrate() has succeeded, so load order is the first
+         of two defences rather than the only one. Pure state plus one
+         fetch: no DOM, so its position here is about who reads it, not
+         about what it paints. -->
+    <script src="/static/js/preferences.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->

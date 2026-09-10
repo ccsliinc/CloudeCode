@@ -447,10 +447,7 @@ class AppController {
             console.log('App: User has token, verifying...');
             const isValid = await window.Auth.verifyToken();
             if (isValid) {
-                // Phase 2: load full theme manifests + mount selector BEFORE
-                // launchpad render or any deep-link resolves. Failure here is
-                // non-fatal - registry has its own claude fallback.
-                await this._initThemes();
+                await this._initAuthenticatedState();
                 this.showLaunchpad();
             } else {
                 console.log('App: Token invalid, showing auth');
@@ -474,6 +471,43 @@ class AppController {
      * the first time the panel opens). Only the registry needs to be
      * live at boot; the picker DOM is built lazily on demand.
      */
+    /**
+     * Everything that must be true before an authenticated screen paints.
+     *
+     * ORDER IS THE POINT. Preferences are hydrated FIRST, because the
+     * theme registry is a preference-dependent control: it reads the
+     * user's default theme, and a control that initialises on its own
+     * default and then persists it overwrites the real setting. Both
+     * post-auth paths call this one function so neither can drift.
+     *
+     * NEITHER STEP IS FATAL. A preferences read that fails leaves the
+     * module refusing every write, so the app runs on local defaults and
+     * cannot save one of them over a setting it was unable to read.
+     *
+     * Inputs: none. Output: Promise<void>.
+     */
+    async _initAuthenticatedState() {
+        await this._hydratePreferences();
+        // Phase 2: load full theme manifests + mount selector BEFORE
+        // launchpad render or any deep-link resolves. Failure here is
+        // non-fatal - registry has its own claude fallback.
+        await this._initThemes();
+    }
+
+    /**
+     * Read the server-owned preference block before anything uses it.
+     *
+     * Inputs: none. Output: Promise<void> - never rejects; the module
+     *   records its own read status and refuses writes on a failure.
+     */
+    async _hydratePreferences() {
+        if (!globalThis.Preferences) return;
+        const status = await globalThis.Preferences.hydrate(window.api);
+        if (status !== globalThis.Preferences.HYDRATED) {
+            console.warn('App: preferences unavailable - running on local defaults');
+        }
+    }
+
     async _initThemes() {
         if (!window.Themes) return;
         try {
@@ -553,9 +587,10 @@ class AppController {
         // Auth events
         window.addEventListener('authenticated', () => {
             console.log('App: User authenticated');
-            // Bring up the theme registry post-auth (for the TOTP-flow path
-            // that doesn't go through init()'s `if (verifyToken())` branch).
-            this._initThemes().finally(() => this.showLaunchpad());
+            // Same post-auth bring-up as init()'s verifyToken() branch,
+            // through the SAME function. Two copies of this sequence is
+            // how one of them acquires a step the other never gets.
+            this._initAuthenticatedState().finally(() => this.showLaunchpad());
         });
 
         window.addEventListener('auth-required', () => {

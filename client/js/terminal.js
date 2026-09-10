@@ -1511,6 +1511,21 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                     });
             }
 
+            // RECONNECT PERFORMS AN AUTHORITATIVE REFRESH, NOT AN EVENT
+            // REPLAY. While this socket was down any preferences.changed
+            // frame was simply not delivered, and nothing replays it, so
+            // the only correct recovery is to re-read the block. Server
+            // values win; a local edit still in flight becomes a visible
+            // conflict rather than being silently dropped or silently
+            // uploaded back over what another device committed.
+            if (globalThis.Preferences && globalThis.Preferences.status
+                    !== undefined) {
+                globalThis.Preferences.hydrate(window.api).catch((err) => {
+                    console.warn('[Preferences] refresh on reconnect failed',
+                        err && err.message);
+                });
+            }
+
             // Send initial resize (legacy fallback path - the server's
             // request_dims handshake will also arrive and trigger a
             // handshake-tagged sendResize which dedupes if dims match).
@@ -1732,6 +1747,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             // applies the per-session accent color from message.toast.color.
             if (window.ToastManager && message && message.toast) {
                 window.ToastManager.add(message.toast);
+            }
+        } else if (type === 'preferences.changed') {
+            // Another client committed a preference. Preferences.applyRemote
+            // applies it ONLY when the frame's revision is higher than the
+            // one this browser holds, so a duplicate, a reordered pair and a
+            // dropped frame all resolve without the socket promising
+            // anything - and it refuses any save raised while it is applying,
+            // which is what stops two browsers echoing at each other.
+            if (globalThis.Preferences) {
+                globalThis.Preferences.applyRemote(message);
             }
         } else if (type === 'toast.ack') {
             // Another browser (or this one's POST) acked a toast. Dismiss
