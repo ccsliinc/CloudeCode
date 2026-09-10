@@ -739,10 +739,23 @@ recreated - the recovery file's path is in `TODO.md`'s dated
 is not durable across sessions; do not assume it still exists without
 checking.
 
-**Remote rule, restated because it is easy to get backwards: push only
-to `origin` (ccsliinc/CloudeCode) or `adamdev` (CloudeCodeDev). NEVER
-`upstream` (Adoom666/CloudeCode)** - its push URL is disabled by
-construction on the owner's clone.
+**Remote rule, restated because it is easy to get backwards, and
+CHANGED ON 2026-09-10.** Owner's ruling, verbatim: "you can use his repo
+as the main. keep mine for backup." `adamdev` (Adoom666/CloudeCodeDev) is
+the PRIMARY development repo and branches land there first; `origin`
+(ccsliinc/CloudeCode) is the BACKUP MIRROR and every branch and every tag
+also goes there. NEVER `upstream` (Adoom666/CloudeCode) - its push URL is
+disabled by construction on the owner's clone, so do not use a command
+that fans out to all remotes either. The rule before this date treated
+`origin` as the working repo and `adamdev` as a second target; that is
+superseded, so "push to origin" alone is now the OLD rule.
+**The exception is distribution.** `adamdev` is PRIVATE and its releases
+are drafts; `origin` is PUBLIC and holds the published v1.2.0 and v1.2.1
+downloads (dmg plus sha256 plus a downgrade procedure, v1.2.1 Latest), so
+PUBLIC RELEASES STAY ON `origin` unless Adam makes his repo public and
+rules otherwise. `origin` also has Issues DISABLED, so `adamdev` is the
+only issue tracker. Verified with `gh` on 2026-09-10; full detail in the
+CLAUDE.md bullet and in `docs/DECISIONS.md`.
 
 Full commit-by-commit list and item mapping for THIS round (`07bbbb8..
 54731f9`) is in `TODO.md`'s dated 2026-09-08 "late round" closing

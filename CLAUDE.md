@@ -766,7 +766,37 @@ per server process and no subprocess at all.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
-- **Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).** Owner's rule, 2026-09-08. The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
+- **Push to BOTH `adamdev` (Adoom666/CloudeCodeDev) and `origin` (ccsliinc/CloudeCode). NEVER to `upstream` (Adoom666/CloudeCode).**
+  **THE RULE CHANGED ON 2026-09-10 and this is the current one.** Owner's
+  ruling, verbatim: "you can use his repo as the main. keep mine for backup."
+  `adamdev` is now the PRIMARY development repository; `origin` is the BACKUP
+  MIRROR. The rule this replaces, dated 2026-09-08, named the two as
+  interchangeable push targets and read as though `origin` were the working
+  repo, so a reader who remembers "push to origin" is remembering the
+  superseded rule, not a different wording of this one.
+  Work is claimed on `adamdev` with a GitHub issue plus a draft pull request
+  (`.claude/skills/work/SKILL.md`); `docs/DECISIONS.md` and
+  `docs/kept-behaviours/` bind both teams from there; branches land there
+  first. Every branch and every tag then also goes to `origin`, or the backup
+  is not a backup.
+  **PUBLIC DISTRIBUTION STAYS ON `origin`, and that is the exception, not an
+  oversight.** Verified with `gh` 2026-09-10: `adamdev` is PRIVATE and every
+  recent release on it is a DRAFT (v1.2.0, v1.0.36, v1.0.35), while `origin`
+  is PUBLIC and carries the published downloadable releases, v1.2.0 and
+  v1.2.1, each with an arm64 dmg installer, a sha256 and a written downgrade
+  procedure in the body, v1.2.1 marked Latest. "Primary" means development,
+  not distribution. Releases move only if Adam makes his repo public AND rules
+  that they should; moving them while it is private takes the download away
+  from every user. `macOS/update-check.js` correctly points the updater at
+  `origin` for this reason.
+  Also verified 2026-09-10: `origin` has **Issues DISABLED** (it is a fork),
+  so it cannot serve as a fallback tracker while that holds. `adamdev` has
+  Issues enabled and is the only tracker.
+  The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode`
+  on the owner's clone so a push there fails by construction; do not repair it,
+  and re-apply it with `git remote set-url --push upstream DISABLED...` on any
+  fresh clone. Never use a command that fans out to every remote, because
+  `upstream` is in the list.
 
 ## Restarting a session, and picking what it comes back as
 
