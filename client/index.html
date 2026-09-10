@@ -1470,6 +1470,26 @@
 
     <script src="/static/js/app.js"></script>
 
+    <!-- THE STRING LAYER. One catalog, read by the legacy tree here and
+         by the compiled tree below, so a label cannot exist in two
+         languages in one app. See client/js/i18n/ and
+         .claude/notes/i18n-design.md.
+
+         A MODULE, AND ABOVE THE BUNDLE ON PURPOSE. Module scripts are
+         deferred and run in document order, so this publishes
+         window.CloudeI18n before app.js evaluates and before
+         DOMContentLoaded, which is before any legacy render. The classic
+         scripts above run FIRST, which is why every legacy consumer
+         reaches for t() at render time and never while it is being
+         defined.
+
+         IT IS SEPARATE FROM THE BUNDLE SO COPY DOES NOT DEPEND ON THE
+         NEWEST THING. It imports no Svelte and no Tailwind; a failure in
+         the compiled tree must not take every label in the legacy client
+         with it. Same origin, no inline script: `script-src 'self'`
+         permits exactly this. -->
+    <script type="module" src="/static/js/i18n/boot.js"></script>
+
     <!-- THE COMPILED TREE (see web/ and CLAUDE.md, "The web/ build").
          Svelte 5 + TypeScript, bundled by vite into client/dist/app.js
          with a FIXED name so this line never has to be rewritten.

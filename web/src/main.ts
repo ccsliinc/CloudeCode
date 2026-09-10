@@ -32,6 +32,8 @@ import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
 // plugins on the surface registry. Nothing reads a binding from it.
 import './lib/plugins/builtin';
 import { sessionCardMenuItems, runSessionCardAction } from './lib/plugins/session-card-actions';
+import { t, setLocale, currentLocale, i18n } from './lib/i18n/index.svelte';
+import { summaryLabel } from './lib/session-summary-label';
 
 /** The id of the container `renderLaunchpadUI()` writes for the card. */
 const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
@@ -142,6 +144,29 @@ const CloudeWeb = {
      */
     sessionCardMenuItems,
     runSessionCardAction,
+    /**
+     * THE STRING LAYER, AS THIS TREE SEES IT. Note what is NOT here: a
+     * catalog. The messages live in client/js/i18n/, `boot.js` publishes
+     * the one instance as `window.CloudeI18n` before this bundle
+     * evaluates, and this adopts that object rather than building a
+     * second one - two instances would be two current locales.
+     *
+     * `t` here is the REACTIVE one: it reads a `$state` counter before
+     * delegating, so any component template that calls it repaints when
+     * `setLocale` moves. A legacy caller wants `window.CloudeI18n.t`
+     * instead, which is the same function without the rune, because a
+     * classic script has nothing to repaint.
+     */
+    i18n: { t, setLocale, currentLocale, instance: i18n },
+    /**
+     * The group summary sentence, from the SHARED assembler in
+     * client/js/labels/session-summary.js. The legacy tree reaches the
+     * same module through `window.CloudeLabels`, so the sidebar header
+     * and any Svelte surface cannot render two different sentences for
+     * one state - web/src/lib/session-summary-label.parity.test.ts holds
+     * them to it across the whole matrix.
+     */
+    sessionSummaryLabel: summaryLabel,
 } as const;
 
 declare global {

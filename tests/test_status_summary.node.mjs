@@ -29,6 +29,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { createI18n } from '../client/js/i18n/runtime.js';
+import { sessionSummaryLabel } from '../client/js/labels/session-summary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,10 +65,21 @@ async function runQueue() {
  * global - loading them separately would test a summary that resolves
  * against a different copy of the rules than the rows do, which is exactly
  * the drift these tests exist to prevent.
+ *
+ * THE SANDBOX IS THE PAGE, so it also gets the string layer. On a real
+ * page `client/js/i18n/boot.js` publishes `CloudeI18n` and `CloudeLabels`
+ * as a module script, before any render; here they are injected from the
+ * SAME modules, which this file can simply import because it is real ESM.
+ * Handing the sandbox a second copy of the strings would defeat the point
+ * of there being one catalog.
  * Inputs: none. Output: object - {Led, Summary}.
  */
 function loadModules() {
-    const context = { console };
+    const context = {
+        console,
+        CloudeI18n: createI18n({ locale: 'en' }),
+        CloudeLabels: { sessionSummaryLabel },
+    };
     vm.createContext(context);
     for (const file of ['status-led.js', 'session-status-summary.js']) {
         const src = fs.readFileSync(

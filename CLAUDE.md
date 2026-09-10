@@ -2315,6 +2315,92 @@ tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
 
+## The string layer, and the one catalog rule
+
+Every user-visible string comes from ONE catalog that BOTH clients read. Full
+model in `.claude/notes/i18n-design.md`; the rule is that there is no second
+table, ever, for any reason.
+
+| Piece | File |
+|---|---|
+| The default catalog, data only | `client/js/i18n/catalog.en.js` |
+| Plural selection and interpolation, PURE | `client/js/i18n/format.js` |
+| The pseudo-locale, derived from en | `client/js/i18n/pseudo.js` |
+| The locale registry, where a second locale is added | `client/js/i18n/catalogs.js` |
+| Locale ladder, `t()`, missing-key behaviour | `client/js/i18n/runtime.js` |
+| Publishes `window.CloudeI18n` and `window.CloudeLabels` | `client/js/i18n/boot.js` |
+| Shared sentence assembly, one per screen | `client/js/labels/` |
+| The reactive accessor for Svelte | `web/src/lib/i18n/index.svelte.ts` |
+
+**THE CATALOG IS DATA, NOT CODE, AND THAT IS LOAD-BEARING.** No functions in
+values, no template literals, no TypeScript in the file. It is read by the
+legacy browser client, the Svelte bundle, vitest and the node suite, so a value
+that can RUN is a value that can reach for something one of those four does not
+have. It also has to convert to a Python dict by inspection, because the server
+emits user-visible prose too and bringing it into this same key namespace later
+is only cheap while that stays true. Server strings are OUT of scope today for a
+reason that is about data rather than effort: toast bodies are STORED, so
+translating at write time is wrong and translating at read time is a schema
+change.
+
+**KEYS NAME WHAT A STRING MEANS, NEVER WHERE IT APPEARS.**
+`session.summary.none`, never `sidebar.groupheader.emptylabel`. Slices 2 to 7 of
+the Svelte migration rewrite the screens these strings sit on, and a key that
+names a screen dies with it. Keys are FLAT and dotted so `grep -rn` finds every
+use across both trees, and because a nested catalog invites
+`t('session.status.' + key)`, which makes the extraction guard impossible to
+write.
+
+**NO LIBRARY, AND CSP IS WHY, NOT TASTE.** Every ICU MessageFormat runtime
+compiles a message into a function and `script-src 'self'` refuses
+`new Function` and `eval`. `Intl.PluralRules` and `Intl.NumberFormat` are
+already in the browser and already correct for every locale CLDR covers. A
+plural message is an object keyed by CLDR category with `other` mandatory;
+interpolation is `{name}` and one replace pass, with no expressions inside the
+braces, because a mini-language in a message is the road back to a compiler.
+**THE ZERO CASE IS CHOSEN BY THE CALLER, NOT BY THE PLURAL RULE**:
+`Intl.PluralRules('en').select(0)` is `other`, so a plural set alone renders
+"0 sessions", which is grammatical and is still the wrong copy. "no sessions" is
+a DIFFERENT message.
+
+**A MISSING KEY RENDERS THE KEY ITSELF, LOUDLY, AND NEVER THROWS.** An empty
+string is invisible and loses a label for a release; `???` is visible and
+unattributable; the key names itself, so a screenshot of the bug is the fix. It
+is reported on `console.error` in production too, deduped so a key missing on a
+two-hundred-row list logs once. The same rule covers a missing runtime: a legacy
+caller with no `globalThis.CloudeI18n` gets keys back and NEVER a second copy of
+the strings, because a fallback table is the dual path this exists to prevent
+and a fallback that works is one nobody notices is being used.
+
+**ORDERING IS GUARANTEED BY THE SPEC, NOT BY LUCK.** `boot.js` is a same-origin
+`<script type="module">` in `client/index.html`, above the bundle's tag. Module
+scripts are deferred and run in document order, so `window.CloudeI18n` exists
+before `app.js` evaluates and before `DOMContentLoaded`. The classic scripts
+above both run FIRST, which is why every legacy consumer reaches for `t()` at
+RENDER time and never while it is being defined. It is kept out of the Svelte
+bundle deliberately: copy must not depend on the newest thing, and nothing about
+the legacy tree's strings changes on the day slice 7 deletes `launchpad.js`.
+The Svelte tree ADOPTS that instance rather than building one, because two
+instances are two current locales.
+
+**LOCALE IS BROWSER-LOCAL, THROUGH A LADDER, AND THAT IS A DECISION.**
+`localStorage['cloude.locale']`, then `navigator.languages` prefix-matched, then
+`en`. Not a server setting, because it must resolve SYNCHRONOUSLY at first paint
+and a setting arriving on an async config fetch paints the wrong language and
+then flips. The ladder is the seam: a server preference later is one rung at the
+top plus a `setLocale()` when config lands.
+
+**TWO GUARDS, BECAUSE NEITHER COVERS THE OTHER'S GAP, AND IT WAS MEASURED.**
+The pseudo-locale (derived from en, so it cannot go stale) wraps and LENGTHENS
+every string; `coverage.test.ts` requires each rendered sentence to be a
+balanced bracketed span AND to be built from an exact count of catalog messages,
+and separately scans the ported sources for literals that read like sentences.
+Mutation-proven 2026-09-10: a literal returned at the top level fails all three
+checks, but **a literal interpolated INTO another message passes the span check**
+because the outer message wraps it, and is caught only by the count assertion
+and the source scan. `PORTED_FILES` in that test is the list a slice APPENDS TO;
+a file not on it is not covered.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,

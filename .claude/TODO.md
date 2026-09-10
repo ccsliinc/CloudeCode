@@ -7081,3 +7081,73 @@ Force-added onto `feat/svelte-1.3`:
   case), reverted clean. svelte-check 0 errors, `client/dist` bundle unchanged,
   node suite 200/200, `scan_secrets.py` clean. Committed `e143ceb` on
   `feat/svelte-1.3-on-121`.
+
+## 2026-09-10 - the string layer (i18n foundation), issue #61 / PR #62
+
+Owner's direction, verbatim: "making classsed code and probably should have
+language vars if we can get this to be bigger and people want to use this".
+Architecture only; no translations written. Landed BEFORE slice 2 of the Svelte
+migration on purpose, so slices 2 to 7 port their screens straight into it
+instead of every file being rewritten twice.
+
+- [x] ONE catalog both clients read: `client/js/i18n/catalog.en.js`, a plain ES
+  module of flat dotted keys, data only. Four readers, no build step for
+  `client/`: Vite imports it, `boot.js` publishes it to the legacy tree as a
+  same-origin module script, vitest imports it, and the `.node.mjs` suite
+  imports it and injects it into its `vm` sandboxes. That last one is what made
+  this shape work, and it is why the catalog is not JSON and not a classic IIFE.
+- [x] Keys name what a string MEANS, never the screen it is on, so they survive
+  slices 2 to 7. Flat so `grep -rn` finds every use across both trees.
+- [x] No library: `Intl.PluralRules` + `Intl.NumberFormat`, both memoized. Every
+  ICU runtime compiles with `new Function`, which `script-src 'self'` refuses.
+  Plural sets are keyed by CLDR category with `other` mandatory.
+- [x] Missing key renders the KEY, loudly (deduped `console.error`), never
+  throws. Missing runtime does the same, and never a second string table.
+- [x] Locale is browser-local through a ladder (localStorage override,
+  `navigator.languages` prefix-matched, then `en`). NOT the settings block: it
+  must resolve synchronously at first paint, and #43 is redesigning that block.
+  The ladder is the seam for making it a server preference later.
+- [x] Ported surface, chosen by MEASUREMENT rather than by suggestion: the group
+  summary label (`summaryHtml`). It carries an explicit zero, a seven-key
+  lookup, a plural with a count and a second count, and it was the only
+  candidate with just ONE node-test sandbox to update. The alternative,
+  `session-status-ui.js`, had 17.
+- [x] Sentence ASSEMBLY is shared too, not just the copy:
+  `client/js/labels/session-summary.js` is imported by the Svelte tree and
+  reached by the legacy tree through `globalThis.CloudeLabels`. One function,
+  one catalog, two callers.
+- [x] Pseudo-locale, DERIVED from en so it cannot go stale, wrapping and
+  lengthening by 40 percent so it finds unextracted strings and layout that
+  cannot take a longer language in one pass.
+- [x] MUTATION-PROVEN, and the result changed the design. A literal returned at
+  the top level fails all three checks. A literal interpolated INTO another
+  message PASSES the balanced-span check, because the outer message wraps it,
+  and is caught only by the bracket-COUNT assertion and the source scan. The
+  count assertion exists because that mutation was run, not because it was
+  predicted. Reverted byte-identical, suite green.
+
+Verified: `npm test -- --run` 147 passed / 11 files (baseline was 93 / 7, so 54
+added and none broken). `svelte-check --threshold error` 0 errors, 284 files.
+`npm run build` then `git status --porcelain client/dist` empty after committing
+the rebuilt bundle; `./scripts/web-build-check.sh` exit 0. Node suite as CI runs
+it: no FAIL lines, including `test_archive_full_page_mode.node.mjs`, which
+CLAUDE.md records as pre-existing-failing and which passed here.
+`pytest -q tests/test_no_remote_assets.py` 15 passed. `scan_secrets.py` exit 0,
+1448 files. `node --check` on all nine JS files touched.
+
+Open items, stated rather than discovered:
+- [ ] The reactive repaint is proven at the module level (subscription fires,
+  `t()` returns the new locale's string) but NOT by a MOUNTED component, because
+  vitest runs in `node` and jsdom would be a new dev dependency bought to
+  re-test Svelte's own core promise. The first component slice 2 ports is where
+  that last link gets exercised for real.
+- [ ] Server strings are out of scope and the reason is data, not effort: toast
+  bodies are STORED, so translating at write time is wrong and at read time is a
+  schema change. `.claude/notes/i18n-design.md` section 7 prices it.
+- [ ] RTL is a CSS project, not a string project: `client/css/` holds 235
+  physical-direction declarations across 49 files and 16,924 lines, and zero
+  logical equivalents. Nothing here blocks it.
+- [ ] Only ONE surface is ported. The other 12 files carrying `n === 1 ? ...`
+  plural ternaries (launchpad.js, toast.js, terminal-away-gap.js,
+  session-sidebar-groups.js and the rest) are untouched by design; each is a
+  slice's own step 1.
