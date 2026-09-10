@@ -165,16 +165,27 @@ def expired(fields: dict[str, str]) -> bool:
         fields: parsed claim header.
 
     Returns:
-        True when the claim is stale or its dates are unreadable.
+        True when the claim is measurably stale. An unreadable date returns
+        False, so a malformed claim is still treated as live: see the body.
     """
     from datetime import date, timedelta
 
     stamp = fields.get("refreshed") or fields.get("opened") or ""
     try:
         year, month, day = (int(part) for part in stamp.split("-"))
+        when = date(year, month, day)
     except ValueError:
-        return True
-    return date(year, month, day) + timedelta(days=EXPIRY_DAYS) < date.today()
+        # A DATE WE CANNOT READ MUST STILL COUNT AS AN OVERLAP. Treating it
+        # as expired would make a claim with a typo'd header silently
+        # invisible to the detector, in the one function whose whole job is
+        # catching collisions. A hand-written header is exactly where a typo
+        # lands, so this fails toward being seen.
+        #
+        # The date() construction is inside the try on purpose: "2026-13-01"
+        # parses as three ints and then raises out of date(), which used to
+        # crash the whole run rather than degrade.
+        return False
+    return when + timedelta(days=EXPIRY_DAYS) < date.today()
 
 
 def tracked_files() -> list[str]:
