@@ -50,124 +50,47 @@ import {
 } from './lib-home-mechanics.mjs';
 
 // =====================================================================
-// ITEM 38 - the fold actually folds, and it folds the right element.
+// ITEMS 38 AND 43 MOVED IN SLICE 4, AND ITEM 38's DEFECT IS NOW
+// UNREACHABLE RATHER THAN GUARDED AGAINST.
+//
+// ITEM 38 was a fold that did nothing: the toggle sat inside
+// `.project-node__row`, so `toggle.nextElementSibling` was the
+// `.project-item` card rather than the `.project-node__sessions`
+// container one level up. The old handler guarded on the class, found
+// the wrong element, and silently changed nothing while still flipping
+// `aria-expanded` and recording the new state. The fix at the time was
+// to resolve from `closest('.project-node')`.
+//
+// There is no element walk at all now. `ProjectNode.svelte` renders
+// `style:display` on the two foldable parts from the SAME `collapsed`
+// value it renders `aria-expanded` from, so the three can no longer
+// disagree and the sibling-order case has nothing to be sensitive to.
+// The two remaining claims are asserted against the rendered DOM in
+// web/src/lib/launchpad/ProjectTree.behaviour.test.ts:
+//
+//   - "clicking a toggle folds the node" (both `aria-expanded` and the
+//     sessions container, together)
+//   - "a collapsed node also sheds its description"
+//   - "A FOLD SURVIVES A FULL DATA REFRESH, which is the whole
+//     contract", which is what ITEM 38's "re-applied on every render"
+//     case was really protecting - twelve simulated ticks rather than
+//     one repaint.
+//
+// The third outcome ITEM 38 also carried - "a toggle outside any project
+// node reports FAILURE, it does not pretend to have folded" - has no
+// counterpart, because there is no function that can be handed a toggle
+// belonging to nothing. That is a rung removed, not a rung lost.
+//
+// ITEM 43's four slim-row cases are
+// web/src/lib/launchpad/project-node.test.ts, under "foldability, and
+// what the count chip is allowed to claim", asserted on the DECISION
+// (`hasDescription`, `foldable`, `hasChildren`) rather than on the
+// presence of a class name in a string. The escaping case is
+// ProjectTree.behaviour.test.ts's "a project description carrying a tag
+// renders it verbatim" - Svelte's own interpolation replaced the
+// `_escapeHtml` call, so the assertion is that no `<img>` element
+// exists rather than that the string holds `&lt;`.
 // =====================================================================
-
-await test('ITEM 38: the fold resolves its target from the NODE, not from the toggle sibling', async () => {
-    // The exact shape the real renderer produces for a project node: the
-    // toggle is nested inside `.project-node__row`, so its next sibling
-    // is the `.project-item` card. The old handler walked to that sibling,
-    // found the wrong class, and silently changed nothing.
-    const sessions = el('project-node__sessions');
-    const description = el('project-description');
-    const card = el('project-item', { children: [description] });
-    const toggle = el('project-node__toggle', { attrs: { 'aria-expanded': 'true', 'data-node-key': 'project:p' } });
-    const row = el('project-node__row', { children: [toggle, card] });
-    const node = el('project-node', { children: [row, sessions] });
-
-    const { lp } = loadLaunchpad();
-    const ok = lp._applyProjectNodeCollapsed(toggle, true);
-    assert.equal(ok, true, 'the handler must report that it found a node');
-    assert.equal(sessions.style.display, 'none', 'the sessions container must actually be hidden');
-    assert.equal(description.style.display, 'none', 'the description must actually be hidden');
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-
-    lp._applyProjectNodeCollapsed(toggle, false);
-    assert.equal(sessions.style.display, '', 'unfolding must actually restore the sessions');
-    assert.equal(description.style.display, '', 'unfolding must actually restore the description');
-    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-    assert.equal(node.classes.includes('project-node'), true);
-});
-
-await test('ITEM 38: a toggle outside any project node reports FAILURE, it does not pretend to have folded', async () => {
-    const orphan = el('project-node__toggle', { attrs: { 'aria-expanded': 'true' } });
-    const { lp } = loadLaunchpad();
-    assert.equal(lp._applyProjectNodeCollapsed(orphan, true), false,
-        'three outcomes: "I could not find the node" is not the same as "I folded it"');
-});
-
-await test('ITEM 38: the fold does not depend on element ORDER inside the node', async () => {
-    // Same parts, sessions container FIRST. A sibling-walk implementation
-    // is order-sensitive; addressing from the node root is not.
-    const sessions = el('project-node__sessions');
-    const toggle = el('project-node__toggle', { attrs: { 'aria-expanded': 'true' } });
-    const row = el('project-node__row', { children: [el('project-item'), toggle] });
-    el('project-node', { children: [sessions, row] });
-    const { lp } = loadLaunchpad();
-    lp._applyProjectNodeCollapsed(toggle, true);
-    assert.equal(sessions.style.display, 'none');
-});
-
-await test('ITEM 38: collapse state is re-applied on every render, for BOTH foldable parts', async () => {
-    const fixture = {
-        projects: [{ id: 1, name: 'proj', path: '/p', description: 'a description' }],
-        presence: [{ id: 1, raw_path: '/p', presence: 'present' }],
-        runningSessions: [{ name: 'cloude_a', created_by_cloude: true, created_at_epoch: 1, window_count: 1, status: 'idle' }],
-        attribution: [{ tmux_name: 'cloude_a', project_id: 1, project_attribution: 'derived_deepest' }],
-    };
-    const first = renderProjects(fixture);
-    assert.ok(first.html.includes('aria-expanded="true"'));
-    assert.ok(!/class="project-description" style="display:none;"/.test(first.html));
-
-    first.lp._collapsedProjectNodes.add('project:proj');
-    first.lp.renderProjectList();
-    const html = first.projectList.innerHTML;
-    assert.ok(html.includes('aria-expanded="false"'), 'the toggle must render collapsed');
-    assert.ok(/project-node__sessions[^>]*style="display:none;"/.test(html),
-        'the sessions container must render collapsed');
-    assert.ok(/class="project-description" style="display:none;"/.test(html),
-        'the description must render collapsed too, not spring back open');
-});
-
-// =====================================================================
-// ITEM 43 - slim rows.
-// =====================================================================
-
-await test('ITEM 43: an empty description renders NOTHING, not the words "no description"', async () => {
-    const { html } = renderProjects({
-        projects: [{ id: 1, name: 'proj', path: '/p', description: '' }],
-        presence: [{ id: 1, raw_path: '/p', presence: 'present' }],
-    });
-    assert.ok(!html.includes('no description'),
-        'the filler line is a full row of type that says nothing');
-    assert.ok(!html.includes('class="project-description"'),
-        'and no empty element is left behind to keep costing height');
-});
-
-await test('ITEM 43: a whitespace-only description counts as empty', async () => {
-    const { html } = renderProjects({
-        projects: [{ id: 1, name: 'proj', path: '/p', description: '   ' }],
-        presence: [{ id: 1, raw_path: '/p', presence: 'present' }],
-    });
-    assert.ok(!html.includes('class="project-description"'));
-});
-
-await test('ITEM 43: a project with a description and no sessions is still foldable', async () => {
-    const { html } = renderProjects({
-        projects: [{ id: 1, name: 'proj', path: '/p', description: 'something to fold' }],
-        presence: [{ id: 1, raw_path: '/p', presence: 'present' }],
-    });
-    assert.ok(html.includes('project-node__toggle'), 'it has something to fold, so it gets a control');
-    assert.ok(!html.includes('project-node__count'),
-        'but no count chip: a bare "0" would be a claim about sessions');
-});
-
-await test('ITEM 43: a project with nothing to fold gets no fold control at all', async () => {
-    const { html } = renderProjects({
-        projects: [{ id: 1, name: 'proj', path: '/p', description: '' }],
-        presence: [{ id: 1, raw_path: '/p', presence: 'present' }],
-    });
-    assert.ok(!html.includes('project-node__toggle'));
-});
-
-await test('a description is HTML-escaped on the way into the row', async () => {
-    const { html } = renderProjects({
-        projects: [{ id: 1, name: 'proj', path: '/p', description: '<img src=x onerror=1>' }],
-        presence: [{ id: 1, raw_path: '/p', presence: 'present' }],
-    });
-    assert.ok(!html.includes('<img src=x'), 'a description is user text and must not reach the DOM as markup');
-    assert.ok(html.includes('&lt;img src=x'));
-});
 
 // =====================================================================
 // ITEM 42 - it is the project list, not a recency list.

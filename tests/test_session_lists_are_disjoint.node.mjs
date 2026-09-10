@@ -321,74 +321,25 @@ await test('no "earlier session" disclosure exists anywhere in the client', asyn
 });
 
 // =====================================================================
-// THE PROJECT TREE obeys the same one-list rule, including for the
-// legacy rows a name comparison cannot catch. Still launchpad.js.
+// THE PROJECT TREE's THREE CASES MOVED IN SLICE 4.
+//
+// `_endedSessionsForTree` is `endedSessionsForTree` in
+// web/src/lib/launchpad/project-groups.ts now, and all three assertions
+// live in web/src/lib/launchpad/project-groups.test.ts under
+// "endedSessionsForTree, and its four filters":
+//
+//   - "a row a RUNNING successor names as its parent is already on
+//     screen" (the two rows carry DIFFERENT tmux names on purpose, which
+//     is the whole reason the live-name guard misses them)
+//   - "it KEEPS an ended row whose successor is NOT running" (the
+//     positive control: once nothing on screen represents the row,
+//     hiding it would make it unreachable)
+//   - "it keeps an ordinary ended session that has no successor at all"
+//
+// They are stronger there, because they drive the pure function against
+// a typed input rather than a hand-built launchpad singleton. The
+// one-list rule they enforce is unchanged.
 // =====================================================================
-
-/**
- * Drive _endedSessionsForTree() against canned running rows and records.
- * @param {object[]} running  What the live tmux probe reported.
- * @param {object[]} records  What GET /sessions/records returned.
- * @returns {Promise<string[]>} tmux names the tree would list as ENDED.
- */
-async function endedInTree(running, records) {
-    const { lp } = await loadBoth({
-        attachable: running,
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    lp.sessionAttributionListingOk = true;
-    lp.sessionRecords = records;
-    lp.runningSessions = running;
-    return lp._endedSessionsForTree().map(r => r.name);
-}
-
-await test('the tree drops an ended row its RUNNING successor already shows', async () => {
-    // The two rows carry DIFFERENT tmux names on purpose - that is the
-    // whole reason the live-name guard misses them, and it is exactly
-    // the shape of the owner's real data.
-    const ended = await endedInTree(
-        [live('cloude_Media_Compression')],
-        [
-            { id: 4, tmux_name: 'Media_Compression', lifecycle: 'stopped',
-              session_uuid: 'u4', archived_at: null, parent_session_id: null },
-            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'running',
-              session_uuid: 'u7', archived_at: null, parent_session_id: 4 },
-        ]
-    );
-    assert.ok(!ended.includes('Media_Compression'),
-        `the tree listed a session twice: ended=${JSON.stringify(ended)}`);
-    assert.equal(ended.length, 0);
-});
-
-await test('the tree KEEPS an ended row whose successor is not running', async () => {
-    // POSITIVE CONTROL. Once nothing on screen represents the row,
-    // hiding it would make it unreachable.
-    const ended = await endedInTree(
-        [],
-        [
-            { id: 4, tmux_name: 'Media_Compression', lifecycle: 'stopped',
-              session_uuid: 'u4', archived_at: null, parent_session_id: null },
-            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'stopped',
-              session_uuid: 'u7', archived_at: null, parent_session_id: 4 },
-        ]
-    );
-    assert.equal(ended.length, 2,
-        `the tree hid rows nothing else represents: ${JSON.stringify(ended)}`);
-});
-
-await test('the tree keeps an ordinary ended session with no successor', async () => {
-    const ended = await endedInTree(
-        [live('cloude_Media_Compression')],
-        [
-            { id: 9, tmux_name: 'cloude_Old_Thing', lifecycle: 'stopped',
-              session_uuid: 'u9', archived_at: null, parent_session_id: null },
-            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'running',
-              session_uuid: 'u7', archived_at: null, parent_session_id: null },
-        ]
-    );
-    assert.deepStrictEqual(ended.length, 1);
-    assert.ok(ended.includes('cloude_Old_Thing'));
-});
 
 // =====================================================================
 // 6. THE PARENT-LINK BADGE IS GONE from the running row.

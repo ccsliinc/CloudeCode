@@ -131,15 +131,15 @@ export function resetSessionStore(cloudeWeb) {
 }
 
 /**
- * Replace the two Svelte panel mounts with counting no-ops.
+ * Replace the THREE Svelte panel mounts with counting no-ops.
  *
  * Description: MOUNTING IS A DIFFERENT THING FROM READING THE STORE, and
- *   only one of them needs a real browser. `mountRecentSessions` and
- *   `mountAttributionPrompt` put compiled Svelte components into the
- *   document, so they reach for `Element` and everything under it; a vm
- *   sandbox with a hand-built fake document throws from inside Svelte's
- *   own mount, which says nothing about the thing a launchpad harness is
- *   usually measuring.
+ *   only one of them needs a real browser. `mountRecentSessions`,
+ *   `mountAttributionPrompt` and (since slice 4) `mountProjectTree` put
+ *   compiled Svelte components into the document, so they reach for
+ *   `Element` and everything under it; a vm sandbox with a hand-built
+ *   fake document throws from inside Svelte's own mount, which says
+ *   nothing about the thing a launchpad harness is usually measuring.
  *
  *   USE THIS ONLY WHEN THE TEST DOES NOT MEASURE THOSE TWO PANELS. Their
  *   own behaviour is covered by the vitest suite, which has a real DOM.
@@ -147,13 +147,20 @@ export function resetSessionStore(cloudeWeb) {
  *   agreeing with its own fixture. The counts are returned so a caller
  *   can still assert the call happened.
  * Inputs: cloudeWeb (object) - what installCloudeWeb returned.
- * Output: object - {recent, attribution} call counts, live.
+ * Output: object - {recent, attribution, projectTree} call counts, live.
  * Example: const mounts = stubPanelMounts(win.CloudeWeb);
  */
 export function stubPanelMounts(cloudeWeb) {
-    const counts = { recent: 0, attribution: 0 };
+    const counts = { recent: 0, attribution: 0, projectTree: 0 };
     if (!cloudeWeb || !cloudeWeb.launchpad) return counts;
     cloudeWeb.launchpad.mountRecentSessions = () => { counts.recent++; };
     cloudeWeb.launchpad.mountAttributionPrompt = () => { counts.attribution++; };
+    // SLICE 4. `Launchpad.renderProjectList()` is now ONE call to this,
+    // so a harness that does not stub it throws on every code path that
+    // used to paint the tree - including several that never looked at
+    // the tree at all. The project tree's own behaviour is measured in
+    // web/src/lib/launchpad/ProjectTree.behaviour.test.ts, which has a
+    // real DOM.
+    cloudeWeb.launchpad.mountProjectTree = () => { counts.projectTree++; };
     return counts;
 }

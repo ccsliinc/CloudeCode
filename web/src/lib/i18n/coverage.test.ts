@@ -48,6 +48,23 @@ import {
     unavailableDetail,
     unidentifiedRestartNotice,
 } from '../../../../client/js/labels/recent-session.js';
+import {
+    attentionReason,
+    attentionTitle,
+    archivedNoticeText,
+    authorityBannerText,
+    PROJECT_TREE_KEYS,
+    presenceBadgeText,
+    sessionCountLabel,
+    workTitle,
+} from '../../../../client/js/labels/project-tree.js';
+import { ATTENTION_REASON } from '../launchpad/project-groups';
+import { FAMILY_PILL_KEYS, familyPillView } from '../launchpad/agent-family-pill';
+import {
+    PROJECT_WORK_UNRECORDED_KEY,
+    SESSION_WORK_UNRECORDED_KEY,
+    workAttrs,
+} from '../launchpad/project-node';
 import { summaryLabel } from '../session-summary-label';
 
 /** Repo root, three levels up from web/src/lib/i18n. */
@@ -90,6 +107,27 @@ const PORTED_FILES = [
     'web/src/lib/sessions/host.ts',
     'web/src/lib/sessions/env.ts',
     'web/src/lib/sessions/types.ts',
+    // Slice 4, the project tree. The assembler first, then every module
+    // and component the tree is built from. The COMPONENTS are on the
+    // list for the reason slice 2 gave: a literal in a TEMPLATE is
+    // exactly as untranslated as one in a function and is the easier of
+    // the two to write by accident.
+    'client/js/labels/project-tree.js',
+    'web/src/lib/launchpad/project-groups.ts',
+    'web/src/lib/launchpad/project-node.ts',
+    'web/src/lib/launchpad/project-chrome.ts',
+    'web/src/lib/launchpad/project-chrome-control.ts',
+    'web/src/lib/launchpad/project-tree-host.ts',
+    'web/src/lib/launchpad/agent-family-pill.ts',
+    'web/src/lib/launchpad/tree-collapse.svelte.ts',
+    'web/src/lib/launchpad/ProjectTree.svelte',
+    'web/src/lib/launchpad/ProjectNode.svelte',
+    'web/src/lib/launchpad/ProjectSessionRow.svelte',
+    'web/src/lib/launchpad/EndedSessionRow.svelte',
+    'web/src/lib/launchpad/TreeSessionRows.svelte',
+    'web/src/lib/launchpad/NoProjectGroup.svelte',
+    'web/src/lib/launchpad/AttentionGroup.svelte',
+    'web/src/lib/launchpad/AgentFamilyPill.svelte',
 ];
 
 interface I18nLike {
@@ -197,6 +235,12 @@ describe('the pseudo locale proves the surface really reads the catalog', () => 
  *   left is a literal that could reach a screen. The console stripper
  *   counts parentheses rather than matching a regex, because these calls
  *   run across several lines.
+ *
+ *   HTML COMMENTS ARE STRIPPED TOO, and slice 4 is what forced it. A
+ *   `.svelte` file's header comment is `<!-- -->`, not a JSDoc block, and
+ *   the ones in this migration quote the copy they are explaining - so
+ *   `"I retired this"` inside a comment about two badges was reported as
+ *   untranslated copy. A comment is not copy whichever syntax it wears.
  * Inputs: src (string) - a source file.
  * Output: string - the same source with comments and diagnostics removed.
  * Example: scannable("console.log('a b'); const x = 'c d';")
@@ -204,6 +248,7 @@ describe('the pseudo locale proves the surface really reads the catalog', () => 
  */
 function scannable(src: string): string {
     let out = src
+        .replace(/<!--[\s\S]*?-->/g, ' ')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')
         .replace(/^[ \t]*\/\/.*$/gm, ' ');
     let index = out.indexOf('console.');
@@ -266,7 +311,7 @@ describe('a ported file may not carry a hardcoded sentence', () => {
 
     test('the list of ported files is not empty and the files exist', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(11);
+        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(27);
         for (const rel of PORTED_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }
@@ -282,6 +327,10 @@ describe('a ported file may not carry a hardcoded sentence', () => {
             .toEqual([]);
         expect(stringLiterals(scannable("console.error('no string layer here');")).filter(looksLikeCopy))
             .toEqual([]);
+        // ...including a Svelte header comment, which is where slice 4's
+        // components explain themselves.
+        expect(stringLiterals(scannable('<!-- it says \'the folder is gone\' -->'))
+            .filter(looksLikeCopy)).toEqual([]);
     });
 });
 
@@ -438,6 +487,152 @@ describe('the RECENT surface really reads the catalog too', () => {
 
     test('every key this surface asks for exists in the catalog', () => {
         for (const key of Object.values(RECENT_KEYS)) {
+            expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
+        }
+    });
+});
+
+// ---- guard 1, applied to slice 4's surface ---------------------------
+
+describe('the PROJECT TREE really reads the catalog too', () => {
+    /**
+     * A pseudo-locale translator over the derived pseudo catalog.
+     *
+     * Inputs: none. Output: `(key, params) => string`.
+     */
+    function pseudoT(): (k: string, p?: Record<string, unknown> | null) => string {
+        const i18n = createI18n({ locale: PSEUDO_LOCALE }) as I18nLike;
+        return (k, p) => i18n.t(k, p);
+    }
+
+    /**
+     * Every sentence the tree can say, with HOW MANY catalog messages
+     * each is built from.
+     *
+     * THE COUNT IS THE HALF `isPseudo` CANNOT SEE. A hardcoded fragment
+     * interpolated INTO a message is wrapped by the outer message, so the
+     * bracket span still balances and the sentence still looks
+     * translated. It was MEASURED to pass the span check and fail this
+     * one, which is why both exist. Every entry here is 1 because every
+     * sentence is a WHOLE message with a hole in it, never an assembly:
+     * a value of 2 would mean somebody re-fragmented one.
+     */
+    const CASES: Array<[string, string, number]> = (() => {
+        const t = pseudoT();
+        return [
+            ['session count one', sessionCountLabel(1, t), 1],
+            ['session count many', sessionCountLabel(19, t), 1],
+            ['attention title one', attentionTitle(1, t), 1],
+            ['attention title many', attentionTitle(3, t), 1],
+            ['archived count', archivedNoticeText({ kind: 'count', count: 2 }, t) as string, 1],
+            ['archived unknown', archivedNoticeText({ kind: 'unknown' }, t) as string, 1],
+            ['authority unknown', authorityBannerText({ kind: 'unknown' }, t) as string, 1],
+            ['presence missing', presenceBadgeText('missing', null, t) as string, 1],
+            // TWO, and correctly so: the detail slot is filled by ANOTHER
+            // catalog message when the server sent no reason. That is a
+            // composition of two real messages, not a glued fragment.
+            ['presence unreachable, no reason',
+                presenceBadgeText('unreachable', null, t) as string, 2],
+            ['no project group', t(PROJECT_TREE_KEYS.noProject), 1],
+            ['attention head', t(PROJECT_TREE_KEYS.attentionHead), 1],
+            ['toggle aria', t(PROJECT_TREE_KEYS.toggleAria, { name: 'api' }), 1],
+            ['empty title', t(PROJECT_TREE_KEYS.emptyTitle), 1],
+            ['empty hint', t(PROJECT_TREE_KEYS.emptyHint), 1],
+            ['archived badge', t(PROJECT_TREE_KEYS.badgeArchived), 1],
+            ['edit action', t(PROJECT_TREE_KEYS.actionEdit), 1],
+            ['archive title', t(PROJECT_TREE_KEYS.actionArchiveTitle), 1],
+            ['restore title', t(PROJECT_TREE_KEYS.actionRestoreTitle), 1],
+            ['archived show', t(PROJECT_TREE_KEYS.archivedShow), 1],
+            ['archived hide', t(PROJECT_TREE_KEYS.archivedHide), 1],
+            ['badge tmux', t(PROJECT_TREE_KEYS.badgeTmux), 1],
+            ['badge external', t(PROJECT_TREE_KEYS.badgeExternal), 1],
+            ['badge ended', t(PROJECT_TREE_KEYS.badgeEnded), 1],
+            ['project work unrecorded',
+                workTitle(workAttrs(null, PROJECT_WORK_UNRECORDED_KEY), t) as string, 1],
+            ['session work unrecorded',
+                workTitle(workAttrs(null, SESSION_WORK_UNRECORDED_KEY), t) as string, 1],
+            ['family unknown label', t(FAMILY_PILL_KEYS.unknownLabel), 1],
+            ['family fact title',
+                t(familyPillView('codex', 'wrapper').titleKey,
+                    familyPillView('codex', 'wrapper').titleParams), 1],
+            ['family guess title',
+                t(familyPillView('claude', 'fingerprint').titleKey,
+                    familyPillView('claude', 'fingerprint').titleParams), 1],
+            ['family inferred title',
+                t(familyPillView('claude', 'inferred_process').titleKey, {}), 1],
+            ['family unknown title', t(familyPillView(null, null).titleKey, {}), 1],
+        ] as Array<[string, string, number]>;
+    })();
+
+    test.each(CASES)('%s is fully pseudo-localised', (_name, rendered) => {
+        expect(isPseudo(rendered), rendered).toBe(true);
+    });
+
+    test.each(CASES)('%s is built from exactly the expected message count',
+        (_name, rendered, expected) => {
+            expect(pseudoCount(rendered), rendered).toBe(expected);
+        });
+
+    test('ALL SEVEN attention reasons are catalog messages', () => {
+        const t = pseudoT();
+        for (const reasonKey of Object.values(ATTENTION_REASON)) {
+            const rendered = attentionReason({ reasonKey }, t);
+            expect(isPseudo(rendered), `${reasonKey} -> ${rendered}`).toBe(true);
+            expect(pseudoCount(rendered), reasonKey).toBe(1);
+        }
+    });
+
+    test("the SERVER's own detail is NOT translated, because it is data", () => {
+        // The distinction the whole layer rests on. When the records
+        // fetch fails the server says which read failed, and that
+        // sentence arrives on the wire - it has no key and must survive
+        // verbatim, exactly like a user's own session title.
+        const rendered = attentionReason(
+            { reasonKey: ATTENTION_REASON.listingUnreadable, detail: 'the server answered HTTP 500' },
+            pseudoT(),
+        );
+        expect(rendered).toBe('the server answered HTTP 500');
+        expect(isPseudo(rendered)).toBe(false);
+    });
+
+    test("and the SERVER's authority message is not translated either", () => {
+        expect(authorityBannerText(
+            { kind: 'degraded', mode: 'db_unreadable', writable: false, message: 'raw' },
+            pseudoT(),
+        )).toBe('raw');
+    });
+
+    test('the counts still format inside the pseudo locale', () => {
+        const t = pseudoT();
+        expect(sessionCountLabel(19, t)).toContain('19');
+        expect(sessionCountLabel(1234, t)).toContain('1,234');
+        expect(archivedNoticeText({ kind: 'count', count: 1234 }, t)).toContain('1,234');
+    });
+
+    test('a project NAME is NOT pseudo-localised, because it is the user\'s text', () => {
+        expect(pseudoT()(PROJECT_TREE_KEYS.toggleAria, { name: 'My Project' }))
+            .toContain('My Project');
+    });
+
+    test('the three cases that must say NOTHING still say nothing, in any locale', () => {
+        // A guard that required every path to render copy would push a
+        // message into the places the design says stay quiet.
+        const t = pseudoT();
+        expect(archivedNoticeText({ kind: 'silent' }, t)).toBeNull();
+        expect(authorityBannerText({ kind: 'none' }, t)).toBeNull();
+        expect(presenceBadgeText('unchecked', null, t)).toBeNull();
+        expect(presenceBadgeText('present', null, t)).toBeNull();
+        expect(workTitle(workAttrs('2026-09-01', PROJECT_WORK_UNRECORDED_KEY), t)).toBeNull();
+    });
+
+    test('every key this surface asks for exists in the catalog', () => {
+        for (const key of Object.values(PROJECT_TREE_KEYS)) {
+            expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
+        }
+        for (const key of Object.values(FAMILY_PILL_KEYS)) {
+            expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
+        }
+        for (const key of Object.values(ATTENTION_REASON)) {
             expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
         }
     });

@@ -10,9 +10,11 @@
  *
  * TWO GATES, AND THEY ARE THE ORIGINAL TWO. A tick is skipped when the
  * user is not authenticated, and when the launchpad screen is not the
- * active one - the second read through
- * `ProjectListRenderGuard.shouldPoll(document)`, exactly as before. THE
- * SKIP IS A SKIP, NOT A STOP: the interval keeps running and the next
+ * active one. THE SECOND GATE MOVED HERE IN SLICE 4: it used to live in
+ * `client/js/project-list-render-guard.js` as `shouldPoll`, and that
+ * file was deleted with the repaint it was named for. The predicate is
+ * unchanged, it simply lives beside the tick it gates now. THE SKIP IS A
+ * SKIP, NOT A STOP: the interval keeps running and the next
  * tick re-asks, so returning to the screen resumes without anything
  * having to restart it. Stopping on a hidden screen would need something
  * to notice the screen came back, and nothing does.
@@ -35,7 +37,7 @@ export interface PollerDeps {
     tick: () => Promise<unknown> | unknown;
     /** Whether the user is signed in. Defaults to `window.Auth`. */
     isAuthenticated?: () => boolean;
-    /** Whether the launchpad screen is showing. Defaults to the guard. */
+    /** Whether the launchpad screen is showing. Defaults to below. */
     shouldPoll?: () => boolean;
     /** Injected for tests. Defaults to the global pair. */
     setIntervalFn?: (handler: () => void, ms: number) => unknown;
@@ -71,26 +73,59 @@ export function defaultIsAuthenticated(): boolean {
         && (auth.isAuthenticated as () => boolean)());
 }
 
+/** The screen element whose `active` class means "on display". */
+const SCREEN_ID = 'launchpad-screen';
+/** The class `App.showLaunchpad()` and `App.hideAllScreens()` toggle. */
+const ACTIVE_CLASS = 'active';
+
+/** Visibility verdicts. THE THIRD IS NOT A FLAVOUR OF THE SECOND. */
+export const VISIBLE = 'visible';
+export const HIDDEN = 'hidden';
+export const CANNOT_DETERMINE = 'cannot_determine';
+
+/**
+ * Is the launchpad the screen currently on display?
+ *
+ * Description: reads the DOM first, because the DOM is what the user is
+ *   actually looking at; falls back to `App.currentScreen`, which is the
+ *   same fact one level removed; answers `cannot_determine` when neither
+ *   can be read rather than guessing either way.
+ *
+ *   MOVED HERE IN SLICE 4 FROM `project-list-render-guard.js`, verbatim,
+ *   when that file was deleted along with the repaint it was named for.
+ * Inputs: none. Output: VISIBLE, HIDDEN or CANNOT_DETERMINE.
+ * Example: launchpadVisibility()  // 'visible'
+ */
+export function launchpadVisibility(): string {
+    const doc = hostDocument();
+    const el = doc && typeof doc.getElementById === 'function'
+        ? doc.getElementById(SCREEN_ID)
+        : null;
+    if (el && el.classList && typeof el.classList.contains === 'function') {
+        return el.classList.contains(ACTIVE_CLASS) ? VISIBLE : HIDDEN;
+    }
+    const app = (hostWindow() as unknown as {
+        App?: { currentScreen?: unknown };
+    } | undefined)?.App;
+    if (app && typeof app.currentScreen === 'string' && app.currentScreen) {
+        return app.currentScreen === 'launchpad' ? VISIBLE : HIDDEN;
+    }
+    return CANNOT_DETERMINE;
+}
+
 /**
  * Whether the launchpad screen is the active one.
  *
- * Description: delegates to `ProjectListRenderGuard.shouldPoll(document)`,
- *   which tests `#launchpad-screen` for `.active`. THE ABSENT-GUARD CASE
- *   ANSWERS TRUE, which is the legacy behaviour byte for byte: the guard
- *   is an optimisation, and a missing optimisation must not silently stop
- *   the app refreshing.
+ * Description: FALSE ONLY FOR A MEASURED `hidden`. An unknown screen
+ *   state keeps polling, because not having been able to look is not
+ *   evidence the screen is hidden, and a gate that treated it as such
+ *   would silently freeze the launchpad on any page whose markup it did
+ *   not recognise.
  * Inputs: none. Output: boolean.
  * Example: defaultShouldPoll()
  */
 export function defaultShouldPoll(): boolean {
-    // Same rule as above.
-    const g = (hostWindow() as unknown as {
-        ProjectListRenderGuard?: { shouldPoll?: (d: unknown) => boolean };
-    } | undefined)?.ProjectListRenderGuard;
-    if (g && typeof g.shouldPoll === 'function') {
-        return !!g.shouldPoll(hostDocument());
-    }
-    return true;
+    return launchpadVisibility() !== HIDDEN;
 }
 
 /**

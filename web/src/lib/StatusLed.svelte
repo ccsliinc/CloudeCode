@@ -38,6 +38,18 @@
         startupGate?: string | null;
         /** Where the status came from; renders in the tooltip only. */
         statusSource?: string | null;
+        /**
+         * Whether THIS browser holds a live socket for this session.
+         *
+         * NOT a server fact and never mixed with one: no `/sessions/list`
+         * response can report it. A `disconnected` transport OUTRANKS
+         * every other signal in `ledStateFor`, because nothing on screen
+         * is trustworthy while the socket is down. Slice 4 added the prop:
+         * the legacy tree and running rows both passed it to
+         * `SessionStatusUI.dotHtml` and this component silently dropped
+         * it, so a disconnected session painted a confident dot.
+         */
+        transport?: string | null;
         /** CSS length for the whole LED, e.g. '9px'. */
         size?: string | null;
         /** When true, the label is shown beside the light as text. */
@@ -49,13 +61,19 @@
         unread = false,
         startupGate = null,
         statusSource = null,
+        transport = null,
         size = null,
         showLabel = false,
     }: Props = $props();
 
     const key = $derived(normalizeStatus(status));
     const led = $derived(
-        ledStateFor({ activity_status: key, unread, startup_gate: startupGate }),
+        ledStateFor({
+            activity_status: key,
+            unread,
+            startup_gate: startupGate,
+            transport,
+        }),
     );
     const label = $derived(labelWithSource(key, statusSource));
     const dotClass = $derived(STATUS_DOT_CLASS[key] ?? 'unknown');

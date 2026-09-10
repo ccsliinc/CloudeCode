@@ -111,3 +111,41 @@ export function unmountPanel(id: string): boolean {
     unmount(record.instance, { outro: false });
     return true;
 }
+
+/**
+ * Mount a panel ONLY if this module does not already hold a live one on
+ * the element that currently carries that id.
+ *
+ * Description: SLICE 4 NEEDED THIS AND SLICES 1 AND 2 DID NOT, because
+ *   those two panels are mounted at one moment each. The project tree's
+ *   legacy entry point, `renderProjectList()`, is called on EVERY 5s poll
+ *   tick and from five other places, and it is now one call to this. A
+ *   plain `mountPanel` there would unmount and rebuild the whole tree
+ *   every five seconds - the exact repaint the slice exists to delete,
+ *   reintroduced by the seam rather than by the renderer.
+ *
+ *   THE TEST IS THE ELEMENT, NOT THE ID, and that is the part worth
+ *   reading twice. A legacy parent can replace `#project-list` wholesale;
+ *   the recorded handle then points at nodes that are no longer in the
+ *   document, and the panel is invisible while still holding live
+ *   effects. Comparing the recorded target against the element the id
+ *   resolves to NOW catches that and remounts, which is correct in both
+ *   directions: same element means the panel is already there, different
+ *   element means the container was replaced under us.
+ * Inputs: id, component, props - as :func:`mountPanel`.
+ * Output: Record<string, unknown> | null - the live handle, or null when
+ *   no element carries that id.
+ * Example: ensurePanel('project-list', ProjectTree, {});
+ */
+export function ensurePanel<Props extends Record<string, unknown>>(
+    id: string,
+    component: Component<Props, Record<string, unknown>>,
+    props?: Props,
+): Record<string, unknown> | null {
+    const target = document.getElementById(id);
+    const existing = panels.get(id);
+    if (existing && target && existing.target === target) {
+        return existing.instance;
+    }
+    return mountPanel(id, component, props);
+}

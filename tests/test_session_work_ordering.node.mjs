@@ -289,9 +289,19 @@ await test('the launcher orders its own lists the same way', async () => {
     store.reset();
     store.useHost(null);
 
-    const src = fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    assert.ok(src.includes('_workRecencyAttrs'),
+    // THE LABEL MOVED IN SLICE 4, AND SO DID THIS ASSERTION'S TARGET.
+    // `_workRecencyAttrs` was a renderer on the launchpad singleton; the
+    // rule is `workAttrs()` in web/src/lib/launchpad/project-node.ts now,
+    // and the two callers that differ only in which sentence they hover
+    // are named constants beside it. Reading the TS source keeps the
+    // claim - that an unrecorded row is LABELLED rather than silently
+    // sorted last - attached to the file that makes it.
+    const src = fs.readFileSync(
+        path.join(ROOT, 'web', 'src', 'lib', 'launchpad', 'project-node.ts'), 'utf8');
+    assert.ok(src.includes('SESSION_WORK_UNRECORDED_KEY'),
         'the launcher no longer labels its unrecorded rows');
+    assert.ok(src.includes('PROJECT_WORK_UNRECORDED_KEY'),
+        'the launcher no longer labels its unrecorded projects');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

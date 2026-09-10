@@ -26,6 +26,7 @@
  */
 import { createI18n } from './runtime.js';
 import { sessionSummaryLabel } from '../labels/session-summary.js';
+import { glyphSvg } from '../icons/glyphs.js';
 
 if (!globalThis.CloudeI18n) {
     globalThis.CloudeI18n = createI18n();
@@ -38,4 +39,14 @@ if (!globalThis.CloudeI18n) {
 // imports these modules directly and never reads this object.
 if (!globalThis.CloudeLabels) {
     globalThis.CloudeLabels = { sessionSummaryLabel };
+}
+
+// THE SHARED ICON GEOMETRY, published the same way and for the same
+// reason. `client/js/session-status-ui.js` is a classic script and cannot
+// import; it reads this at RENDER time, which is long after this deferred
+// module has run. A Svelte component imports ../icons/glyphs.js directly
+// and never reads this object. See that file for why the path data is
+// shared rather than the markup.
+if (!globalThis.CloudeGlyphs) {
+    globalThis.CloudeGlyphs = { glyphSvg };
 }

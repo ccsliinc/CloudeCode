@@ -238,6 +238,122 @@ export default {
     // The colon and the word order belong to the message now, which is
     // exactly what a translation needs to be able to move.
     'project.list.load_failed': 'failed to load projects: {reason}',
+    // The empty state. TWO KEYS, not one string with a line break in it:
+    // the hint is a separate element with its own styling, and gluing
+    // them would make a translator move a `<br>`.
+    'project.list.empty': 'no projects yet',
+    'project.list.empty.hint': 'use + new to add one',
+
+    // ---- the project tree ----------------------------------------------
+    // The two-level project-to-session tree on the home screen. Keys name
+    // the DOMAIN, so they survived launchpad.js being rewritten around
+    // them in slice 4 and will survive slice 7 deleting it.
+
+    // The synthetic group for sessions whose working directory WAS read
+    // and sits inside no known project. A MEASURED answer, so it reads as
+    // an ordinary group and never as a warning.
+    'project.tree.no_project': 'no project',
+    // The child count on a group header. A plural set rather than the
+    // `n === 1 ? '' : 's'` ternary it replaces, which is a two-form
+    // plural in disguise: right for English, wrong for anything with a
+    // `few` or a `many`.
+    'project.tree.session_count': {
+        one: '{count} session',
+        other: '{count} sessions',
+    },
+    // Uppercased by `.project-node__attention-head` in the stylesheet, so
+    // the value is lowercase like every other message. The shout is the
+    // stylesheet's, the words are the catalog's.
+    'project.tree.attention.head': 'needs attention',
+    'project.tree.attention.title': {
+        one: '{count} session could not be attributed to a project',
+        other: '{count} sessions could not be attributed to a project',
+    },
+    'project.node.toggle.aria': 'toggle details for {name}',
+
+    // THE SEVEN REASONS A SESSION CANNOT BE PLACED, and they are seven
+    // separate messages on purpose. Each one names a DIFFERENT thing that
+    // did not happen, and collapsing any two of them would render an
+    // unproven answer as a measured one - which is the false green this
+    // whole screen exists to remove. See
+    // web/src/lib/launchpad/project-groups.ts for the ladder order.
+    //
+    // The FIRST one is a fallback: the server sends its own detail when
+    // the records fetch fails, and that outranks this, because it knows
+    // which read failed and this does not.
+    'project.attention.listing_unreadable': 'project attribution could not be read',
+    'project.attention.ambiguous_name': 'two stored session records for this name could not be told apart',
+    'project.attention.no_record': 'no stored attribution for this session',
+    'project.attention.dir_unreadable': 'working directory could not be read',
+    'project.attention.no_project_id': 'project attribution missing an id',
+    'project.attention.ended_dir_unreadable': 'ended; working directory could not be read',
+    'project.attention.ended_no_project_id': 'ended; project attribution missing an id',
+
+    // ---- what the project list says about ITSELF ------------------------
+    // THREE OUTCOMES for the archived dimension, and the third is why
+    // these exist: "there are no archived projects" and "the request that
+    // would have told you failed" render identically otherwise, because
+    // both are an absence of archived rows on screen. There is no key for
+    // the not-asked case; that one renders nothing at all.
+    'project.archived.notice.count': 'showing archived: {count}',
+    'project.archived.notice.unknown': 'archived projects CANNOT BE DETERMINED - they could not be loaded. this is NOT a claim that there are none; the list below may be stale or incomplete.',
+    // The authority fetch itself did not answer. It claims nothing in
+    // either direction, deliberately: not having looked is not a fault.
+    // The DEGRADED banner has no key, because the server sends its own
+    // sentence and that is data rather than copy.
+    'project.authority.unknown': 'the source of these projects CANNOT BE DETERMINED - the authority check did not answer. this is not a claim that anything is wrong, and not a claim that it is fine.',
+
+    // ---- a project row's two independent badges -------------------------
+    // ORTHOGONAL DIMENSIONS. A project can be archived AND missing, and
+    // the two say different things: "I retired this" against "the folder
+    // is gone". Archiving never disables a row.
+    'project.presence.missing': 'folder MISSING - not found on disk',
+    'project.presence.unreachable': 'folder presence CANNOT BE DETERMINED - {detail}',
+    'project.presence.unreachable.detail_unknown': 'reason unknown',
+    // Uppercased by `.project-archived-badge` in the stylesheet.
+    'project.badge.archived': 'archived',
+
+    // ---- a project row's controls ---------------------------------------
+    // Archive is the ONLY destructive-shaped control on the row. The
+    // hard-delete button is gone from the UI on the owner's instruction:
+    // "sessions and projects can be archived not deleted".
+    'project.action.edit': 'edit project',
+    'project.action.archive.title': 'archive project - keeps it and its sessions, hides it from this list',
+    'project.action.archive.aria': 'archive project',
+    'project.action.restore.title': 'restore project to the list',
+    'project.action.restore.aria': 'restore project',
+    'project.archived.show': 'show archived projects',
+    'project.archived.hide': 'hide archived projects',
+
+    // ---- work recency ----------------------------------------------------
+    // TWO KEYS, NOT ONE, because a project and a session are ordered
+    // against different populations and the sentence names which. Both
+    // exist so an UNRECORDED row is visibly distinct instead of silently
+    // last: "nothing has happened here yet" must never read as "this is
+    // the stalest thing you own".
+    'project.work.unrecorded': 'no work recorded in this project yet - ordered below every project that has been worked in',
+    'session.work.unrecorded': 'no work recorded yet - ordered below every session that has been worked in',
+
+    // ---- who owns a session ----------------------------------------------
+    // Uppercased by `.badge` in the stylesheet.
+    'session.badge.tmux': 'tmux',
+    'session.badge.external': 'external',
+    'session.badge.ended': 'ended',
+
+    // ---- the agent-family pill --------------------------------------------
+    // A THREE-OUTCOME rule about what is running in a pane, plus a rule
+    // about how sure we are. A null family renders LITERALLY as unknown,
+    // never as a family name and never silently as nothing.
+    'session.agent.family.unknown': 'unknown family',
+    'session.agent.family.title.fact': 'agent family: {family}',
+    // A GUESS AND A FACT MUST NOT LOOK IDENTICAL, and the hover says so
+    // in words as well as the pill saying it with a dashed border.
+    'session.agent.family.title.guess': 'guessed from session output ({source})',
+    // `inferred_process` is the STRONGEST guess and keeps its own
+    // sentence, because "guessed from session output" would be false: it
+    // was read off the process actually running in the pane.
+    'session.agent.family.title.inferred_process': 'read from the process running in this pane, not from a launch',
+    'session.agent.family.title.unknown': 'could not determine which agent this session is running',
 
     // ---- generic failure reasons --------------------------------------
     // The `{reason}` slot's value when an error carried no message.

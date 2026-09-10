@@ -125,7 +125,6 @@ function decl(body, prop) {
 }
 
 const stylesCss = clientFile('css', 'styles.css');
-const launchpadJs = clientFile('js', 'launchpad.js');
 const styleRules = rules(stylesCss);
 
 test('--project-gutter token is declared once, in :root', () => {
@@ -233,12 +232,16 @@ test('the stale ITEM 43 min-width/justify-content override is gone', () => {
         + 'defeat the count\'s margin-left: auto right-alignment');
 });
 
-test('renderProjectList always wraps the toggle in .project-node__gutter', () => {
-    assert.match(launchpadJs, /<div class="project-node__gutter">\$\{chevronHtml\}<\/div>/,
-        'the gutter wrapper must be emitted unconditionally (even when '
-        + 'chevronHtml is empty) so a foldless project still gets a two-column '
-        + 'grid row and its card lands in column two, not column one');
-});
+// THE MARKUP HALF OF THIS FILE MOVED IN SLICE 4. It used to assert that
+// `renderProjectList` emitted `<div class="project-node__gutter">`
+// unconditionally, by regex against `client/js/launchpad.js`. That
+// method is now one line and the tree is a Svelte component, so the same
+// claim is asserted against the RENDERED DOM in
+// web/src/lib/launchpad/ProjectTree.behaviour.test.ts ("THE GUTTER IS
+// THERE EVEN WITH NO TOGGLE, which is the grid contract"), which is a
+// stronger test: it counts the row's grid children rather than matching
+// a template literal. The CSS assertions below are unchanged and stay
+// here, because the stylesheet is still a stylesheet.
 
 console.log(`\n${passes} passed, ${failures} failed`);
 if (failures > 0) { console.error('FAILURES'); process.exit(1); }

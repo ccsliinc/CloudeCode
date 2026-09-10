@@ -7370,3 +7370,93 @@ Protocol notes for the next slice:
   needs (`queueMicrotask` and friends) and the locale ladder's two reads
   (`navigator`, `localStorage`), because a vm context carries none of them and
   the failures surface as a ReferenceError from inside minified Svelte.
+
+## 2026-09-10 - svelte slice 4: the project tree, and the render guard it replaces
+
+Issue #76, PR #77 (Adoom666/CloudeCodeDev). Branch `feat/svelte-slice-4` off
+slice 3's `97476a1`.
+
+DONE:
+- [x] The whole project tree out of `client/js/launchpad.js` and into
+  `web/src/lib/launchpad/`: the join (`project-groups.ts`), the per-project
+  decisions (`project-node.ts`), the two three-outcome ladders
+  (`project-chrome.ts`), the fold state (`tree-collapse.svelte.ts`), the
+  navigation seam (`project-tree-host.ts`), the one outside control
+  (`project-chrome-control.ts`) and eight components. `launchpad.js` went from
+  5,106 to 4,093 lines; `renderProjectList()` is one call to
+  `CloudeWeb.launchpad.mountProjectTree()`.
+- [x] `client/js/project-list-render-guard.js` DELETED (220 lines), with
+  `_lastProjectListSig`, `_collapsedProjectNodes`, `_archivedVisible` and the two
+  archived-pref accessors. Its `<script>` tag in `client/index.html` went with it.
+- [x] `mountPanel` gained `ensurePanel`, which is what stops the 5s tick
+  unmounting and rebuilding the tree it just deleted the repaint of.
+- [x] 44 catalog keys under `project.*` and `session.*`, assembled in
+  `client/js/labels/project-tree.js`. Pseudo-locale coverage extended over all 16
+  new files; the seven NEEDS ATTENTION reasons are asserted as catalog keys.
+- [x] Vitest 458 -> 779. Node suite 196 -> 187 files, 0 failures.
+
+THE GUARD'S THREE FUNCTIONS HAD THREE UNRELATED CONSUMERS, and only one of them
+was the project tree. `decide` died with the repaint. `shouldPoll` moved to
+`web/src/lib/sessions/poller.ts`, beside the tick it gates. `isBusy` moved to
+`client/js/session-list-busy-guard.js`, because `renderRunningSessions` still
+writes `innerHTML` and a poll landing under an open rename input still destroys
+it. Slice 5 deletes that file too.
+
+MEASURED, in a real DOM (jsdom) driving the compiled component through the real
+store with a real `MutationObserver`, 9 projects x 5 sessions = 442 elements:
+- 12 ticks, NOTHING changing: 0 records, 0 nodes. The old guard already achieved
+  this and the test asserts it so nobody can sell the slice on it.
+- 12 ticks, EXACTLY ONE status changing: 5 records, 0 nodes. Five because the LED
+  encodes its state in five attributes on ONE element (`class`, `data-inner`,
+  `data-outer`, `title`, `aria-label`). The plan's "under 5" was an estimate; five
+  is the measured floor and the test pins it so a sixth write fails.
+- The legacy mechanism on the same fixture: 1 record carrying 916 nodes.
+- The busy case the guard could not do: a status change lands with a row menu
+  open, the dot updates and the menu is still the same node.
+
+STILL OPEN:
+- [ ] THE REAL-CHROME RUN IS NOT DONE, and it is blocked on a human step. Two
+  scratch servers were stood up (the slice-4 build and a slice-3 baseline, each
+  with its own state dir and `.env`), the slice-4 one loaded correctly in Chrome
+  once - `mountProjectTree` present, the old guard absent, 9 nodes / 45 rows / 442
+  elements painted from the real bundle, matching jsdom's 443 - and then the
+  extension session was lost. Every origin after that (`127.0.0.1:5011`,
+  `:8010`, `localhost:8010`) is refused by the browser before a request leaves
+  it, while `curl` gets 200 and `https://example.com` loads fine, so it is a
+  per-origin extension permission and not the app. Granting the Claude-in-Chrome
+  extension access to the scratch origin is the missing step.
+- [ ] `scripts/ci/mutate-restart-identity-and-content-dedupe.sh` has dead
+  mutations. Its RECENT ones went stale in slice 2 and its TREE ones went stale
+  here; they now report `cannot_determine` rather than a false `killed`. Rebuilding
+  it against the vitest suite is its own job.
+- [ ] `_renderFamilyPillHtml` still exists in `launchpad.js` for the running-row
+  list. `AgentFamilyPill.svelte` is the same rules as a component and
+  `agent-family-pill.test.ts` holds the two to the same verdicts until slice 5
+  deletes the legacy copy.
+- [ ] `StatusLed.svelte` gained a `transport` prop. The legacy tree and running
+  rows both passed `transport` to `SessionStatusUI.dotHtml` and the component
+  silently dropped it, so a disconnected session painted a confident dot. Slice 5
+  should check the running row passes it too.
+- [ ] The fold is still in-memory only, exactly as the legacy field was. A
+  reload opens every project. Persisting it would be a new behaviour and needs
+  its own decision.
+
+Protocol notes for the next slice:
+- `vitest.config.ts` now carries `resolve.conditions: ['browser']`. Without it
+  `import { mount } from 'svelte'` resolves to the SSR build, whose `mount` exists
+  only to throw `lifecycle_function_unavailable`. It reads as a broken test
+  environment and is a resolution setting.
+- A `MutationObserver`'s queue is drained by DELIVERY as well as by
+  `takeRecords()`. Any `await` at all lets the callback run and empties it, so a
+  test that awaits and then calls `takeRecords()` reads ZERO and looks like a
+  perfect score. Collect in the callback. It cost three failing tests to find.
+- Count mutation NODES with their descendants. A record names only the DIRECT
+  children that moved, so an `innerHTML` write over nine project nodes reports
+  nine added and nine removed rather than the 916 they carry.
+- The i18n source guard now strips `<!-- -->` comments too. A `.svelte` header
+  comment that QUOTES the copy it explains was being reported as untranslated
+  copy. A multi-class string literal reads to it as two words, so slice 4 uses
+  Svelte's array `class={['a', 'b']}` form.
+- `jsdom` is a new devDependency in `web/`, and it is there for one reason: the
+  slice's whole claim is a mutation count, and counting real DOM mutations against
+  a real mounted component is the only measurement of it that means anything.

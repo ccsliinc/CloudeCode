@@ -523,12 +523,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   pencilIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function pencilIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M9 4L12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('pencil');
     }
 
     /**
@@ -603,13 +598,37 @@ console.log('[SessionStatusUI Module] Loading...');
      *   archiveIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function archiveIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>' +
-            '<path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
-            '<path d="M6.5 8.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('archive');
+    }
+
+    /**
+     * Read one glyph out of the shared geometry, at CALL time.
+     *
+     * Description: SLICE 4 MOVED THE PATH DATA, NOT THE ICON. The
+     *   coordinates now live in client/js/icons/glyphs.js as data, so a
+     *   Svelte component can render them as real elements while this
+     *   classic script keeps handing back the string an `innerHTML`
+     *   caller needs. Two renderers, ONE set of coordinates: a copy in
+     *   each tree is the DRY violation with the most visible failure
+     *   mode there is, the same button drawn two different shapes on two
+     *   screens.
+     *
+     *   READ AT CALL TIME, NEVER AT DEFINITION TIME. `globalThis
+     *   .CloudeGlyphs` is published by the deferred module
+     *   client/js/i18n/boot.js, and this file is a CLASSIC script that
+     *   runs before it. Every icon here is called during a render, which
+     *   is long after boot - the same rule every `t()` consumer follows.
+     * Inputs: name (string).
+     * Output: string - the SVG element, or '' when the module is absent.
+     * Example: glyph('pencil')
+     */
+    function glyph(name) {
+        var glyphs = globalThis.CloudeGlyphs;
+        if (!glyphs || typeof glyphs.glyphSvg !== 'function') {
+            console.error('SessionStatusUI: the glyph module is not loaded, icon:', name);
+            return '';
+        }
+        return glyphs.glyphSvg(name);
     }
 
     window.SessionStatusUI = {

@@ -14,7 +14,16 @@
  */
 import { afterEach, describe, expect, test } from 'vitest';
 
-import { createPoller, defaultIsAuthenticated, defaultShouldPoll, POLL_INTERVAL_MS } from './poller';
+import {
+    CANNOT_DETERMINE,
+    createPoller,
+    defaultIsAuthenticated,
+    defaultShouldPoll,
+    HIDDEN,
+    launchpadVisibility,
+    POLL_INTERVAL_MS,
+    VISIBLE,
+} from './poller';
 
 /**
  * A fake interval pair that records what was set and what was cleared.
@@ -284,24 +293,66 @@ describe('the default gates read the same globals the legacy tick read', () => {
         expect(defaultIsAuthenticated()).toBe(false);
     });
 
-    test('NO GUARD MODULE MEANS POLL, because a missing optimisation is not a stop', () => {
+    // SLICE 4 MOVED THE SCREEN GATE INTO THIS MODULE. It used to
+    // delegate to `ProjectListRenderGuard.shouldPoll(document)`, and
+    // slice 4 deleted that file along with the repaint it was named for.
+    // The predicate is unchanged and these tests are the same three
+    // questions asked of it directly rather than through the seam.
+
+    /** Plant a fake `#launchpad-screen` with the given class list. */
+    function plantScreen(classes: string[] | null): void {
+        const g = globalThis as Record<string, unknown>;
         plant({});
+        (g.document as Record<string, unknown>).getElementById = (id: string) => {
+            if (id !== 'launchpad-screen' || classes === null) return null;
+            return { classList: { contains: (c: string) => classes.includes(c) } };
+        };
+    }
+
+    test('the screen carrying `.active` is VISIBLE, and polls', () => {
+        plantScreen(['screen', 'active']);
+        expect(launchpadVisibility()).toBe(VISIBLE);
         expect(defaultShouldPoll()).toBe(true);
     });
 
-    test('the guard module is asked, and its answer is used', () => {
-        plant({ ProjectListRenderGuard: { shouldPoll: () => false } });
+    test('the screen WITHOUT `.active` is HIDDEN, and does not poll', () => {
+        plantScreen(['screen']);
+        expect(launchpadVisibility()).toBe(HIDDEN);
         expect(defaultShouldPoll()).toBe(false);
     });
 
-    test('the guard is handed the document, which is what it reads', () => {
-        let received: unknown = 'never called';
-        plant({
-            ProjectListRenderGuard: {
-                shouldPoll: (d: unknown) => { received = d; return true; },
-            },
-        });
-        defaultShouldPoll();
-        expect(received).toBe((globalThis as Record<string, unknown>).document);
+    test('with no element, `App.currentScreen` is the same fact one level removed', () => {
+        plantScreen(null);
+        (globalThis as unknown as { window: Record<string, unknown> })
+            .window.App = { currentScreen: 'terminal' };
+        expect(launchpadVisibility()).toBe(HIDDEN);
+        expect(defaultShouldPoll()).toBe(false);
+        (globalThis as unknown as { window: Record<string, unknown> })
+            .window.App = { currentScreen: 'launchpad' };
+        expect(launchpadVisibility()).toBe(VISIBLE);
+    });
+
+    test('NEITHER READABLE IS `cannot_determine`, AND IT POLLS', () => {
+        // The third outcome, and it sides with doing the work. Not
+        // having been able to look is not evidence the screen is hidden,
+        // and a gate that treated it as such would silently freeze the
+        // launchpad on any page whose markup it did not recognise.
+        plantScreen(null);
+        expect(launchpadVisibility()).toBe(CANNOT_DETERMINE);
+        expect(defaultShouldPoll()).toBe(true);
+    });
+
+    test('an empty `currentScreen` string is not an answer either', () => {
+        plantScreen(null);
+        (globalThis as unknown as { window: Record<string, unknown> })
+            .window.App = { currentScreen: '' };
+        expect(launchpadVisibility()).toBe(CANNOT_DETERMINE);
+    });
+
+    test('the ELEMENT outranks `App.currentScreen`, because it is what the user sees', () => {
+        plantScreen(['screen', 'active']);
+        (globalThis as unknown as { window: Record<string, unknown> })
+            .window.App = { currentScreen: 'terminal' };
+        expect(launchpadVisibility()).toBe(VISIBLE);
     });
 });

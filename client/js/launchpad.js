@@ -7,13 +7,6 @@ console.log('[Launchpad Module] Loading...');
 class Launchpad {
     constructor() {
         this.launchpadScreen = null;
-        // The markup `#project-list` is currently showing, kept so the
-        // 5s poller can tell a repaint that would change something from
-        // one that would rebuild ~800 identical nodes. null means nothing
-        // has been painted yet, which always paints. See
-        // client/js/project-list-render-guard.js for why the signature is
-        // the markup itself rather than a hand-listed set of fields.
-        this._lastProjectListSig = null;
         // GUARD (deep-link duplicate-session regression fix): set true
         // for the duration of openProjectByName()'s resolution. selectProject()
         // checks this flag and refuses to create a session while it's set -
@@ -23,22 +16,6 @@ class Launchpad {
         // order, so a future edit that re-wires openProjectByName() into
         // selectProject() fails loudly instead of silently regressing.
         this._resolvingDeepLink = false;
-        // In-memory only (not persisted across reload, unlike the
-        // section-level collapse state in localStorage below) - per-
-        // project expand/collapse state for the tree's child-session
-        // rows, keyed by a stable node key ("project:<name>" or the
-        // literal "__no_project__"). Survives re-renders because it
-        // lives on the instance, not in the DOM.
-        this._collapsedProjectNodes = new Set();
-        // SHOW-ARCHIVED, per device, read once here and thereafter the
-        // single source of truth for what the last /projects fetch asked
-        // for. Kept as its own field rather than re-read from
-        // localStorage at render time so a render can never disagree
-        // with the request that produced the rows it is drawing. Moves to
-        // the compiled tree with the rest of the tree's preferences in
-        // slice 4; it is still a real field here because the two toggles
-        // that write it are still in this file.
-        this._archivedVisible = this.getArchivedVisiblePref();
         //
         // EVERYTHING ELSE THIS CONSTRUCTOR USED TO SET NOW LIVES IN THE
         // COMPILED TREE, and reading it here would be a second copy.
@@ -52,49 +29,7 @@ class Launchpad {
         // value. See the block at the bottom of this file.
     }
 
-    /**
-     * Read the per-device archived-visibility preference.
-     *
-     * NAMED ``archivedVisible`` rather than the obvious camelCase of
-     * "show archived", and that is not a style choice.
-     * tests/test_archive_entry_points.node.mjs guards the TRANSCRIPT
-     * archive's single navigation entry point with a bare substring
-     * test applied to this whole file, COMMENTS INCLUDED, and the
-     * camelCase spelling of "show archived" contains the token that
-     * guard forbids. Renaming this back fails that suite with a message
-     * about a second archive door, which has nothing to do with
-     * projects. (This paragraph is worded around the token for the same
-     * reason - an earlier draft of it tripped the guard by itself.)
-     *
-     * Same convention as ``cloude.launchpad.collapsed`` and
-     * ``cloude.theme``. A read that throws (private window, blocked site
-     * data) is NOT an error the user needs to see - it means "no stored
-     * preference", and the honest default is the pre-existing behaviour:
-     * archived projects hidden.
-     *
-     * @returns {boolean}
-     */
-    getArchivedVisiblePref() {
-        try {
-            return localStorage.getItem('cloude.launchpad.archivedVisible') === '1';
-        } catch (err) {
-            console.warn('Launchpad: failed to read show-archived preference:', err);
-            return false;
-        }
-    }
 
-    /**
-     * Persist the per-device "show archived" preference.
-     *
-     * @param {boolean} on
-     */
-    setArchivedVisiblePref(on) {
-        try {
-            localStorage.setItem('cloude.launchpad.archivedVisible', on ? '1' : '0');
-        } catch (err) {
-            console.warn('Launchpad: failed to persist show-archived preference:', err);
-        }
-    }
 
     /**
      * Initialize launchpad screen
@@ -352,8 +287,11 @@ class Launchpad {
      * is skipped when the user is not signed in, so we do not hammer
      * /sessions with anonymous requests before the OTP flow completes,
      * and skipped when the launchpad is not the screen on display -
-     * ``ProjectListRenderGuard.shouldPoll``, which is a different thing
-     * from a hidden tab. Nothing this tick fetches is read anywhere but
+     * ``CloudeWeb.launchpadIsVisible()``, which is a different thing
+     * from a hidden tab. That predicate lived in
+     * client/js/project-list-render-guard.js until slice 4 deleted that
+     * file; it is in web/src/lib/sessions/poller.ts now, beside the tick
+     * it gates. Nothing this tick fetches is read anywhere but
      * the launchpad's own two lists, so while the terminal or the archive
      * is up it was spending four HTTP requests and two full DOM rebuilds
      * every five seconds to update a screen nobody could see. A SKIP IS
@@ -361,8 +299,10 @@ class Launchpad {
      * so returning to the screen resumes with nothing to restart, and
      * App.showLaunchpad() ends in loadProjects() anyway.
      *
-     * The tick's WORK is passed in, because a tick refetches AND
-     * repaints, and both renderers are still legacy until slices 4 and 5.
+     * The tick's WORK is passed in. It refetches, and it re-mounts the
+     * project tree - which is idempotent and paints nothing, because that
+     * tree READS the store. Only the running-sessions list is still a
+     * repaint, until slice 5.
      */
     _startRunningSessionsPoller() {
         const web = this._web('the running-sessions poller cannot start');
@@ -406,7 +346,7 @@ class Launchpad {
     async loadProjects() {
         const web = this._web('the project list cannot load');
         if (web) {
-            const result = await web.loadProjects(this._archivedVisible);
+            const result = await web.loadProjects(web.archivedProjectsVisible());
             if (!result.ok && result.error) this.showError(result.error);
             this.renderProjectList();
         }
@@ -513,44 +453,6 @@ class Launchpad {
 
 
 
-    /**
-     * Build the ONE banner that names where the project list came from.
-     *
-     * There is exactly one banner, and that is the fix. This method used
-     * to draw up to two at once from two independently-formed opinions -
-     * a "degraded mode" banner saying config.json's projects were being
-     * shown, and a "sources disagree" banner saying the database was
-     * authoritative and was what you were seeing. Both rendered together,
-     * and they contradicted each other about the one thing a provenance
-     * banner exists to state. Worse, the disagreement was computed by
-     * comparing a live database read against a CACHED config read, so it
-     * announced conflicts that did not exist on disk.
-     *
-     * Projects are DB-only now, so there is one source, one opinion and
-     * one banner. Three cases, and the healthy one draws nothing:
-     *
-     *   - `db`: the steady state. No badge; an empty list here is a real
-     *     measured empty list and the empty-state copy already says so.
-     *   - `db_unreadable`: the datastore did not answer. The server's own
-     *     message says the empty list means "could not read", not "you
-     *     have none", and that writes are refused.
-     *   - authority unknown (the fetch itself failed): says so, and
-     *     claims nothing in either direction.
-     *
-     * @returns {string} - HTML, empty string when there is nothing to say.
-     */
-    _renderProjectAuthorityBannerHtml() {
-        const a = this.projectAuthority;
-        if (a === null || a === undefined) {
-            return `<div class="project-authority-banner project-authority-banner-unknown" data-authority-state="unknown">CANNOT DETERMINE which source these projects came from - the authority check did not answer. This is not a claim that anything is wrong, and not a claim that it is fine.</div>`;
-        }
-
-        if (!a.degraded) {
-            return '';
-        }
-
-        return `<div class="project-authority-banner project-authority-banner-unreadable" data-authority-state="${this._escapeHtml(a.mode)}" data-writable="${a.writable ? 'true' : 'false'}">${this._escapeHtml(a.message || a.mode)}</div>`;
-    }
 
 
 
@@ -564,39 +466,7 @@ class Launchpad {
      *   here yet" never reads as "this is the stalest thing you own".
      * Inputs: session (object). Output: string - HTML attributes.
      */
-    /**
-     * The ``last_work_at`` for one running-session row, or null.
-     *
-     * SLICE 3: A DELEGATE. The lookup and the index it reads both live in
-     * web/src/lib/sessions/attribution.ts now. It is kept as a method
-     * only because ``_workRecencyAttrs`` below is a tree renderer that
-     * stays here until slice 4, and it is the one surviving caller. A
-     * missing bundle answers null, which is the same third outcome an
-     * unrecorded session already has - so the row is LABELLED unrecorded
-     * rather than the render throwing.
-     *
-     * @param {object} session - a running-session row with ``name``.
-     * @returns {string|null} - an ISO timestamp, or null for unrecorded.
-     */
-    _workStampFor(session) {
-        const web = this._web('a work stamp cannot be read');
-        if (!web) return null;
-        return web.workStampFor(session);
-    }
 
-    _workRecencyAttrs(session) {
-        // The helper moved to web/src/lib/sessions/attribution.ts with
-        // the ordering it exists for; this reads the same index through
-        // the same function rather than keeping a second copy of the
-        // lookup, because two copies are two answers the moment one of
-        // them is updated.
-        const stamp = this._workStampFor(session);
-        if (stamp) {
-            return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
-        }
-        return ' data-work="unrecorded" title="no work recorded yet - ordered'
-            + ' below every session that has been worked in"';
-    }
 
 
 
@@ -710,8 +580,11 @@ class Launchpad {
         // no error anywhere. The signature diff does not save it: a
         // status flip on any OTHER row is a real change and paints. The
         // skip stores nothing, so the next tick paints once the rename
-        // has settled. Same predicate the project list uses.
-        const guard = window.ProjectListRenderGuard;
+        // has settled. Slice 4 deleted the project tree's repaint and
+        // the guard module named after it; this predicate is all that
+        // survived, in client/js/session-list-busy-guard.js. Slice 5
+        // deletes it too, because a component's rows are not rebuilt.
+        const guard = window.SessionListBusyGuard;
         if (guard && guard.isBusy({ container, doc: document })) return;
         const section = document.getElementById('running-sessions-section');
         const listing = this.runningSessionsListing || { ok: true, reason: null };
@@ -2307,53 +2180,15 @@ class Launchpad {
             });
         });
 
-        this.initArchivedVisibleToggle();
-        // The RECENT section's archive filter is wired by
-        // RecentSessions.svelte, which owns that control now. Its
-        // disclosure toggle is still listed above, because the heading
-        // it lives in is legacy markup until a later slice.
+        // BOTH archive filters are wired by the components that own
+        // them now: the RECENT one by RecentSessions.svelte and the
+        // PROJECTS one by ProjectTree.svelte, each through its own
+        // chrome module. Their disclosure toggles are still listed
+        // above, because the headings they live in are legacy markup
+        // until a later slice.
     }
 
-    /**
-     * Wire the "show archived" control in the projects section heading.
-     *
-     * Flipping it persists the preference, then RE-FETCHES: the archived
-     * rows are not held client-side and filtered, they are asked for.
-     * That keeps one rule about what is on screen (whatever the last
-     * request returned) instead of two that can drift apart, and it means
-     * the toggle cannot show stale archived rows from an earlier fetch.
-     *
-     * The re-fetch happens on CLICK only. Nothing here runs on the 5s
-     * running-sessions poll, which re-renders the project list but does
-     * not re-request it.
-     */
-    initArchivedVisibleToggle() {
-        const btn = document.getElementById('projects-show-archived-toggle');
-        if (!btn) return;
-        this._applyArchivedVisibleToggleState(btn);
-        btn.addEventListener('click', async () => {
-            const next = !this._archivedVisible;
-            this._archivedVisible = next;
-            this.setArchivedVisiblePref(next);
-            this._applyArchivedVisibleToggleState(btn);
-            await this.loadProjects();
-        });
-    }
 
-    /**
-     * Paint one show-archived button to match ``this._archivedVisible``.
-     *
-     * @param {HTMLElement} btn
-     */
-    _applyArchivedVisibleToggleState(btn) {
-        const on = !!this._archivedVisible;
-        btn.setAttribute('aria-pressed', String(on));
-        btn.classList.toggle('is-on', on);
-        btn.setAttribute(
-            'title',
-            on ? 'hide archived projects' : 'show archived projects'
-        );
-    }
 
     /**
      * Apply expanded/collapsed visual + a11y state to one disclosure toggle
@@ -2404,244 +2239,7 @@ class Launchpad {
         }
     }
 
-    /**
-     * Group running sessions by project for the home-screen tree (S8).
-     *
-     * Description: cross-references ``this.runningSessions`` (live tmux
-     *   probe) against ``this.sessionAttribution`` (datastore-backed
-     *   ``project_id`` / ``project_attribution`` per tmux name, from
-     *   GET /sessions/records) to decide which project owns each running
-     *   session. THREE-OUTCOME RULE: a session with a resolved
-     *   ``project_id`` becomes that project's child; ``project_attribution
-     *   === 'none'`` (working directory WAS read and sits inside no known
-     *   project - a complete, actionable answer) becomes a child of the
-     *   synthetic "no project" group; ``project_attribution === 'unknown'``
-     *   (the working directory could not be read - NOT an answer), a
-     *   session absent from the attribution map, or a wholesale fetch
-     *   failure (``sessionAttributionListingOk === false``) all land in
-     *   ``needsAttention`` instead - excluded from every project's
-     *   children and from "no project", because an unproven answer must
-     *   never render as if it were measured.
-     * Inputs: none (reads ``this.runningSessions``,
-     *   ``this.sessionAttribution``, ``this.sessionAttributionListingOk``).
-     * Output: {byProjectId: Map<number, object[]>, noProject: object[],
-     *   needsAttention: Array<{session: object, reason: string}>}
-     * Example: const {byProjectId} = lp._buildProjectSessionGroups();
-     */
-    _buildProjectSessionGroups() {
-        const byProjectId = new Map();
-        const noProject = [];
-        const needsAttention = [];
-        const sessions = this.runningSessions || [];
-        for (const s of sessions) {
-            if (!this.sessionAttributionListingOk) {
-                needsAttention.push({
-                    session: s,
-                    reason: this.sessionAttributionListingDetail
-                        || 'project attribution could not be read',
-                });
-                continue;
-            }
-            // INSTANCE-EXACT FIRST. When this running session carries its
-            // own tmux creation epoch (every row on ``runningSessions``
-            // does - see ``created_at_epoch`` in loadRunningSessions()),
-            // resolve its EXACT stored row via the instance key rather
-            // than a name-only guess - this is what stops an archived
-            // OLDER instance of the same tmux_name from ever being
-            // considered for a currently-live session.
-            let rec = null;
-            if (s.created_at_epoch) {
-                const instanceKey = s.name + '\u0000' + s.created_at_epoch;
-                if (this.sessionAttributionByInstance.has(instanceKey)) {
-                    rec = this.sessionAttributionByInstance.get(instanceKey);
-                }
-            }
-            // FALLBACK: name-only join, only reached when the exact
-            // instance was not found (epoch missing on either side, or a
-            // legacy row with no recorded epoch). Never resolves to an
-            // archived row - see _resolveSessionAttribution().
-            if (!rec) {
-                if (this.sessionAttributionAmbiguous.has(s.name)) {
-                    needsAttention.push({
-                        session: s,
-                        reason: 'two stored session records for this name '
-                            + 'could not be told apart',
-                    });
-                    continue;
-                }
-                rec = this.sessionAttribution.get(s.name) || null;
-            }
-            if (!rec) {
-                needsAttention.push({
-                    session: s,
-                    reason: 'no stored attribution for this session',
-                });
-                continue;
-            }
-            // DELETED WINS OVER LIVE. Deleting is a decision about the
-            // user's list, not about the process, so a row he deleted
-            // stays off the tree even if its tmux session is somehow
-            // still up. Without this the rule would silently read
-            // "deleted, unless it happens to still be running", which is
-            // the kind of exception nobody can predict from the button's
-            // label. The session keeps running and is still reachable
-            // from the live sidebar; only this listing forgets it.
-            // Reached only via the instance-exact path now (the name-only
-            // fallback above never yields an archived row), so this is
-            // specifically "the live session's OWN record was deleted",
-            // not "some unrelated older instance of this name was".
-            if (rec.archived_at) continue;
-            const attribution = rec.project_attribution;
-            if (attribution === 'unknown') {
-                needsAttention.push({
-                    session: s,
-                    reason: 'working directory could not be read',
-                });
-            } else if (attribution === 'none') {
-                noProject.push(s);
-            } else if (rec.project_id !== null && rec.project_id !== undefined) {
-                const list = byProjectId.get(rec.project_id) || [];
-                list.push(s);
-                byProjectId.set(rec.project_id, list);
-            } else {
-                // Defensive: an attribution string that isn't 'none' or
-                // 'unknown' but carries no id is not a shape this build
-                // should trust - never guess which project it meant.
-                needsAttention.push({
-                    session: s,
-                    reason: 'project attribution missing an id',
-                });
-            }
-        }
-        // ENDED SESSIONS, APPENDED AFTER THE LIVE PASS. This loop is the
-        // whole fix for "recent shows two, the tree shows one": the loop
-        // above can only ever describe what the LIVE tmux probe named, so
-        // a session whose instance is gone was invisible to the tree by
-        // construction - not filtered out, unable to appear at all.
-        //
-        // APPENDED, NOT MERGED IN, and the order is the point: a dead row
-        // sitting above the session he is actually working in is
-        // technically correct and practically wrong. Live first, ended
-        // underneath, in every group.
-        for (const s of this._endedSessionsForTree()) {
-            if (s.project_attribution === 'unknown') {
-                needsAttention.push({
-                    session: s,
-                    reason: 'ended; working directory could not be read',
-                });
-            } else if (s.project_attribution === 'none') {
-                noProject.push(s);
-            } else if (s.project_id !== null && s.project_id !== undefined) {
-                const list = byProjectId.get(s.project_id) || [];
-                list.push(s);
-                byProjectId.set(s.project_id, list);
-            } else {
-                needsAttention.push({
-                    session: s,
-                    reason: 'ended; project attribution missing an id',
-                });
-            }
-        }
-        return { byProjectId, noProject, needsAttention };
-    }
 
-    /**
-     * The stored sessions that ENDED, shaped like running-session rows.
-     *
-     * Description: reads ``this.sessionRecords`` (GET /sessions/records)
-     *   and returns the rows the tree must show but no live probe can
-     *   name. Three filters, each load-bearing:
-     *
-     *     archived_at        ARCHIVED. The user pressed archive; it is off
-     *                        his screens. This is the ONE thing that
-     *                        hides a row, and it hides it whatever its
-     *                        lifecycle - including a row that is somehow
-     *                        still running, or "delete" would quietly
-     *                        mean "delete unless it is busy".
-     *     lifecycle          only 'stopped' / 'dead' are ENDED. A
-     *                        'running' row is the live probe's business
-     *                        and is already in the list above; an
-     *                        'unknown' row is a CANNOT DETERMINE and is
-     *                        NOT quietly promoted to ended here - the
-     *                        live pass already routes it to NEEDS
-     *                        ATTENTION, which is where an unevaluable
-     *                        row belongs.
-     *     live name          a name the probe DID list is a live session,
-     *                        so the stored row is merely stale. The live
-     *                        answer wins; never render both.
-     *
-     *   THE THREE-OUTCOME GATE. When ``sessionAttributionListingOk`` is
-     *   false the records fetch did not answer, so this returns NOTHING.
-     *   Inventing ended rows out of a failed read would be the exact
-     *   false green this screen keeps removing - and the live pass
-     *   already routes every row to NEEDS ATTENTION in that case, which
-     *   is the honest report.
-     * Inputs: none (reads ``this.sessionRecords``, ``this.runningSessions``
-     *   and the listing latch).
-     * Output: object[] - rows shaped like ``this.runningSessions`` entries
-     *   plus ``ended: true``, ``session_uuid`` and the record's project
-     *   attribution. Empty when the fetch did not answer.
-     * Example: lp._endedSessionsForTree()  // [{name:'cloude_a', ended:true, ...}]
-     */
-    _endedSessionsForTree() {
-        if (!this.sessionAttributionListingOk) return [];
-        const liveNames = new Set((this.runningSessions || []).map(s => s.name));
-        const records = this.sessionRecords || [];
-        // THE SAME EXCLUSION /sessions/recent APPLIES, for the same
-        // reason. A restart made before row reuse landed left this row
-        // behind and started a new one pointing back at it, so the pair
-        // rendered under one project TWICE - once running, once ended.
-        // The live-name check above cannot catch it: the two rows
-        // legitimately carry DIFFERENT tmux names ('Media_Compression'
-        // against 'cloude_Media_Compression').
-        //
-        // parent_session_id is a stored fact, not a classifier - when the
-        // successor is RUNNING this row is already on screen as that
-        // successor. Computed from `records`, which already carries both
-        // lifecycle and parent_session_id, so it needs no extra fetch.
-        const replacedByRunning = new Set();
-        for (const rec of records) {
-            if (!rec || rec.lifecycle !== 'running') continue;
-            const parent = rec.parent_session_id;
-            if (parent !== null && parent !== undefined && parent !== '') {
-                replacedByRunning.add(String(parent));
-            }
-        }
-        const out = [];
-        for (const rec of records) {
-            if (!rec || rec.archived_at) continue;
-            if (rec.lifecycle !== 'stopped' && rec.lifecycle !== 'dead') continue;
-            if (rec.tmux_name && liveNames.has(rec.tmux_name)) continue;
-            if (rec.id !== null && rec.id !== undefined
-                && replacedByRunning.has(String(rec.id))) continue;
-            // A RESTARTED SESSION NO LONGER PRODUCES A SECOND ROW, so
-            // there is nothing here to fold away. A restart moves the
-            // existing row onto the new tmux instance and that row is
-            // simply `running` again - it leaves this list because it is
-            // no longer stopped, not because anything hid it. See
-            // src/core/session_restart.py: rebind_instance.
-            out.push({
-                name: rec.tmux_name || '',
-                label: rec.title || null,
-                session_uuid: rec.session_uuid,
-                ended: true,
-                status: 'stopped',
-                is_active: false,
-                created_by_cloude: !!rec.owned,
-                created_at_epoch: rec.tmux_created_epoch || 0,
-                working_dir: rec.working_dir || '',
-                agent_type: rec.agent_type || '',
-                agent_family: rec.agent_family || null,
-                agent_family_source: rec.agent_family_source || null,
-                project_id: rec.project_id,
-                project_attribution: rec.project_attribution,
-                // The durable row id. Every other surface already carries
-                // this field under this name - see _renderSessionIdHtml.
-                session_row_id: (rec.id === undefined ? null : rec.id),
-            });
-        }
-        return out;
-    }
 
     /**
      * Build one child session row for the project tree (S8).
@@ -2679,650 +2277,39 @@ class Launchpad {
      * Output: string - the group's inner HTML.
      * Example: lp._renderTreeSessionRowsHtml(children)
      */
-    /**
-     * Description: the DOM attributes that make a project with NO
-     *   recorded work visibly distinct from one that was merely worked in
-     *   a long time ago. Both sit at the bottom of a list ordered by
-     *   ``work_at``, and without this they would be indistinguishable
-     *   there - which is the exact collapse (unknown rendered as "oldest")
-     *   the ordering change exists to undo.
-     *
-     *   ``work_at`` is MAX(sessions.last_work_at) across the project's
-     *   sessions and arrives on the project itself from GET /projects.
-     *   Null means no session under this project has ever been measured
-     *   working; it is never inferred from ``last_opened_at``, because
-     *   opening is not working.
-     * Inputs: project (object) - one row of ``this.projects``.
-     * Output: string - HTML attributes.
-     */
-    _projectWorkAttrs(project) {
-        const stamp = project && project.work_at;
-        if (stamp) {
-            return ` data-work="recorded" data-work-at="${this._escapeHtml(stamp)}"`;
-        }
-        return ' data-work="unrecorded" title="no work recorded in this'
-            + ' project yet - ordered below every project that has been'
-            + ' worked in"';
-    }
 
-    _renderTreeSessionRowsHtml(sessions) {
-        const list = Array.isArray(sessions) ? sessions : [];
-        return list.map((s) => this._renderTreeSessionRowHtml(s)).join('');
-    }
 
-    _renderTreeSessionRowHtml(s) {
-        if (s.ended) return this._renderEndedTreeSessionRowHtml(s);
-        const owned = !!s.created_by_cloude;
-        const displayName = this._sessionDisplayLabel(s);
-        const escapedName = this._escapeHtml(s.name);
-        const escapedDisplay = this._escapeHtml(displayName);
-        // Same signals the running-session card passes, for the same
-        // reason: one component, one meaning per colour, on every
-        // surface. A project-tree row that painted a plainer light than
-        // the card above it would be two answers to one question.
-        const statusDot = window.SessionStatusUI
-            ? window.SessionStatusUI.dotHtml(s.status, {
-                unread: !!s.unread,
-                startup_gate: s.startup_gate,
-                status_source: s.status_source,
-                transport: window.SessionTransport
-                    ? window.SessionTransport.stateFor(s.name)
-                    : undefined,
-            })
-            : '';
-        return `
-                <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">
-                  ${statusDot}
-                  <span class="project-session-row__name">${escapedDisplay}</span>
-                  <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
-                  ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
-                </div>
-            `;
-    }
+
+
+
+
+
+
 
     /**
-     * Build one ENDED child row for the project tree.
+     * Mount the project tree.
      *
-     * Description: the same shape as a live row so the tree does not
-     *   visually fragment, differing in exactly the ways a human must be
-     *   able to see WITHOUT hovering anything:
+     * SLICE 4, AND THIS IS THE WHOLE METHOD NOW. It used to build the
+     * markup, ask `window.ProjectListRenderGuard` whether writing it was
+     * worth doing, and on a yes write `#project-list.innerHTML` and
+     * re-register every per-row listener. Sixteen methods,
+     * `_lastProjectListSig` and that guard module were all deleted in the
+     * same commit.
      *
-     *     - the word ENDED, as text. Colour alone never carries meaning
-     *       here, and a dot is a 9px hint at best.
-     *     - the `stopped` status dot from the shared vocabulary, not a
-     *       second signal invented for this surface.
-     *     - NO `role="button"` and NO `tabindex`. This is the important
-     *       one. A dead row that looks identical to a live one is worse
-     *       than a hidden one, because he would click it and try to
-     *       attach to a tmux session that does not exist.
-     *     - restart and archive instead, which are the only two things
-     *       that CAN be done to a record with no process behind it.
-     *       Restart is the same action RECENT already offers: a NEW
-     *       session in the same working directory, never a resurrection.
+     * THE MOUNT IS IDEMPOTENT, WHICH IS WHY EVERY CALLER STILL WORKS.
+     * `ensurePanel` is a no-op once a live panel sits on the element that
+     * currently carries the id, so the 5s tick and the five other call
+     * sites cost one map lookup each. The tree updates because it READS
+     * the store, not because anything told it to paint.
      *
-     *   `data-uuid` carries ``session_uuid`` because archive is keyed on
-     *   it, never on the tmux name - tmux reuses names, and two rows can
-     *   differ only by creation epoch.
-     * Inputs: s (object) - one row from ``_endedSessionsForTree``.
-     * Output: string - HTML for one ``.project-session-row--ended``.
-     */
-    _renderEndedTreeSessionRowHtml(s) {
-        const owned = !!s.created_by_cloude;
-        const escapedName = this._escapeHtml(s.name);
-        const escapedDisplay = this._escapeHtml(this._sessionDisplayLabel(s));
-        const uuid = this._escapeHtml(s.session_uuid || '');
-        const statusDot = window.SessionStatusUI
-            ? window.SessionStatusUI.dotHtml('stopped')
-            : '';
-        return `
-                <div class="project-session-row project-session-row--ended" data-name="${escapedName}" data-ended="1" data-lifecycle="stopped" data-uuid="${uuid}">
-                  ${statusDot}
-                  <span class="project-session-row__name">${escapedDisplay}</span>
-                  <span class="badge badge-ended">ENDED</span>
-                  <span class="badge ${owned ? 'badge-tmux' : 'badge-external'}">${owned ? 'TMUX' : 'EXTERNAL'}</span>
-                  ${this._renderFamilyPillHtml(s.agent_family, s.agent_family_source)}
-                  <button type="button" class="ended-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((s.title && String(s.title).trim()) || '')}" data-working-dir="${this._escapeHtml(s.working_dir || '')}" data-agent-type="${this._escapeHtml(s.agent_type || '')}">restart</button>
-                  <button type="button" class="ended-session-delete" data-uuid="${uuid}" title="archive this session from your lists (the record is kept)" aria-label="archive this session from your lists">archive</button>
-                </div>
-            `;
-    }
-
-    /**
-     * Build the synthetic "no project" group (S8).
-     *
-     * Description: the home for every RUNNING session whose working
-     *   directory WAS read and sits inside no known project
-     *   (``project_attribution === 'none'``). It is a real, measured
-     *   answer - distinct from NEEDS ATTENTION, which is reserved for
-     *   sessions that could NOT be evaluated - so it renders as an
-     *   ordinary (collapsible) group, never as a warning. Omitted
-     *   entirely when empty, matching every other optional group on this
-     *   screen.
-     * Inputs: sessions (object[]) - rows attributed 'none'.
-     * Output: string - HTML for one ``.project-node--virtual``, or ''.
-     */
-    _renderNoProjectGroupHtml(sessions) {
-        if (!sessions || sessions.length === 0) return '';
-        const nodeKey = '__no_project__';
-        const collapsed = this._collapsedProjectNodes.has(nodeKey);
-        const rows = this._renderTreeSessionRowsHtml(sessions);
-        return `
-                <div class="project-node project-node--virtual" data-project-node="no-project">
-                  <button type="button" class="project-node__header project-node__toggle" data-node-key="${nodeKey}" aria-expanded="${!collapsed}" aria-controls="project-node-sessions-${nodeKey}">
-                    <span class="project-node__chevron" aria-hidden="true">►</span>
-                    <span class="project-node__title">no project</span>
-                    <span class="project-node__count">${sessions.length} session${sessions.length === 1 ? '' : 's'}</span>
-                  </button>
-                  <div class="project-node__sessions" id="project-node-sessions-${nodeKey}" style="${collapsed ? 'display:none;' : ''}">${rows}</div>
-                </div>
-            `;
-    }
-
-    /**
-     * Build the NEEDS ATTENTION group for un-attributable running
-     * sessions (S8) - the session-level counterpart to S3's project
-     * presence badges and this file's ``_renderListingAttentionHtml``
-     * for the running-sessions probe. Reuses the same "NEEDS ATTENTION"
-     * visual language (see client/css/styles.css) rather than inventing
-     * a new one.
-     *
-     * Description: never collapsible and never offers any action - the
-     *   row exists so an unattributed session is visible and named, not
-     *   silently dropped from the tree and not guessed into a project.
-     * Inputs: items (Array<{session: object, reason: string}>).
-     * Output: string - HTML, or '' when there is nothing to report.
-     */
-    _renderProjectAttentionGroupHtml(items) {
-        if (!items || items.length === 0) return '';
-        const rows = items.map(({ session, reason }) => {
-            const displayName = this._escapeHtml(
-                this._sessionDisplayLabel(session)
-            );
-            return `
-                <div class="project-session-row project-session-row--attention" data-name="${this._escapeHtml(session.name)}">
-                  <span class="project-session-row__name">${displayName}</span>
-                  <span class="project-session-row__attention-reason">${this._escapeHtml(reason)}</span>
-                </div>
-            `;
-        }).join('');
-        return `
-                <div class="project-node project-node--attention" data-project-node="needs-attention" role="status">
-                  <div class="project-node__header project-node__header--attention">
-                    <span class="project-node__attention-head">NEEDS ATTENTION</span>
-                    <span class="project-node__title">${items.length} session${items.length === 1 ? '' : 's'} could not be attributed to a project</span>
-                  </div>
-                  <div class="project-node__sessions">${rows}</div>
-                </div>
-            `;
-    }
-
-    /**
-     * Wire click-to-expand/collapse on every ``.project-node__toggle`` in
-     * the tree, via event delegation on the (stable) ``#project-list``
-     * container so re-renders never need to re-bind. State is kept in
-     * ``this._collapsedProjectNodes`` (a Set of node keys) so it survives
-     * the next ``renderProjectList()`` call - e.g. the 5s running-
-     * sessions poller repainting the tree does not snap a collapsed
-     * project back open.
-     */
-    _bindProjectNodeToggles() {
-        const container = document.getElementById('project-list');
-        if (!container || container.__boundNodeToggles) return;
-        container.__boundNodeToggles = true;
-        container.addEventListener('click', (e) => {
-            const toggle = e.target.closest('.project-node__toggle');
-            if (!toggle) return;
-            e.stopPropagation();
-            const key = toggle.getAttribute('data-node-key');
-            if (!key) return;
-            const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
-            this._applyProjectNodeCollapsed(toggle, !nowExpanded);
-            if (nowExpanded) {
-                this._collapsedProjectNodes.delete(key);
-            } else {
-                this._collapsedProjectNodes.add(key);
-            }
-        });
-    }
-
-    /**
-     * Show or hide one tree node's foldable parts, addressed from the
-     * node ROOT rather than by walking siblings off the toggle button.
-     *
-     * Description: this is the fix for the fold that did nothing. A
-     *   PROJECT node nests its toggle inside ``.project-node__row``, so
-     *   ``toggle.nextElementSibling`` was the ``.project-item`` card, not
-     *   the ``.project-node__sessions`` container one level up. The old
-     *   code guarded on the class, found the wrong element, and silently
-     *   changed nothing while still flipping ``aria-expanded`` and
-     *   recording the new state - so the sessions only appeared to fold
-     *   later, when the 5s poller happened to re-render. The synthetic
-     *   "no project" node DID fold, because there the toggle is the
-     *   header and the container really is its next sibling, which is
-     *   why the bug read as "sometimes works". Resolving from
-     *   ``closest('.project-node')`` makes both shapes take the same
-     *   path and removes the dependence on sibling order entirely.
-     *   Both foldable parts move together: the child session rows and
-     *   the project description.
-     * Inputs: toggle (HTMLElement) - the ``.project-node__toggle``
-     *   clicked or being re-applied; collapsed (boolean) - true to hide.
-     * Output: boolean - true when a ``.project-node`` root was found and
-     *   updated, false when the toggle sits outside one (nothing was
-     *   changed, and nothing is claimed to have been).
-     * Example: lp._applyProjectNodeCollapsed(btn, true);
-     */
-    _applyProjectNodeCollapsed(toggle, collapsed) {
-        toggle.setAttribute('aria-expanded', String(!collapsed));
-        const node = toggle.closest('.project-node');
-        if (!node) return false;
-        const display = collapsed ? 'none' : '';
-        node.querySelectorAll('.project-node__sessions').forEach((el) => {
-            el.style.display = display;
-        });
-        node.querySelectorAll('.project-description').forEach((el) => {
-            el.style.display = display;
-        });
-        return true;
-    }
-
-    /**
-     * Wire click-to-open on every child ``.project-session-row`` in the
-     * tree (excluding the inert ``--attention`` variant, which carries
-     * no ``data-active`` and offers no action). Delegated the same way
-     * as ``_bindProjectNodeToggles``. Routes into the exact same
-     * open/adopt methods the flat running-sessions list uses, so a
-     * session behaves identically whichever surface it was clicked from.
-     */
-    _bindProjectSessionRowClicks() {
-        const container = document.getElementById('project-list');
-        if (!container || container.__boundSessionRowClicks) return;
-        container.__boundSessionRowClicks = true;
-        container.addEventListener('click', async (e) => {
-            const row = e.target.closest('.project-session-row');
-            if (!row || row.classList.contains('project-session-row--attention')) return;
-            e.stopPropagation();
-            // AN ENDED ROW MUST NOT REACH THE ATTACH PATH. Dropping
-            // role="button" off the markup stops it LOOKING clickable,
-            // but this listener is delegated on the container and matches
-            // the row class, not the role - so without this guard the
-            // whole row would still attach on click and fail against a
-            // tmux session that no longer exists. Its two real actions
-            // are handled below and return before this point.
-            if (row.dataset.ended === '1') {
-                const restart = e.target.closest('.ended-session-restart');
-                if (restart) {
-                    // Same implementation the RECENT rows use. Slice 2
-                    // moved it; this tree is slice 4 and calls it by name.
-                    await window.CloudeWeb.launchpad.restartRecentSession({
-                        sessionUuid: restart.getAttribute('data-uuid'),
-                        title: restart.getAttribute('data-title'),
-                        workingDir: restart.getAttribute('data-working-dir'),
-                        agentType: restart.getAttribute('data-agent-type'),
-                    });
-                    return;
-                }
-                const del = e.target.closest('.ended-session-delete');
-                if (del) {
-                    await window.CloudeWeb.launchpad.archiveSessionRecord(
-                        del.getAttribute('data-uuid'));
-                }
-                return;
-            }
-            const name = row.dataset.name;
-            const isActive = row.dataset.active === '1';
-            if (isActive) {
-                const live = (this.runningSessions || []).find(s => s.name === name);
-                await this._returnToActiveRunningSession(live ? live.session_id : null);
-                return;
-            }
-            await this._handleAttachRunningSession(name);
-        });
-    }
-
-    /**
-     * Render the project list as a two-level project-to-session tree
-     * (S8, design section 4.2). Projects are the parents; their RUNNING
-     * sessions (from ``this.runningSessions``, matched via
-     * ``this.sessionAttribution``) are the children, via
-     * ``_buildProjectSessionGroups``. A project whose ``presence`` is
-     * ``missing`` or ``unreachable`` still renders here with S3's badge
-     * and every action on its row refused - it is never dropped from
-     * the list, matching the three-outcome rule this whole screen
-     * follows.
-     */
-    /**
-     * Render the archived dimension's own status line - THREE OUTCOMES,
-     * never two.
-     *
-     * This exists because "there are no archived projects" and "the
-     * request that would have told you failed" render identically
-     * otherwise: both are an absence of archived rows on screen. The
-     * three states, read off ``this._archivedFetchOk``:
-     *
-     *   null  - the toggle is off, so nothing was asked. Renders NOTHING
-     *           at all. Silence here is correct: the user asked not to
-     *           see archived projects, and a line saying "unknown" about
-     *           a question nobody posed is furniture.
-     *   true  - the toggle is on and the server answered. Renders the
-     *           count of archived rows in the list, INCLUDING zero,
-     *           because "showing archived: 0" is a measured fact and is
-     *           exactly what distinguishes this state from the next one.
-     *   false - the toggle is on and the fetch FAILED. Renders CANNOT
-     *           DETERMINE, in words, and says the list below may be
-     *           stale. It never renders as zero.
-     *
-     * @returns {string} HTML, possibly empty
-     */
-    _renderArchivedNoticeHtml() {
-        if (this._archivedFetchOk === null) return '';
-        if (this._archivedFetchOk === false) {
-            return `
-                <div class="project-archived-notice project-archived-notice--unknown">
-                    CANNOT DETERMINE - archived projects could not be loaded.
-                    This is NOT a claim that there are none; the list below
-                    may be stale or incomplete.
-                </div>
-            `;
-        }
-        const archivedCount = (this.projects || [])
-            .filter(p => p && p.archived_at).length;
-        return `
-            <div class="project-archived-notice">
-                showing archived: ${archivedCount}
-            </div>
-        `;
-    }
-
-    /**
-     * Paint the project tree, but only when painting it would change it.
-     *
-     * Description: builds the markup, asks
-     *   ``window.ProjectListRenderGuard`` whether it is worth writing,
-     *   and writes plus re-binds only when the answer is yes. The three
-     *   reasons it says no - identical markup, launchpad not on screen,
-     *   user mid-interaction inside the list - are that module's, not
-     *   this one's, and every one of them leaves the stored signature
-     *   alone so the next tick reconsiders. Without the guard present
-     *   (module missing, load-order regression) it paints
-     *   unconditionally, which is exactly the old behaviour.
-     * Inputs: none; reads this.projects, this.projectPresence,
-     *   this.projectAuthority and the session groups.
-     * Output: void.
+     * @returns {void}
      */
     renderProjectList() {
-        const projectListEl = document.getElementById('project-list');
-        if (!projectListEl) return;
-        const html = this._projectListHtml();
-        const guard = window.ProjectListRenderGuard;
-        const verdict = guard
-            ? guard.decide({
-                html,
-                lastSignature: this._lastProjectListSig,
-                container: projectListEl,
-            })
-            : { paint: true, signature: html };
-        if (!verdict.paint) return;
-        this._lastProjectListSig = verdict.signature;
-        projectListEl.innerHTML = html;
-        this._bindProjectListHandlers(projectListEl);
+        const web = this._web('the project tree cannot mount');
+        if (web) web.mountProjectTree();
     }
 
-    /**
-     * Build the project tree's markup, writing nothing.
-     *
-     * Description: split out of renderProjectList() so the guard above
-     *   can compare what WOULD be painted against what IS painted. It
-     *   has to stay pure for that comparison to mean anything: no DOM
-     *   writes, no fetches, no state mutation.
-     * Inputs: none.
-     * Output: string - the whole `#project-list` inner HTML.
-     * Example: const same = lp._projectListHtml() === lp._lastProjectListSig;
-     */
-    _projectListHtml() {
-        // feat/db-is-authoritative - the provenance banner is drawn in
-        // BOTH the empty and populated cases. An empty list is exactly
-        // when the user most needs to know whether the datastore
-        // answered, because "no projects" and "could not read your
-        // projects" look identical without it.
-        const authorityHtml = this._renderProjectAuthorityBannerHtml();
-        const archivedNoticeHtml = this._renderArchivedNoticeHtml();
 
-        if (this.projects.length === 0) {
-            return authorityHtml + archivedNoticeHtml + `
-                <div class="launchpad-empty">
-                    no projects yet<br>
-                    <small style="color: #666;">use + new to add one</small>
-                </div>
-            `;
-        }
-
-        const groups = this._buildProjectSessionGroups();
-
-        // Render projects
-        const projectNodesHtml = this.projects.map((project, index) => {
-            // SLIM ROW. A project with no description used to render the
-            // literal filler "no description": a full line of type on
-            // every row that says nothing. All 9 projects in the live
-            // datastore have an empty description, so on the real screen
-            // the filler was the single largest avoidable cost. No
-            // description now means no element at all. The text is also
-            // escaped here - it was interpolated raw, and a description
-            // is user-supplied text that reaches this template.
-            const rawDescription = (project.description || '').trim();
-            const hasDescription = rawDescription.length > 0;
-            const description = this._escapeHtml(rawDescription);
-            // feat/projects-table (S3) - presence badge. `presenceRow` is
-            // undefined for a project the DB import has not seen yet
-            // (created via config write after the one-time boot import);
-            // that renders exactly like 'unchecked' - normal, no badge,
-            // every action allowed, because "not yet probed" is not
-            // evidence of anything wrong. Only 'missing' and
-            // 'unreachable' change the row: they get a visibly distinct
-            // badge (different label AND different color, see
-            // client/css/styles.css) and every action on the row -
-            // opening it, editing it, removing it - is refused, matching
-            // design section 4.1's "every action refused" for both
-            // states. The two states are never rendered the same way:
-            // collapsing "your project is gone" and "I could not check"
-            // into one look is the exact bug this table exists to kill.
-            // Presence is indexed by BOTH raw path and normalised root
-            // (see loadProjectPresence). Root is tried first because the
-            // authoritative project list is keyed by root, and two
-            // spellings of the same folder must resolve to one badge.
-            const presenceRow = (project.root && this.projectPresence.get(project.root))
-                || this.projectPresence.get(project.path);
-            const presenceState = presenceRow ? presenceRow.presence : 'unchecked';
-            const isDisabled = presenceState === 'missing' || presenceState === 'unreachable';
-            let presenceBadge = '';
-            if (presenceState === 'missing') {
-                presenceBadge = `<div class="project-presence-badge project-presence-badge-missing">MISSING - folder not found</div>`;
-            } else if (presenceState === 'unreachable') {
-                const detail = presenceRow && presenceRow.presence_detail
-                    ? this._escapeHtml(presenceRow.presence_detail)
-                    : 'reason unknown';
-                presenceBadge = `<div class="project-presence-badge project-presence-badge-unreachable">CANNOT DETERMINE - ${detail}</div>`;
-            }
-            // ARCHIVED IS ITS OWN DIMENSION, orthogonal to presence. A
-            // project can be archived AND missing, and the two badges say
-            // different things: "I retired this" vs "the folder is gone".
-            // Archiving never disables a row - an archived project is
-            // still openable, and its sessions were never touched.
-            const isArchived = !!project.archived_at;
-            const archivedBadge = isArchived
-                ? `<div class="project-archived-badge">ARCHIVED</div>`
-                : '';
-            const itemClasses = [
-                'project-item',
-                isDisabled ? `project-presence-disabled project-presence-${presenceState}` : '',
-                isArchived ? 'project-item--archived' : '',
-            ].filter(Boolean).join(' ');
-
-            // S8, revised by feat/db-is-authoritative - a project's row
-            // id now arrives ON THE PROJECT ITSELF, from GET /projects,
-            // which reads the authoritative `projects` table.
-            //
-            // It used to be looked up here in the PRESENCE map, keyed by
-            // raw config path. That is what produced the triplication:
-            // config.json carried three entries ("test pause",
-            // "ses_ec5bf2a3", "qqwe") all pointing at
-            // /Users/jsugamele/Development/ses_ec5bf2a3, all three found
-            // the SAME presence row, and all three therefore drew the
-            // same two child sessions. The list is now one entry per
-            // unique root by construction, so that cannot recur.
-            //
-            // `project.id` is null in the degraded config.json fallback -
-            // a config entry has no row - and null means "no children we
-            // can prove", never row 0. The presence map is still
-            // consulted as a fallback so a project the boot import has
-            // not reached yet still resolves.
-            const projectId = (project.id !== null && project.id !== undefined)
-                ? project.id
-                : (presenceRow ? presenceRow.id : null);
-            const children = (projectId !== null && projectId !== undefined)
-                ? (groups.byProjectId.get(projectId) || [])
-                : [];
-            const nodeKey = `project:${project.name}`;
-            const collapsed = this._collapsedProjectNodes.has(nodeKey);
-            const hasChildren = children.length > 0;
-            // The node is foldable when it has something to fold: child
-            // sessions, a description, or both. The count chip is drawn
-            // only when there ARE children, because a bare "0" would be
-            // a claim about sessions that the fold is not making.
-            const foldable = hasChildren || hasDescription;
-            const countHtml = hasChildren
-                ? `<span class="project-node__count">${children.length}</span>`
-                : '';
-            const controlsAttr = hasChildren
-                ? ` aria-controls="project-node-sessions-${this._escapeHtml(nodeKey)}"`
-                : '';
-            const chevronHtml = foldable
-                ? `<button type="button" class="project-node__toggle" data-node-key="${this._escapeHtml(nodeKey)}" aria-expanded="${!collapsed}" aria-label="toggle details for ${this._escapeHtml(project.name)}"${controlsAttr}><span class="project-node__chevron" aria-hidden="true">►</span>${countHtml}</button>`
-                : '';
-            const sessionsHtml = hasChildren
-                ? `<div class="project-node__sessions" id="project-node-sessions-${this._escapeHtml(nodeKey)}" style="${collapsed ? 'display:none;' : ''}">${this._renderTreeSessionRowsHtml(children)}</div>`
-                : '';
-            // Item 43: the description is the part of the row that a
-            // collapsed node sheds. Rendered with the collapse already
-            // applied so a re-render (the 5s poller) repaints the same
-            // state the user last chose, exactly as sessionsHtml does.
-            const descriptionHtml = hasDescription
-                ? `<div class="project-description"${collapsed ? ' style="display:none;"' : ''}>${description}</div>`
-                : '';
-
-            return `
-                <div class="project-node${isArchived ? ' project-node--archived' : ''}" data-project-node="project" data-project-name="${this._escapeHtml(project.name)}"${this._projectWorkAttrs(project)}>
-                  <div class="project-node__row">
-                    <div class="project-node__gutter">${chevronHtml}</div>
-                    <div class="${itemClasses}" data-index="${index}" data-name="${project.name}"${isDisabled ? ' aria-disabled="true"' : ''}>
-                        <button class="project-edit-btn" data-name="${project.name}" title="edit project" aria-label="edit project"${isDisabled ? ' disabled' : ''}>${window.SessionStatusUI ? window.SessionStatusUI.pencilIconSvg() : ''}</button>
-                        <!-- THE ONLY DESTRUCTIVE-SHAPED CONTROL ON THIS ROW.
-                             A hard-delete trash button used to sit here
-                             too (DELETE /projects/{name}, a real row
-                             removal with a tombstone) - it is gone from
-                             the UI on the owner's instruction, 2026-09-08:
-                             "sessions and projects can be archived not
-                             deleted". The server route is untouched and
-                             still reachable directly; nothing in the
-                             client calls it any more. NOT disabled by
-                             presence. A project whose
-                             folder has gone missing is precisely one a
-                             user wants to archive, and refusing that
-                             would leave the row permanently stuck on the
-                             screen it is trying to leave. -->
-                        <button class="project-archive-btn" data-name="${project.name}" data-archived="${isArchived ? '1' : '0'}" title="${isArchived ? 'restore project to the list' : 'archive project - keeps it and its sessions, hides it from this list'}" aria-label="${isArchived ? 'restore project' : 'archive project'}">${isArchived ? '&#x21ba;' : (window.SessionStatusUI ? window.SessionStatusUI.archiveIconSvg() : '')}</button>
-                        <div class="project-name">» ${project.name}</div>
-                        <div class="project-path">${project.path}</div>
-                        ${descriptionHtml}
-                        ${archivedBadge}
-                        ${presenceBadge}
-                    </div>
-                  </div>
-                  ${sessionsHtml}
-                </div>
-            `;
-        }).join('');
-
-        const noProjectHtml = this._renderNoProjectGroupHtml(groups.noProject);
-        const attentionHtml = this._renderProjectAttentionGroupHtml(groups.needsAttention);
-
-        return authorityHtml + archivedNoticeHtml + projectNodesHtml + noProjectHtml + attentionHtml;
-    }
-
-    /**
-     * Re-bind every handler the project tree's markup needs.
-     *
-     * Description: called ONLY after a real write, because innerHTML
-     *   destroys the nodes these listeners were attached to. The two
-     *   delegated binders below guard themselves against re-binding; the
-     *   per-row loops cannot, which is precisely why a repaint that
-     *   changes nothing is worth skipping.
-     * Inputs: projectListEl (Element) - the container just written to.
-     * Output: void.
-     */
-    _bindProjectListHandlers(projectListEl) {
-        this._bindProjectNodeToggles();
-        this._bindProjectSessionRowClicks();
-
-        // Add click handlers for project selection
-        const projectItems = projectListEl.querySelectorAll('.project-item');
-        projectItems.forEach(item => {
-            item.addEventListener('click', (e) => {
-                // Don't open project if clicking an inline action button
-                if (e.target.closest('.project-edit-btn') ||
-                    e.target.closest('.project-archive-btn')) {
-                    return;
-                }
-                // MISSING and CANNOT DETERMINE rows refuse every action -
-                // design section 4.1. The row still exists so it stays
-                // visible and can never be silently opened into a stale
-                // or unreachable directory.
-                //
-                // REFUSING IS NOT THE SAME AS DOING NOTHING. This used to be
-                // a bare `return`: the click was swallowed with no message,
-                // no log line and no request, so the row presented to the
-                // user as a button that does nothing. Refusal has to SAY it
-                // refused and name the path, or the user cannot tell a
-                // deliberate refusal from a broken app - and on a fresh
-                // install every seeded row was in this state, so the whole
-                // first screen was dead clicks.
-                if (item.classList.contains('project-presence-disabled')) {
-                    const idx = parseInt(item.dataset.index);
-                    const p = this.projects[idx];
-                    this._explainRefusedProject(p, item);
-                    return;
-                }
-                const index = parseInt(item.dataset.index);
-                this.selectProject(this.projects[index]);
-            });
-        });
-
-        // Add click handlers for archive / unarchive buttons
-        const archiveButtons = projectListEl.querySelectorAll('.project-archive-btn');
-        archiveButtons.forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation(); // Prevent project selection
-                const projectName = btn.dataset.name;
-                if (btn.dataset.archived === '1') {
-                    await this.unarchiveProject(projectName);
-                } else {
-                    await this.archiveProject(projectName);
-                }
-            });
-        });
-
-        // Add click handlers for edit buttons
-        const editButtons = projectListEl.querySelectorAll('.project-edit-btn');
-        editButtons.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation(); // Prevent project selection
-                const projectName = btn.dataset.name;
-                const project = this.projects.find(p => p.name === projectName);
-                if (project) {
-                    this.editProject(project);
-                }
-            });
-        });
-    }
 
     /**
      * ARCHIVE a project: retire it from the list, keep everything.

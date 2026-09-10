@@ -188,16 +188,18 @@ function renderCard(row) {
     return container.innerHTML;
 }
 
-/**
- * Render the launchpad's project-TREE child row for one row.
- * @param {object} row  One merged session row.
- * @returns {string} The row markup.
- */
-function renderTreeRow(row) {
-    const { lp, win } = loadLaunchpad({});
-    win.SessionStatusUI = Object.assign({}, win.SessionStatusUI, loadStatusUI());
-    return lp._renderTreeSessionRowHtml(row);
-}
+// THE PROJECT-TREE SURFACE MOVED IN SLICE 4, and it is measured where
+// it lives now. `_renderTreeSessionRowHtml` is
+// `ProjectSessionRow.svelte`, which hands the four signals to
+// `StatusLed.svelte` rather than building a dot string, so there is no
+// markup for this harness to read. The same three claims are asserted
+// against the RENDERED DOM in
+// web/src/lib/launchpad/ProjectTree.behaviour.test.ts under "the LED
+// gets the same four signals on every surface": an UNREAD idle row
+// paints `done`, the same status READ paints `idle`, and the startup
+// gate reaches the dot. The remaining surfaces below are unchanged, and
+// they are still what enforces the "every surface renders the same
+// LIGHT" rule between the sidebar and the launchpad card.
 
 const SidebarRows = loadSidebarRows();
 
@@ -213,7 +215,6 @@ function renderSidebarRow(row) {
 const SURFACES = [
     ['sidebar row', renderSidebarRow],
     ['launchpad card', renderCard],
-    ['launchpad project tree row', renderTreeRow],
 ];
 
 // ---------------------------------------------------------------------

@@ -67,6 +67,18 @@ function canWarn(): boolean {
 export const ARCHIVED_SESSIONS_VISIBLE_KEY = 'cloude.launchpad.deletedSessionsVisible';
 
 /**
+ * The PROJECT list's own show-archived key. A DIFFERENT preference.
+ *
+ * Two filters, two keys, and they are not interchangeable: one governs
+ * whether archived SESSION records are asked for in the RECENT group, the
+ * other whether archived PROJECTS are asked for in the tree. A user who
+ * wants his retired projects visible has said nothing about his archived
+ * sessions. Merging them would be a behaviour change smuggled in under a
+ * port, and it would silently reset both.
+ */
+export const ARCHIVED_PROJECTS_VISIBLE_KEY = 'cloude.launchpad.archivedVisible';
+
+/**
  * Read one boolean preference, defaulting OFF on anything unexpected.
  *
  * Description: only the exact string `'1'` reads as on, which is the
@@ -109,6 +121,9 @@ export function writeFlag(key: string, on: boolean): void {
  */
 let archivedSessionsVisible = $state<boolean | null>(null);
 
+/** The project filter. Same tri-state, same lazy read, its own key. */
+let archivedProjectsVisible = $state<boolean | null>(null);
+
 /**
  * Resolve the archive filter on first access, then hold it.
  *
@@ -125,6 +140,24 @@ function resolveArchivedSessionsVisible(): boolean {
         archivedSessionsVisible = readFlag(ARCHIVED_SESSIONS_VISIBLE_KEY);
     }
     return archivedSessionsVisible;
+}
+
+/**
+ * Resolve the project archive filter on first access, then hold it.
+ *
+ * Description: the legacy constructor's `this._archivedVisible =
+ *   this.getArchivedVisiblePref()` happened at LOAD; this happens at
+ *   first read, for the reason in this file's header. Once resolved it is
+ *   never re-read, so a second tab changing the key cannot silently
+ *   repaint this one mid-session.
+ * Inputs: none. Output: boolean.
+ * Example: resolveArchivedProjectsVisible()  // false
+ */
+function resolveArchivedProjectsVisible(): boolean {
+    if (archivedProjectsVisible === null) {
+        archivedProjectsVisible = readFlag(ARCHIVED_PROJECTS_VISIBLE_KEY);
+    }
+    return archivedProjectsVisible;
 }
 
 /**
@@ -155,6 +188,23 @@ export const uiPrefs = {
         writeFlag(ARCHIVED_SESSIONS_VISIBLE_KEY, archivedSessionsVisible);
     },
 
+    /** Whether archived PROJECTS are asked for and drawn in the tree. */
+    get archivedProjectsVisible(): boolean {
+        return resolveArchivedProjectsVisible();
+    },
+
+    /**
+     * Set the project archive filter, in memory and on disk together.
+     *
+     * Inputs: on - the new state.
+     * Output: void.
+     * Example: uiPrefs.setArchivedProjectsVisible(true)
+     */
+    setArchivedProjectsVisible(on: boolean): void {
+        archivedProjectsVisible = !!on;
+        writeFlag(ARCHIVED_PROJECTS_VISIBLE_KEY, archivedProjectsVisible);
+    },
+
     /**
      * Re-read every preference from storage.
      *
@@ -167,6 +217,7 @@ export const uiPrefs = {
      */
     reload(): void {
         archivedSessionsVisible = readFlag(ARCHIVED_SESSIONS_VISIBLE_KEY);
+        archivedProjectsVisible = readFlag(ARCHIVED_PROJECTS_VISIBLE_KEY);
     },
 
     /**
@@ -180,5 +231,6 @@ export const uiPrefs = {
      */
     resetForTests(): void {
         archivedSessionsVisible = null;
+        archivedProjectsVisible = null;
     },
 };

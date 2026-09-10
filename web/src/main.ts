@@ -26,9 +26,10 @@ import StatusLed from './lib/StatusLed.svelte';
 import * as led from './lib/led';
 import { ledHtmlForStatus, labelFor, labelWithSource, normalizeStatus } from './lib/status-dot';
 import type { StatusSignals } from './lib/status-dot';
-import { mountPanel, unmountPanel } from './lib/mount';
+import { ensurePanel, mountPanel, unmountPanel } from './lib/mount';
 import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
 import RecentSessions from './lib/launchpad/RecentSessions.svelte';
+import ProjectTree from './lib/launchpad/ProjectTree.svelte';
 import {
     archiveSessionRecord,
     browserHost as recentBrowserHost,
@@ -37,6 +38,7 @@ import {
 } from './lib/launchpad/recent-actions';
 import type { RestartOptions } from './lib/launchpad/recent';
 import { sessionStore } from './lib/sessions/store.svelte';
+import { defaultShouldPoll } from './lib/sessions/poller';
 import { workStampFor } from './lib/sessions/attribution';
 import type { RunningSessionRow } from './lib/sessions/types';
 import { uiPrefs } from './lib/ui/prefs.svelte';
@@ -52,6 +54,9 @@ const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
 
 /** The id of the container `renderLaunchpadUI()` writes for RECENT. */
 const RECENT_SESSIONS_CONTAINER = 'recent-sessions-list';
+
+/** The id of the container `renderLaunchpadUI()` writes for the tree. */
+const PROJECT_TREE_CONTAINER = 'project-list';
 
 /**
  * The host the three exported RECENT actions use when a legacy caller
@@ -115,6 +120,67 @@ function mountAttributionPrompt(): void {
  */
 function mountRecentSessions(): void {
     mountPanel(RECENT_SESSIONS_CONTAINER, RecentSessions, {});
+}
+
+/**
+ * Mount the project tree into the launchpad's own slot.
+ *
+ * Description: THE ONE LINE `client/js/launchpad.js` CALLS for slice 4,
+ *   and it is the whole of `renderProjectList()` now. It sits at the
+ *   exact point that method's `innerHTML` write used to run, along with
+ *   the sixteen methods deleted in the same commit and
+ *   `client/js/project-list-render-guard.js`.
+ *
+ *   `ensurePanel`, NOT `mountPanel`, AND THAT IS THE PERFORMANCE CLAIM'S
+ *   SEAM. `renderProjectList()` is called on every 5s poll tick and from
+ *   five other places. A `mountPanel` here would unmount and rebuild the
+ *   whole tree every five seconds - exactly the repaint this slice
+ *   deletes, reintroduced by the seam rather than by the renderer. This
+ *   is a no-op once a live panel is mounted on the element that
+ *   currently carries the id, so the tick costs one map lookup and the
+ *   tree updates because it READS the store, not because anybody told it
+ *   to paint.
+ * Inputs: none.
+ * Output: void.
+ * Example: window.CloudeWeb.launchpad.mountProjectTree();
+ */
+function mountProjectTree(): void {
+    ensurePanel(PROJECT_TREE_CONTAINER, ProjectTree, {});
+}
+
+/**
+ * The project archive filter, for a legacy caller.
+ *
+ * Description: `Launchpad.loadProjects()` decides what to REQUEST, and
+ *   the filter it reads is a per-device preference that moved into
+ *   `./lib/ui/prefs.svelte.ts` with the rest of the tree's state in
+ *   slice 4. Exported as a FUNCTION rather than a value because the
+ *   preference is resolved lazily on first read and can be flipped by
+ *   the tree between two calls; a value would be a snapshot taken at
+ *   import, which is the whole reason the store exports accessors.
+ * Inputs: none.
+ * Output: boolean.
+ * Example: window.CloudeWeb.launchpad.archivedProjectsVisible();
+ */
+function archivedProjectsVisible(): boolean {
+    return uiPrefs.archivedProjectsVisible;
+}
+
+/**
+ * Whether the launchpad screen is the one on display.
+ *
+ * Description: `client/js/project-list-render-guard.js` held this as
+ *   `shouldPoll`, and slice 4 deleted that file. The predicate is
+ *   unchanged and so is its THIRD OUTCOME: false only for a MEASURED
+ *   hidden, because an unknown screen state must keep polling rather
+ *   than silently stop refreshing the app. The poller reaches it through
+ *   `./lib/sessions/poller.ts`, which is where it now lives; this export
+ *   exists because `client/js/launchpad.js` has no way to import one.
+ * Inputs: none. Output: boolean.
+ * Example: window.CloudeWeb.launchpadIsVisible()
+ */
+function launchpadIsVisible(): boolean {
+    return defaultShouldPoll();
 }
 
 /**
@@ -328,9 +394,16 @@ const CloudeWeb = {
     mountPanel,
     unmountPanel,
     /** Panels that belong to the launchpad screen, by name. */
+    launchpadIsVisible,
     launchpad: {
         mountAttributionPrompt,
         mountRecentSessions,
+        /**
+         * SLICE 4: THE PROJECT TREE. One call, idempotent, at the line
+         * `renderProjectList()`'s `innerHTML` write used to be.
+         */
+        mountProjectTree,
+        archivedProjectsVisible,
         /**
          * SLICE 3: THE SESSION DATA LAYER, AND THE ONLY COPY OF IT.
          * `client/js/launchpad.js` holds no `projects`, no

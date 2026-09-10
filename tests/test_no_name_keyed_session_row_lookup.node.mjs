@@ -232,20 +232,17 @@ const ALLOWED_MATCHES = {
         'tmux_session field instead of .name. launchpad.js is excluded',
         'from edits by this task; flagged here, not fixed here.',
     ].join(' '),
-    'client/js/launchpad.js::.find(s => s.name === name': [
-        'KNOWN BUG, unfixed by this guard. Same shape, a fifth call site',
-        '(note: distinct from the s.name === tmuxName entry above -',
-        'compares against a differently-named local variable, which is',
-        'why both survive as separate allowlist keys).',
-        'launchpad.js is excluded from edits by this task; flagged here,',
-        'not fixed here.',
-    ].join(' '),
-    'client/js/launchpad.js::.find(p => p.name === projectName': [
-        'NOT a session identity lookup: this.projects is keyed by project',
-        'name by design in this app (a launcher project has no other',
-        'identity), not a sessions row. Different entity, same regex',
-        'shape.',
-    ].join(' '),
+    // TWO ENTRIES RETIRED IN SLICE 4, and the reason is worth the line.
+    // `.find(s => s.name === name)` lived in
+    // `_bindProjectSessionRowClicks`, which resolved the clicked row back
+    // to a live session by NAME after reading the name off the DOM. The
+    // tree is a component now, so the row's own object is in scope at the
+    // click and there is nothing to look up - the known bug this entry
+    // registered went away with the lookup rather than being fixed.
+    // `.find(p => p.name === projectName)` was the edit button doing the
+    // same round trip for a PROJECT; same fix, and it was never a session
+    // identity lookup anyway. A dead entry here is worse than no entry,
+    // because it tells the next reader a call site exists that does not.
     'client/js/launchpad.js::.find((p) => p.name === chosen': [
         'NOT a session identity lookup: same projects-by-name lookup as',
         'the entry above, a second call site.',
