@@ -36,6 +36,22 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
 }
 
 SCANNER="$REPO_ROOT/scripts/scan_secrets.py"
+
+# A LINKED WORKTREE MAY NOT CARRY scripts/ AT ALL, and refusing there is a
+# false refusal rather than a real one. The `coord` orphan branch is the case
+# this exists for: it holds coordination markdown and no code by design, so
+# `git rev-parse --show-toplevel` finds a root with no scanner in it and the
+# hook would block every coordination commit forever. The scanner is the same
+# file for every worktree of one clone, so fall back to the MAIN worktree's
+# copy, which the shared .git directory always points at. If neither exists the
+# hook still refuses; not finding a scanner is never treated as a clean scan.
+if [ ! -f "$SCANNER" ]; then
+    COMMON_DIR=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd) || COMMON_DIR=""
+    if [ -n "$COMMON_DIR" ]; then
+        MAIN_ROOT=$(dirname "$COMMON_DIR")
+        [ -f "$MAIN_ROOT/scripts/scan_secrets.py" ] && SCANNER="$MAIN_ROOT/scripts/scan_secrets.py"
+    fi
+fi
 if [ ! -f "$SCANNER" ]; then
     echo "pre-commit secret scan: $SCANNER is missing, refusing" >&2
     echo "  (uninstall with ./scripts/uninstall-secret-hook.sh)" >&2

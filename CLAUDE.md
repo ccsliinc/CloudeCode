@@ -1805,6 +1805,80 @@ tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
 
+## Coordinating with the other team
+
+Two teams work this codebase and neither stops for the other: `ccsliinc`
+(remote `origin`) and `adoom666` (remote `adamdev`). Twice in two days we
+learned what the other side had built by running `git fetch`, after it had
+already landed. The coordination branch exists to stop that.
+
+**Everything lives on `coord`, an ORPHAN branch on `adamdev` carrying no code.**
+That is deliberate: a claim can be published without shipping, compiling or
+testing anything, so coordination cadence is decoupled from code cadence. The
+helper is `scripts/coord.sh` and the full rules are `README.md` on that branch.
+
+**At the start of every work session, run `scripts/coord.sh status`.** It prints
+both sides' current work, every claim with its approach, the design decisions
+each side treats as settled, and any path overlap between live claims. It is one
+command and it is the whole read side of the protocol.
+
+**File a claim before starting work in an area that could collide**, and refresh
+it to keep it alive. A claim is a SOFT LOCK over path globs: it says "I am
+editing these paths this week", not "this is mine". It expires 72 hours after
+its last refresh, computed at read time; nothing deletes an expired claim, it
+just stops counting as an overlap.
+
+**A claim must carry its APPROACH, not only its paths, and that is the field
+that earns its keep.** Measured on the 2026-09-10 merge of the two lines: only
+two files conflicted in git and both were docs, every code file merged
+automatically. The expensive collisions that week were design collisions git
+could not see - unread moved onto the outer ring by one side and the inner dot
+by the other, dead rows kept on the live list by one side and moved to Recent by
+the other, the kebab menu replaced by inline icons while it was being rebuilt.
+The worst was silent: a TypeScript port of the LED went stale because the
+rewrite touched a DIFFERENT file, so nothing conflicted, the rebase looked clean
+and the port was wrong. Only a parity suite caught it. **File level claims
+prevent merge conflicts, which turned out to be the cheap problem. Approach
+prevents design divergence, which was the expensive one.**
+
+**Log what LANDED once it lands**, into your own log file. Shas, what shipped,
+what is still in flight.
+
+**Record settled decisions in `settled/<party>.md`.** A fresh agent has no
+memory of a ruling it was not present for and will cheerfully redesign it; the
+LED ring model has already been reverted by accident once.
+
+**On an overlap, STOP and surface it to the human.** Do not resolve it, do not
+edit the other party's claim, do not negotiate with the other agent. Two agents
+trading ownership over an async channel with a 72 hour horizon will livelock or
+both yield; the humans have out of band bandwidth. If your human is not around,
+keep working on the parts of your claim that do NOT intersect and leave the
+intersection alone. Nothing here may block you.
+
+**There are two kinds of overlap and only one is machine detectable.** A PATH
+overlap is what the script finds, by expanding both claims' globs against the
+real tracked file list and intersecting the results. A DESIGN overlap is when
+the other party's approach contradicts a model your work assumes, and it counts
+exactly the same even when you share no file. All four of the expensive
+collisions above were design overlaps with no shared file.
+
+**Never write into the other party's files.** `coord.sh` refuses by construction
+(every writable path carries its writer's name), and so should you by hand.
+Never rewrite history on a shared branch, and never force push anything.
+
+**And the push rule above still stands, unchanged: `origin` and `adamdev` only,
+NEVER `upstream`.** `coord.sh sync` refuses to run if the `upstream` push URL is
+not still the disabled sentinel.
+
+**What is unproven.** As of 2026-09-10 adoom666 has not agreed to any of this;
+the owner has not raised it yet, and nothing has been pushed to any remote. The
+branch exists locally only. The protocol is built to be useful with one-sided
+participation - our claims still say what we are on and our log still records
+what shipped - but the two-sided half has never been exercised. The merge-safety
+property was simulated in a throwaway repo, both directions, rather than
+asserted; the deliberate single shared file (the protocol doc itself) was
+confirmed to conflict, which is what makes the clean result mean something.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,

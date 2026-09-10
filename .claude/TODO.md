@@ -5723,3 +5723,112 @@ the upstream this project may not push to, so a 1.2 install keeps being
 told it is behind a line it does not follow. No `v1.2.0` git tag was
 created here either; that is a separate deliberate act and the release
 workflow triggers on it.
+
+## 2026-09-10 - a coordination protocol for the two teams, on an orphan branch
+
+Two teams work this codebase and neither stops for the other: ccsliinc
+(`origin`) and adoom666 (`adamdev`). Three times in two days we learned what the
+other side had built by running `git fetch`, after it had landed. This is the
+protocol that exists to stop that. NOT PUSHED and NOT PUBLISHED: the coord
+branch is local only, because the owner has not yet raised any of it with adam.
+
+**The layout, and the one reason for it.** An ORPHAN branch named `coord` on
+`adamdev`, carrying no code at all. `README.md` is the protocol and the only
+file both parties edit; `now/<party>.md`, `log/<party>.md`,
+`settled/<party>.md`, `claims/<party>-<slug>.md` and `notes/<party>-<slug>.md`
+each carry their writer's name in their own path. Git merges additions of
+distinct paths into one directory with no conflict and conflicts on concurrent
+edits to one file, so partitioning the write set by filename makes a
+cross-party conflict structurally impossible rather than merely unlikely.
+
+**Branch, not in-tree, and the trade-off is real.** In-tree was rejected for two
+reasons. Publishing a claim would require a commit on a code branch, and our two
+parties are NEVER on the same branch, so a claim written on `feat/svelte-1.3`
+would be invisible from `release/1.2.1` until a merge. Worse, per-party
+partitioning protects ccsliinc against adoom666 and NOT ccsliinc against itself:
+in-tree, our own five worktrees would conflict with each other on every merge
+between our own branches. The cost we accept is extra git plumbing, and
+`scripts/coord.sh` is where that cost is paid once.
+
+**THE MERGE CONFLICTS WERE THE CHEAP PROBLEM, and this is the part worth
+keeping.** Measured on the 2026-09-10 merge of the two lines: only TWO files
+conflicted in git and both were docs. Every code file merged automatically. The
+expensive collisions that week were design collisions git could not see - unread
+moved onto the outer ring by one side and the inner dot by the other, dead rows
+kept on the live list by one side and moved to Recent by the other, the kebab
+replaced by inline icons while it was being rebuilt. The worst was silent: the
+TypeScript port of the LED went stale because the rewrite touched a DIFFERENT
+file, so nothing conflicted, the rebase looked clean and the port was wrong.
+Only a parity suite caught it. So a claim carries a REQUIRED `## approach`
+(design direction, the invariant it assumes, what it expects to change about
+shared semantics), and a contradiction between two approaches counts as an
+overlap even when the two parties share no file.
+
+**Filed, and all of it true.** Four claims: `ccsliinc-listing-perf`
+(release/1.2.1, the five listing commits), `ccsliinc-session-row-menu`
+(feat/svelte-1.3, the plugin registry at `2d43339`), `ccsliinc-svelte-launchpad`
+(slices 2 to 7, `status: paused`), `ccsliinc-coordination-protocol`. Four log
+entries: v1.2.0 merged/deployed/tagged/pushed, the Electron bundle rebuilt at
+1.2.0, gitleaks 8.30.1 as the second gate, and 1.2.1 in progress. Two settled
+decisions: the LED ring model ruled 2026-09-09, and the push-targets rule.
+
+**A note to adam's agent**, `notes/ccsliinc-to-adoom666-webui-plan.md`, about
+`docs/webui-performance-and-session-menu-plan.md` (`4ae4b71` on adamdev/master,
+which we have NOT merged, along with `46e7aca` durable session mute). It names
+what we have landed in both areas, the two paths we would rather not have
+rewritten this week, and offers to hand over the entire menu specification, the
+event-loop-offload direction, any of slices 2 to 7 and the global settings work.
+It offers; it does not demand.
+
+**MEASURED, NOT ASSERTED.** The merge safety was simulated in throwaway repos,
+both directions, each run able to fail:
+- both parties add a claim, prepend their own log and rewrite their own now,
+  merged B into A: CLEAN, exit 0, zero conflicted files. Merged A into B:
+  CLEAN, exit 0, zero conflicted files.
+- NEGATIVE CONTROL, and it is what makes the clean results mean anything: both
+  parties editing the same line region of the shared README CONFLICTED, exit 1.
+  A harness that never exercises git's conflict detection looks identical to a
+  correct one.
+- KNOWN WEAK SPOT, reported rather than hidden: ONE party prepending to its OWN
+  log from two worktrees CONFLICTS. Per-party partitioning does not protect a
+  party against itself. Mitigated by a clone-wide lock in `coord.sh` and by
+  syncing either side of a write; stated in the protocol doc.
+- The first simulation run was INVALID and was thrown away: git tracks no empty
+  directory, so the second clone had no `claims/` and silently added nothing.
+  A clean merge of nothing looks exactly like a clean merge of something.
+
+**The overlap detector was proved to fire AND to stop firing**, against 1,478
+tracked files. With a claim built from adam's real plan it reported three
+overlaps; the load-bearing one is that his `src/core/*_manager.py` matched our
+literal `src/core/session_manager.py`, two strings that look nothing alike,
+because the detector intersects the EXPANSIONS and not the glob strings. Setting
+that claim's expiry three days into the past dropped it to zero overlaps while
+still rendering it as `EXPIRED_OR_DONE`.
+
+**Two real defects were found by testing rather than by reading.**
+1. `--party` let any invocation assert the other party's identity, which made
+   the "refuses to write another party's files" guard decorative. Party is now
+   pinned to the clone (`git config coord.party`); `--party` is a read-only lens
+   valid on `status` alone and exits 4 on any write.
+2. `expand_globs` returned the status of its last comparison, which is normally
+   a non-match, so under `set -e` the whole status pass died silently after
+   printing a partial report. It also glob-expanded the claim's patterns against
+   the caller's cwd before matching. Both fixed, with the reasons in comments.
+
+**One product-adjacent change, and it was forced.** `scripts/hooks/pre-commit-secret-scan.sh`
+resolved the scanner from `git rev-parse --show-toplevel`, so on the orphan
+branch (no `scripts/` by design) it refused every commit forever. It now falls
+back to the main worktree's copy via the shared git dir. Not finding a scanner
+still refuses; that has not been loosened. `coord.sh` additionally runs the same
+scanner explicitly before every coordination commit, because a claim is exactly
+the kind of prose someone pastes a token into.
+
+**Still open.**
+- NOT PUSHED. The coord branch exists locally only. Publishing it to `adamdev`
+  is outward facing and the owner has not spoken to adam yet.
+- Adam has not agreed to any of this. The two-sided half of the protocol has
+  never been exercised; only the one-sided half is proven.
+- `coord.sh` matches globs in pure bash, roughly files x globs x claims. It is
+  fine at 1,478 files and about 10 claims and will not stay fine forever.
+- There is no periodic reminder. An agent that does not run `coord.sh status`
+  at session start gets nothing, and only the CLAUDE.md section pushes it to.
