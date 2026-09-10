@@ -734,8 +734,23 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // the marker's wording are all in client/js/terminal-write-queue.js;
     // what is here is the queue itself and the two-step teardown, which
     // cannot live anywhere else because they are this object's state.
+    // RAISED 2570 -> 2745, with the stated reason this comment demands,
+    // and this is the round that MOST needed a raise rather than a
+    // squeeze. The auto-reconnect ladder never reconnected: the retry it
+    // scheduled hit connectWebSocket()'s isReconnecting guard, returned
+    // without opening a socket, and had its budget zeroed on the way out
+    // - measured against this very class, present since the initial
+    // commit. Fixing it needed the retry to be able to reach the socket,
+    // the budget to have ONE writer instead of four, initialization
+    // success to be a measured fact (the first BYTES, not the socket
+    // opening), and the 4401 / 4404 / outage guard clauses to become
+    // named branches of one scheduler. The rules - what an attempt
+    // measured, what it costs, how long to wait, and which recovery a
+    // close asks for - are all in
+    // client/js/terminal-reconnect-policy.js. What is here is the state
+    // those rules read and the four call sites that act on them.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2570, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2745, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {

@@ -42,11 +42,27 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         this.fitAddon = null;
         this.sessionActive = false;
 
-        // Auto-reconnect tracking
+        // Auto-reconnect tracking. TWO COUNTERS, TWO QUESTIONS, ONE
+        // WRITER EACH. `reconnectAttempts` is the BUDGET - have we told
+        // the user this session is unreachable yet - and only a MEASURED
+        // failure moves it, through _resetRetryBudget() and nothing else.
+        // `_attemptsSinceProgress` is the BACKOFF - how long before the
+        // next try - and EVERY attempt moves it. One counter for both
+        // forced a choice between a budget that never fills and a delay
+        // that never grows. See client/js/terminal-reconnect-policy.js.
         this.reconnectAttempts = 0;
+        this._attemptsSinceProgress = 0;
         this.reconnectTimeout = null;
         this.maxReconnectAttempts = 5;
         this.isReconnecting = false;
+        // What THIS attempt has measured. `_socketEverOpened` says the
+        // server answered; `_bytesEverSeen` says the PANE is talking, and
+        // only the second is initialization success.
+        this._socketEverOpened = false;
+        this._bytesEverSeen = false;
+        this._initOutcome = 'unknown';
+        // The unreachable message is said once per exhausted budget.
+        this._unreachableReported = false;
 
         // WebSocket keepalive
         this.keepaliveInterval = null;
@@ -119,10 +135,15 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *   file asks before it acts.
      * Inputs: what (string) - what is being abandoned, for the log line.
      * Output: boolean - true to proceed. True when the module is absent,
-     *   because a load-order accident must not stop the terminal working.
+     *   because a load-order accident must not stop the terminal working,
+     *   and true when no token was ever recorded: not having looked is
+     *   not evidence of staleness, and refusing on it would be a new way
+     *   for a connect to silently never happen. Same asymmetry as
+     *   TerminalInputOwnership.permits() with no ticket.
      */
     _navCurrent(what) {
         if (!window.NavigationGeneration) return true;
+        if (this._navToken == null) return true;
         return window.NavigationGeneration.keep(this._navToken, what);
     }
 
@@ -955,7 +976,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         }
         this._currentSession = null;
         this.sessionActive = false;
-        this.reconnectAttempts = 0;
+        this._resetRetryBudget('new session bound');
 
         // Stash session on the controller so other modules (launchpad
         // self-adopt filter, debug) can introspect without refetching.
@@ -1101,7 +1122,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         }
         this._currentSession = null;
         this.sessionActive = false;
-        this.reconnectAttempts = 0;
+        this._resetRetryBudget('new session bound');
 
         // Stash so launchpad self-adopt filter + debug can introspect.
         this._currentSession = session;
@@ -1212,11 +1233,31 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     /**
      * Connect WebSocket with auth token
      */
-    async connectWebSocket() {
+    async connectWebSocket(opts = {}) {
         if (this.isReconnecting) {
-            this.stopReconnecting();
-            return;
+            // A RETRY MUST BE ALLOWED TO CONNECT. This guard used to
+            // stopReconnecting() and RETURN for EVERY caller, including
+            // the retry the scheduler had just fired - so the ladder ran
+            // one timer, opened ZERO sockets, put the budget back to 0
+            // and went silent, without even reaching its own failure
+            // message. Measured against this class; present since the
+            // initial commit. It is why the 4404 and outage recoveries
+            // were bolted on beside the general mechanism rather than
+            // built into it.
+            if (opts && opts.scheduled) {
+                // This IS the attempt the ladder was waiting for.
+                this.isReconnecting = false;
+            } else {
+                // A connect the USER asked for - a session switch, a
+                // rejoin - supersedes a ladder sitting on a timer. Cancel
+                // the timer and connect now rather than doing neither.
+                this.stopReconnecting();
+            }
         }
+
+        // A fresh attempt has measured nothing yet.
+        this._socketEverOpened = false;
+        this._bytesEverSeen = false;
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             console.log('Terminal: Already connected');
@@ -1594,8 +1635,13 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             if (!live('open')) return;
             console.log('Terminal: WebSocket connected');
 
-            // Reset reconnect state
-            this.reconnectAttempts = 0;
+            // THE SOCKET OPENING IS NOT INITIALIZATION SUCCESS. It proves
+            // the SERVER answered and says nothing about whether the pane
+            // is talking - a pane parked on its folder-trust dialog opens
+            // a perfectly good socket and sends nothing. The budget is
+            // reset by the first BYTES, in onmessage below. See
+            // client/js/terminal-reconnect-policy.js.
+            this._socketEverOpened = true;
             this.isReconnecting = false;
             // Clear intentional-close flag now that a fresh WS is open -
             // any FUTURE close is a natural disconnect and should reconnect.
@@ -1689,6 +1735,10 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             if (!live('frame')) return;
             // Handle binary frames (PTY data)
             if (event.data instanceof ArrayBuffer) {
+                // INITIALIZATION SUCCESS, MEASURED. The pane sent bytes,
+                // which is the only positive proof the session is talking
+                // and the ONE event allowed to reset the retry budget.
+                if (!this._bytesEverSeen) this._noteInitializationSuccess();
                 this.enqueue(new Uint8Array(event.data));
                 return;
             }
@@ -1764,64 +1814,77 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             this.updateStatus('Disconnected', 'error');
             this._showStatusPill('disconnected', 'error');
 
-            // Auth-fail close from server (src/api/websocket.py - code 4401
-            // is emitted when JWT verification fails on the WS handshake or
-            // when the access token expires mid-stream). Don't reconnect
-            // with the same stale token - that would spin the close/4401
-            // loop until we exhaust maxReconnectAttempts. Instead, proactively
-            // refresh first so the next openWebSocket() picks up a fresh
-            // token via getToken().
-            if (closeCode === 4401 && this.sessionActive && !this.isReconnecting) {
-                this._handleAuthFailedClose();
-                return;
-            }
-
-            // Server-forgot-session close (src/api/websocket.py - code 4404
-            // is emitted when ``?session_id=`` doesn't resolve against the
-            // server's in-memory session map, e.g. right after a server
-            // restart: the tmux session survives on its socket, but the
-            // fresh server process never heard of the ephemeral id our WS
-            // was scoped to). Retrying with the SAME id via the normal
-            // attemptReconnect() below would just hit 4404 again on every
-            // attempt until maxReconnectAttempts. Try re-resolving by the
-            // stable tmux NAME once instead - see _attemptReconnectByName().
-            // Guarded so this fires at most once per disconnect episode
-            // (flag clears on the next successful ws.onopen).
-            if (closeCode === 4404 && this.sessionActive && !this.isReconnecting
-                && !this._reconnectByNameAttempted) {
-                this._reconnectByNameAttempted = true;
-                // Capture the name this tab is bound to RIGHT NOW, before
-                // any await can rebind it, and hand it down so the adopt
-                // guard has a fixed reference point to compare against.
-                this._attemptReconnectByName(this._currentTmuxName());
-                return;
-            }
-
-            // OUTAGE close. This is the case neither branch above covers:
-            // the socket dies with an ordinary abnormal-close code (1006
-            // refused/aborted, 1001 going away, 1012 service restart, ...)
-            // and nothing ever sends 4404, so the bounded id-based loop
-            // below spends all five attempts against something that is
-            // not answering. The close code alone does NOT tell us WHY -
-            // a restarting server, a dead proxy and the user's wifi
-            // dropping all look identical here - so this branch only
-            // claims "possible outage" and _handlePossibleOutage() does
-            // the narrowing with a health probe and navigator.onLine.
-            // Gated on ServerRestartWatch being loaded so a missing
-            // script degrades to the pre-existing behavior rather than
-            // throwing inside onclose.
-            if (this.sessionActive && !this.isReconnecting && !this._restartWatchActive
-                && window.ServerRestartWatch
-                && window.ServerRestartWatch.isOutageCloseCode(closeCode)) {
-                this._handlePossibleOutage();
-                return;
-            }
-
-            // Attempt auto-reconnect if session still active
-            if (this.sessionActive && !this.isReconnecting) {
-                this.attemptReconnect();
-            }
+            this._scheduleRecovery(closeCode);
         };
+    }
+
+    /**
+     * Description: pick and run the recovery this close asks for. ONE
+     *   shape, four named branches, rather than three guard clauses in
+     *   front of a general mechanism that none of them ever reached.
+     * Inputs: closeCode (number|null) - the WebSocket close code.
+     * Output: void.
+     *
+     * WHY IT IS ONE FUNCTION NOW. Each of these WAS a guard clause with
+     * an early return sitting above `attemptReconnect()`, which is
+     * usually a sign the general mechanism does not express the
+     * situation - and here it was worse than that, because the general
+     * mechanism was broken and the guard clauses were the only thing that
+     * worked. The conditions are unchanged and are written down in
+     * client/js/terminal-reconnect-policy.js; what changed is that they
+     * are branches of one scheduler with stated conditions.
+     *
+     *   refresh_auth       4401. The token is stale, so rotate it BEFORE
+     *                      the next attempt or every attempt spends
+     *                      itself on the same rejection.
+     *   re_resolve_by_name 4404, at most once per disconnect episode.
+     *                      The server forgot our ephemeral id but tmux
+     *                      still has the session, so the stable NAME is
+     *                      what resolves it. Retrying the same id cannot.
+     *   wait_for_server    an ordinary abnormal close AND ServerRestartWatch
+     *                      is loaded and recognises the code. The code
+     *                      alone does not say WHY - a restarting server,
+     *                      a dead proxy and dropped wifi look identical -
+     *                      so this only claims "possible outage" and the
+     *                      handler narrows it with a health probe.
+     *   retry_same_id      everything else.
+     */
+    _scheduleRecovery(closeCode) {
+        if (!this.sessionActive || this.isReconnecting) return;
+        const policy = window.TerminalReconnectPolicy;
+        const watch = window.ServerRestartWatch;
+        const outageCodeKnown = !this._restartWatchActive && !!watch
+            && typeof watch.isOutageCloseCode === 'function'
+            && watch.isOutageCloseCode(closeCode);
+        const recovery = policy
+            ? policy.recoveryFor({
+                code: closeCode,
+                intentional: false,
+                byNameAlreadyTried: !!this._reconnectByNameAttempted,
+                outageCodeKnown,
+            })
+            // No policy module is a load-order accident, not a licence to
+            // do nothing: fall back to the plain retry, which is what
+            // every close reached before the named branches existed.
+            : 'retry_same_id';
+
+        if (recovery === 'refresh_auth') {
+            this._handleAuthFailedClose();
+            return;
+        }
+        if (recovery === 're_resolve_by_name') {
+            this._reconnectByNameAttempted = true;
+            // Capture the name this tab is bound to RIGHT NOW, before any
+            // await can rebind it, and hand it down so the adopt guard
+            // has a fixed reference point to compare against.
+            this._attemptReconnectByName(this._currentTmuxName());
+            return;
+        }
+        if (recovery === 'wait_for_server') {
+            this._handlePossibleOutage();
+            return;
+        }
+        this.attemptReconnect();
     }
 
     /**
@@ -1923,11 +1986,45 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     }
 
     /**
-     * Attempt to reconnect WebSocket
+     * Description: schedule one more attempt on the SAME session id, and
+     *   charge the retry budget only for what the last attempt actually
+     *   measured.
+     * Inputs: none. Reads `_socketEverOpened` / `_bytesEverSeen`, which
+     *   the attempt that just ended wrote.
+     * Output: void.
+     *
+     * THE BUDGET IS SPENT ONLY BY A MEASURED FAILURE - the socket never
+     * opened, so the server did not answer. An attempt whose outcome is
+     * UNKNOWN, and a pane measured to be sitting on its startup prompt,
+     * both cost nothing: not having measured a success is not evidence of
+     * failure, and charging for one is how a slow machine or an
+     * untrusted folder gets a healthy session declared unreachable. That
+     * is the same asymmetry `resolve_startup_gate` uses at rung 5 versus
+     * rung 7. The BACKOFF grows on every attempt regardless, so an
+     * unknown outcome is a slow poll rather than a spin.
      */
     attemptReconnect() {
-        if (!this.sessionActive || this.reconnectAttempts >= this.maxReconnectAttempts) {
-            if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        const policy = window.TerminalReconnectPolicy;
+        const outcome = this._measuredInitOutcome();
+        this._initOutcome = outcome;
+        const charge = policy
+            ? policy.consumesBudget({
+                socketOpened: this._socketEverOpened, outcome })
+            : true;
+        if (charge) this.reconnectAttempts += 1;
+
+        if (!this.sessionActive || this.reconnectAttempts > this.maxReconnectAttempts) {
+            if (this.reconnectAttempts > this.maxReconnectAttempts
+                && !this._unreachableReported) {
+                // SAID ONCE, AND IT STAYS SAID. stopReconnecting() used
+                // to clear the budget on its way out of this branch, so
+                // the ceiling handed out another five attempts every time
+                // it was reached. Silence on an unreachable session is
+                // worse than a message, and a message that repeats on
+                // every further close is worse than either - so the flag
+                // is what keeps it to one, and only _resetRetryBudget()
+                // clears it, on the same evidence that refills the budget.
+                this._unreachableReported = true;
                 console.log('Terminal: Max reconnect attempts reached');
                 this.updateStatus('Connection failed', 'error');
                 this._showStatusPill(
@@ -1938,23 +2035,44 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         }
 
         this.isReconnecting = true;
-        this.reconnectAttempts++;
+        this._attemptsSinceProgress += 1;
+        const delay = policy
+            ? policy.backoffMs(this._attemptsSinceProgress)
+            : 1000;
 
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 16000);
-
-        console.log(`Terminal: Reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
+        console.log(`Terminal: reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms, last outcome ${outcome}`);
         this.updateStatus('Reconnecting...');
-
         this._showStatusPill(
             `reconnecting, attempt ${this.reconnectAttempts} of ${this.maxReconnectAttempts}`, 'info');
 
         this.reconnectTimeout = setTimeout(() => {
-            this.connectWebSocket();
+            this.reconnectTimeout = null;
+            // A RECONNECT CARRIES THE NAVIGATION IT WAS SCHEDULED FOR.
+            // The delay reaches sixteen seconds, which is ample time to
+            // move to another session, and a retry that fired anyway
+            // would open a socket for a session nobody is looking at.
+            if (!this._navCurrent('scheduled reconnect attempt')) {
+                this.stopReconnecting();
+                return;
+            }
+            // `scheduled` is what lets this reach the socket at all - see
+            // connectWebSocket()'s first branch.
+            this.connectWebSocket({ scheduled: true });
         }, delay);
     }
 
     /**
-     * Stop reconnection attempts
+     * Description: stop the retry ladder. Cancels the pending timer and
+     *   clears the in-progress flag, and DELIBERATELY LEAVES THE BUDGET
+     *   ALONE.
+     * Inputs: none.
+     * Output: void.
+     *
+     * IT USED TO RESET THE BUDGET, and that was the defect. It is called
+     * from the exhaustion branch itself, so five failures printed the
+     * "unreachable" message and then handed out five more attempts,
+     * forever - a ceiling that can never be reached is not a ceiling.
+     * Only _resetRetryBudget() writes that counter now.
      */
     stopReconnecting() {
         if (this.reconnectTimeout) {
@@ -1962,7 +2080,63 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             this.reconnectTimeout = null;
         }
         this.isReconnecting = false;
+    }
+
+    /**
+     * Description: THE ONE WRITER of the retry budget. Two reasons reach
+     *   it and both are named in the log line: a connection that reached
+     *   initialization success, and a different session being bound to
+     *   this controller - which is not a reset of one session's counter
+     *   but the start of another's, and a fresh session must not inherit
+     *   an exhausted budget from the one before it.
+     * Inputs: reason (string) - for the log.
+     * Output: void.
+     */
+    _resetRetryBudget(reason) {
+        if (this.reconnectAttempts || this._attemptsSinceProgress) {
+            console.log('Terminal: retry budget reset -', reason);
+        }
         this.reconnectAttempts = 0;
+        this._attemptsSinceProgress = 0;
+        this._unreachableReported = false;
+    }
+
+    /**
+     * Description: record that this attempt reached INITIALIZATION
+     *   SUCCESS - the pane sent bytes, which is the only positive proof
+     *   the session is talking. The socket opening and the dimension
+     *   handshake completing are two other facts and neither is this one.
+     * Inputs: none.
+     * Output: void.
+     */
+    _noteInitializationSuccess() {
+        this._bytesEverSeen = true;
+        const policy = window.TerminalReconnectPolicy;
+        this._initOutcome = policy
+            ? policy.initOutcome({ socketOpened: true, bytesSeen: true })
+            : 'ready';
+        this._resetRetryBudget('initialization success');
+    }
+
+    /**
+     * Description: what the attempt that just ended measured, in the
+     *   server's own `ready` / `awaiting_startup_prompt` / `unknown`
+     *   vocabulary. `awaiting_startup_prompt` is read off the session row
+     *   this tab holds, so a pane parked on its folder-trust dialog is
+     *   recognised as a session that CONNECTED and is waiting for a
+     *   human, not as a failed attempt.
+     * Inputs: none.
+     * Output: string - one of TerminalReconnectPolicy.INIT.
+     */
+    _measuredInitOutcome() {
+        const policy = window.TerminalReconnectPolicy;
+        if (!policy) return this._bytesEverSeen ? 'ready' : 'unknown';
+        const wrapper = this._currentSession || {};
+        return policy.initOutcome({
+            socketOpened: this._socketEverOpened,
+            bytesSeen: this._bytesEverSeen,
+            startupGate: wrapper.startup_gate || null,
+        });
     }
 
     /**

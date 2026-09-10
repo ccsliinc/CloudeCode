@@ -751,7 +751,13 @@ per server process and no subprocess at all.
   chasing it. Node: **197 tracked suites, all 197 passing** (re-counted
   2026-09-09 at the 1.2 merge; v1.1 alone had 193, of which 2 failed).
   `test_archive_full_page_mode.node.mjs`, the one long-standing node
-  failure this file used to name, is FIXED and now passes. The piped-stdin CLI helper for
+  failure this file used to name, is FIXED and now passes. Re-measured
+  2026-09-10 on the navigation-token branch: **206 tracked suites, all
+  206 passing**, against 202 on its base commit in the same worktree -
+  four added, no new failures. Note `test_terminal_layout.node.mjs`
+  flaked ONCE in that base run and passed in isolation seconds later on
+  the same tree, so a lone failure there without a code change is not a
+  regression; re-run before chasing it. The piped-stdin CLI helper for
   the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
   exits non-zero when run with no input - which is what it used to be
@@ -2206,6 +2212,66 @@ re-sum, so admission is O(1) per chunk instead of growing precisely when
 the queue is longest. The scrollback follow decision is still sampled
 BEFORE the write, where `terminal-scroll.js` put it, and a test pins that
 it did not move.
+
+**AND THE AUTO-RECONNECT LADDER NEVER RECONNECTED, WHICH WAS MEASURED
+BEFORE ANYTHING WAS CHANGED.** `attemptReconnect()` set
+`isReconnecting = true`, charged the budget and scheduled
+`connectWebSocket()`, whose first line was
+`if (this.isReconnecting) { this.stopReconnecting(); return; }` - so the
+retry it had just fired hit that guard, RETURNED without opening a socket,
+and `stopReconnecting()` put the budget back to zero on its way out.
+Driven against the shipped class: one timer, ZERO sockets, budget 0, and
+the user saw `reconnecting, attempt 1 of 5` then silence, not even the
+failure message, because `attemptReconnect()` was never re-entered.
+Present since the initial commit (`a82cb57`). It is why the 4404 and
+outage recoveries were bolted on beside the general mechanism: they call
+`reconnectToExistingSession` directly and never went through it. Full
+model in `docs/reconnect.md`; the rules are in
+`client/js/terminal-reconnect-policy.js`.
+
+**TWO QUESTIONS, TWO COUNTERS, ONE WRITER EACH.** `reconnectAttempts` was
+zeroed in five places and compared in one, and any reset on a path that
+also schedules a retry makes the ceiling unreachable - `stopReconnecting()`
+is called from the exhaustion branch ITSELF, so five failures printed the
+message and handed out five more attempts, forever. It is the BUDGET now
+and `_resetRetryBudget()` is the only thing that zeroes it, for two named
+reasons: initialization success, and a different session being bound
+(which is not a reset of one counter but the start of another's - a fresh
+session must not inherit an exhausted budget). `_attemptsSinceProgress` is
+the BACKOFF and every attempt moves it; one counter for both forced a
+choice between a budget that never fills and a delay that never grows.
+
+**THE BUDGET IS SPENT ONLY BY A MEASURED FAILURE**, the socket never
+opening. An UNKNOWN outcome costs nothing and neither does a pane measured
+`awaiting_startup_prompt`: not having measured a success is not evidence
+of failure, and charging for one gets a healthy session on a slow machine
+declared unreachable. Same asymmetry as `resolve_startup_gate` rung 5
+versus rung 7. The cost, stated rather than hidden: a server that accepts
+and immediately closes is retried forever - but the backoff still reaches
+its 16s ceiling, so it is a slow poll and not a spin, and declaring a
+healthy session dead is the worse failure.
+
+**INITIALIZATION SUCCESS IS THE FIRST BYTES.** The socket opening, the
+dimension handshake completing and the pane sending something are three
+different facts and only the third proves the session is talking - a pane
+on its folder-trust dialog opens a perfectly good socket and says nothing.
+The outcome reuses the server's `ready` / `awaiting_startup_prompt` /
+`unknown` vocabulary rather than inventing a fourth spelling, and `ready`
+still claims only "not blocked on a startup prompt", never "healthy". The
+unreachable message is said ONCE and stays said; `_unreachableReported`
+clears on the same evidence that refills the budget.
+
+**FOUR NAMED BRANCHES, ONE SCHEDULER.** `_scheduleRecovery(closeCode)`
+replaces three guard clauses that sat in front of a mechanism none of them
+ever reached: `refresh_auth` (4401), `re_resolve_by_name` (4404, once per
+episode), `wait_for_server` (an abnormal close `ServerRestartWatch`
+recognises) and `retry_same_id`. And a reconnect carries the navigation
+token: sixteen seconds is ample time to move to another session, so a
+retry stands down rather than opening a socket nobody is looking at.
+`terminal-reconnect-policy.js` is a REAL DEPENDENCY of terminal.js - a
+sandbox without it takes the plain retry for every close, which is how
+`tests/test_restart_reconnect.node.mjs` started failing on a harness gap
+rather than a code change.
 
 ## Gotchas that have cost real time
 

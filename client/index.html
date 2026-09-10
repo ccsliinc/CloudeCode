@@ -1061,6 +1061,12 @@
          it is missing the queue is unbounded, which is the behaviour
          that shipped. -->
     <script src="/static/js/terminal-write-queue.js"></script>
+    <!-- What a reconnect attempt MEASURED, what that costs the retry
+         budget, and which named recovery a close code asks for. PURE.
+         Must load BEFORE terminal.js; if it is missing every close falls
+         back to the plain same-id retry, which is what every close
+         reached before the named branches existed. -->
+    <script src="/static/js/terminal-reconnect-policy.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Punchlist item 1: after a measured absence, OFFER full history, a
          summary of what happened, or just carry on, instead of the app

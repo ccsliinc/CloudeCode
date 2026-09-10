@@ -28,6 +28,14 @@ import assert from 'node:assert/strict';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_JS = path.join(__dirname, '..', 'client', 'js');
 const watchSrc = fs.readFileSync(path.join(CLIENT_JS, 'server-restart-watch.js'), 'utf8');
+// A REAL DEPENDENCY OF terminal.js, and it has to be in the sandbox.
+// _scheduleRecovery() asks this module which recovery a close code
+// wants, and without it every close falls through to the plain same-id
+// retry - so the outage branch this file exists to test would never fire
+// and every case here would be measuring a missing script tag.
+// index.html loads it before terminal.js; so does this.
+const policySrc = fs.readFileSync(
+    path.join(CLIENT_JS, 'terminal-reconnect-policy.js'), 'utf8');
 const terminalSrc = fs.readFileSync(path.join(CLIENT_JS, 'terminal.js'), 'utf8');
 
 // Test-only tunables: the same loop the browser runs, at millisecond
@@ -191,7 +199,14 @@ function makeSandbox({
     };
     vm.createContext(context);
     vm.runInContext(watchSrc, context, { filename: 'server-restart-watch.js' });
+    vm.runInContext(policySrc, context, { filename: 'terminal-reconnect-policy.js' });
     vm.runInContext(terminalSrc, context, { filename: 'terminal.js' });
+    if (!context.window.TerminalReconnectPolicy) {
+        throw new Error(
+            'terminal-reconnect-policy.js did not export itself into the '
+            + 'sandbox, so every close would take the plain retry and this '
+            + 'suite would be measuring a harness bug');
+    }
 
     const terminal = context.window.TerminalController;
     terminal.sessionActive = true;
