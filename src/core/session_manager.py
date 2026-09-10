@@ -4479,6 +4479,9 @@ class SessionManager:
                     note="every session status falls back to unknown",
                 )
                 return StatusMap()
+            # THE SOCKET TRAVELS WITH THE LISTING, and it is read off
+            # the probe rather than re-derived, so the map can never
+            # claim a socket the listing was not actually taken from.
             return StatusMap(
                 {
                     row["name"]: row
@@ -4486,6 +4489,7 @@ class SessionManager:
                     if row.get("name")
                 },
                 complete=True,
+                socket=getattr(probe, "socket_name", None),
             )
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             logger.warning("tmux_status_map_build_failed", error=str(exc))
@@ -4697,9 +4701,23 @@ class SessionManager:
         # ``listing_proves_alive`` also answers False for any caller
         # passing a plain dict, so every pre-``StatusMap`` test double
         # keeps the behaviour it had.
+        #
+        # AND THE POSITIVE IS ONLY EVIDENCE ABOUT THE SOCKET IT CAME
+        # FROM. ``is_alive()`` probes THIS BACKEND'S socket; the listing
+        # was taken from the PROBE'S. They agree in this process today
+        # and nothing enforces it, and a tmux session NAME is not unique
+        # across sockets - so the backend's own socket is passed in and a
+        # mismatch (or an unstated socket on either side) refuses and
+        # falls through to the probe. Refusing costs the pre-fix
+        # behaviour; answering across sockets would paint a dead session
+        # alive.
         liveness = resolve_listing_liveness(
             exists=(
-                listing_proves_alive(status_map, tmux_session_name)
+                listing_proves_alive(
+                    status_map,
+                    tmux_session_name,
+                    backend_socket=getattr(backend, "socket_name", None),
+                )
                 or backend.is_alive()
             ),
             pane_status=raw_tmux_status if tmux_session_name else None,

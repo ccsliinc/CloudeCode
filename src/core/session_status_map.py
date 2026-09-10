@@ -26,10 +26,31 @@ backend pinned to a different socket - so an absent name is "not shown to
 be alive", not "shown to be dead". Dropping a row on that would delete a
 live session from the sidebar on the strength of a negative.
 
+AND THE POSITIVE HALF IS ONLY EVIDENCE ABOUT THE SOCKET IT WAS TAKEN
+FROM. The probe that produced this listing was bound to ONE tmux socket,
+while ``backend.is_alive()`` - the call being replaced - runs
+``tmux has-session`` on THAT BACKEND'S OWN socket. Those are the same
+socket in this process today and nothing enforces it. A tmux session name
+is not unique across sockets, this app mints names from project slugs, and
+a user's personal ``tmux`` server can hold a ``cloude_Foo`` of its own. So
+a name found on the PROBE'S socket would vouch for a session held by a
+backend pinned somewhere else, and a dead session would paint alive - the
+false green this codebase keeps paying for. The socket the listing came
+from therefore travels ON the map, and a caller must state the socket it
+is asking ABOUT; if either is unstated, or they differ, this refuses and
+the caller pays the probe it was always paying. A refusal costs exactly
+the pre-fix behaviour, so refusing too often is free and answering wrongly
+is not.
+
 So this module answers only the POSITIVE half, and the caller keeps its
 existing probe for everything else:
 
-    exists = listing_proves_alive(status_map, name) or backend.is_alive()
+    exists = (
+        listing_proves_alive(
+            status_map, name, backend_socket=backend.socket_name
+        )
+        or backend.is_alive()
+    )
 
 That is the same shape this codebase already uses for the startup gate's
 tail (rung 5 refuses, rung 7 answers) and for transcript presence: not
@@ -69,8 +90,18 @@ class StatusMap(dict):
     #: "not stated" rather than raising.
     complete: bool = False
 
+    #: The tmux socket this listing was taken from, or None for "not
+    #: stated". Same default discipline as ``complete``: a map that does
+    #: not say which socket it describes can vouch for nothing, because a
+    #: session NAME is not unique across sockets.
+    socket: Optional[str] = None
+
     def __init__(
-        self, rows: Optional[Dict[str, Any]] = None, *, complete: bool = False
+        self,
+        rows: Optional[Dict[str, Any]] = None,
+        *,
+        complete: bool = False,
+        socket: Optional[str] = None,
     ) -> None:
         """Build the map.
 
@@ -79,46 +110,70 @@ class StatusMap(dict):
                 found nothing or could not run.
             complete: True iff the listing ran and its enumeration of
                 live session names can be trusted.
+            socket: the tmux socket the listing was taken from. None
+                means "not stated", which makes the map unable to prove
+                anything about any backend.
         Output: None.
         Example:
-            >>> StatusMap({"cloude_a": {"status": "running"}}, complete=True)
+            >>> StatusMap(
+            ...     {"cloude_a": {"status": "running"}},
+            ...     complete=True,
+            ...     socket="cloude",
+            ... )
             {'cloude_a': {'status': 'running'}}
         """
         super().__init__(rows or {})
         self.complete = bool(complete)
+        self.socket = socket or None
 
 
 def listing_proves_alive(
-    status_map: Optional[Dict[str, Any]], tmux_name: Optional[str]
+    status_map: Optional[Dict[str, Any]],
+    tmux_name: Optional[str],
+    *,
+    backend_socket: Optional[str] = None,
 ) -> bool:
     """Does the bulk listing POSITIVELY show this session exists?
 
     Description: the one place that decides whether the bulk row may
         stand in for a ``tmux has-session`` call, and it answers only the
-        half the listing can prove. True means the completed listing
-        named this session, so no probe is needed. False means ONLY "this
-        listing does not establish it" - never "it is gone" - and the
-        caller must fall back to its own probe. See the module docstring
-        for why the negative is deliberately not trusted.
+        half the listing can prove. True means the completed listing was
+        taken from THIS BACKEND'S SOCKET and named this session, so no
+        probe is needed. False means ONLY "this listing does not
+        establish it" - never "it is gone" - and the caller must fall
+        back to its own probe. See the module docstring for why neither
+        the negative nor a cross-socket positive is trusted.
     Inputs:
         status_map: the map from ``_build_tmux_status_map``. A
-            :class:`StatusMap` carries its own completeness; any other
-            mapping (a test double, a legacy caller) is treated as not
-            stating it and can never prove anything.
+            :class:`StatusMap` carries its own completeness and its own
+            socket; any other mapping (a test double, a legacy caller) is
+            treated as stating neither and can never prove anything.
         tmux_name: the tmux session name to look for, or None. A session
             with no tmux name cannot be looked up by name - the
             PTYBackend case, which appears in no tmux listing at all - so
             it is never proven here.
+        backend_socket: the socket the ASKING backend is pinned to, which
+            is the socket its own ``is_alive()`` would have probed.
+            Required in practice: None means the caller did not state it,
+            and an unstated socket is refused rather than assumed to
+            match. A name is not unique across sockets, so answering on a
+            mismatch would vouch for a different tmux session that merely
+            shares a name.
     Output:
-        bool - True when the listing names it and may be trusted;
-        False when the caller must probe.
+        bool - True when the listing is complete, was taken from this
+        backend's socket, and names it; False when the caller must probe.
     Example:
-        >>> m = StatusMap({"cloude_a": {}}, complete=True)
-        >>> listing_proves_alive(m, "cloude_a")
+        >>> m = StatusMap({"cloude_a": {}}, complete=True, socket="cloude")
+        >>> listing_proves_alive(m, "cloude_a", backend_socket="cloude")
         True
-        >>> listing_proves_alive(m, "cloude_b")
+        >>> listing_proves_alive(m, "cloude_b", backend_socket="cloude")
         False
-        >>> listing_proves_alive({"cloude_a": {}}, "cloude_a")
+        >>> listing_proves_alive(m, "cloude_a", backend_socket="default")
+        False
+        >>> listing_proves_alive(m, "cloude_a")
+        False
+        >>> listing_proves_alive({"cloude_a": {}}, "cloude_a",
+        ...                      backend_socket="cloude")
         False
     """
     if not tmux_name:
@@ -126,5 +181,10 @@ def listing_proves_alive(
     if status_map is None:
         return False
     if not getattr(status_map, "complete", False):
+        return False
+    listing_socket = getattr(status_map, "socket", None)
+    if not listing_socket or not backend_socket:
+        return False
+    if listing_socket != backend_socket:
         return False
     return tmux_name in status_map
