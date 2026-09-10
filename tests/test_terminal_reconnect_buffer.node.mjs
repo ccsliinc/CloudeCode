@@ -314,7 +314,13 @@ function loadTerminal(term) {
     sandbox.window = sandbox;
     vm.createContext(sandbox);
 
-    for (const m of ['terminal-reconnect-buffer.js', 'terminal.js']) {
+    // index.html loads terminal-layout-wait.js before terminal.js, so this
+    // harness does too - otherwise it measures the optional-chaining
+    // fallback rather than the code that actually runs in the browser.
+    // Its rAF stub fires, so the bounded waits settle on a real frame,
+    // which models a PAINTED tab. The unpainted tab is
+    // tests/test_terminal_layout_wait.node.mjs.
+    for (const m of ['terminal-layout-wait.js', 'terminal-reconnect-buffer.js', 'terminal.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(CLIENT_JS, m), 'utf8'), sandbox, { filename: m });
     }

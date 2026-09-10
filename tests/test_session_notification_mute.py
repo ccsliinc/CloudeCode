@@ -1137,7 +1137,7 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
     """
     import time as _time
 
-    from src.core.session_liveness import LIVENESS_ALIVE
+    from src.core.session_status import LIVENESS_LIVE
     from src.core.session_startup_gate import GATE_AWAITING
 
     store = _muted_store()
@@ -1155,7 +1155,7 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
         backend=mgr.backends["ses_mute"],
         tmux_name=TMUX_NAME,
         row=row,
-        liveness=LIVENESS_ALIVE,
+        liveness=LIVENESS_LIVE,
     )
 
     assert verdict == GATE_AWAITING
@@ -1170,7 +1170,7 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
             backend=mgr.backends["ses_mute"],
             tmux_name=TMUX_NAME,
             row=row,
-            liveness=LIVENESS_ALIVE,
+            liveness=LIVENESS_LIVE,
         )
         == GATE_AWAITING
     )
@@ -1183,7 +1183,7 @@ def test_an_unmuted_session_still_gets_its_startup_prompt_toast(
     """The positive control for the gate above."""
     import time as _time
 
-    from src.core.session_liveness import LIVENESS_ALIVE
+    from src.core.session_status import LIVENESS_LIVE
     from src.core.session_startup_gate import GATE_AWAITING
 
     _, mgr = _build_hook_app(
@@ -1200,7 +1200,7 @@ def test_an_unmuted_session_still_gets_its_startup_prompt_toast(
         backend=mgr.backends["ses_mute"],
         tmux_name=TMUX_NAME,
         row=row,
-        liveness=LIVENESS_ALIVE,
+        liveness=LIVENESS_LIVE,
     )
     assert verdict == GATE_AWAITING
     assert len(mgr.get_toasts("ses_mute")) == 1

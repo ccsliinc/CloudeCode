@@ -1,0 +1,27 @@
+/*
+ * The status light in the terminal header, beside the session name.
+ *
+ * IT OWNS POSITION ONLY. Every pixel of the light itself - its rings,
+ * its colours, its motion - comes from client/css/status-led.css, which
+ * is the single source of truth for the indicator and must stay that
+ * way: a second stylesheet painting the same element is how one surface
+ * quietly ends up a different colour from another. This file says where
+ * the light sits and nothing else.
+ *
+ * `flex-shrink: 0` is load-bearing, not cosmetic. `#appTitle` is a flex
+ * box and client/js/header-title-fit.js computes the title's
+ * middle-elision budget by subtracting every non-shrinking child from
+ * the slot width. A shrinking light would be squeezed to nothing by a
+ * long session name AND would be left out of that budget, so the name
+ * would also elide at the wrong width.
+ */
+
+.header-session-led {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    /* Optical, not geometric: the light reads as part of the name rather
+       than as a control sitting next to it. */
+    margin-right: 6px;
+    line-height: 0;
+}

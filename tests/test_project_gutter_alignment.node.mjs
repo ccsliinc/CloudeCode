@@ -12,10 +12,19 @@
 // column, `--project-gutter`, so the card's left edge is a constant
 // regardless of what the gutter draws. `.project-node__sessions` reuses
 // the exact same token for its indent, rather than restating a pixel
-// value that could drift out of sync. The count is right-aligned inside
-// the gutter (`margin-left: auto` inside the full-width toggle button)
-// and set in tabular figures so a digit swap never nudges its own right
-// edge.
+// value that could drift out of sync. The count is set in tabular
+// figures so a digit swap never nudges the clear space that follows it.
+//
+// FOLLOW-UP (same day). The count used to be right-aligned inside the
+// gutter (`margin-left: auto`), which pushed it flush against the
+// project card - far from the chevron it belongs to, and crowding the
+// project name beside it. The owner's words: "the session count, its 2
+// far from the arrow and too close to the tab." The auto margin is
+// gone; the count now sits a fixed 4px from the chevron (the toggle's
+// own existing `gap: 4px`) and is coloured to match the sidebar's own
+// count treatment (`.session-sidebar-group__count`, accent text, no
+// pill, from 2174b0d) rather than inheriting the toggle's muted text
+// colour.
 //
 // A project with nothing to fold renders no toggle at all (see
 // renderProjectList()), which is exactly the case that broke a grid
@@ -172,16 +181,33 @@ test('.project-node__sessions indents child rows by the SAME token as the row gu
         + 'row gutter token, or a future edit to one can silently un-align the other');
 });
 
-test('.project-node__count is right-aligned inside the gutter with tabular numerals', () => {
+test('.project-node__count sits tight beside the chevron, coloured, with tabular numerals', () => {
     const count = bySelector(styleRules, '.project-node__count');
     assert.ok(count.length > 0, '.project-node__count rule not found');
     const body = count.map((r) => r.body).join(';');
-    assert.equal(decl(body, 'margin-left'), 'auto',
-        'the count must be pushed to the gutter\'s right edge, not sit beside '
-        + 'the chevron at a width that varies with its own digit count');
+    assert.notEqual(decl(body, 'margin-left'), 'auto',
+        'margin-left: auto pushes the count to the gutter\'s right edge, flush '
+        + 'against the project card - the owner\'s complaint was that this puts '
+        + 'the count far from the chevron and crowds the project name');
     assert.equal(decl(body, 'font-variant-numeric'), 'tabular-nums',
         'without tabular numerals a digit swap (1 session -> 10) changes the '
-        + 'count\'s own rendered width and nudges its right edge');
+        + 'count\'s own rendered width and nudges the clear space after it');
+    assert.equal(decl(body, 'color'), 'var(--color-accent)',
+        'the count must match the sidebar\'s own treatment '
+        + '(.session-sidebar-group__count, 2174b0d): accent-coloured text, not '
+        + 'the toggle\'s muted default');
+});
+
+test('.project-node__toggle keeps a small fixed gap for the chevron and count to sit in', () => {
+    const toggle = bySelector(styleRules, '.project-node__toggle');
+    const body = toggle.map((r) => r.body).join(';');
+    const gap = decl(body, 'gap');
+    assert.ok(gap, '.project-node__toggle must declare a gap - it is the only '
+        + 'thing spacing the chevron from the count now that the count is not '
+        + 'right-aligned');
+    const px = parseFloat(gap);
+    assert.ok(px >= 4 && px <= 6,
+        `expected a small fixed gap (4-6px) between the chevron and the count, got ${gap}`);
 });
 
 test('.project-node__toggle fills the fixed-width gutter column', () => {

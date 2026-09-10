@@ -251,6 +251,18 @@ SESSION_FAMILY_SOURCE_LAUNCHED = "launched"
 #: them apart is what stops a shell rendering as a guessed agent.
 SESSION_FAMILY_SOURCE_NOT_LAUNCHED = "not_launched"
 
+#: INFERRED FROM THE PANE'S OWN PROCESS. A hook proved a claude is
+#: running, and the claude command line read out of the pane's process
+#: tree named a wrapper (or, when nothing distinguishing was on it, the
+#: bare family). A GUESS, and a stronger one than a scrollback
+#: fingerprint - a direct read of what the process was told to do rather
+#: than banner text - which is why it may name a wrapper where a
+#: fingerprint may not. It still renders as the dashed pill and never as
+#: a launch fact, and ``session_agent_infer.restart_agent_type`` keeps it
+#: out of the restart ladder entirely: an inference is not intent.
+#: Written only by ``src/core/session_agent_infer_apply.py``.
+SESSION_FAMILY_SOURCE_INFERRED_PROCESS = "inferred_process"
+
 #: COULD NOT DETERMINE. Reserved for a session the app never started, so
 #: it has no launch choice to read. Never write this from a create path.
 SESSION_FAMILY_SOURCE_UNKNOWN = "unknown"

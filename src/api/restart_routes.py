@@ -39,6 +39,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.api.auth import require_auth
+from src.api.recreate_routes import router as recreate_router
 from src.models import (
     RestartPlanPreview,
     RestartPreviewOption,
@@ -48,6 +49,16 @@ from src.models import (
 logger = structlog.get_logger()
 
 router = APIRouter(tags=["sessions"])
+
+# THE RECREATE PAIR RIDES THIS ROUTER, and that is a mounting
+# decision rather than a design one. A session whose tmux SESSION is
+# gone has no pane for the ladder above to read, so it needs its own
+# preview and its own action (src/api/recreate_routes.py); they are
+# the same feature surface as this file, and main.py's include list
+# is already the longest thing in that module. Included here means
+# they are mounted under /api/v1 exactly once, by the line that
+# already mounts this router, and cannot be forgotten separately.
+router.include_router(recreate_router)
 
 
 @router.get(

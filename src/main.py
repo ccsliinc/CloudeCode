@@ -68,8 +68,10 @@ from src.api.auth import (
 from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
 from src.api.imported_restart_routes import router as imported_restart_router
+from src.api.away_routes import router as away_router
 from src.api.restart_routes import router as restart_router
 from src.api.status_routes import router as status_router
+from src.api.toast_routes import router as toast_router
 from src.api.corpus_routes import router as corpus_router
 from src.api.archive_overlay_routes import router as archive_overlay_router
 from src.api.archive_routes import router as archive_router
@@ -869,6 +871,11 @@ app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
 app.include_router(config_files_router, prefix="/api/v1")  # Claude-config file tree/editor (auth required)
 app.include_router(version_router, prefix="/api/v1")  # Version + release self check (auth required)
 app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmux status (auth required)
+# Cross-session toast reads. The per-session toast routes stay in routes.py;
+# these two are the ones that made a toast visible from ANY session (raise is
+# global) and readable afterwards (history). Dismissal is untouched and stays
+# per session on POST /toasts/{id}/ack. See src/api/toast_routes.py.
+app.include_router(toast_router, prefix="/api/v1")  # Cross-session toast list + history (auth required)
 if MESSAGE_ARCHIVE.enabled:
     # THE MESSAGE ARCHIVE'S ENTIRE HTTP SURFACE. Mounted only when the
     # master switch resolved to enabled; otherwise these paths 404 like
@@ -881,6 +888,7 @@ if MESSAGE_ARCHIVE.enabled:
     app.include_router(archive_overlay_router, prefix="/api/v1")  # Presentation overlay over the archive: rename/group/hide (auth required)
 app.include_router(session_groups_router, prefix="/api/v1")  # User-defined sidebar groups (auth required)
 app.include_router(restart_router, prefix="/api/v1")  # Read-only restart preview: which respawn rung a session would land on (auth required)
+app.include_router(away_router, prefix="/api/v1")  # Read-only "what happened while you were away" report for one session (auth required)
 app.include_router(imported_restart_router, prefix="/api/v1")  # Preview and restart a session with NO tmux identity, e.g. one imported from a transcript (auth required)
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
@@ -1215,15 +1223,40 @@ async def features(_: str = Depends(require_auth)) -> JSONResponse:
       surface that is not there. When ``state`` says enabled and
       ``routes_mounted`` is false, the answer is "restart the server",
       and the payload says so in ``restart_required``.
+      It ALSO carries the ``ui`` block, which is a different KIND of
+      thing and is shaped differently on purpose: a plain boolean per
+      surface, because these are the owner's own preferences rather than
+      a subsystem that can be half-present. There is no third state to
+      report - an unreadable config leaves each flag at its default, and
+      the default is always "shown", so a failed read can never remove a
+      control the user has.
     Inputs: none (auth required, same as every other /api/v1 route).
-    Output: JSONResponse - {"message_archive": {state, source, reason,
-      routes_mounted, restart_required, env_override}}.
+    Output: JSONResponse - {"ui": {show_mark_unread_control},
+      "message_archive": {state, source, reason, routes_mounted,
+      restart_required, env_override}}.
     Example: GET /api/v1/features -> {"message_archive": {"state":
       "disabled", ...}}
     """
     mounted = _archive_routes_mounted()
+    # Read once per request rather than cached: config.json is written
+    # atomically by Settings.update_settings_config, so a re-read is a
+    # cheap way to make a flipped switch reach the next page load without
+    # a restart. An unreadable config leaves the flag at its DEFAULT (the
+    # control is shown) rather than hiding a capability on a failed read -
+    # the same "unknown never denies" rule ArchiveEntry follows.
+    try:
+        show_mark_unread = settings.load_auth_config().ui.show_mark_unread_control
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        logger.warning("features_ui_flags_unreadable", error=str(exc))
+        show_mark_unread = True
     return JSONResponse(
         content={
+            "ui": {
+                # Whether the manual mark-unread toggle is rendered. See
+                # src/config.py::UIConfig for why it defaults to shown and
+                # why the LED's ring is not a substitute for the control.
+                "show_mark_unread_control": show_mark_unread,
+            },
             "message_archive": {
                 "state": MESSAGE_ARCHIVE.state,
                 "source": MESSAGE_ARCHIVE.source,

@@ -104,12 +104,7 @@ function harness() {
             trashIconSvg() { return '<svg class="trash"></svg>'; },
             markUnreadHtml() { return ''; },
         },
-        // `offersMenu` decides between the inline X and the row's
-        // three-dot menu, so a stub without it makes every card throw.
-        SessionRowActions: {
-            html() { return ''; },
-            offersMenu(status) { return status !== 'dead'; },
-        },
+        SessionRowActions: { html() { return ''; } },
         SessionThemeTint: { attrs() { return ''; }, swatchHtml() { return ''; } },
         localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
         addEventListener() {},

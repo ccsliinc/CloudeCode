@@ -924,14 +924,19 @@ def identity_for_live_name(
       rather than hidden. Use :func:`identity_for_instance` wherever an
       epoch is available.
     Inputs: conn (sqlite3.Connection). socket (str). name (str).
-    Output: dict with ``id``, ``parent_session_id``, ``agent_type``, or
-      None when no row carries that name.
+    Output: dict with ``id``, ``parent_session_id``, ``agent_type`` and
+      ``agent_family_source``, or None when no row carries that name.
+      THE LAST TWO TRAVEL TOGETHER: ``agent_type`` alone cannot say
+      whether it was launched or inferred from the pane's process tree,
+      and a caller that reads one without the other renders a guess as a
+      fact (see src/core/session_agent_evidence.py).
     Example: identity_for_live_name(conn, socket='cloude', name='a')
     """
     if not sessions_table_ready(conn) or not name:
         return None
     row = conn.execute(
-        "SELECT id, parent_session_id, agent_type FROM sessions "
+        "SELECT id, parent_session_id, agent_type, agent_family_source "
+        "FROM sessions "
         "WHERE tmux_socket = ? AND tmux_name = ? AND tmux_created_epoch IS NOT NULL "
         "ORDER BY tmux_created_epoch DESC, id DESC LIMIT 1",
         (socket, name),
@@ -942,4 +947,5 @@ def identity_for_live_name(
         "id": int(row["id"]),
         "parent_session_id": row["parent_session_id"],
         "agent_type": row["agent_type"],
+        "agent_family_source": row["agent_family_source"],
     }

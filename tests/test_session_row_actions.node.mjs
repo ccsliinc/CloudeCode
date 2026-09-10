@@ -110,8 +110,8 @@ function makeSandbox() {
     const context = { window: fakeWindow, document: fakeDocument, console };
     vm.createContext(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
+    vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
-    vm.runInContext(readClientJs('session-row-menu.js'), context);
 
     return {
         SessionRowActions: fakeWindow.SessionRowActions,
@@ -169,11 +169,10 @@ test('the X and the trash are still never both on one row', () => {
     const running = SessionRowActions.html('working', 'cloude_api', 'running-session-kill');
     const stopped = SessionRowActions.html('dead', 'cloude_api', 'running-session-kill');
     const unread = SessionRowActions.html('unknown', 'cloude_api', 'running-session-kill');
-    // ONE on a running row and one on an unreadable one; two on a
-    // stopped row, which draws restart plus trash. The live row briefly
-    // drew restart as well; the owner removed that control on 2026-09-08
-    // with the overflow menu it sat in.
-    assert.equal((running.match(/<button/g) || []).length, 1, 'running row grew a control');
+    // Two apiece on a MEASURED row, since TODO item 22 part 2 - the live
+    // row draws close plus restart, the stopped row restart plus trash.
+    // A row whose status could not be read keeps the single X.
+    assert.equal((running.match(/<button/g) || []).length, 2, 'running row lost a control');
     assert.equal((stopped.match(/<button/g) || []).length, 2, 'stopped row must offer restart + remove');
     assert.equal((unread.match(/<button/g) || []).length, 1, 'an unreadable row grew a control');
 
@@ -182,14 +181,10 @@ test('the X and the trash are still never both on one row', () => {
     const restartGlyph = SessionStatusUI.restartIconSvg();
     assert.ok(running.includes(closeGlyph), 'running row must draw the X');
     assert.ok(!running.includes(trashGlyph), 'running row must not draw the trash');
-    // THE PAIR IS WHAT THIS TEST GUARDS. A live row may never draw the
-    // trash, because close and remove make opposite promises about
-    // whether anything is running.
-    assert.ok(!running.includes(restartGlyph),
-        'a live row must not offer restart - the control was removed on '
-        + '2026-09-08 with the overflow menu it lived in. The server-side '
-        + 'gates around a live respawn are untouched; nothing in the UI '
-        + 'hands a running session to them now.');
+    // THE PAIR IS WHAT THIS TEST GUARDS. A live row may draw the restart
+    // arrow now; it may still never draw the trash, because close and
+    // remove make opposite promises about whether anything is running.
+    assert.ok(running.includes(restartGlyph), 'running row lost its restart arrow');
     assert.ok(stopped.includes(trashGlyph), 'stopped row must draw the trash');
     assert.ok(stopped.includes(restartGlyph), 'stopped row must draw the restart arrow');
     assert.ok(!stopped.includes(closeGlyph), 'stopped row must not draw the X');
@@ -388,20 +383,19 @@ function makeRenderSandbox(moduleFile, containerId) {
     };
     vm.createContext(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
+    vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
-    vm.runInContext(readClientJs('session-row-menu.js'), context);
     // The sidebar's row markup moved into its own module when
     // session-sidebar.js hit the 500-line ceiling; SessionSidebar.render()
     // now delegates to it, so it has to be in the sandbox too. Harmless
     // for the launchpad case, which does not use it.
     vm.runInContext(readClientJs('session-sidebar-rows.js'), context);
-    // The shared three-dot glyph. Nothing on a session row draws it any
-    // more, but header-menu.js is in the same client directory and the
-    // sandbox is cheap; keeping it loaded means a row builder that
-    // regressed to emitting a kebab would render rather than throw, so
-    // the assertion below fails on the SHAPE rather than on a missing
-    // global.
+    // The row's kebab, and the menu it builds. rowHtml() calls into this
+    // for its one remaining control, and the sidebar assertion below
+    // reads the folded actions back out of it.
     vm.runInContext(readClientJs('kebab-icon.js'), context);
+    vm.runInContext(readClientJs('session-row-menu-items.js'), context);
+    vm.runInContext(readClientJs('session-row-menu.js'), context);
     vm.runInContext(readClientJs(moduleFile), context, { filename: moduleFile });
     return { win, container };
 }
@@ -416,49 +410,73 @@ test('launchpad running-session rows paint the right control per state', () => {
     const html = container.innerHTML;
     // The bug that started this: the X had an aria-label and no title.
     assert.ok(!/aria-label="[^"]*"(?![^>]*title=)[^>]*data-session-action/.test(html));
-    // THE LIVE ROW'S CLOSE MOVED INTO THE MENU. It is no longer an inline
-    // control here, and the dead row is untouched.
-    assert.equal((html.match(/data-session-action="close"/g) || []).length, 0);
-    assert.equal((html.match(/data-row-menu="cloude_alive"/g) || []).length, 1);
-    assert.equal((html.match(/data-row-menu="cloude_gone"/g) || []).length, 0,
-        'a dead card gets restart and remove, not a menu');
+    assert.equal((html.match(/data-session-action="close"/g) || []).length, 1);
     assert.equal((html.match(/data-session-action="remove"/g) || []).length, 1);
+    assert.ok(html.includes('title="close session"'));
     assert.ok(html.includes('title="remove from the list"'));
-    assert.ok(html.includes('title="session actions"'),
-        'the menu trigger carries a hover tooltip of its own');
 });
 
-test('sidebar rows and launchpad cards agree about every control they share', () => {
-    // THE PARITY THIS TEST EXISTS TO PROTECT is between the two SURFACES,
-    // launcher and sidebar - one glyph, one tooltip, one confirm copy for
-    // one meaning. Both draw the dead row's controls from the same
-    // builder and both draw the live row's menu from the same one, so
-    // this reads the rendered rows directly on both sides.
+test('sidebar rows paint the same control with the same wording', () => {
+    // THE CONTROL MOVED, THE WORDING DID NOT. The sidebar row folded its
+    // action icons into a per-row overflow menu
+    // (client/js/session-row-menu.js), so the buttons are no longer in
+    // the row's own markup - they are in the panel that row's kebab
+    // opens. The parity this test exists to protect is between the two
+    // SURFACES, launcher and sidebar, not between two strings in one
+    // element, so what is compared is what each surface OFFERS.
+    //
+    // Narrowing this to the row's inline markup would have quietly turned
+    // it into an assertion about nothing: every needle below would be
+    // absent, and the test would have to be deleted rather than moved.
     const { win, container } = makeRenderSandbox('session-sidebar.js', 'session-sidebar-list');
     win.SessionSidebar.listEl = container;
     win.SessionSidebar.render([
         { name: 'cloude_alive', created_by_cloude: true, status: 'idle', is_active: true },
         { name: 'cloude_gone', created_by_cloude: true, status: 'dead', is_active: false },
     ]);
-    const html = container.innerHTML;
-    assert.ok(html.includes('title="remove from the list"'),
-        'same tooltip wording as the launcher');
-    assert.ok(html.includes('title="restart the agent"'),
-        'the dead row keeps its restart');
-    assert.ok(html.includes('title="session actions"'),
-        'and the live row carries the same menu trigger the launcher does');
-    // 2, not 3: only the dead row draws inline actions now.
-    assert.equal((html.match(/data-session-action=/g) || []).length, 2);
-    assert.equal(
-        (html.match(/data-session-action="restart"/g) || []).length, 1,
-        'only the dead row may offer restart',
-    );
-    assert.equal((html.match(/data-row-menu="cloude_alive"/g) || []).length, 1);
-    assert.equal((html.match(/data-row-menu="cloude_gone"/g) || []).length, 0);
-    assert.equal(
-        (html.match(/data-pin-session=/g) || []).length, 2,
-        'both rows draw an inline pin',
-    );
+    // WHAT EACH ROW OFFERS, gathered the way the row itself resolves it:
+    // inline controls carry `data-session-action`, and a live row's menu
+    // trigger resolves its items through the menu's own pure functions.
+    // Asserted over ACTIONS rather than over tooltip strings, so the
+    // Svelte rebuild on feat/svelte-1.3 can satisfy this unchanged.
+    function offeredFor(name) {
+        const rowHtml = container.innerHTML;
+        const rowRe = new RegExp(`<[^>]*data-name="${name}"[\\s\\S]*?(?=<div[^>]*data-name="|$)`);
+        const seg = (rowHtml.match(rowRe) || [''])[0];
+        const inline = [...seg.matchAll(/data-session-action="([^"]+)"/g)].map((m) => m[1]);
+        const tag = (seg.match(/<button[^>]*data-row-menu="[^"]*"[^>]*>/) || [])[0];
+        let menu = [];
+        if (tag) {
+            const stub = { getAttribute(a) {
+                const m = tag.match(new RegExp(`\\s${a}="([^"]*)"`));
+                return m ? m[1] : null;
+            } };
+            menu = win.SessionRowMenu
+                .itemsFor(win.SessionRowMenu.contextFromTrigger(stub))
+                .map((i) => i.id);
+        }
+        return { inline, menu, all: [...inline, ...menu] };
+    }
+
+    const alive = offeredFor('cloude_alive');
+    const gone = offeredFor('cloude_gone');
+
+    assert.ok(container.innerHTML.includes('data-row-menu='),
+        'a live row must paint a menu trigger to hang its actions off');
+    // The destructive pair, one per row, whichever surface carries it.
+    assert.ok(alive.all.includes('close'), 'a live row offers close');
+    assert.ok(gone.all.includes('remove'), 'a dead row offers remove');
+    assert.ok(!alive.all.includes('remove'), 'and never both on one row');
+    assert.ok(!gone.all.includes('close'));
+    // BOTH rows offer restart, by two different routes. The live row's is
+    // the one decision 3 settled on 2026-09-09; the dead row's is the one
+    // that was never in dispute. Offering it is not permitting the kill -
+    // it opens the picker, which needs an arm box and a confirm modal,
+    // and the server needs `confirm_restart_live` after that.
+    assert.ok(alive.menu.includes('restart'),
+        'a LIVE row must offer restart, in its menu');
+    assert.ok(gone.inline.includes('restart'),
+        'a DEAD row must offer restart, inline');
 });
 
 await runQueue();

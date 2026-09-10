@@ -77,6 +77,13 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
 
+        const toggleEl = e.target.closest('[data-mark-unread]');
+        if (toggleEl) {
+            e.stopPropagation();
+            await onMarkUnreadClick(ctrl, toggleEl);
+            return;
+        }
+
         // A click that landed on the grip was a drag gesture, not a
         // switch - the pointer handlers own it.
         if (e.target.closest('[data-grip-session]')) return;
@@ -84,13 +91,18 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const rowEl = e.target.closest('.session-sidebar-row');
         if (!rowEl) return;
 
-        // NOTHING WAITS ANY MORE. A click on a renameable row's NAME used
-        // to be held for 250 ms so a double-click could claim it for
-        // rename instead. Double-click rename is gone - renaming is F2,
-        // or the `rename` item in the row's three-dot menu - so there is
-        // no second gesture left to wait for, and the most-used
-        // interaction in this list stops paying for the rarest one. The
-        // measured 250 ms delay was the whole cost of that trade.
+        // THE NAME IS THE ONE TARGET WHERE A CLICK HAS TO WAIT.
+        // Double-click on the name means rename, and a browser delivers
+        // the first click of a double-click before it delivers the
+        // double-click, so an instant switch here would navigate away
+        // from the row the user was about to edit. The wait is scoped as
+        // tightly as it can be: only on the NAME, and only on a row that
+        // is actually renameable. Every other part of the row, and every
+        // row that has nothing to edit, still activates immediately.
+        if (window.SessionSidebarRename
+            && window.SessionSidebarRename.deferActivation(e, rowEl, () => activateRow(ctrl, rowEl))) {
+            return;
+        }
         await activateRow(ctrl, rowEl);
     }
 
@@ -164,6 +176,27 @@ console.log('[SessionSidebarClicks Module] Loading...');
     }
 
     /**
+     * Description: toggle the manual unread flag for one row and re-render
+     *   immediately (optimistic - the next poll tick reconciles either
+     *   way, but a full POLL_MS with no visual feedback feels broken).
+     * Inputs: ctrl (object) - the SessionSidebarController.
+     *   toggleEl (Element) - the `[data-mark-unread]` span clicked.
+     * Output: Promise<void>.
+     */
+    async function onMarkUnreadClick(ctrl, toggleEl) {
+        const tmuxName = toggleEl.dataset.markUnread;
+        if (!tmuxName) return;
+        const next = toggleEl.dataset.unreadCurrent !== 'true';
+        try {
+            await window.API.setSessionUnread(tmuxName, next);
+            ctrl._lastSig = null; // force a repaint even if the poll sig matches
+            await ctrl._fetchAndRender();
+        } catch (err) {
+            console.error('SessionSidebar: mark-unread failed:', err);
+        }
+    }
+
+    /**
      * Description: run a row's destructive action - close a running
      *   session (X) or remove a stopped one (trash). Which action the row
      *   painted is read back off the button, so the confirm always matches
@@ -185,14 +218,16 @@ console.log('[SessionSidebarClicks Module] Loading...');
         const name = btnEl.getAttribute(actions.ATTR_NAME);
         if (!name) return;
         const action = btnEl.getAttribute(actions.ATTR_ACTION) || actions.ACTION_CLOSE;
-        // THE BUTTON IS BACK INSIDE THE ROW, so `closest` is the primary
-        // route again. The by-NAME lookup stays as the fallback rather
-        // than being deleted with the overflow menu it was added for:
-        // `data-active` and `data-session-id` read as absent when the walk
-        // fails, which looks exactly like "this is not the open tab and
-        // has no backend" and would send an own-tab close down the wrong
-        // path. Resolving by name costs one query and cannot produce that
-        // silent misroute.
+        // THE BUTTON IS NOT ALWAYS INSIDE THE ROW ANY MORE. These controls
+        // now also render inside the row's overflow menu, which is mounted
+        // on document.body (client/js/session-row-menu.js explains why: the
+        // sidebar panel is `transform`ed, so it would become the containing
+        // block for a fixed panel rendered inside it). From there the walk
+        // up to `.session-sidebar-row` finds nothing, and both `data-active`
+        // and `data-session-id` would read as absent - which looks exactly
+        // like "this is not the open tab and has no backend" and would send
+        // an own-tab close down the wrong path. Falling back to the live row
+        // by NAME keeps one handler for both mount points.
         const rowEl = btnEl.closest('.session-sidebar-row')
             || document.querySelector(
                 `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
@@ -275,19 +310,24 @@ console.log('[SessionSidebarClicks Module] Loading...');
             alert(`could not restart "${name}": the restart picker did not load.`);
             return;
         }
-        // THE ROW CARRIES ITS OWN STATUS. `data-row-status` used to live
-        // on the kebab, which was the only element built from the whole
-        // payload; the kebab is gone and the row is stamped with it
-        // instead (client/js/session-sidebar-rows.js). Resolved by NAME
-        // rather than from `rowEl`, so a null row - which this function
-        // already tolerates - still yields a status when the list has one
-        // on screen. A null status is passed through untouched: the
-        // picker treats "not stated" as unknown and says so, which is not
-        // the same claim as a measured state.
-        const statusRow = rowEl || document.querySelector(
-            `.session-sidebar-row[data-name="${CSS.escape(name)}"]`);
-        const status = statusRow
-            ? statusRow.getAttribute('data-row-status')
+        // The row does not carry its own status; the MENU TRIGGER does
+        // (`data-row-menu-status`, stamped by SessionRowMenu.triggerHtml).
+        // Read it from there rather than adding a second copy of the same
+        // fact to the row, and resolve it by NAME so this works
+        // identically whether restart was chosen from the row's menu or
+        // reached some other way.
+        //
+        // THE ATTRIBUTE NAME IS LOAD-BEARING: it was `data-row-status` on
+        // our own kebab until the 2026-09-10 reconcile moved us onto
+        // adam's trigger, which spells it `data-row-menu-status`. Reading
+        // the old spelling against the new trigger returns null and the
+        // picker reports every restart as "unknown" with nothing failing,
+        // which is the exact defect the sidebar compare report flagged as
+        // "a merge that compiles and lies".
+        const trigger = document.querySelector(
+            `[data-row-menu="${CSS.escape(name)}"]`);
+        const status = trigger
+            ? trigger.getAttribute('data-row-menu-status')
             : null;
         // The name column's TEXT is the display label - the same value
         // SessionLabel resolved when the row was painted. A dialog that
@@ -297,7 +337,20 @@ console.log('[SessionSidebarClicks Module] Loading...');
             ? rowEl.querySelector('.session-sidebar-row-name')
             : null;
         const label = (nameEl && nameEl.textContent.trim()) || name;
-        const choice = await picker.open(name, label, status);
+        // THE DURABLE KEY, resolved only when naming it is not a guess.
+        // The sidebar addresses rows by tmux NAME and holds no uuid, and
+        // the recreate endpoints take one - so the records the launchpad
+        // already fetched are consulted, and `recreateTarget` returns
+        // null unless exactly one of them carries this name. Null simply
+        // means the recreate question is never asked, which leaves the
+        // panel showing what it showed before the feature existed.
+        const opts = window.SessionRestartOptions;
+        const records = (window.Launchpad && window.Launchpad.sessionRecords)
+            || null;
+        const uuid = opts && opts.recreateTarget
+            ? opts.recreateTarget(records, name)
+            : null;
+        const choice = await picker.open(name, label, status, uuid);
         if (!choice) {
             const why = picker.lastError();
             if (why) {
@@ -309,21 +362,42 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
 
+        // POST TO THE ENDPOINT THAT MADE THE PREDICTION. `mode` comes
+        // back from the picker and names it; deriving it here from the
+        // row's status would be a second rule that can disagree with the
+        // one the panel was actually rendered from. A recreate posted to
+        // the respawn route reaches a session with no pane and is
+        // answered `cannot_determine`, which looks exactly like a click
+        // that did nothing.
+        const recreating = choice.mode === 'recreate';
+        const verb = recreating ? 'recreate' : 'restart';
+
         let result = null;
         try {
-            result = await window.API.respawnSession(
-                name, choice.agentType, choice.confirmRestartLive === true);
+            result = recreating
+                ? await window.API.recreateSession(
+                    choice.sessionUuid, choice.agentType)
+                : await window.API.respawnSession(
+                    name, choice.agentType, choice.confirmRestartLive === true);
         } catch (err) {
-            console.error('SessionSidebar: restart failed:', err);
-            alert(`could not restart "${name}": ${err.message || err}`);
+            console.error(`SessionSidebar: ${verb} failed:`, err);
+            alert(`could not ${verb} "${name}": ${err.message || err}`);
             ctrl._lastSig = null;
             await ctrl._fetchAndRender();
             return;
         }
 
-        if (!result || result.ok !== true) {
+        // TWO ROUTES, TWO SUCCESS WORDS, and neither is inferred from the
+        // absence of the other. Respawn reports `ok`; recreate reports
+        // `status`, because a gate declining there is a 200 rather than a
+        // failure. Reading only one field would let a refusal read as a
+        // success on whichever route was not being checked.
+        const worked = recreating
+            ? (result && result.status === 'started')
+            : (result && result.ok === true);
+        if (!worked) {
             alert(
-                `could not restart "${name}": `
+                `could not ${verb} "${name}": `
                 + ((result && result.detail) || 'no reason given')
             );
             ctrl._lastSig = null;
@@ -331,7 +405,22 @@ console.log('[SessionSidebarClicks Module] Loading...');
             return;
         }
 
-        if (choice.agentType && result.agent_type_persisted === false) {
+        if (recreating) {
+            // The reopen module reads `name` and `session_id`; a recreate
+            // reports the tmux name it ACTUALLY took, which is what the
+            // new session answers to. It asks for the old name back so
+            // name-scoped per-device state survives, but the create path
+            // uniquifies on collision, so the reported name is the one to
+            // reopen and the requested one is not.
+            result = {
+                name: result.tmux_session || name,
+                session_id: result.session_id || null,
+                detail: result.detail || '',
+            };
+        }
+
+        if (!recreating && choice.agentType
+            && result.agent_type_persisted === false) {
             // The restart worked and the choice did NOT stick. Said out
             // loud, because the next restart will not repeat it and a
             // user who was not told would reasonably assume it had.
@@ -355,7 +444,7 @@ console.log('[SessionSidebarClicks Module] Loading...');
 
     window.SessionSidebarClicks = {
         onRowClick, onGroupToggleClick, activateRow,
-        onRowActionClick, runRestart,
+        onMarkUnreadClick, onRowActionClick, runRestart,
     };
     console.log('[SessionSidebarClicks Module] Exported as window.SessionSidebarClicks');
 })();

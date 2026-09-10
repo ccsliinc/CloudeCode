@@ -14,6 +14,28 @@
  *   inner dot  - the chat's own status. One of INNER_STATES.
  *   outer halo - activity and attention. One of OUTER_STATES.
  *
+ * THE RING CARRIES UNREAD, and the owner settled that on 2026-09-09.
+ * Two lines of this project fixed the same reported defect - a ring
+ * pulsing on sessions with nothing running - in opposite ways. One
+ * retired the outer `unread` state and moved unread onto the inner dot;
+ * this one kept the ring, stopped it breathing, and made it a crisp
+ * still green. The owner picked THIS one. So `unread` is an outer state,
+ * a finished turn nobody has read paints a green ring, and motion is
+ * reserved for `active` - a light that MOVES is a session that is
+ * moving, which is the whole of the original complaint. Do not
+ * reintroduce the inner-dot-unread model; it was decided against, not
+ * forgotten.
+ *
+ * BOTH RINGS ARE DRAWN ON ONE ELEMENT. The inner dot is the span's
+ * fill and the outer ring and its glow are layers of ONE `box-shadow` on
+ * that same span - there is no pseudo-element and there may not be one.
+ * A box gets pixel-snapped independently of its parent's box, so a halo
+ * drawn as its own box came apart from the dot by a device pixel
+ * whenever the dot landed on a fractional x/y (routine in a flex row).
+ * A box-shadow is painted from the element's own border box, so
+ * concentric is the only geometry it can have. See the header of
+ * client/css/status-led.css.
+ *
  * They are set separately (`data-inner` / `data-outer`) and every
  * combination renders. That is deliberate: it is what lets a gallery
  * enumerate the whole matrix, and it is why neither vocabulary contains a
@@ -56,6 +78,16 @@ console.log('[StatusLed Module] Loading...');
      * status we are showing is fresh. It is red like `dead` and says
      * something different in words - see INNER_LABELS.
      *
+     * `idle` was added on 2026-09-09 and is the READ half of rest.
+     * Owner's report, verbatim: "i need the lights to go idle, (i think
+     * thats gray) when i click on a tab. there needs to be a read/idle
+     * color." Before it, opening a tab left the dot exactly as it was
+     * and only the ring changed, which is too small a change to register
+     * at a glance. `done` is the state a finished turn holds while the
+     * green unread ring is around it; `idle` is what the dot becomes
+     * once that ring goes. The ring still carries unread - see the
+     * module header - and this pair is what makes its departure visible.
+     *
      * @type {string[]}
      */
     const INNER_STATES = [
@@ -63,6 +95,7 @@ console.log('[StatusLed Module] Loading...');
         'waiting-permission',
         'waiting-input',
         'notice',
+        'idle',
         'done',
         'dead',
         'disconnected',
@@ -105,6 +138,7 @@ console.log('[StatusLed Module] Loading...');
         'waiting-permission': 'stopped - waiting on your permission',
         'waiting-input': 'stopped - waiting on you',
         notice: 'still working - wants your attention',
+        idle: 'idle - already read',
         done: 'done',
         // TWO RED STATES, TWO DIFFERENT FACTS, and the colour cannot say
         // which. `dead` is a pane whose process exited - the session is
@@ -199,9 +233,11 @@ console.log('[StatusLed Module] Loading...');
      * Description: PURE - no DOM, no globals, no side effects. Returns a
      *   single `<span>` carrying `data-inner` and `data-outer`; every
      *   colour and every animation is selected off those two attributes
-     *   by client/css/status-led.css. The halo is a pseudo-element on the
-     *   same span, so the LED occupies one inline box and drops into any
-     *   row that used to hold a `.status-dot` with no layout change.
+     *   by client/css/status-led.css. Both rings are painted on that one
+     *   span - fill for the inner state, box-shadow for the outer - so
+     *   the LED occupies one inline box, drops into any row that used to
+     *   hold a `.status-dot` with no layout change, and stays concentric
+     *   by construction rather than by two boxes agreeing.
      *
      *   `role="img"` marks it a meaningful glyph rather than decoration.
      *   Unrecognised inputs are clamped rather than rejected, so a stale
@@ -212,8 +248,8 @@ console.log('[StatusLed Module] Loading...');
      *     `outer` are clamped onto the two vocabularies. `size` is an
      *     optional CSS length for the whole LED (default comes from the
      *     stylesheet); it is emitted as a custom property, never as a
-     *     raw style rule, so the stylesheet keeps control of the ratio
-     *     between the dot and its halo. `title` overrides the derived
+     *     raw style rule, so the stylesheet keeps control of the ring
+     *     and the glow around it. `title` overrides the derived
      *     label when a caller has a more specific sentence.
      * Output:
      *   string - HTML for one inline `<span>`.
@@ -280,6 +316,9 @@ console.log('[StatusLed Module] Loading...');
      * Example:
      *   ledStateFor({activity_status: 'idle', unread: true})
      *   // {inner: 'done', outer: 'unread'}
+     * Example:
+     *   ledStateFor({activity_status: 'idle'})
+     *   // {inner: 'idle', outer: 'steady'}
      */
     function ledStateFor(signals) {
         const s = signals || {};
@@ -366,8 +405,21 @@ console.log('[StatusLed Module] Loading...');
             return { inner: 'done', outer: 'unread' };
         }
 
+        // READ AND AT REST. The dot goes to the NEUTRAL grey `idle` and
+        // the ring stays lit-and-still in that same grey, so a session
+        // the user has looked at is visibly calmer than one they have
+        // not without the LED changing size. `unread` here is defensive
+        // rather than reachable from a well-formed row - the server
+        // derives this pair from the flag on every path, see
+        // src/core/session_status.derive_read_state - but if the two
+        // ever arrive contradictory the flag must not be swallowed, so
+        // it renders identically to `finished_unread` above and the
+        // group roll-up in session-status-summary.js cannot disagree
+        // with the row under it.
         if (status === 'idle') {
-            return { inner: 'done', outer: unread ? 'unread' : 'steady' };
+            return unread
+                ? { inner: 'done', outer: 'unread' }
+                : { inner: 'idle', outer: 'steady' };
         }
 
         // Everything else - `unknown`, an absent field, a state this

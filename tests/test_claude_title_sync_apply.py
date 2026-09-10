@@ -126,7 +126,10 @@ def db(tmp_path):
         "id INTEGER PRIMARY KEY, tmux_socket TEXT, tmux_name TEXT, "
         "tmux_created_epoch INTEGER, claude_session_uuid TEXT, title TEXT, "
         "claude_title TEXT, working_dir TEXT, parent_session_id INTEGER, "
-        "agent_type TEXT)"
+        # agent_family_source travels with agent_type everywhere the row
+        # identity is read (see session_store.identity_for_live_name):
+        # the value alone cannot say whether it was launched or inferred.
+        "agent_type TEXT, agent_family_source TEXT)"
     )
     conn.commit()
     # The seam closes the connection it is handed, which would break the

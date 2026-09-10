@@ -2975,20 +2975,9 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   asserts the dot reaches `idle` once the halo clears - the state
   punchlist 4 made unreachable, so that is the live proof.
 
-- [x] **Measured on a live run, 2026-09-08** (`CLOUDE_REAL_HOOK_TESTS=1`,
-  claude 2.1.265, 8 of 9 passed): Stop+38.30s -> `finished_unread`
-  (`done`/`unread`), SubagentStop+39.71s -> STILL `finished_unread`, and
-  binding a terminal -> `idle` (`done`/`steady`). The hook ledger for
-  that run contains no `SubagentStart` at all, so the depth was 0 and the
-  refusal is the branch that was exercised. The one failure is the
-  dead-pane test, which belongs to the concurrent liveness work.
-
 - [ ] STILL OPEN, unchanged by this: the dead-pane entry above
   (`_session_info_for` drops a dead pane on `LIVENESS_GONE`, so the LED's
   `dead` state is unreachable from live data). Being worked separately.
-
-
-## 2026-09-08 - a dead session keeps its row
 
 - [x] **A DEAD SESSION NOW KEEPS ITS ROW** (closes the dead-pane entry
   left open above). `resolve_listing_liveness` answered ONE verdict,
@@ -3033,3 +3022,3237 @@ PROGRESS, not built" - it is now built, committed, and run for real.
   deliberate - the owner's model is that it stays until the user restarts
   or removes it - but it means a box left alone accumulates dead rows,
   and no one has measured what that looks like after a week.
+
+## 2026-09-08 late: owner decisions on items 9 and the dead-pane finding
+
+- Item 9 DECIDED (owner, verbatim: "yes, its something that floats to top row
+  can still be ungroupped"): a pin is a flag that floats the row to the top,
+  not a bucket of its own; an ungrouped session stays a legal state, so the
+  six ungrouped Infrastructure sessions are NOT forced into a group. No
+  migration needed. Only work left: confirm a pinned row floats to the top
+  whether or not it is in a group, then close.
+- Dead-pane finding DECIDED (owner: "they go into recent, they can
+  disappear"): a killed session drops out of the live list and shows under
+  Recent. The LED dead/off state stays gallery-only. Closed as by design.
+
+## 2026-09-08: archived one-off verify scripts whose fixes shipped
+
+- [x] Reviewed all 31 `verify_*`/`verify-*` scripts at the top of `scripts/`
+  (about 11,342 lines). For each one read its docstring, found the git
+  commit that shipped the fix it was proving, and grepped the repo for a
+  permanent automated test covering the same assertion, and for any other
+  script or CI file that still calls or imports it.
+- Moved 21 scripts (7,649 lines) into `scripts/archive/verify/` via
+  `git mv`, each one a closed single-bug pixel/behaviour proof now
+  covered by a test under `tests/`. Table of script, closing commit and
+  covering test is in `scripts/archive/verify/README.md`.
+- Kept 4 in place because they are load-bearing: `verify_header_icons_and_menu.py`,
+  `verify_sidebar_groups.py` and `verify_sidebar_sessions.py` are actively
+  invoked by `scripts/ci/mutate-*.sh` mutation-testing scripts;
+  `verify_sidebar_rename.py` is not called directly but is imported by
+  `verify_sidebar_groups.py` (`from verify_sidebar_rename import
+  measure_inline_rename`), so moving it would break that CI-invoked
+  script.
+- Kept 4 more as reusable parameterised operator tools, not one-off
+  proofs: `verify_lifecycle_reconcile.py` (`--db`/`--listing` against a
+  real `cloude.db`) and the `verify_selection_apps.py` /
+  `verify_selection_regressions.py` / `verify_selection_scrolled.py` trio
+  (argparse, live server plus TOTP, cross-import each other), all still
+  named as release-time harnesses in `RELEASE-NOTES.md`.
+- Kept 2 as unsure: `verify_home_mechanics.py` is a multi-item regression
+  harness (items into the 50s) referenced by a comment in
+  `scripts/ci/mutate-home-screen-mechanics.sh`, with at least one item
+  still open across past releases per `RELEASE-NOTES.md`, so it is not a
+  single closed bug; `verify_sidebar_group_drag.py` is a companion to the
+  actively-called `verify_sidebar_groups.py`, last touched 2026-09-07, in
+  a part of the codebase under active edit during this same session.
+- Full suite after the move: 5302 passed / 3 failed / 22 skipped, same
+  three pre-existing environmental failures named in `CLAUDE.md`
+  (`test_home_write_guard`, `test_state_dir_resolution`,
+  `test_version_probe`). Nothing newly broken by the archive move.
+
+## 2026-09-08 - the status round, closed as the owner ruled (`cafb50c`)
+
+Two findings from `tests/test_led_real_hooks.py` (the real-claude harness
+added in `3af3a3d`), both now closed. The first was tightened, the second
+was overruled and reverted.
+
+**Finding 1 - a late `SubagentStop` reopened `working`. CLOSED, rule (a).**
+The owner's symptom was "clicking a tab does not change the light to idle".
+Measured cause: on a turn with NO subagent in it, claude 2.1.265 fires a
+`SubagentStop` about 1.5s AFTER `Stop`, and `record_event` stamped
+`last_tool_event_ts` on it, re-arming the 120s working heartbeat on a
+finished session. `e794aef` shipped option (b) - stamp only when
+`subagent_depth > 0`. Review found the hole: hooks are DUPLICATED, so a
+duplicated `SubagentStart` delivered after `Stop` raises the depth off the
+floor by itself and the duplicated `SubagentStop` behind it then passes the
+gate and stamps, at its own arrival time, ratcheting the expiry out on
+every further pair. Tightened to option (a) in `cafb50c`: **a
+`SubagentStop` NEVER stamps the heartbeat; it only decrements
+`subagent_depth`, floored at 0.** `PostToolUse` keeps the `turn_open`
+machinery unchanged - it is the only event some legitimate turns emit late,
+so a blanket refusal is wrong there.
+- Negative control moved with the rule and is still the load-bearing test.
+  The old one ("a real SubagentStop still stamps") is false by design now,
+  so it split in two: the DECREMENT is asserted on its own (a refusal that
+  also skipped it would wedge `working_subagent` forever - verified to trip
+  4 tests), and the non-stamping is asserted separately.
+- New: the ratchet test that pins the hole above, the measured real
+  timeline (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
+  `SubagentStop` +1.5s) reading `finished_unread` then `idle`, and the same
+  timeline duplicated and reordered. Both new assertions were confirmed to
+  FAIL against the `depth > 0` version before being kept.
+- NOT claimed: an OPENING event still stamps unconditionally, so a stray
+  `SubagentStart` after `Stop` still buys ONE bounded window keyed on
+  itself. Documented in the test rather than silently left.
+
+**Finding 2 - a dead pane vanished off every live surface. CLOSED by the
+owner's decision, and `ba2aa5d` REVERTED.** `ba2aa5d` read this as a bug
+and made a husk KEEP its row, painted dead. The owner ruled otherwise,
+verbatim: "they go into recent, they can disappear." So the row leaves the
+live list, `dead`/`off` stays GALLERY-ONLY, and `ba2aa5d` is reverted whole
+in `cafb50c`: `src/core/session_liveness.py`, its two test files, the
+`_session_info_for` row-keeping branch, the `pane_alive=False` startup-gate
+caller and the persist-settled skip. `resolve_listing_liveness` returns to
+`session_status.py` - moving it bought nothing once the verdict went back
+to three values.
+- `tests/test_led_real_hooks.py::test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead`
+  already asserted the owner's behaviour against a real killed pane. Its
+  docstring is rewritten from "characterisation of a defect, invert this"
+  to "this is the product decision, changing it needs the owner".
+
+**STILL OPEN (new item, from finding 2).** `remain-on-exit` keeps a husk's
+tmux SESSION in the listing, and `src/core/session_lifecycle.py` reaps on
+ABSENCE from that listing, so a killed pane's row leaves the live list
+without yet arriving in Recent. The second half of the owner's decision is
+therefore NOT built. Closing it needs a reaper rung keyed on a MEASURED
+`#{pane_dead}` - a new durable writer, in the one module whose entire
+premise is never writing a verdict nobody measured - so it is its own
+change with its own gates (a probe that could not answer must not reap).
+The real-hook test now PRINTS the recent-list membership on every run
+instead of pinning the gap open with an assertion in either direction.
+
+**Measured.** Full suite 5329 passed / 3 failed / 21 skipped; the three are
+the pre-existing environmental ones `CLAUDE.md` names
+(`test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`). Real-hook test opted in once against a real claude
+in a throwaway tmux socket: 9 passed in 51.92s.
+
+2026-09-08: git remote rule
+- Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).
+- The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
+
+2026-09-08: sidebar unread-count badge removed. `client/js/session-status-summary.js` `summaryHtml()` no longer emits `.status-summary-badge`; the count still drives the LED outer ring (`bucketFor`) and rides in the LED title/aria-label. CSS block removed from `client/css/status-led.css`. Only consumer was the sidebar group header (`client/js/session-sidebar-groups.js`); launchpad has no separate numeric badge (its `markUnreadHtml` is an unrelated manual toggle icon). Tests updated in `tests/test_status_summary.node.mjs`, 17/17 pass. Commit 1d03f2835e27d92aa23702dee8de8a5027d1d534 on v1.1, pushed to origin.
+
+---
+
+## 2026-09-08 - Punchlist 1: the choice on wake, not a better silent default - SHIPPED
+
+**What the app did before, read rather than assumed.** Two reconnect paths
+and they differ. The websocket re-attach (`src/api/websocket.py`) replays NO
+history at all: `request_dims`, the client's `pty_resize`, ~150 ms for
+SIGWINCH, then `ws_startup_paint` paints the VISIBLE SCREEN, or sends Ctrl+L
+and lets a TUI redraw itself. The launchpad/sidebar rejoin
+(`GET /sessions?include_scrollback=1`) captures
+`tmux capture-pane -p -e -J -S -<session.scrollback_lines>`, 3000 lines by
+default, and `terminal-reconnect-buffer.js` then decides alone: `keep` for
+the same session id with content already in xterm, `replace` otherwise.
+Nobody was ever asked, and nothing ever said what happened during the gap.
+
+**Threshold 60s, bound 3000 lines.** `TerminalAwayGap.AWAY_THRESHOLD_MS`.
+Under a minute is a blip and keeps today's behaviour with no prompt - a bar
+that fired on every wifi hiccup would be dismissed unread, which is worse
+than no bar. The full-history bound is `session.scrollback_lines` read from
+config, so the number the bar prints is the number tmux is asked for.
+
+**The absence is MEASURED by a heartbeat, not by a visibility event.** A
+sleeping phone may fire nothing: the tab is already hidden and the OS
+suspends the process. `terminal-away-bar.js` stamps the wall clock every 5s
+while visible; the gap between the last stamp and the next tick IS the
+absence. `visibilitychange` is wired too because a tab switch does fire it.
+
+**A remembered choice PRE-SELECTS AND NEVER SUPPRESSES.** Stored per device
+in `localStorage` under `cloude.away.lastChoice`. The bar shows every time
+and nothing runs without a press, because a remembered choice that acted on
+its own would be exactly the silent default this item exists to remove,
+wearing the user's own preference as a disguise. Pinned by a test.
+
+**The summary is built from what the app already has**, no LLM step and no
+new event log: toast records with a `created_at` inside the window counted
+by kind, the live `SessionActivityTracker` signal (`permission_open`,
+`notice_open`, and the later of `last_tool_event_ts` / `last_stop_ts`), and
+one `#{alternate_on}` probe. One new read-only route,
+`GET /api/v1/sessions/away/summary`, because three of those facts are on no
+existing endpoint. The server ships FACTS and never sentences, so the app
+keeps exactly one duration formatter instead of two that drift.
+
+**THE TURN COUNT IS A FLOOR.** `SessionManager.record_toast` supersedes an
+unacked `Stop` with the same title IN PLACE, so twelve finished turns can be
+one stored record. The report counts records, names the coalescing kinds,
+and the client prints "at least 3 turns finished". A total there would be
+the same class of lie the toast layer already refuses to tell in the other
+direction.
+
+**COVERAGE IS ITS OWN FIELD, and it is the negative control.** The toast
+store is in memory, so a bucket emptied by a restart is indistinguishable
+from a quiet session. A window starting before this process loaded reports
+`partial_server_restarted` and the bar says so out loud. "Nothing happened"
+and "the record was thrown away" must never render the same.
+
+**The bar is an OVERLAY inside `.terminal-container`.** An in-flow child
+there steals rows from `#terminal`, the ResizeObserver ships a `pty_resize`,
+tmux raises SIGWINCH and claude answers `ESC[2J`, which on the alternate
+screen erases the conversation. A bar asking "what should I repaint" must
+not be able to wipe the answer on its way in. `#localServersContainer`
+already paid for this.
+
+**STILL OPEN.** A websocket drop with the user PRESENT raises no bar, on
+purpose - that is not an absence and the reconnect buffer already kept the
+screen across it. If it ever should, the signal does not exist: nothing
+dispatches an event on `ws.onopen` and `client/js/terminal.js` is under a
+no-growth guard. Also unaddressed: on an alternate-screen pane "show full
+history" trades the browser's kept buffer for a single captured frame. The
+caveat is printed before the press, but for a Claude Code session the
+browser's buffer is usually the better record.
+
+**Files.** `client/js/terminal-away-gap.js` (pure rules and sentences),
+`client/js/terminal-away-bar.js` (heartbeat, element, actions),
+`client/css/terminal-away-bar.css`, `src/core/session_away_report.py`,
+`src/api/away_routes.py`, `docs/reconnect.md`,
+`tests/test_terminal_away_gap.node.mjs` (13),
+`tests/test_session_away_report.py` (19). Nothing in
+`terminal-reconnect-buffer.js` was touched; this layers on top of its keep
+rule.
+
+**Measured.** `venv/bin/python3 -m pytest -q`: 5328 passed / 4 failed / 21
+skipped. Three are the pre-existing environmental ones `CLAUDE.md` names;
+the fourth is
+`test_respawn_refreshes_pane_env.py::test_the_session_environment_itself_is_updated`,
+the documented real-tmux flake, which passes 3/3 in isolation on the same
+tree minutes later. The passed/skipped counts include another session's
+uncommitted work in this tree.
+
+## 2026-09-08 - Local branch/worktree prune + gc (v1.1)
+
+Authorised prune of local branches merged into v1.1, removal of worktrees
+whose branches were merged, and a plain `git gc`. Main tree, shared index,
+and v1.1/main refs were never touched directly (no checkout/reset/stash/
+clean in the main tree).
+
+- Worktrees removed (clean + branch merged): copy-ios-false-success,
+  fix-copy-output, home-bottom-bar, session-editor-top-right,
+  sidebar-toggle-spacing, theme-audio, tools-consolidation (7 total).
+- Worktree skipped (dirty, uncommitted change to
+  client/css/config-editor.css): editor-project-roots
+  (branch fix/editor-project-roots).
+- Branches deleted via `git branch -d`: 184 (all local branches merged
+  into v1.1, excluding v1.1/main/current and the branch still checked out
+  in the surviving worktree).
+- Branch skipped: feat/gui-fork (git refused: not fully merged to its
+  own remote-tracking branch origin/feat/gui-fork, despite being merged
+  to v1.1's HEAD - `-d` correctly declined; left alone, not force-deleted).
+- Branch count: 207 -> 16. `.git` size: 163M -> 135M (count-objects
+  size-pack 140.27 MiB -> 134.43 MiB, prune-packable 1 -> 0).
+- `git gc` (plain, not --prune=now) ran clean, no lock retries needed.
+- v1.1 sha moved 537c10c -> 1d03f28 during this work (another worker's
+  commit landed on it live, confirmed by log - not caused by this prune).
+  main unchanged at fd9e0a8d.
+- Working tree dirty-path count moved 45 -> 65 in the main tree during
+  this work (other workers' concurrent uncommitted edits, per the brief -
+  nothing here touched the working tree or index).
+- Recovery record (sha of every ref before any deletion, so any branch
+  can be recreated): /private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/prune-refs-before.txt
+- Before/after snapshots: same scratchpad dir, prune-before.txt / prune-after.txt.
+
+### 2026-09-08 - punchlist 7 and 8 closed: toasts raise globally, dismiss per session, and a history page
+
+**WHAT FILTERED TOASTS TO THE SESSION ON SCREEN, and it was TWO filters,
+which is why fixing either alone would have left the bug.** (1) The
+`toast.new` WebSocket frame is fanned out only to sockets bound to the
+raising session (`src/api/routes.py`'s own comment: "toasts for session A
+never leak"), and a browser holds ONE terminal socket, bound to the
+session being viewed. (2) `client/js/terminal.js` backfills via `GET
+/sessions/{id}/toasts` for the ATTACHED session alone, and only at
+WebSocket open. So a session needing attention while the owner was
+elsewhere was silent - and the launchpad and archive screens, which hold
+no terminal socket at all, were deaf to notifications entirely.
+
+**WHAT RAISES THEM NOW.** `GET /api/v1/toasts` returns every session's
+records; `client/js/toast-global-poll.js` polls it every 10s from
+whatever screen is up and feeds the SAME `ToastManager.backfill` the
+attach path already used, so a record arriving by both routes dedupes on
+id and renders once. A poll rather than a wider WS broadcast on purpose:
+widening the fan-out would push every session's frames down the one
+terminal socket and make terminal.js filter them - coupling notification
+delivery to the terminal transport, which is the coupling that caused
+this - and would still leave the socket-less screens deaf.
+
+**THE DISMISSAL AXIS WAS ALREADY CORRECT AND THE WORK WAS NOT TO BREAK
+IT.** `ToastManager.dismiss()` already acked with `toast.session_id` -
+the toast's OWN session, never the one on screen - and
+`SessionManager.ack_toast` walks only that session's bucket.
+`dismissForSessionActivity` was already scoped to the session typed into.
+Item 7 was therefore purely a visibility problem, and the new tests exist
+to pin the isolation now that the read is global.
+
+**THE ONE NEW DEFECT THE POLL COULD HAVE INTRODUCED, and its guard.**
+`dismiss()` drops the id from its model immediately and fires the ack
+asynchronously; a poll tick that left BEFORE the ack landed returns a
+snapshot where the toast is still unacked, and `add()` would resurrect
+the card the user just dismissed. `client/js/toast-dismissed-ring.js` is
+a bounded, EXPIRING set of locally dismissed ids that the poller filters
+every result through, fed by a new `cloude:toast-dismissed` CustomEvent
+from `toast.js` (an event rather than a hard call, so the toast module
+keeps working with no poller loaded). It is a SUPPRESSION, NEVER AN ACK:
+if the ack genuinely failed the record is still unacked server-side, the
+ring forgets it after 60s and the toast correctly comes back. A permanent
+ring would turn a failed write into a notification never seen again.
+
+**CLICKING A CARD GOES TO THE SESSION THAT RAISED IT**
+(`client/js/toast-navigate.js`), which only became meaningful once most
+cards on screen were about somewhere else. It resolves the real
+`/sessions/list` row and hands it to `App.returnToExistingTerminal` ->
+`ThemeNavigation.applyForSession`. IT DOES NOT SYNTHESISE A ROW: the
+toast carries enough to NAME a session and not enough to ENTER one -
+`pinned_theme` rides on the SessionInfo WRAPPER - so a synthesised object
+would paint the previous session's theme, gotcha 7, already paid for
+once. The dismiss button calls `stopPropagation`, so dismissing never
+navigates, and the click NEVER ACKS: reading a notification is not
+answering it. A dead session is announced through `Router.showError`, the
+app's one banner.
+
+**WHERE THE HISTORY LIVES, MEASURED, because the handoff's "the server
+already holds the record" is true only for the current process.** There
+is NO toast table and NO json store. Everything is
+`SessionManager._pending_toasts`, an in-memory dict keyed by session id.
+Retention is asymmetric: unacked kept WITHOUT LIMIT (dropping one loses a
+notification nobody saw); acked kept to the last 50 PER SESSION
+(`_TOAST_ACKED_CAP`), older falling off the tail; a wiped session loses
+its whole bucket; a restart loses everything. So `GET
+/api/v1/toasts/history` reports `storage: "process_memory"` and the empty
+state says it in words - an empty list after a restart means the record
+was LOST, not that nothing ever happened.
+
+**THE HISTORY OUTCOME IS TWO-VALUED AND THAT IS A NAMED LIMITATION.**
+Item 8 wanted three outcomes distinguished (answered / auto-dismissed by
+typing / swept by "dismiss all") because "I answered it" and "it got
+swept" are different facts. `Toast` carries `acknowledged` as a bare
+boolean and nothing records which act set it, so a row says `dismissed`
+or `open` and nothing else. Rendering a guessed reason on a page whose
+only job is to be trusted would be worse than the missing column. Adding
+it needs a reason threaded through the ack route into
+`SessionManager.ack_toast`, which is in another session's uncommitted
+work this round.
+
+**WHERE IT IS REACHED.** Settings gear -> `notifications` tab -> beneath
+the channel fields. That tab already existed and settings-panel.js
+already had a declarative SLOT mechanism (wrappers, terminal commands),
+so this is `slots: ['toast-history']` plus one `mountSlots()` call, not a
+fourth navigation pattern in a place nobody would look for it.
+
+**CORRECTED A STALE DOCSTRING while testing it** (gotcha 8): the ack
+route claimed a 404 for a toast id unknown to the named session. It never
+did that - it returns 200 "No-op" for both "not in this bucket" and
+"already acked", because the storage layer treats them as the same
+non-change. The scoping is real and lives in the storage walk; the tests
+assert the resulting STATE rather than a status code.
+
+**FILES.** New: `src/core/toast_history.py` (pure: flatten, order with a
+`(created_at, id)` tiebreak, page), `src/api/toast_routes.py`,
+`client/js/api-toasts.js`, `client/js/toast-dismissed-ring.js`,
+`client/js/toast-global-poll.js`, `client/js/toast-navigate.js`,
+`client/js/toast-history-render.js`, `client/js/toast-history-panel.js`,
+`client/css/toast-history.css`, `docs/notifications.md`,
+`tests/test_toast_cross_session.py`,
+`tests/test_toast_history_render.node.mjs`. Edited:
+`client/js/toast.js` (+50), `client/js/settings-panel.js` (+14),
+`src/api/routes.py` (docstring only), `src/main.py` (router
+registration), `client/index.html` (tags).
+
+**THE TIEBREAK IS NOT COSMETIC.** `collect_toasts` orders on
+`(created_at, id)` because a hook burst records several toasts inside one
+`datetime.utcnow()` tick; two records comparing equal leave their order
+to whatever the sort last saw, so page 1 and page 2 can both contain a
+row and neither contain another. Asserted directly.
+
+**TEST BASELINE, and the attribution.** `venv/bin/python3 -m pytest -q`:
+**5325 passed / 7 failed / 21 skipped** in 190s. THREE are the documented
+environmental failures (`test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`). The other FOUR are
+all in `tests/test_session_activity.py` (subagent depth / `SubagentStop`
+cases) - that file AND `src/core/session_activity.py` are another
+session's uncommitted work in this tree, and the file passes 57/57 when
+run alone minutes later. Nothing in this round touches that path. Node:
+187 files, run individually (`node --test` hangs on
+`led_state_for.node.mjs`, which is a piped-stdin CLI helper, not a
+standalone test) - **185 pass, 1 fails**, the pre-existing
+`test_archive_full_page_mode.node.mjs`. `tests/test_viewport_units.node.mjs`
+caught a real defect in the new CSS during this round: a raw `46vh` with
+no `dvh` twin, fixed.
+
+**STILL OPEN, carried forward:** (a) no durable store - a restart clears
+the history, and a table needs a schema migration through modules another
+session holds this round; (b) the dismissal REASON is unrecorded, so the
+three-way outcome cannot be rendered; (c) a duplicate hook event arriving
+AFTER a dismissal mints a NEW toast, because supersession deliberately
+never returns an acked record - correct for a genuinely new turn, wrong
+for a duplicated delivery, and indistinguishable at the record level
+today; (d) nothing bounds the number of DISTINCT SESSIONS stacking at
+once (the client cap and coalescing bound what is drawn, and supersession
+bounds repeated `Stop`s per session) - the owner asked about this for
+20+ sessions and it wants measuring on a real box before a cap is added.
+
+---
+
+## 2026-09-08 - punchlist 3: infer a hand-started session's agent from its process
+
+**DONE.** `sessions.agent_type` NULL beside
+`agent_family_source='not_launched'` rendered "unknown family" for a pane
+plainly running claude. Filled FROM EVIDENCE, never by defaulting the
+resolver.
+
+**The ladder** (`src/core/session_agent_infer.py`, pure): refusals first.
+`unavailable` when `ps` did not answer, so nothing was measured;
+`not_claude` when the tree WAS read and holds no claude - the bare-zsh
+negative control; `wrapper` when the claude argv carries at least one
+distinguishing flag and EXACTLY ONE configured claude-family wrapper
+passes that same set; `family` (bare `claude`) for everything else that
+is proven claude - no distinguishing flag, no match, or several.
+`#{pane_current_command}` CORROBORATES only: it answers the family when
+its basename is literally `claude`, and the claude VERSION STRING that 15
+of 19 live panes report there selects no rung at all.
+
+**The anchor gate is the whole design.** Equality of flag sets, not
+subset, or a `--dangerously-skip-permissions` wrapper would claim a pane
+running that plus `--chrome`. An EMPTY observed set names nothing, even
+when a flagless wrapper is configured: empty agreeing with empty is the
+absence of evidence, not two facts agreeing.
+
+**THE HOOK IS NOT THE TRIGGER, and that was the correction that mattered.**
+The first design ran only on the first hook. Measured on live: 10 of the
+hand-started `not_launched` sessions have NEVER fired a hook and never
+will - `CLOUDECODE_SESSION_ID` / `CLOUDECODE_HOOK_TOKEN` are copied into a
+pane's process at spawn, so a claude a human typed into an
+already-running pane has neither. A hook-only ladder would have been a
+rung that can never fire for exactly the population it was written for.
+Three drivers now: `session_agent_infer_sweep.sweep_live_sessions` at the
+END of the boot re-adopt pass and after an adoption (TWO subprocesses for
+the whole fleet - one `list-panes -a`, one `ps -A` - and only if a row
+needs them, because the row gate runs first), plus the per-session hook
+path in `session_agent_infer_apply` for a session that DOES have the env.
+A hook is still the strongest evidence when it exists; its absence is no
+longer read as an absence of claude.
+
+**The new source is `inferred_process`**, a SIXTH `agent_family_source`,
+rendered as the dashed guess pill. Kept apart from `fingerprint` because
+they were measured differently: a process read is the STRONGER guess -
+what the process was told to do, not what it printed - which is why it is
+the one guess allowed to name a wrapper, and it is still a guess. Writing
+an inference into `agent_type` broke the premise `session_agent_evidence`
+rested on, so the row's source now travels with its value through
+`identity_for_live_name`, `choose_agent_evidence` and `stored_launch_for`.
+
+**An inference is not intent.** `session_respawn.py` is UNCHANGED.
+`RESPAWN_SHELL` still fires on an empty `#{pane_start_command}` and fires
+BEFORE `agent_command` is read, so this could never have moved that rung.
+What it could have moved is an ADOPTED session off `RESPAWN_REPLAY` on a
+guess, which `session_agent_infer.restart_agent_type` refuses at
+`_stored_agent_type_for_tmux_name`. The picker's explicit choice stays
+the only override.
+
+**LIVE READ-ONLY DRY RUN, 2026-09-08 (nothing written).** 19 live panes,
+all with rows, **0 fillable**: every live row already carries an
+`agent_type`, so the row gate ends the pass before any `ps`. 12 rows on
+disk carry the punchlist-3 shape (`not_launched` + NULL `agent_type`) and
+NONE is live, so there is no pane to read for them. Counterfactual, run
+against the owner's five real wrappers: had those 19 rows been empty the
+ladder would have named `claude-chrome` for 3 and written the bare family
+`claude` for 16, because `cld`, `cldl` and `claude-skip-permissions` all
+reduce to the same single flag and tie three ways. That tie is the anchor
+gate working on real config, not a hypothetical.
+
+**TEST BASELINE.** `venv/bin/python3 -m pytest -q`: see the final run
+recorded in the commit. New: `tests/test_session_agent_infer.py` (25) and
+`tests/test_agent_inferred_source_renders_as_a_guess.py` (20).
+`tests/test_claude_title_sync_apply.py`'s fixture gained
+`agent_family_source` because `identity_for_live_name` now selects it.
+NOT MINE and left alone: `tests/test_no_name_keyed_session_identity.py`
+fails on `src/api/recreate_routes.py`, an UNTRACKED file another session
+holds in this tree.
+
+**STILL OPEN:** (a) no periodic re-sweep - a claude typed into a pane
+after boot with no adoption and no hook waits for the next server start;
+the sweep is cheap enough for a slow timer and that is the obvious next
+step. (b) The one-shot backfill for the 12 dead-row cases is out of scope
+here: those rows have no live pane, so only a transcript/argv archive
+could answer them, and it needs a verified backup first.
+
+2026-09-08: fix(launchpad) a74988a - project row session count moved from margin-left:auto (far from chevron, flush against card) to a fixed 4px gap beside the chevron, coloured to match the sidebar count treatment (2174b0d, accent text no pill). Archive action icon replaced U+1F5C4 file-cabinet emoji with a shared archiveIconSvg() (session-status-ui.js, same stroke family as pencilIconSvg) matching the header archive button shape; project row is the only surface using the new shared function so far. Targeted node tests updated and green: test_project_gutter_alignment, test_project_archive_render, test_project_authority_banner/render, test_project_list_render_guard, test_project_session_tree, test_home_screen_mechanics (via lib-home-mechanics.mjs stub).
+
+### 2026-09-08 - recreate a dead session on the same row - DONE (item 22, close-and-recreate)
+
+**THE GAP, restated as the owner would see it.** Restart in place shipped for a
+pane that died (`respawn-pane`) and for a pane that is alive (`respawn-pane -k`).
+Neither can touch a session whose tmux SESSION is gone entirely - the server was
+restarted, the machine rebooted, someone ran `kill-session`, so the name is
+simply absent from `tmux -L cloude list-sessions`. The respawn ladder reads a
+PANE, finds none, and answers `cannot_determine`. That is correct and it is a
+dead end: the only path left was building a fresh session by hand, which loses
+the row and with it the project binding, the title, the pinned theme, the unread
+key and the group filing.
+
+**REUSE BEFORE INVENTING, and it is a call rather than a copy.**
+`src/core/session_recreate.py` owns exactly one new fact - is the tmux session
+still on the socket - and hands everything else to
+`session_imported_restart.plan_imported_restart`: the measured directory
+spelling (`resume_directory`), the transcript refusal, the wrapper validation
+(`session_agent_choice.validate_agent_choice`), the `--resume` fragment
+(`resume_extra_args`) and the three conversation words. So there is ONE
+create-a-session classifier for the two rows that have no pane, and a change to
+the transcript guard cannot fix one path and miss the other.
+
+**THE GATE IS A LISTING, NOT `is_alive()`.** `has-session` returns the same
+False for "no such session" and for "tmux is missing / timed out / errored".
+Acting on that would spawn a second tmux beside a perfectly healthy one and
+rebind the row onto the newcomer, leaving the pane the user is talking to alive
+and unreferenced. `session_recreate_presence.tmux_presence` takes
+`discover_existing()`'s `ok` and `complete` and answers `gone` / `present` /
+`unknown`. Only `gone` acts; `present` is reported as the ladder's own
+`not_dead`; a listing that did not run, one that ran with rows the parser
+refused, and a name outside the `cloude_` namespace the listing does not cover
+are all `unknown`. `tests/test_recreate_gate_real_tmux.py` drives a real
+throwaway socket for the present -> killed -> gone transition, plus two negative
+controls (a neighbour session still running while the asked-about name is
+absent; a non-prefixed name that IS running and must never read gone).
+
+**THE IDENTITY GUARD CAUGHT THE FIRST DRAFT, and it was right.** The routes
+originally took the tmux name and resolved the row by greatest
+`tmux_created_epoch`. `tests/test_no_name_keyed_session_identity.py` failed it:
+a name is reusable and this app re-mints them, so that is a recency guess, and a
+wrong answer rebinds a DIFFERENT session's row onto a tmux session it has
+nothing to do with. `GET /sessions/recreate/preview` and `POST /sessions/recreate`
+now take `session_uuid` - the same durable key `imported_restart_routes` takes -
+and read the tmux name OFF the row. Client-side the same rule applies:
+`SessionRestartOptions.recreateTarget(records, name)` returns a uuid only when
+EXACTLY ONE record carries that name, null otherwise. A refusal costs the user
+the offer, which is what they had before this existed; a guess costs a session.
+
+**WHAT MOVES.** `create_session(reuse_session_id=...)` reaches
+`session_restart.rebind_instance`, which holds `sessions.id` fixed while moving
+the instance triple, so the project binding, the title, the conversation link,
+the pinned theme, the unread key and the group membership all ride the row.
+Group filing is safe because `session_group_membership` has keyed on
+`session_uuid` since v24; the v8 table it replaced keyed on `tmux_name`, which
+is the landmine the 2026-09-07 design notes flagged and which this shape does
+not touch. The SAME tmux name is asked for so name-scoped per-device browser
+state survives, and it is free by construction because the gate only passes on a
+measured absence - but the create path still uniquifies on collision, so the
+response REPORTS the name actually taken rather than the one requested.
+
+**UI.** The picker asks the second question itself:
+`SessionRestartOptions.previewFor(name, uuid)` re-asks the recreate endpoint when
+the restart preview came back `cannot_determine` on a pane state that is not
+`alive`, and carries the MODE back on the choice so the action posts to the
+endpoint that made the prediction. `recreate` is its own rung with its own badge
+("would build a new session on this record") rather than a synonym for `agent`,
+because `agent` reuses the pane and keeps its scrollback and this does neither.
+A failed second ask falls back to the restart preview's honest refusal, not to a
+blank panel.
+
+**MOUNTED THROUGH `src/api/restart_routes.py`** (`router.include_router`) rather
+than from `src/main.py`, which another session holds modified in this tree. Same
+`/api/v1` prefix, one mount, cannot be forgotten separately.
+
+**TEST BASELINE.** `venv/bin/python3 -m pytest -q`: 5417 passed, 3 failed, 21
+skipped. The three failures are the same pre-existing environmental ones
+(`test_home_write_guard`, `test_state_dir_resolution`, `test_version_probe`).
+New: `tests/test_session_recreate.py` (23, pure gate + plan),
+`tests/test_recreate_routes.py` (10, HTTP + the re-key against a real migrated
+schema with a project actually bound), `tests/test_recreate_gate_real_tmux.py`
+(3, real socket), `tests/test_recreate_picker.node.mjs` (13) with its
+`tests/test_recreate_picker_runs.py` wrapper. `tests/test_restart_picker_renders.py`
+gained `mode` / `sessionUuid` in the two choice-shape assertions.
+
+**STILL OPEN:** (a) the recreate offer is reachable only where a
+`GET /sessions/records` row uniquely names the session - a name shared by two
+records refuses rather than guesses, and the honest fix is for the sidebar to
+carry `session_uuid` on its rows instead of resolving one. (b) The launchpad's
+own stopped-row restart still goes to `POST /sessions/{uuid}/restart`, which has
+no presence gate and no directory-spelling measurement; it should be routed
+through this path, and `launchpad.js` was out of scope for this change.
+
+---
+
+## 2026-09-08 - punchlist 20: a resting claude reads idle, not unknown
+
+**COMPLAINT, verbatim:** "on the homepage and sidebar many status unknown."
+
+**MEASURED READ-ONLY ON LIVE, 2026-09-08 22:24Z.** 19 live panes on the
+`cloude` socket, 15 painting `unknown`. Cause: `SessionActivityTracker`
+(`src/core/session_activity.py`) is an in-memory dict and nothing hydrates it at
+boot or at adopt, so after a restart `resolve()` falls to `map_tmux_fallback`,
+which correctly answers `unknown` for any pane running claude. Ten of the 15 had
+NEVER fired a hook and never will - hand-started without the hook env, last
+assistant turns dated 2026-07-16 and 2026-08-24, alive at an idle prompt for
+weeks. Three carried real hook history in the row (Fantasy Football 20:01Z,
+daily-briefing 13:17Z, Mac 09-04) but all of it PERISHABLE and stale, so
+`activity_persist.restore_state` correctly refused it. Zero cases of
+hook-seen-but-unknown. The 4 bare-shell panes already read `idle`.
+
+**SHIPPED.** A second source of evidence, one that outlives the process.
+
+| Piece | File |
+|---|---|
+| The pure ladder, and the asymmetry it enforces | `src/core/session_status_seed.py` |
+| What one transcript record says about a turn | `src/core/session_status_seed_records.py` |
+| The cache and the refresh clock | `src/core/session_status_seed_store.py` |
+| The two reads, and the seam | `src/core/session_status_seed_read.py` |
+
+**IT MAY CLAIM REST AND MAY NEVER CLAIM `working`.** A file carries no
+heartbeat, so a `working` seeded from one could never be expired - the identical
+defect `4215ad0` had just fixed one tier up, where a raw tmux `running` painted
+15 sessions busy on no evidence. Rung A is the row, judged by
+`activity_persist.restore_state` (imported, never rebuilt) and read on the FULL
+INSTANCE TRIPLE - byte-for-byte the WHERE clause `write_state` writes on,
+because a name-scoped read answers for whichever epoch sorts newest, which is a
+different question. Rung B is the last decidable record of the bound transcript,
+walked BACKWARDS so the newest evidence wins.
+
+**THE ONE BOUNDED READER IS NOW SHARED.** `claude_title_sync.read_tail_records`
+was extracted out of `read_newest_custom_title`, which is rebuilt on top of it.
+The 64 KB bound and its reasoning are unchanged; there is one window/clamp/
+partial-line implementation instead of two about to drift.
+
+**TWO RECORD SHAPES THE LADDER HAD TO BE CORRECTED ABOUT, both caught by
+measuring rather than by reading the code.** A SIDECHAIN `end_turn` is a
+SUBAGENT finishing inside a turn that is still running, so it is UNDECIDABLE.
+And a SLASH COMMAND IS NOT A PROMPT: claude intercepts `/rename` before it
+becomes one (which is why no hook event carries it) but still writes a
+pseudo-`user` record about it wrapped in `<command-name>` /
+`<local-command-caveat>` envelopes whose own text says "DO NOT respond to these
+messages". Read as prompts, those were the ONLY two sessions the first version
+of this ladder refused - and both were sitting at an empty `>` prompt. They are
+now undecidable rather than rest, so the walk continues to a boundary claude
+really wrote and a slash command can never manufacture an idle either.
+
+**WIRED IN THREE PLACES, one hunk each.** `session_boot_readopt.py` (warm, at
+the end of the pass, beside `sweep_live_sessions`), `src/api/routes.py`
+(`adopt_session`, after the adopt returns), and ONE call site in
+`SessionManager._session_info_for` - reached only while the answer is still
+`unknown` on a pane measured LIVE, so a seed can add an answer and can never
+overwrite a measured one. `session_manager.py` grew 30 lines at that single
+seam and nothing else. The seed store hangs off a `WeakKeyDictionary` keyed on
+the manager rather than an attribute assigned in its `__init__`, deliberately:
+that file is far past the size guideline and was under concurrent edit.
+
+**A HOOK RETIRES A SEED INSTANTLY** - the seam is gated on `hooks_seen`, so
+there is no expiry to wait out and no value to clear. That gate is also what
+makes seeding idempotent: a seed is a cached READING of durable evidence, not
+an event applied to a state machine.
+
+**RESULT, measured read-only against the live DB and the real corpus before
+committing: all 15 of the unknowns would read `idle`**, every one via rung B,
+dated by its own transcript (oldest 2026-04-23, newest 2026-09-08). 0.27 ms
+median per session, 1.09 ms max. THE NEGATIVE CONTROL IS SEPARATE AND
+LOAD-BEARING, because a matcher that always finds something is worse than
+useless: over 400 randomly sampled transcripts the ladder splits 172 `at_rest` /
+70 `in_flight` / 158 `no_marker`.
+
+**TEST BASELINE.** `venv/bin/python3 -m pytest -q`: 5463 passed, 3 failed, 21
+skipped. The three failures are the same pre-existing environmental ones
+(`test_home_write_guard`, `test_state_dir_resolution`, `test_version_probe`).
+New: `tests/test_session_status_seed.py` (42) - positive per rung, and a
+negative control per rung: a stale `working` row does not seed working while a
+stale `idle` row still does, a user prompt and a `tool_use` seed nothing, an
+unreadable transcript refuses rather than answering idle, a measured absence is
+named apart from an unreadable file, a sidechain `end_turn` does not seed idle,
+the newest decidable record wins over an older closer, duplicated seeds are
+idempotent, and a session with live hook signal is never seeded. Plus a
+hermetic boot test in the style of `tests/test_boot_readopt.py` with `$HOME`
+redirected under `tmp_path` so nothing reads the developer's real corpus.
+
+**STILL OPEN:** (a) `SessionManager._restored_activity_state` (the pre-existing
+rung-A read at the seam) still selects `WHERE tmux_name = ? ... ORDER BY
+tmux_created_epoch DESC LIMIT 1` - name-scoped, so for two rows sharing one name
+it can answer for the wrong instance. It cannot currently produce a WRONG seed,
+because the new epoch-scoped read only runs after it has already declined, but
+it can produce a wrong RESTORE. Fixing it means a second hunk in
+`session_manager.py`, which was out of scope for this change. (b) The periodic
+re-seed rides the listing poll rather than a task of its own; if the listing
+ever stops running for a hookless session, its light freezes at its last seed.
+
+## 2026-09-08 deploy to live: 1f9b437
+
+Nine worker commits from `2361427..1f9b437` (LED centering, verify-script
+archive, sidebar header, the status machine split, badge removal, the
+sleep/wake bar, global toasts, the home page row and icon, wrapper
+inference, recreate, status seeding) shipped to the live install with
+`./scripts/deploy-mini.sh --target live --all`, restarted with
+`launchctl kickstart -k gui/501/com.cloudecode.menubar`.
+
+The index carried stale staged state from an earlier session (`MM`, `D`
+and `AD` rows against a worktree that already matched HEAD). `git reset -q`
+cleared it and left the tree clean, untracked included: every doc append
+the workers made was already committed, and `origin/v1.1` was already at
+`1f9b437`. Nothing was discarded.
+
+Pre-deploy baseline, measured before anything was copied: 19 rows on
+`GET /sessions/list` against 19 live tmux sessions, statuses 13 unknown,
+3 idle, 1 working, 2 notice.
+
+Tests on the clean tree: 5463 passed, 3 failed, 21 skipped in 196s. The
+three failures are the standing environmental ones (`test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`); the tmux-socket flake in
+`test_respawn_refreshes_pane_env.py` did not fire this run. Node: 188 files,
+only the pre-existing `test_archive_full_page_mode.node.mjs`.
+
+Verified after the restart, three outcomes each, all PASS:
+
+- Deploy hashes: `--verify-only` exit 0, 518/518 files on both the app
+  bundle Resources and the server dir, mirror-clean in both directions.
+- The RUNNING process serves HEAD. `GET /api/v1/version` carries a release
+  string (`1.0.33`) and no git hash, so the fallback was used instead:
+  seven files changed or added this round were fetched from the served
+  `/static` path and sha256-compared to the repo copy. All seven matched
+  (`status-led.js`, `status-led.css`, `session-sidebar-groups.js`,
+  `session-sidebar-band-menu.js`, `terminal-away-bar.js`,
+  `toast-global-poll.js`, `session-status-ui.js`). Corroborated by the log:
+  `status_seed_warm` and `agent_infer_sweep_complete` both ran at boot, and
+  neither module existed before this round.
+- Sessions: 19 rows against 19 live tmux sessions, no session vanished and
+  none appeared versus the pre-deploy set. `boot_readopt_complete` held 18,
+  failed 0, skipped 1, live_count 19, all 18 ids recovered from
+  `hook_token` and none derived.
+- The status seeding is what this round was for and it MOVED THE NUMBER:
+  unknown fell from 13 to 1 (`cloude_PT-IMC` alone), idle rose from 3 to 14,
+  1 working, 3 finished_unread.
+- Hooks over the two minutes after boot: 21 `POST /api/v1/hooks/claude-event`,
+  all 200, zero `hook_post_rejected`, zero stale-session refusals.
+- New routes: `GET /api/v1/toasts/history?limit=5` 200,
+  `GET /api/v1/sessions/away/summary` 200 with a real session and a
+  one-hour `since`, `GET /api/v1/sessions/recreate/preview` with a bogus
+  uuid 404 with a sentence naming the uuid, not a 500. Note the recreate
+  pair is mounted through `restart_routes.py`, not from `main.py`, which is
+  deliberate and documented in that file.
+- Client assets: the five new or changed JS files fetched from `/static`
+  all returned 200 and passed `node --check` ON THE FETCHED BODIES rather
+  than on the repo copies, and the served `index.html` references
+  `terminal-away-bar.css`, `terminal-away-bar.js`, `toast-global-poll.js`,
+  `session-sidebar-band-menu.js`, `session-status-ui.js` and
+  `toast-history.css`.
+
+**STILL OPEN:** one session, `cloude_PT-IMC`, still reads unknown. It fired
+no hook in the window and the seeder declined it, so nothing here says
+whether its row, its transcript or its pane is the reason. Not measured.
+
+## 2026-09-08 - punchlist item 4 (activity-after-resume): the real four-minute
+## measurement, re-run against current code, and it does not reproduce
+
+- [x] **Item 4 verified closed with a live measurement, not just the earlier
+  root-cause fix.** Used `tests/real_hook_app.py` / `tests/real_hook_harness.py`
+  AS A LIBRARY from a standalone scratch driver (not added to the repo, per
+  instructions) to: create a real session, answer the trust dialog, run one
+  turn to completion (`Stop`), read the transcript uuid, SIGKILL the pane's
+  process, and `respawn-pane -k` the SAME pane with `claude --resume <uuid>`
+  and the same `--settings` file - the tmux-layer mechanic
+  `TmuxBackend.respawn(live_restart_confirmed=True)` performs in production.
+  Then polled `GET /sessions/list` every 2s from the moment the resumed pane
+  was born, logging `(t, activity_status, startup_gate, unread)` plus every
+  hook's arrival time off the harness's ledger. Two independent runs: one
+  with a trivial no-tool prompt, one with the real `WORKING_PROMPT`-style
+  5-file-read turn (so `Stop` is preceded by real `PreToolUse`/`PostToolUse`
+  pairs and a trailing `SubagentStop`, matching the owner's actual workflow).
+
+- [x] **A RESUME FIRES EXACTLY ONE HOOK - a fresh `SessionStart` - and
+  nothing else.** Measured identically in both runs: `SessionStart` lands
+  0.48s and 0.49s after the resumed pane's process starts. No
+  `UserPromptSubmit`, no `PreToolUse`/`PostToolUse`, no `Stop`, no
+  `SubagentStop` are replayed from the prior conversation's history. The
+  full ledger for the tool-using run: original turn
+  `SessionStart+4.66s, UserPromptSubmit+8.64s, PreToolUse/PostToolUse x5
+  (13.46s..32.35s), Stop+35.71s, SubagentStop+38.49s`, then after the kill
+  and resume: `SessionStart+69.62s` and NOTHING after it for the rest of
+  the 300s ceiling.
+
+- [x] **SECONDS TO SETTLE: ZERO, in both runs.** `activity_status` was
+  already at its post-resume value (`finished_unread`, `unread=true`) at
+  the very FIRST poll (t=0.0s) and held there for the full 10.9s
+  confirmation window (poll granularity is 2s, so 0.0s is the true
+  measurement, not an artifact of a coarse poll). It never reads `working`
+  at any point after a bare resume. This makes sense given the mapping in
+  `src/core/session_activity.py`: `SessionStart` is a lifecycle event
+  consumed only by the lineage/correlation path, not one of the events
+  that stamps `last_tool_event_ts` or moves the status machine - so a
+  resume with no NEW prompt cannot arm the 120s working heartbeat at all.
+
+- [x] **THE FOUR-MINUTE CLAIM DOES NOT HOLD.** Confirms and extends the
+  2026-09-08 earlier closure entry above ("a closing hook event is not a
+  heartbeat"): that entry fixed the mechanism (`SubagentStop` no longer
+  re-arms the heartbeat when `subagent_depth == 0` / `turn_open=False`) but
+  had not been re-run against an actual `--resume`. This run did that. The
+  guard was measured LIVE and firing correctly during the tool-using run's
+  original turn: `subagent_stop_without_start session_id=... turn_open=False`
+  logged 2.78s after `Stop`, and `activity_status` read `finished_unread`
+  (never `working`) both immediately before the kill and for the entire
+  post-resume window. **The word "resume" in the original punchlist item
+  was itself a red herring** - a resume does not replay hooks and cannot,
+  on its own, produce ANY working-state exposure; the historical ~4-minute
+  observation is fully explained by the (now-fixed) `SubagentStop`
+  heartbeat re-arm on the turn that happened to precede the resume, not by
+  anything the resume itself does. Two re-arms of the 120s
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` land almost exactly on "about four
+  minutes", which is consistent with the original report.
+
+- [ ] **SIDE FINDING, NOT CHASED DOWN: `record_claude_lifecycle_event`
+  answered `LINEAGE_UNRESOLVED` for every session created in this harness
+  ("no live session carries this cloudecode session id, and no persisted
+  tmux name is recorded for it"), even though the session was created by
+  the SAME process moments earlier and never restarted.** Reproduced 3/3
+  runs. `sessions.claude_session_uuid` was therefore never written via the
+  normal path in any of these runs; the measurement above used the
+  transcript uuid read directly off disk instead (newest `*.jsonl` under
+  `~/.claude/projects/<slugify_project_dir(realpath(work_dir))>/`), which
+  is independent of that column. Not investigated further - could be
+  specific to `RealHookApp`'s minimal bootstrap (it deliberately skips
+  `src.main.app`'s lifespan) rather than a defect reachable from the real
+  app; whoever touches `src/core/session_lineage.py` next should check
+  whether `session.tmux_session` is actually populated at the point
+  `record_claude_lifecycle_event` runs for a session created through the
+  same request/response cycle, since that is the exact case that failed
+  here.
+
+- [ ] **OPERATIONAL NEAR-MISS DURING THIS MEASUREMENT, recorded so the next
+  person does not repeat it: running `tests/real_hook_app.py` as a
+  standalone script (not through `pytest`) does NOT get
+  `tests/conftest.py`'s autouse `tmux_socket_isolation` fixture, so nothing
+  installs `tests/socket_guard`'s socket redirect or subprocess guard.**
+  First attempt created a REAL session (`cloude_ses_1d468a9a`) on the
+  user's live `cloude` tmux socket, alongside his 19 other real sessions
+  (confirmed via `tmux -L cloude list-sessions` logging
+  `socket_name=cloude`). Caught before any real damage - the stray session
+  was idle on the trust dialog and was killed by name
+  (`tmux -L cloude kill-session -t cloude_ses_1d468a9a`) within the same
+  turn, verified gone, no other session touched, no orphan claude process
+  left running. Fix: a standalone driver MUST call
+  `tests.socket_guard.install_default_socket_redirect()` and
+  `install_subprocess_guard()` itself before creating anything, verify
+  `settings.load_auth_config().session.tmux_socket_name` actually resolved
+  away from `"cloude"` before proceeding, and call
+  `kill_test_socket_server()` / `remove_subprocess_guard()` /
+  `remove_default_socket_redirect()` in a `finally`. The corrected pattern
+  is in the scratch script referenced below - if this harness ever grows a
+  documented "run as a script" mode, this guard installation belongs in it
+  by default, not left to whoever forgets it next.
+
+- Rerunnable driver (not part of the repo, per instructions):
+  `/private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/item4_resume_timing.py`.
+  Run with `CLOUDE_REAL_HOOK_TESTS=1 venv/bin/python3 <path>` for the
+  no-tool original turn, or add `ITEM4_TOOL_PROMPT=1` for the tool-using
+  original turn. Needs claude/tmux/node on PATH, as the shipped real-hook
+  suite does.
+
+---
+
+## 2026-09-08 - unread is ONE instance-keyed flag, read by every surface [DONE]
+
+**Reported, measured in the browser on the live app.** Clicking a running
+session card's "mark unread for followup" envelope on the home page turned
+the envelope yellow, while the SIDEBAR row for the same session stayed
+`data-outer="steady"` for over 12 seconds across two `/sessions/list`
+polls. The owner's spec, verbatim: "when clicking a tab, the session is
+marked read. if i want it unread i click unread. it allows me to know
+whats waiting."
+
+**The divergence, traced rather than guessed.** Three defects, one
+symptom, and the client one is the whole visible failure:
+
+1. **No live caller passed the LED its unread signal.**
+   `SessionStatusUI.dotHtml(status, signals)` takes `unread` and
+   `startup_gate` as an optional second argument, and
+   `StatusLed.ledStateFor` is the only thing that turns `unread` into an
+   outer `unread` halo. All three live call sites
+   (`session-sidebar-rows.js:389`, `launchpad.js` card, `launchpad.js`
+   project-tree row) passed the status alone. So the flag reached the row,
+   was fingerprinted by BOTH repaint signatures (which already carried
+   `unread`), forced a repaint, and was dropped at the last inch: `idle` +
+   unread painted `steady`, `working` + unread painted `active`. Only
+   `finished_unread` looked right, and only because that status string
+   hardcodes the halo. Every surface was equally broken - the launchpad's
+   yellow envelope, which reads `s.unread` directly, is what made it look
+   like only the sidebar was wrong.
+2. **The `/sessions/list` READ used a cache the WRITE never used.**
+   `_session_info_for` resolved the epoch from `self._instance_epochs`,
+   populated only by the create/adopt persist steps and therefore EMPTY
+   for every session predating the process (after any restart, all of
+   them). A miss composes the LEGACY bare-name key, which cannot see an
+   entry stored under `<name>@<epoch>` - the key the manual control writes
+   via `_epoch_for_tmux_name`. Now reads `row["created_at_epoch"]` off the
+   bulk tmux probe it already fetched.
+3. **The two WRITERS keyed differently.** The `Stop` branch of
+   `record_hook_event` also read `_instance_epochs`, so it filed the same
+   pane under the bare name while the control filed it under the instance
+   key. Now uses `_work_stamp_epoch` (probes tmux once, caches), the same
+   source `mark_session_viewed` already used.
+
+**Behaviour change, per the spec.** `mark_session_viewed` (the WS bind)
+now clears BOTH sub-flags: opening the tab marks the session read, full
+stop. It used to spare `manual` ("survives being viewed"), and
+`tests/test_hook_driven_status.py::test_manual_unread_survives_being_viewed`
+asserted that; it is now
+`test_manual_unread_is_cleared_by_being_viewed`. Clearing the control
+(`PATCH .../unread` with `false`) also clears both, because the envelope
+renders the UNIFIED flag - a row flagged by a `Stop` shows the control
+pressed, and clearing only `manual` would leave it unread and read as a
+dead control. New `UnreadStore.clear()` drops the pair in one write and
+retires the legacy bare-name entry alongside the composite one.
+
+**Verified.** Both new suites were run against the reverted code and
+FAIL there: `tests/test_unread_led_one_field.node.mjs` 6 of 17 fail
+without the client fix, `tests/test_unread_one_flag.py` 6 of 9 fail
+without the server fix. Full pytest 5473 passed / 3 failed / 21 skipped
+(the 3 are the known environmental ones: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`), up from the 5463
+baseline with no new failures. Node: 190 files, 2 fail, both known -
+`test_archive_full_page_mode.node.mjs` (pre-existing) and
+`led_state_for.node.mjs` (a piped-stdin CLI helper, not a standalone
+test).
+
+**Negative controls are in both suites** because a renderer that
+hardcoded the halo, or a read path that always answered True, would pass
+every positive assertion: an unmarked row must stay `steady`/`active`, a
+DEAD pane must never paint as unread whatever the flag says, and a mark
+aimed at a different tmux name must not reach this row.
+
+**Files.** `src/core/unread_store.py` (new `clear`),
+`src/core/session_manager.py` (three call sites; net -0 lines),
+`src/api/routes.py` (docstring), `client/js/session-sidebar-rows.js`,
+`client/js/launchpad.js` (net 0 lines), `docs/session-status.md`,
+`CLAUDE.md`, plus the two new test files.
+
+## 2026-09-08 - boot race closed: PT-IMC's epoch never recorded [DONE]
+
+**Reported, from a read-only trace against a live boot at 23:14:25Z.**
+`session_re_registered_from_backend session_id=ses_fb4b2825
+backend_session=cloude_PT-IMC` landed at 23:14:44.109Z from the LEGACY
+metadata-driven reconcile (`SessionManager._lifespan_tmux_reconcile` /
+`_register_session`), a fraction of a second ahead of the triple-keyed
+boot re-adopt (`boot_readopt_complete held=18 failed=0 skipped=1` at
+23:14:44.407Z; the one skip was PT-IMC, already registered).
+
+**Root cause.** Only `session_boot_readopt.py`'s attach step writes
+`manager._instance_epochs[session_id] = epoch`; the legacy reconcile
+never does. `plan_readopt` skips a name already registered
+(`SKIP_ALREADY_HELD`) BY NAME, before it ever resolves an epoch for it -
+so the race left PT-IMC's epoch permanently unset. Every reader keyed on
+the instance triple, including `session_status_seed_read.derive_seed`,
+then read "this session's exact tmux instance could not be identified"
+and cached that refusal, silently, because the swallow around it was
+`except Exception: logger.debug(...)` and this server emits no debug
+lines.
+
+**Fix.** `session_boot_readopt._record_epoch_for_already_registered` now
+runs right after the plan is built: for every name skipped as
+`SKIP_ALREADY_HELD`, it resolves the epoch from the SAME epoch-bearing
+listing this pass already paid for, maps the name back to whichever
+session id already holds it (`manager.backends`), and fills
+`_instance_epochs` if it is still unset - logging
+`boot_readopt_epoch_recorded_for_registered` once per session healed.
+Costs no extra tmux round trip.
+
+Separately, `session_status_seed_read.py`'s swallows are narrowed from
+bare `except Exception` to a named tuple (`sqlite3.Error`, `OSError`,
+`ValueError`, `KeyError`) and now log at `warning` with the session id
+and the exception's type name, in `read_instance_row`,
+`read_transcript_rest`, `seeded_status`, and `seed_live_sessions` (which
+is now per-session inside its loop, so one bad session's read failure no
+longer aborts the whole boot warm-up). And a cached "instance could not
+be identified" refusal is no longer permanent:
+`SessionStatusSeeds.due`/`remember` now carry the epoch a reading was
+taken against, and a refusal cached with no epoch is due again the
+instant a caller supplies one, rather than waiting out a full
+`SEED_REFRESH_INTERVAL_SECONDS` on grounds that no longer apply.
+
+**Verified.** New hermetic tests: `test_boot_readopt.py::
+test_a_session_registered_ahead_of_this_pass_still_gets_its_epoch`
+(pre-registers a session the way the legacy path does, with no epoch,
+and asserts the pass fills it in); `test_session_status_seed.py::
+test_a_refusal_cached_with_no_epoch_is_due_the_instant_one_is_known` and
+`test_a_seed_cached_with_a_known_epoch_is_not_forced_due_by_the_same_epoch`
+(store-level); `test_seeded_status_retries_a_refusal_once_the_epoch_is_known`
+(the PT-IMC shape end to end, through `seeded_status`); and
+`test_a_broken_datastore_read_logs_at_warning_not_debug` (a
+`sqlite3.OperationalError` from a broken connection double is caught,
+logged at `warning` with the session id and `error_type`, and never
+raises past `read_instance_row`). Full pytest: 5478 passed / 3 failed
+(the same known environmental three: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`) / 21 skipped - no new
+failures.
+
+**Files.** `src/core/session_boot_readopt.py`,
+`src/core/session_status_seed_read.py`,
+`src/core/session_status_seed_store.py`, `tests/test_boot_readopt.py`,
+`tests/test_session_status_seed.py`, `CLAUDE.md`.
+
+---
+
+## 2026-09-08 DEPLOY RECORD - c360cfc to live (mac-mini-m4, port 8000)
+
+Deployed `c360cfc` (boot epoch for a session the legacy reconcile
+registered first) and `c39dd14` (unread one flag), branch `v1.1`, tree
+clean, HEAD equal to `origin/v1.1` at deploy time. `./scripts/deploy-mini.sh
+--target live` wrote both destinations (app bundle Resources, then the
+server dir), 518 files, verified both directions before and after the
+restart.
+
+**Regression gate before the deploy.** `tests/test_unread_one_flag.py`,
+`tests/test_boot_readopt.py`, `tests/test_session_status_seed.py`,
+`tests/test_led_real_hooks.py`: 70 passed / 9 skipped (the real-hook file
+skips without `CLOUDE_REAL_HOOK_TESTS=1`, as designed). Node
+`tests/test_unread_led_one_field.node.mjs` and
+`tests/test_status_summary.node.mjs`: 2 passed / 0 failed.
+
+**Before.** 19 live tmux sessions on `-L cloude`; `GET
+/api/v1/sessions/list` returned 19 rows, idle 15 / working 1 /
+finished_unread 3 / unknown 0, 4 rows unread.
+`cloude_Fantasy_Hockey_2026` was unread by hand from the home page,
+`activity_status=finished_unread`.
+
+**After.** Boot at 2026-09-08T23:52:12Z.
+
+- `boot_readopt_complete`: held 18, skipped 1, failed 0, live_count 19.
+  held + skipped = 19 = the live tmux count. `id_sources` all
+  `hook_token` (18), no `legacy_row`, no `derived`, `no_row` 0 - so no id
+  was minted and no hook token was rotated.
+- `boot_readopt_epoch_recorded_for_registered` fired once, for
+  `cloude_BHPP` / `ses_8f7ea3db`, epoch 1788559250. That is the c360cfc
+  fix doing exactly the thing it was written for: the one session the
+  legacy reconcile had already registered without an epoch got its epoch
+  recorded rather than being skipped empty.
+- `status_seed_warm`: seeded 19 = examined 19. PT-IMC, the one miss
+  before this round, is gone.
+- `GET /api/v1/sessions/list` after the deploy: 19 rows for 19 live tmux
+  sessions, idle 15 / working 1 / finished_unread 3, and **zero**
+  `unknown`.
+- Unread survived the restart: 4 rows unread
+  (`cloude_Agent_-_Cloude_Code`, `cloude_Hirschfeld`,
+  `cloude_Fantasy_Hockey_2026`, `cloude_daily-briefing`), and
+  `cloude_Fantasy_Hockey_2026` came back `unread=true`,
+  `activity_status=finished_unread` - the flag in `unread_state.json` is
+  keyed on the instance and the instance did not move.
+- Hooks over the first 2m20s after boot: 30 POSTs to
+  `/api/v1/hooks/claude-event`, all 200. Zero non-200, zero
+  `hook_post_rejected_invalid_token`, zero
+  `hook_post_rejected_non_loopback`.
+- Served bytes, not the file on disk: `GET
+  /static/js/session-sidebar-rows.js` hashes
+  `8de50029561df1d427325a21ec327d573da6f64684da39b56e537befc7aafdea` and
+  `GET /static/js/session-status-ui.js` hashes
+  `5a001c143afe31509825373115edef22465ce781dd398f98fb92d8509763ec8e`,
+  both equal to the repo copies.
+- `./scripts/deploy-mini.sh --target live --verify-only` re-run after the
+  restart: exit 0, 518/518 on both destinations, mirror-clean.
+
+**Method note worth keeping.** `/sessions/list` is under `/api/v1`, not
+at the bare path this file and `CLAUDE.md` quote, and it requires auth. A
+token is obtained on the mini itself from `TOTP_SECRET` in the live
+install's `.env` via `pyotp` against `POST /api/v1/auth/verify`; the
+secret never leaves that box. The negative control was run in the same
+pass: a bogus bearer token returns 401, so a 200 on the real one is
+evidence of the credential and not of an open endpoint. Accepted and
+rejected hook counts were read off uvicorn's own access lines rather than
+off a success-only application event, because the accepted path logs
+nothing of its own and a grep for rejections alone can never tell "none
+rejected" from "none received".
+
+## 2026-09-09 - a terminal bind clears the same instance key the writers wrote
+
+**Reported.** Browser measurement on live (HEAD 2692b63): mark "unread for
+followup" on the Fantasy Hockey 2026 card - card LED, sidebar row and the Joe
+group header all paint the outer `unread` halo within one poll, so c39dd14's
+set half works. Then click the row: the page navigates, the terminal paints,
+and nine seconds later `GET /sessions/list` still reports `unread: true`,
+`activity_status: finished_unread` for `cloude_Fantasy_Hockey_2026`
+(`ses_9523c563`). Owner's rule, verbatim: "when clicking a tab, the session is
+marked read. if i want it unread i click unread."
+
+**Cause, measured, and it was NOT the server.** A live end-to-end probe against
+the running install - mint a JWT from the install's TOTP secret, PATCH the
+manual unread, open a real `/ws/terminal?session_id=ses_9523c563`, hold it two
+seconds, close it - cleared BOTH sub-flags on the correct instance key
+`cloude_Fantasy_Hockey_2026@1788444912`, moved the row to `unread: false` /
+`activity_status: idle`, and left the negative control `cloude_Hirschfeld`
+untouched. The server was never the problem.
+
+THE BROWSER NEVER OPENED A WEBSOCKET. Grepping the live log across the whole
+window: `websocket_disconnected` at 23:57:28.776Z (the navigation away) and NO
+`websocket_connected` until the probe's own at 00:01:35.065Z, four minutes
+later. Confirmed in the live tab: `TerminalController.ws === null` while
+`sessionActive === true`, `isReconnecting false`, `_intentionalClose false`,
+footer stuck on "Connecting to terminal..." - the string set on the line ABOVE
+the await in `connectWebSocket()`. A bare `requestAnimationFrame` in that tab
+did not fire within 3000 ms at `visibilityState === 'hidden'`, and
+`waitForFontsAndLayout()` did not resolve within 4000 ms. The suspended connect
+opened its socket the instant the tab was painted, 35 minutes on.
+
+So: `waitForFontsAndLayout` ended on two bare
+`await new Promise(requestAnimationFrame)` calls; a browser does not run rAF
+for a tab it is not painting; `connectWebSocket()` suspended there, before
+`openWebSocket()`. No socket means no `onclose`, so every rung of the
+auto-reconnect ladder is unreachable too - the failure is silent and permanent,
+and it breaks the terminal outright, not only the unread flag.
+
+**Fixed.**
+- NEW `client/js/terminal-layout-wait.js` - every wait raced against a timer
+  (`setTimeout` fires in a background tab, rAF does not). A layout wait may
+  DELAY a connect, never CANCEL one. A timed-out wait is reported, not thrown;
+  the resize handshake corrects the grid on the first real paint.
+  `terminal.js` is a thin delegate and got SHORTER (2423 -> 2422 lines).
+- NEW `src/core/unread_identity.py` - THE one epoch source the unread key is
+  derived from, and it is the live tmux listing. `_unread_epoch` is the only
+  caller in `session_manager.py`; the `Stop` writer, the manual control,
+  `mark_session_viewed` and both read paths all reach it. Removes the two
+  answers that used to compete: the session_id-keyed `_instance_epochs` (seeded
+  from the DB row, empty after a restart) and the row's own recorded epoch. The
+  name-keyed cache is a memo of the tmux measurement, refreshed by every
+  listing, so a recycled name cannot hold a dead session's epoch past one poll.
+  `_epoch_for_tmux_name` is gone, folded into the one resolver.
+
+**Tests.** `tests/test_unread_bind_clears_same_key.py` (the measured sequence:
+manual mark, bind, list reads read; Stop sets it again, bind clears again, a
+duplicate bind is harmless; set and clear agree with a COLD memo after a
+simulated restart) and `tests/test_terminal_layout_wait.node.mjs` (an unpainted
+tab resolves instead of hanging, with the negative control that a painted tab
+still awaits both frames rather than being short-circuited). Negative controls
+throughout: a bind for a different session leaves this flag alone, a bind on a
+different INSTANCE of the same name does not clear, and the on-disk file keeps
+every other row verbatim - a clear that dropped everything would pass every
+positive assertion.
+
+pytest 5491 passed / 3 failed / 21 skipped, the 3 the known environmental ones.
+Node 189 of 190, the one failure the known `test_archive_full_page_mode`.
+
+**FOLLOW-UP, same day: FIXING ONE rAF WAIT WAS NOT ENOUGH, and only a live
+re-verification caught it.** After the first deploy the delegate was live in
+the page (`waitForFontsAndLayout.toString()` contained `TerminalLayoutWait`,
+the module was loaded) and a hidden tab STILL opened no socket and still read
+`unread: true`. `reconnectToExistingSession` (the sidebar row click) and the
+adopt branch of `connectToSession` each carried their OWN bare
+`await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`,
+and both sit ABOVE the `setTimeout(() => this.connectWebSocket(), 500)` in the
+same async function - so the connect was never even SCHEDULED, let alone
+reached. `TerminalLayoutWait.settleFrames(frames, timeoutMs)` replaces both,
+and `tests/test_terminal_layout_wait.node.mjs` now also asserts the SOURCE of
+terminal.js carries no bare rAF await at all, so a third one cannot be added
+back quietly.
+
+Two things this round is worth remembering for. A unit test on the module
+would never have caught it: the module was correct and the caller above it was
+not, which is exactly what "verify what the user sees" means here. And the
+first version of the delegate dereferenced `window.TerminalLayoutWait`
+unguarded, which threw in `tests/test_terminal_reconnect_buffer.node.mjs` - a
+real defect, not a harness artifact, since a missing optional script would have
+broken the connect outright. It is `?.` with a `Promise.resolve()` fallback
+now (never a timer: that harness stubs `setTimeout` to a no-op, and a fallback
+that cannot resolve is the bug being fixed), and the harness loads the module
+the way index.html does so it measures the real path.
+
+**Live verification, deployed build, 2026-09-09.**
+- Server end to end (no browser): mint a JWT from the install's TOTP secret,
+  PATCH manual unread, open a real `/ws/terminal?session_id=ses_9523c563`,
+  hold 2s, close. `unread: true` / `finished_unread` -> `unread: false` /
+  `idle`; the key `cloude_Fantasy_Hockey_2026@1788444912` appears and is
+  dropped; negative control `cloude_Hirschfeld` stays `unread: true`.
+- The actual defect, in a BACKGROUNDED tab (`visibilityState: 'hidden'`), as a
+  genuine session-to-session switch: before `unread: true` /
+  `finished_unread`, a WebSocket opens and is scoped to the right session id,
+  after `unread: false` / `idle`, Hirschfeld untouched either side.
+- `deploy-mini.sh --target live --verify-only` exit 0, 520/520 on both
+  destinations, mirror-clean. `boot_readopt_complete` held 18 / failed 0 /
+  skipped 1 against 19 live tmux sessions, identical to the pre-deploy
+  baseline. Over one minute: 2 hook POSTs accepted, 0 403s, 0 410s, 0
+  `hook_post_rejected_invalid_token`.
+
+---
+
+## 2026-09-08 - late round closed out (07bbbb8..54731f9), deployed and confirmed live
+
+21 commits, all deployed to live and verified: `./scripts/deploy-mini.sh
+--target live --verify-only` reported 520/520 file hashes matching on both
+destinations, boot held 18 sessions plus 1 benign skip against 19 live tmux
+sessions, zero hook-token rejections in the post-deploy window, and zero
+`unknown` activity statuses out of 19.
+
+**Commits, newest first:**
+
+- `54731f9` - the sidebar-rejoin and adopt code paths each carried their own
+  bare rAF wait above the websocket connect; both now race
+  `TerminalLayoutWait` instead of hanging in a backgrounded tab.
+- `43ef512` - a terminal bind clears the same instance-keyed unread flag the
+  stop hook and the manual mark write, via `unread_identity.py`'s one epoch
+  source (the live tmux listing).
+- `c360cfc` - boot epoch race closed: a session the legacy metadata reconcile
+  registered first is now recorded (`boot_readopt_epoch_recorded_for_registered`)
+  instead of silently skipped by the triple-keyed pass.
+- `c39dd14` - unread collapsed to one instance-keyed flag; every `dotHtml`
+  call site now passes the `unread`/`startup_gate` signals it was silently
+  dropping; `UnreadStore.clear()` clears both sub-flags.
+- `1d03f28` - the unread-count badge removed from the sidebar summary LED
+  (the outer ring already says unread).
+- `a9d0da2` - sleep/wake choice: after 60s away, the bar offers full history
+  (bounded by `scrollback_lines`) / summary (toasts + hook state + alternate
+  screen probe via `GET /api/v1/sessions/away/summary`) / just continue. Open
+  item: a WS drop with the user present raises no bar.
+- `54475f3` - items 7 and 8 closed: toasts raised from any screen
+  (`toast-global-poll.js`, `GET /api/v1/toasts`), dismissed per session with
+  an expiring ring; history page under settings > notifications,
+  `GET /api/v1/toasts/history`, storage is process memory (acked capped at 50
+  per session), not durable. Verified in Brave: a "Your turn" toast for BHPP
+  appeared on the home page.
+- `a74988a` - home page: project count sits 4px off the fold arrow in accent
+  text; archive button is a stroke icon (`archiveIconSvg` in
+  `session-status-ui.js`) matching the pencil.
+- `41382ee` - item 3 partial: `session_agent_infer.py` +
+  `session_agent_infer_sweep.py` infer a hand-started session's wrapper from
+  ps argv at boot, adopt, and first hook; new `agent_family_source
+  inferred_process` renders as a dashed guess pill, never a launch fact.
+  Live: 0 rows to fill (all 19 live panes already carried `agent_type`).
+  Open: no periodic sweep timer.
+- `46c4872` - item 22: `session_recreate.py`, `recreate_routes.py`
+  (`GET /sessions/recreate/preview`, `POST /sessions/recreate`, keyed on
+  `session_uuid`, mounted via `restart_routes.py`); gate is a tmux LISTING
+  answering gone/present/unknown, only gone acts; row re-keyed to the new
+  triple, project/title/theme/unread/group membership ride the row.
+- `1f9b437` - status seeding: `session_status_seed.py`, rung A row
+  `activity_state` if fresh (stale working refused), rung B transcript tail
+  last decidable record (turn end seeds idle at its timestamp; prompt/tool_use
+  seeds nothing; `/rename` envelopes undecidable), rung C bare shell idle,
+  else unknown; may never claim working. Live: unknown 13 -> 1 at first
+  deploy, then 0.
+- `c360cfc` (deploy record `2692b63`) - see above.
+- `537c10c` - docs: closed the two status findings, recorded the reaper gap.
+- `cafb50c` - `SubagentStop` NEVER counts as activity (only decrements depth
+  with a floor); fork's dead-row-in-live-list hunk removed per owner ("they
+  go into recent, they can disappear"); real-hook test 9 passed. Item 4.
+- `2174b0d` - sidebar group headers: count first in a 22px gutter
+  (`--sidebar-gutter`), colored tabular text, no pill; kebab on every header
+  incl. pinned and other (`session-sidebar-band-menu.js`, fold/expand).
+- `3c640fa` - 21 one-off verify scripts (7,649 lines) archived to
+  `scripts/archive/verify/` with README; 8 kept (CI-called or reusable).
+- `07bbbb8` - LED halo concentric (one shared inset on all four sides;
+  measured -1.35px at 9px).
+
+**Items closed with no commit of their own, verified or decided this round:**
+
+- **Item 4, closed.** Measured with `CLOUDE_REAL_HOOK_TESTS=1` driving a real
+  claude through `--resume`: exactly one hook fires, `SessionStart` at
+  +0.48s; `activity_status` reads `finished_unread` from the very first poll;
+  zero seconds of `working` exposure. The old ~four-minute observation is
+  fully explained by the (separately fixed, `cafb50c`) `SubagentStop`
+  heartbeat re-arm landing on the turn that happened to precede the resume,
+  not by anything the resume itself does. Reproduced 3/3 runs. Side finding,
+  not chased: `record_claude_lifecycle_event` answered `LINEAGE_UNRESOLVED`
+  for every session created inside this harness, even though the session was
+  created by the same process moments earlier - see the harness entry above
+  this section for the full note and what to check first.
+- **Item 9, closed by owner decision, no migration.** Pin is a flag that
+  floats the row to the top; ungrouped stays legal. Residue: a check that a
+  pinned row floats regardless of its group is still untracked verification
+  work.
+- **Item 11, closed.** Verified live on `54731f9` by the orchestrator in
+  Brave: mark unread on the home page -> server reports `unread: true`,
+  `finished_unread`; open the tab -> server reports `unread: false`, `idle`.
+  A hidden automation tab's DOM repaint lagging is Brave throttling hidden-tab
+  timers, not the app - confirmed separately by the terminal-layout-wait fix
+  landing before this check.
+
+**Git housekeeping, no code behind it:** 184 local branches merged into
+`v1.1` deleted (`git branch -d`, branch count 207 -> 16), 7 stale worktrees
+whose branches were already merged removed, plain `git gc` ran clean, `.git`
+163M -> 135M. `feat/gui-fork` (unmerged to its own remote-tracking branch)
+and the `editor-project-roots` worktree (dirty) were left alone, not forced.
+Recovery record (sha of every ref before deletion) is in a scratchpad file
+noted in the "Local branch/worktree prune + gc" entry earlier in this file -
+treat that path as non-durable across sessions. Remote rule restated: push
+only to `origin` (ccsliinc/CloudeCode) or `adamdev` (CloudeCodeDev), never
+`upstream` (Adoom666/CloudeCode) - its push URL is disabled by construction.
+
+**Consolidation candidates measured, none started (for HANDOFF's "next"):**
+`src/core/session_manager.py` 7,684 lines, `src/api/routes.py` 4,022,
+`src/core/tmux_backend.py` 2,542, `client/js/launchpad.js` 6,472,
+`client/js/terminal.js` 2,423; 29 Python files and 13 JS files over the
+500-line guideline in total; the same HTML-escape helper is copy-pasted
+across 7 JS files; `PTYBackend` legacy branches remain in 5 core files. The
+small `src/core` module families are healthy as-is and should be left alone -
+the size problem is concentrated in the five files named above.
+
+**Test baseline at the end of this round:** pytest 5491 passed / 3 failed
+(the same three environmental: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`) / 21 skipped. Node 191
+tracked files, 1 known failure (`test_archive_full_page_mode.node.mjs`);
+`tests/led_state_for.node.mjs` is a piped-stdin CLI helper, not a standalone
+test.
+
+**Still open after this round:** the websocket push (last, deliberately -
+`src/api/websocket.py` still carries no project/session-list message type);
+item 2b (re-measure the db integrity request-path cost on a quiet box);
+the HTML-escape helper dedupe across 7 JS files; the `PTYBackend` trim; the
+big-file splits listed above; a periodic sweep for `session_agent_infer`
+(item 3's residual piece); a bar for a WS drop while the user is present
+(only the 60s-away sleep/wake bar exists); toast history durability
+(process memory only, does not survive a restart); the deferred rename-push
+retry (a push deferred on a measured-missing transcript is never retried);
+`FALLBACK_PROJECTS_ROOT` hardcoding `/Users/jsugamele`
+(`src/core/project_directory.py:85`); `--name` dropped on a restart's
+resume; gitleaks not installed on the mini; the
+`~/.config/restic/mini-m4.pw` plaintext password awaiting the owner's
+rotation decision; the ~24GB of `cloude.db.bak-*` copies awaiting the
+owner's word to delete (list the actual state dir first, not every filename
+is recorded in this repo's docs); `_restored_activity_state` still
+name-scoped rather than instance-keyed; and
+`record_claude_lifecycle_event` answering `LINEAGE_UNRESOLVED` for sessions
+created inside the real-hook test harness (found by the item-4 run above,
+not chased).
+
+- [x] NOT A BUG: "a cleared unread does not repaint the led". Investigated on
+  live 54731f9 in Brave. The answer is (c), the poll pauses, and it pauses on
+  purpose. Both list polls stop for a surface that is off screen: the sidebar's
+  `_startPoll`/`_stopPoll` are called from `open()`/`close()`
+  (`client/js/session-sidebar.js:219,245`) so a closed panel has NO timer at all,
+  and the launchpad's 5s `_startRunningSessionsPoller` (`launchpad.js:529`) keeps
+  ticking but returns early on `ProjectListRenderGuard.shouldPoll(document)` while
+  `#launchpad-screen` lacks `.active`. Measured mid-symptom with the terminal up:
+  `sidebar.poll:false`, `guardShouldPoll:false`, server `unread:false`, all three
+  DOM leds still `data-outer="unread"`. Ruled OUT (b): the fingerprint already
+  carries `unread` (`session-sidebar-rows.js:207` `signature()`), and calling the
+  real tick `SessionSidebar._fetchAndRender()` by hand flipped the row to
+  `unread:false` and the led to `steady` in one pass. Ruled OUT (a): the launchpad
+  interval was alive and firing throughout, and the sidebar had no timer to
+  throttle. The earlier hand-call of `SessionSidebarFetch.load()` proved nothing
+  because it only fetches and returns rows, it never assigns `_rows` and never
+  calls `repaint()`. Every surface refreshes the moment it becomes visible:
+  `open()` ends in `_fetchAndRender()` and `showLaunchpad()` ends in
+  `loadProjects()`, both verified painting `steady` on return, and a sidebar left
+  PINNED open repaints within one 5s poll unaided. The `Joe` group header reading
+  `unread` beside a cleared Hockey row is also correct, not stale:
+  `cloude_daily-briefing` is genuinely unread in that group, and the client's
+  unread set matched the server's four rows exactly. No code change.
+
+## 2026-09-09 - status LED: one element, fill plus a box-shadow ring and glow
+
+DONE. Owner's report, verbatim: "the circles are still not lining up properly.
+can we do the same with only one icon? can we have a fill color and a border
+color, and can the border have a an opacity or blur so we can make the same
+effect with only one icon?" then "go".
+
+ROOT CAUSE, and why the previous fix could not have worked. The halo was an
+`::after` - a second box, sized off the dot. The layout engine pixel-snaps a
+box's position and its size, and it snaps the halo's box independently of the
+dot's box. So whenever the dot itself landed on a fractional x or y - routine
+inside a flex row, or wherever a text baseline puts an inline box on a half
+pixel - the two rounded different ways and the circles came apart by a device
+pixel. The 2026-09-08 symmetric-`inset` change fixed the halo's own INTERNAL
+symmetry (its left and right offsets could no longer disagree) and was
+therefore correct and insufficient: the drift was BETWEEN TWO BOXES, not
+inside one. A box-shadow is not a box - it is painted from the element's own
+border box at that box's own subpixel position - so concentric stops being
+something a rule arranges and becomes the only geometry available.
+
+WHAT SHIPPED. `client/css/status-led.css` rewritten. No pseudo-element. Fill
+is `background-color` from `data-inner`; the outer ring and its glow are two
+layers of ONE `box-shadow` from `data-outer` (`0 0 0 1px` hard ring, then
+`0 0 4px 1.5px` glow). Alpha is mixed into the shadow colour with
+`color-mix(in srgb, <hue> <alpha>, transparent)` rather than element
+`opacity`, which on one element would fade the fill too.
+
+TOKENS INTRODUCED: `--led-ring-width` (1px), `--led-glow-blur` (4px),
+`--led-glow-rest` (0.4), `--led-ring-ink`, `--led-ring-alpha`,
+`--led-glow-alpha`, `--led-hollow-width`, `--led-inset-ring`,
+`--led-ring-layer`, `--led-glow-layer`, `--led-glow-layer-rest`.
+RETIRED: `--led-halo-scale`, `--led-halo-inset`, `--led-halo-ink`,
+`--led-halo-opacity`. KEPT: `--led-size` (9px), `--led-glow-spread` (1.5px),
+every `--led-color-*` hue unchanged.
+
+THREE TRAPS THE REWRITE HAD TO CLEAR, all recorded in the file and in
+docs/session-status.md:
+
+1. THE HOLLOW `unknown` RIM WOULD HAVE ERASED THE OUTER RING. There is one
+   `box-shadow` property and the ring needs it, so `[data-inner='unknown']`
+   declaring its own would have made one dimension depend on the other - the
+   invariant this component exists to hold. It goes in as a LAYER,
+   `--led-inset-ring`, defaulting to a no-op `inset 0 0 0 0 transparent` so
+   the layer count never changes. For the same reason `off` zeroes the ring
+   and glow ALPHAS instead of setting `box-shadow: none`, which would take
+   the rim with it.
+2. THE LEGACY REFEREE'S `box-shadow: none` WOULD HAVE BLANKED EVERY RING.
+   `.status-dot.status-led` is two classes and beats every rule in the
+   component. It was correct while the ring lived on a pseudo-element and is
+   now removed; the legacy shadows it cancelled are single-class rules in
+   `status-dot.css`, which loads FIRST, so source order already handles them.
+3. THE REFEREE'S BLANKET `animation: none` WOULD HAVE KILLED THE PULSE. Now
+   that the animation is on the element rather than the pseudo, that reset
+   ties with the breathing rule at (0,2,0) and wins on order. It is scoped
+   off the two breathing states with `:not()`, which is order-independent.
+
+MOTION: keyframes touch the glow layer only, spread and alpha together off
+the one `--led-glow-rest` fraction. The ring layer is byte-identical at both
+ends. No transform, no width, no margin, no inset - `box-shadow` is
+paint-only, so the element's box is identical at every frame. Costs a repaint
+per frame instead of a composited transform; the region is about 16px square,
+and the alternative is a second box. `prefers-reduced-motion` kills the
+animation and nothing else, because the base rule already paints the full lit
+value.
+
+TESTS: `tests/test_status_led.node.mjs` rewritten from the halo assertions -
+46 pass. Adds a comment-stripped `RULES` view, because this stylesheet's own
+explanations name the properties the structural assertions forbid and were
+failing their own tests. New assertions: no `::after`/`::before` anywhere, one
+`box-shadow` declaration, the hard ring is zero-blur and its 9px diameter is
+an integer, glow reach does not exceed the 16.2px the halo had, no `opacity`
+rule anywhere, the hollow rim is a layer not a declaration, the referee
+touches no `box-shadow`, the referee's animation reset excludes the breathing
+states, keyframes touch box-shadow alone with matching layer counts, and
+nothing in the sheet uses transform / margin-top / margin-left / inset /
+position:absolute. Also green: test_session_status_ui (7), test_status_summary
+(17), test_unread_led_one_field (17), test_no_remote_assets (9).
+
+GALLERY (scratchpad, not published): three rounds side by side - the shipping
+single-element round with `status-led.css` inlined VERBATIM and unscoped, plus
+the 1.3x and 1.7x halo rounds re-created and scoped under `.era-halo`, so the
+round under test is byte-identical to what ships. Every inner x outer cell at
+9px, 12px and 16px, crosshair stages, and rows offset by `margin-left: 0.5px`
+and `0.25px` to force the dot's box onto a fractional device pixel - the exact
+condition the drift needed.
+
+OPEN, deliberately: the ring and glow are flat pixel values and do NOT scale
+with `--led-size`, so a much larger LED reads as a thinner ring. Correct at
+the 9px every call site actually ships; would need revisiting if a surface
+ever rendered at 36px.
+
+## 2026-09-09: 18 legacy cloude.db backup files moved to Trash
+
+Storage cleanup of `~/Library/Application Support/CloudeCode/`, verified
+reversible move (not delete). 18 named backup snapshots (bak-uuidrepair,
+bak-agenttype, bak-uuidfill, bak-import, bak-v23, bak-projectbind,
+bak-sessionkind, bak-claudeuuid, bak-preidentity, bak-v6, bak-v8, bak-v9,
+bak-v10, bak-v11, pre-cleanup, pre-media-migrate, pre-v10, pre-v11) plus
+34 `-shm`/`-wal` sidecars (52 files total, 32G) moved via `mv` into
+`~/.Trash/cloude-db-backups-20260909/` (same volume, instant rename).
+Preconditions checked before moving: zero open file handles (lsof),
+live `cloude.db` quick_check ok. Kept untouched:
+`cloude.db.bak-v24-20260908T194725Z` (4.6G, verified SQLite format 3
+header) - the most recent pre-v24-migration backup - plus the live
+`cloude.db`, `unread_state.json`, `hook_tokens.json`, and everything else
+in the data dir. Data dir size 46G -> 14G. Post-move directory diff
+confirmed no file outside the 18-name target list was removed. Note: an
+unrelated `cloude.online-backup.db` (4.6G) appeared during this pass from
+the app's own background backup process - not touched, not part of this
+cleanup. Reclaim the 32G by emptying the Trash (not done here, left for
+the owner).
+
+## 2026-09-09 restic now covers Development and the app data dir
+
+- [x] Owner asked for "all of development added to restic". Done. The nightly
+  job `/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh` (this is
+  the file launchd actually runs; the copy under `ai-setup/scripts/launchd/` is
+  NOT executed) gained two sources:
+  `/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development`
+  and `/Users/jsugamele/Library/Application Support/CloudeCode`. Repo is
+  `rest:http://10.0.10.80:8000/mini-m4` on qnap-home, LaunchAgent
+  `com.jsugamele.backup-m4`, daily 03:30, retention 7d/4w/6m run on qnap-home
+  because both REST servers are append-only and this host is write-only.
+  The long iCloud spelling is what was added, deliberately, per gotcha 6.
+
+- [x] First full pass: snapshot `2b1964d8`, 178,601 files / 50.356 GiB,
+  28.264 GiB added (15.608 GiB stored) in 7:33. Restic deduplicated roughly
+  22 GiB of that, mostly the `database.sqlite` / `.bak-premigrate` twins under
+  `Web/pt-imc-catalog`. Second pass (the one that carries the database):
+  snapshot `0e27bf00`, 4.636 GiB added (3.818 GiB stored) in 1:59.
+
+- [x] VERIFIED BY RESTORE, not by listing. Restored out of `0e27bf00` into a
+  scratch target and diffed against the originals: `Development/CloudeCode/
+  CLAUDE.md` (83,235 bytes) IDENTICAL, `Application Support/CloudeCode/
+  session_metadata.json` (989 bytes) IDENTICAL. Restore target then deleted.
+  Note restic restores directory modes too, so the tree needed a chmod pass
+  before it could be removed.
+
+- [x] `cloude.db` IS COVERED, VIA A DUMP, AND THE RAW FILE IS EXCLUDED. Copying
+  a hot SQLite file captures a torn database, so the job now takes a
+  `VACUUM INTO` dump to `cloude.online-backup.db` (integrity_check ok, 27
+  tables, 4,962,832,384 bytes) and excludes `cloude.db`, `-wal` and `-shm` so a
+  restore cannot pick the torn one. This is the pattern the job already used
+  for uptime-kuma and dockge, not a new mechanism.
+
+  CORRECTION to the cleanup entry above in this file: `cloude.online-backup.db`
+  is NOT "the app's own background backup process". It is written by the restic
+  job every night and it is the only consistent copy of the database that goes
+  off-box. DO NOT DELETE IT and do not add it to a cleanup sweep.
+
+  Unlike dockge, the dump opens the source WITHOUT `mode=ro`. Measured: this
+  database is `journal_mode=wal`, and a read-only open needs the `-shm` it may
+  not create, so both python sqlite3 and the sqlite3 CLI answer "unable to open
+  database file (14)". `VACUUM INTO` writes only its target, so the source is
+  not modified either way.
+
+- [x] EXCLUSIONS, with the sizes that justify them. Regenerable build
+  artifacts, measured across Development before the change: `venv.nosync`
+  (1 dir, 0.2 GiB), `.venv` (2, 0.1 GiB), `__pycache__` (346, 0.1 GiB),
+  `.mypy_cache` (2, 0.1 GiB), `.pytest_cache` (14, ~0), plus `node_modules`,
+  `venv` and `.DS_Store` which measure zero today and are excluded so they stay
+  that way. Those total only about 0.5 GiB: Development is 51 GiB of real data,
+  not dependency bloat, so nothing else was cut from it. Excluding them dropped
+  the pass from 191,857 files to 178,601.
+
+  The big exclusion is in the app data dir: eight stale multi-gigabyte
+  `cloude.db.bak-*` / `cloude.db.pre-*` migration rollbacks, roughly 37 GiB of
+  near-duplicates of the same database from one day's schema work. Also
+  excluded: `*.pipe` and `*.pipe.1` tmux scrollback tails, which are rewritten
+  constantly and would churn the repo nightly for no recovery value.
+
+  0 `.icloud` placeholder stubs in the tree, so everything in Development is on
+  local disk and is really captured, not a stub. Worth re-checking if the owner
+  ever turns on Optimise Mac Storage: restic backs up only what is on disk.
+
+- [x] TWO BUGS FOUND AND FIXED IN THE JOB ITSELF, both exposed by the new scale.
+
+  1. The CloudeCode dump was rejected on its first run by its own table floor,
+     27 tables against a floor of 40. The floor was wrong, not the dump: it was
+     derived from `SELECT count(*) FROM sqlite_master`, which counts every
+     object. This database is 27 tables + 58 indexes + 2 views = 87 objects.
+     The dump check counts `WHERE type='table'`. sqlite_master is not a table
+     list unless you filter it. Floor is now 15 against a measured 27. The
+     guard behaved correctly throughout: it refused the dump AND the
+     post-snapshot verify then reported the file absent from `2b1964d8`.
+
+  2. THE POST-SNAPSHOT VERIFY KILLED THE SCRIPT ON A GOOD BACKUP. It pipes the
+     `restic ls -l` listing into `awk '... {print $4; exit}'`. Under
+     `set -euo pipefail`, awk leaving early breaks the pipe, `printf` takes
+     SIGPIPE, the command substitution returns 141 and `set -e` ends the run.
+     This was invisible while the listing was 103 lines, because it fit in the
+     64 KB pipe buffer and printf always finished first. At 252,935 lines
+     printf blocks and the job dies mid-verify having written a perfectly good
+     snapshot, reporting failure every night. awk now reads to EOF and keeps
+     the first match. Proven against the real 252,935-line listing: all three
+     dumps verify and the pipeline survives `set -euo pipefail`.
+
+     The same line also could not have matched the new path at all: it used
+     `$NF`, and `Application Support` contains a space, so the last field was
+     only the tail of the name. It now matches on the line ending with the path.
+
+- [ ] OPEN, for the owner to weigh: the nightly job now writes a ~4.6 GiB
+  `VACUUM INTO` dump and pushes it every night. VACUUM rewrites pages, so
+  night-over-night dedup on that file is unlikely to be as good as on ordinary
+  data; run 2 added 4.636 GiB (3.818 GiB stored) for it. Against 7d/4w/6m
+  retention that is real growth on qnap-home. Worth watching the repo size for
+  a week and deciding whether the database wants a lower cadence than the rest.
+
+- [ ] OPEN, unrelated to this change but seen while doing it: the restic
+  password sits in plaintext at `~/.config/restic/mini-m4.pw`, and the retired
+  `~/.config/restic/backup-m4.sh.orig.20260616` still carries an old password
+  inline in the file. Left alone deliberately, not rotated, not copied. The
+  owner already knows about the .pw file; the `.orig` copy may be news.
+
+## 2026-09-09: cleanup, v24 backup and scratch dbs moved to Trash
+
+- [x] Moved to `~/.Trash/cloude-cleanup-20260909/` (move, not delete, per owner
+  policy - `rm` is denied by settings anyway):
+  - `~/Library/Application Support/CloudeCode/cloude.db.bak-v24-20260908T194725Z`
+    (4.6G) plus its `-shm` (32K) and `-wal` (0B) sidecars. Precondition
+    verified first: restic snapshot `0e27bf00` (repo `rest:http://10.0.10.80:8000/mini-m4`,
+    taken 2026-09-09T07:25:26-04:00) holds
+    `Library/Application Support/CloudeCode/cloude.online-backup.db` (confirmed
+    via `restic ls 0e27bf00 | grep online-backup`, 3 hits: cloude, dockge,
+    kuma). Live `cloude.db` passed `PRAGMA quick_check` = ok. `lsof` showed
+    the `.bak` not open. The v24 backup is gone from disk because restic
+    already holds the equivalent dump off-box.
+  - This session's scratch copies: `.../scratchpad/live.db` (4.7G) with its
+    `-shm`/`-wal` sidecars, and `.../scratchpad/bench/cloude.db` (295M).
+    `lsof` showed neither open.
+  - Trash folder total: 9.5G. Verified after the move: all seven source
+    paths gone (`[ -e ]` false), and `cloude.db`, `cloude.online-backup.db`,
+    `unread_state.json`, `hook_tokens.json` unchanged in size (only mtime
+    moved by seconds, from the live server's own normal activity between the
+    baseline read and the verify read - nothing in this cleanup touched
+    them).
+
+- [ ] OPEN, read-only findings from the same pass, not acted on:
+  - `~/ClaudeArchive` (37G: `cc-dev-state` 21G, `hostdim` 11G,
+    `claude-config-archive` 4.2G, `claude-icloud-conflict-preserve-20260902`
+    1.0G, rest small) is covered by **no** backup found: 0 hits in
+    `restic ls 0e27bf00 | grep -c ClaudeArchive`, and it is not under the
+    `~/Development` (iCloud) path either - it is its own directory at
+    `~/ClaudeArchive`, so iCloud sync does not cover it and the m4 restic repo
+    does not either. Worth a decision on whether it needs a backup target.
+  - `~/Library/Caches/CloudKit/*`: mostly small, but `com.apple.bird` (iCloud
+    Drive daemon) is 23G and `com.apple.cloudphotod` is 22G. Both are
+    OS-managed caches, safe to ignore, not part of this cleanup.
+  - Only one network mount active: Time Machine over smbfs to 10.0.1.202. No
+    other SMB/AFP/NFS mounts present at check time.
+
+## 2026-09-09 - ClaudeArchive archived to archive-nas and released to Trash
+
+- [x] CLOSES the open item above ("`~/ClaudeArchive` is covered by no backup").
+  It now has one. archive-nas = 10.0.1.237 (TrueNAS SCALE, ssh user
+  `truenas_admin`, pubkey), dataset `/mnt/ARCHIVE` (8.4T, 1 percent used),
+  destination `/mnt/ARCHIVE/vault/85_cloud-exports/claude/`.
+
+- [x] `hostdim/` copied to `multihost-db-20260830/` (this was the ONLY item of
+  the four not already on the NAS).
+  - Source confirmed closed with `lsof` before reading; WAL 0 bytes, so the
+    `.db` is self-contained. `-shm` / `-wal` deliberately not copied.
+  - Opened read-only (`mode=ro`): `PRAGMA quick_check` = **ok** (64.3s).
+    `page_count` 2,918,513 x 4,096 = 11,954,229,248 = exactly the file size,
+    so not truncated.
+  - `rsync -a --partial --progress` (NOT `--info=progress2`: macOS ships
+    openrsync 2.6.9-compatible, which rejects that flag with exit 1 and a
+    usage dump. It failed before transferring anything, so no partial state).
+  - PROVEN: full sha256 on BOTH sides, identical,
+    `efbec96404dbcd329611e73f10e56faa2161f21427273031c18b4e4a810529c4`
+    (76s remote). Independently corroborated a third time by the hash the
+    owner's own `~/ClaudeArchive/README.md` already recorded for this file.
+  - Remote copy opened read-only with `sqlite3` on the NAS: 21,039 /
+    2,447,028 / 3,125,122 (message_transcripts / message_bodies /
+    message_appearances), matching the source exactly.
+  - All 10 provenance sidecars sha256-matched both sides. `README.txt` written
+    beside it on the NAS recording provenance, dates and the hash.
+
+- [x] Re-verified the three already-archived items before releasing them:
+  - `cloude-archive-20260903.db`: size 22,595,760,128 both sides, tail-64MiB
+    sha256 `ee9290bb...` identical.
+  - `claude-config-git-20260831.tar.zst`: size 4,481,263,585 both sides,
+    tail-64MiB sha256 `7661cd2f...` identical, and the NAS `.sha256` sidecar
+    reads `9a876ec9...` as expected.
+  - conflict-preserve set: went further than a sample. Streamed the NAS
+    `07-*.tar.zst` and hashed EVERY member: 6,962 files, 6,962 manifest
+    entries, 6,962 hash matches, 0 mismatches, 0 not-in-manifest. Plus 50
+    evenly-spaced manifest entries hashed against the local files, 50/50.
+    That closes the local <-> manifest <-> tar chain. A manifest is not the
+    archive, so verifying only the manifest would have proven the wrong thing.
+
+- [x] CUSTODY GAP FOUND AND CLOSED BEFORE RELEASE: `cc-dev-state/` held 240,325
+  bytes across 7 small files that were NOT on the NAS (`README-dev.md`, the
+  two `archive-sample-report.*`, the two `icloud-conflicts.*`,
+  `migration_trail.jsonl`, `refresh_tokens.db`). Only `cloude.db` had ever
+  been archived. Copied to
+  `cloude-db-20260903/cc-dev-state-sidecars/`, all 7 sha256-verified both
+  sides, THEN released. The two subdirectories (`projects/`, `legacy-logs/`)
+  were empty. Note `refresh_tokens.db` is credential material and
+  `README-dev.md` carries a throwaway TOTP/JWT pair the owner's README
+  already flags as throwaway.
+
+- [x] Released by MOVE to `~/.Trash/ClaudeArchive-20260909/` (never `rm`):
+  `cc-dev-state/`, `claude-config-archive/`,
+  `claude-icloud-conflict-preserve-20260902/`, `hostdim/`.
+  `~/ClaudeArchive` 37G -> 119M.
+
+- [ ] OPEN, needs the owner: **the 37G is still on the disk.** The Trash is on
+  the same volume, so `df` is UNCHANGED at 38Gi available on
+  `/System/Volumes/Data`. Emptying `~/.Trash` is what actually reclaims it,
+  and that is deliberately the owner's call, not this pass's.
+
+- Remaining in `~/ClaudeArchive` (119M, all regenerable, left in place):
+  `app/` 54M, `archive-venv/` 64M, `run/` 100K, `config-backups/` 64K,
+  `README.md` 16K, `archive-start.sh`, `refresh-app.sh`,
+  `archive-instance.env`.
+
+- Two things worth keeping. First, the owner's README records `cloude.db` as
+  22,572,834,816 B / sha256 `51943da1...`, but the file is now
+  22,595,760,128 B: it is the live DB for the archive instance and grew after
+  the README was written, so THAT RECORDED HASH IS STALE. It agrees with
+  nothing today and would look like corruption to the next reader. The NAS
+  copy matches the CURRENT file. Second, `cloude.db` was checked with `lsof`
+  and port 5055 was probed (`curl` got no response) before the move, because
+  moving a live database out from under a running service is the obvious way
+  to turn a cleanup into an incident.
+
+## 2026-09-09: disk cleanup closed (measured)
+
+- Owner emptied the Trash and thinned APFS local snapshots twice
+  (`sudo tmutil thinlocalsnapshots / 60000000000 4`). Free space on
+  /System/Volumes/Data: 38 GiB this morning -> 147 GiB now (67 percent
+  used). Local snapshots: 19 -> 1. Trash 0 B. ~/ClaudeArchive 119 MB
+  (regenerable code and venv only). App data dir 9.4 GB (live db plus the
+  nightly VACUUM INTO dump).
+- Lesson: on APFS, emptying the Trash frees nothing while a local Time
+  Machine snapshot still references the blocks; thin the snapshots after a
+  large delete or the measurement lies. Also, a folder moved into ~/.Trash
+  by `mv` from a shell may not appear in Finder until Finder relaunches;
+  `ls ~/.Trash` is the truth.
+
+## 2026-09-09: status LED - idle gets its own gray fill, ring widened and feathered
+
+DONE. Owner's report, verbatim: "i need the lights to go idle, (i think
+thats gray) when i click on a tab. there needs to be a read/idle color.
+lets make the border a little larger and can we feather it?"
+
+**ROOT CAUSE.** `idle` (read, at rest) and `finished_unread` (not yet
+read) both painted inner `done` green - only the outer ring moved when a
+tab was opened, too subtle a change at a glance.
+
+**WHAT SHIPPED.**
+- New inner state `idle`: `client/js/status-led.js` INNER_STATES gains
+  `idle` (slotted between `waiting-input` and `done`), a new
+  `--led-color-idle` token in `client/css/status-led.css` (neutral
+  mid-grey, `var(--color-fg-muted, #8f8f8f)` - deliberately different
+  from `unknown`'s `#666`/`#8b8b8b` grey AND from `unknown`'s hollow
+  shape; `idle` stays a solid dot, since it is a measurement and
+  `unknown` is the absence of one).
+- `ledStateFor`: `activity_status === 'idle'` now returns
+  `{inner: 'idle', outer: 'off'}` when NOT unread, and
+  `{inner: 'done', outer: 'unread'}` (unchanged) when the defensive
+  `idle` + `unread: true` combination arrives - kept identical to
+  `finished_unread`'s pair on purpose, because
+  `session-status-summary.js`'s `unread` bucket always renders as
+  `{inner: 'done', outer: 'unread'}` and a row that disagreed would make
+  the group header lie about its own child
+  (`tests/test_status_summary.node.mjs`, "a single-child group renders
+  the same LED state as that child" - this is what caught it).
+- `session-status-summary.js`: `bucketFor` and `SUMMARY_PRIORITY` gain an
+  `idle` bucket/entry, slotted between `done` and `dead`. New priority:
+  **permission > input > working > unread > done > idle > dead >
+  unknown**. A group of all-idle now reads idle instead of falling to
+  unknown; one unread among ten idle still bubbles unread.
+- Geometry, `client/css/status-led.css`: `--led-ring-width` 1px -> 1.5px.
+  New `--led-ring-feather-blur` (1px) and `--led-ring-feather-fraction`
+  (0.35) drive a NEW named layer, `--led-ring-feather-layer` - a second
+  shadow at the SAME spread as the hard ring (so its unblurred edge sits
+  exactly on the ring's own edge), blurred, at a FRACTION of
+  `--led-ring-alpha` (so it zeroes automatically wherever the ring does,
+  e.g. `off` - the same trick `--led-glow-rest` already used for the
+  breathing trough). `--led-glow-blur` 4px -> 6px, `--led-glow-spread`
+  held at 1.5px on purpose: raising blur alone spreads the same light
+  over a wider fade ("softer"), where raising spread would have read as
+  a bigger solid disc ("bigger") - the owner asked for the former. The
+  box-shadow is now FOUR layers (was three): inset-ring, ring, feather,
+  glow - both keyframes restate all four, unchanged except the glow
+  layer, same pattern the ring layer already used.
+- MEASURED FOOTPRINT: ring diameter at the 9px default is now 12px (was
+  11px), still an integer. The ring-plus-feather's own visible reach is
+  `width + feather-blur/2` = 2.0px past the dot - well inside the "about
+  4px past the dot" ceiling. The glow's reach grew from 3.5px to 4.5px
+  (blur 4px -> 6px, spread unchanged), putting the lit object at about
+  18px across (was 16.2px) - an accepted, documented 1.8px cost of the
+  feathering, not a silent regrowth of the "glowing is still too big"
+  problem the previous round fixed.
+- Sidebar clipping checked, not just assumed: `.session-sidebar-row-main`
+  padding is 10px (cozy/detailed) or 8px (compact), `.session-sidebar-list`
+  padding is 8px on top of that, and neither row nor list sets
+  `overflow: hidden` on the row's own box (only text spans do, for
+  ellipsis) - so the new ~9px glow radius from centre has 16-18px of
+  clearance before the list's own scroll edge in every density. No
+  regression.
+
+**TESTS.** `tests/test_status_led.node.mjs`: 52 pass (was 46 pre-2026-09-08
+element rewrite baseline; new tests added for the idle fill token
+distinctness, idle's solid-not-hollow shape, idle rendering outer off with
+no lit ring, the feather layer's presence/fraction/reach, and the ring
+width/glow blur token values). `tests/test_status_summary.node.mjs`: 20
+pass (idle priority slot, all-idle group, one-unread-among-ten-idle,
+idle-beats-dead-loses-to-unread). `tests/test_unread_led_one_field.node.mjs`:
+17 pass (idle+nothing-waiting now asserts outer `off`, not `steady`).
+`tests/led_state_for.node.mjs` docstring example updated (CLI helper, not a
+test - exits non-zero with no stdin by design). `tests/test_led_real_hooks.py`
+(opt-in, `CLOUDE_REAL_HOOK_TESTS=1`, not run this pass - would spend real
+Claude turns) updated at the two spots that asserted `inner: 'done'` /
+`outer: 'steady'` for a session reaching rest, now `idle`/`off`. Full
+`tests/*.node.mjs` sweep run (191 files): zero new failures; the two
+non-green results (`led_state_for.node.mjs` with no stdin,
+`test_archive_full_page_mode.node.mjs`) are both pre-existing/documented,
+per CLAUDE.md. `node --check` clean on every touched JS file.
+
+**GALLERY** (scratchpad, not published):
+`led-gallery.html`'s "Round 3 - single element (shipping)" section now
+inlines the real `status-led.css`/`status-led.js` verbatim (spliced
+programmatically from the shipped files, then verified: brace-balanced
+CSS, the extracted `<script>` block executes under `node -e` and produces
+`INNER_STATES` including `idle` and the correct `{inner:'idle',
+outer:'off'}` mapping). Added an `idle` row to all three inner x outer
+matrix tables (9/12/16px) and to the "every inner state, active outer"
+strips, plus a new plain-English legend row above them: working / waiting
+for permission / waiting for input / done, unread / idle, read / dead /
+unknown, rendered at 20px through the real `ledStateFor()` pairs (not
+hand-picked colours). Round 1 and Round 2 (the retired halo-era
+comparisons) untouched - they predate `idle` and are historical reference
+only. `build-gallery.js`/`page-template.html` in the same scratchpad
+directory are a separate, unused generator for a different page layout
+and were left alone.
+
+**DOCS.** `docs/session-status.md`: inner-dot vocabulary, the
+activity_status -> (inner, outer) mapping table, the geometry/Sizing
+section, and the group-rollup priority line all updated for `idle` and
+the new ring/feather/glow numbers, plus a note on why `idle` + `unread:
+true` is defensive rather than normally reachable. `CLAUDE.md`: the status
+paragraph now says the box-shadow is three ring-side layers (was two) and
+names `--led-color-idle`; the summary-priority line gains `idle`.
+
+## 2026-09-09: status light audit, defects A to E closed
+
+Audited on live at `f77a978`, 19 live sessions. Client and server agreed on
+all 19 rows, so nothing here is a rendering bug; every defect was upstream of
+the paint.
+
+- [x] **A. A view now clears an open `notice`, and still never a
+  `permission`.** `notice` is set by claude's `Notification` hook (its
+  roughly-60s "waiting for your input"), outranks the heartbeat, and cleared
+  only on `UserPromptSubmit` / `PreToolUse` / `Stop` - all three the AGENT
+  acting. Nothing represented the USER showing up, so BHPP painted terracotta
+  for 46 minutes ACROSS a visit. `src/core/session_view_clears.py` is the one
+  definition of what looking at a session resolves, reached from the WS bind
+  (`mark_session_viewed`) and from the manual mark-read control, which arrive
+  holding different identifiers. `SessionActivityTracker.clear_notice` is the
+  only thing outside the hook stream allowed to move that machine, and it may
+  move exactly one field. `permission_open` is deliberately untouched: a
+  blocking fact about the agent is not answered by looking at it. No time
+  expiry was added either, per the owner - "a session left alone should not go
+  gray".
+
+- [x] **B. A hook-less session reads its own transcript.** Only 6 of 19 live
+  sessions had EVER fired a hook; the other 13 rested on seed rung B, which
+  can say `idle` and nothing else, so three sessions that had touched their
+  transcript inside 36 minutes painted the same rest as ones last touched in
+  July. `src/core/session_transcript_status.py` (pure) plus
+  `_read.py` (the reads, the turn ledger, the unread write) is rung 0 of the
+  same ladder, fed by the existing 60s re-seed. Rung 1 mtime inside
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` -> `working`; rung 2 a turn end NEWER
+  than the ledger's -> `finished_unread` plus ONE auto-unread claim; rung 3
+  the turn end already recorded -> `finished_unread` while unread, `idle`
+  after a view; rung 4 stale in-flight -> nothing; rung 5 no transcript ->
+  nothing.
+  - **An mtime is a TIMESTAMP, which is exactly the objection the old
+    docstring raised.** It refused file-derived work because a RECORD carries
+    no clock. A modification time is a clock, so the claim expires on the same
+    120s a hook heartbeat does. `StatusSeed.expires_at` plus `display_state`
+    enforce it, because the seed cache holds a reading for 60s and would
+    otherwise stretch the window.
+  - **FIRST SIGHT OF A TURN END IS A BASELINE, NOT AN INSTRUCTION.** The
+    ledger is in memory; a first-sighting claim would light the whole fleet
+    unread on every restart, July conversations included. It records and
+    claims nothing. The baseline only moves FORWARD, and only the two
+    turn-end rungs may move it - rung 1's timestamp is a file mtime, not a
+    turn boundary.
+  - **The gate is `hooks_seen`, NOT the hook token store.** Measured:
+    `hook_tokens.json` holds 33 entries against 19 live sessions and includes
+    every `adopted:` id, because an adopt mints a token for a pane it never
+    spawned into. Gating on it would have refused the ladder to exactly the
+    sessions it was built for, and shipped a no-op.
+
+- [x] **C. The legend says what the states mean.** `idle` was "waiting at the
+  shell" while 15 of 19 panes ran claude. Now: `waiting for permission` /
+  `wants your attention` / `working` / `done - unread` /
+  `idle - read, nothing running` / `not measured` / `dead - process exited`,
+  all in `STATUS_LABELS` and reached by every surface through `dotHtml`.
+
+- [x] **D. The terminal header has a light.** The screen you actually look at
+  was the one surface with no LED, so the status of the session you were IN
+  was the one you had to open a list to read.
+  `client/js/session-header-led.js` renders through
+  `SessionStatusUI.dotHtml`, so it inherits the rings, the colours and the
+  legend and cannot drift. Fed from one call site at the end of
+  `session-sidebar-fetch.js`'s `load()`; because that poll runs only while the
+  drawer is OPEN, the module also arms a fallback timer at the same cadence
+  that stands down while the drawer is open. AT MOST ONE POLLER, EVER, and
+  none at all with no session attached.
+
+- [x] **E. `status_source` on the `/sessions/list` wrapper.** `hook` /
+  `transcript` / `seed_row` / `tmux` / `none`, defined once in
+  `src/core/session_status_source.py` and DERIVED FROM THE RUNG THAT
+  ANSWERED, so a status and its provenance travel together. Rendered in the
+  TOOLTIP ONLY (`via hooks`, `via transcript`) - never a colour, a class or a
+  shape, because one status with two appearances would undo the single
+  vocabulary the light rests on.
+
+**ACCEPTED AS IS, both by design and both re-confirmed against live:**
+- A COLLAPSED GROUP HIDES ITS ROWS. Rows missing from the sidebar under a
+  folded band are folded, not lost. Folding is in the paint signature
+  precisely so it repaints; nothing to fix.
+- A PERMISSION STAYS LIT UNTIL IT IS ANSWERED. `question` is not cleared by a
+  view, an expiry or a poll - only by the events that resolve it. That is the
+  one light meaning "this cannot proceed without you" and it must not be
+  dimmable by a glance.
+
+**Tests.** `tests/test_status_view_and_transcript.py` (35: the view rules with
+their permission negative control, every rung, the once-per-turn claim, the
+first-sight baseline, the older-turn-end control, the hooked-session and
+bare-shell controls, the expiry) and
+`tests/test_status_legend_and_header_led.node.mjs` (14: the legend copy, the
+tooltip suffix, and the header light rendering and updating from a list row).
+Full suite 5530 passed / 3 failed / 21 skipped - the three are the known
+environmental ones (`test_home_write_guard`, `test_state_dir_resolution`,
+`test_version_probe`). Node 190 passed / 1 failed, the pre-existing
+`test_archive_full_page_mode`.
+
+---
+
+## 2026-09-09 - the read state is derived on every path, and the ring means activity only
+
+Two defects the owner reported minutes apart, both measured on live at
+HEAD 5e13cb1, both about a light claiming something nobody measured.
+
+**1. WRONG STATUS AFTER A VIEW.** Owner: "i just clicked into the daily
+briefing tab, nothing changed." `/sessions/list` for
+`cloude_daily-briefing` after the click: `unread: false`,
+`activity_status: finished_unread`, `status_source: seed_row`. The WS
+bind had cleared the flag exactly as designed; the durable row still held
+the word `finished_unread` stamped before the view, and the seed path
+returned it verbatim.
+
+ROOT CAUSE, AND IT IS A SHAPE WORTH KEEPING: every source had its own
+half of the read/unread rule, and one of them had only the half that ADDS
+unread. `idle` plus a set flag became `finished_unread`;
+`finished_unread` plus a cleared flag stayed exactly as it was. A
+one-directional derivation is not a derivation, it is a cache - and a
+cache of a fact that moves is a lie with a timestamp.
+
+FIX. `session_status.derive_read_state(state, *, unread)` is the ONE
+function, pure, total and idempotent, and every path runs through it:
+`SessionActivityTracker.resolve`, `session_activity.map_tmux_fallback`
+(which is also the attachable-row path), `session_status_seed
+.display_state`, `session_transcript_status.resolve_transcript_status`
+rung 3, and `SessionManager._session_info_for` on the assembled answer -
+that last one AFTER the seed path has had its chance to set a flag.
+`activity_persist.write_state` now stores the BASE state, so
+`sessions.activity_state` stops baking a read verdict into a column
+nothing rewrites on a view; rows written before today are reconciled on
+read by the same function, which is why this needed no migration.
+
+THE ONE RUNG THAT IS NOT DERIVED IS THE ONE THAT SETS THE FLAG.
+Transcript rung 2 has just MEASURED a turn end newer than anything
+recorded and reports `claim_turn_end_at`; deriving there against the flag
+as it stood BEFORE that measurement would answer `idle` about a turn that
+finished unseen.
+
+**2. THE RING MEANT UNREAD, WHICH READS AS ACTIVITY.** Owner: "the ring
+around some of the leds are not gray, which means there should be
+background tasks. i dont think those few have any background tasks."
+`finished_unread` mapped to outer `unread` - a breathing amber ring - so
+the quietest state on the dial wore the loudest light in the app. The
+original spec, verbatim: "behind this is a larger glowing circle is
+colored and pulsing on activity and steady on done."
+
+FIX. The outer ring encodes ACTIVITY ONLY: `working` /
+`working_subagent` / `running` -> `active` (the only thing that
+breathes), `question` / `notice` / an unanswered startup gate ->
+`steady` (a live turn that is not moving), `finished_unread` / `idle` /
+`dead` -> `off`, `unknown` -> `dim`. Unread rides the INNER dot alone,
+green `done` against grey `idle`. The outer `unread` state is retired
+from `OUTER_STATES`, from the CSS (`--led-color-unread` with it), from
+the gallery and from the tests. The group header folds the two
+dimensions SEPARATELY - highest-priority inner among members, ring from
+activity across the whole group - so a group with one parked session and
+one busy one paints the parked dot inside a breathing ring, which is
+both facts at once. The `done` bucket ("finished and already read") is
+retired with it: the grey dot spells that itself.
+
+**Tests.** New `tests/test_read_state_derivation.py` (21: the pure
+function in both directions and its idempotence, the pass-through
+negative control over every non-resting state, all four sources, the
+assembled `_session_info_for` answer, set/view/set/view applied twice
+each, and the writer storing the base state). NEGATIVE CONTROL RUN: with
+the `_session_info_for` derivation removed, 3 of the 21 fail - the test
+sees the defect. Node: `test_status_led.node.mjs` (56) gained an
+exhaustive sweep proving no `activity_status` x `unread` x
+`startup_gate` combination can produce an `unread` ring and that exactly
+three statuses breathe; `test_status_summary.node.mjs` (23) gained the
+same sweep at the header level plus the separate ring fold;
+`test_unread_led_one_field.node.mjs` (18) now proves the flag survives
+to the INNER dot on all three surfaces, which is a stronger claim than
+the halo assertion it replaces.
+
+Full suite 5551 passed / 3 failed / 21 skipped - the three are the known
+environmental ones. Node sweep: only the pre-existing
+`test_archive_full_page_mode` fails.
+
+---
+
+## 2026-09-09 - the group header rolls up again: `signalsFor` reconciles the two names for one field
+
+**The owner's report**, verbatim: "the status in the group is not working
+as expected." Measured in the browser on live at `880247f`, sidebar on the
+home page: EVERY group header LED read `data-inner="unknown"
+data-outer="dim"` - Joe (12 members, every one of them painting
+`idle/off`), Agents (4, folded), Waiting (1, folded), Clients (0), other
+(2 members painting `working/active` and `idle/off`). A group of twelve
+sessions and an empty group rendered the same light.
+
+**Root cause: ONE FACT, TWO FIELD NAMES, and the fold only knew one of
+them.** `summarizeStates` resolved each child through
+`StatusLed.ledStateFor(row)`, which reads `row.activity_status` - the
+`/sessions/list` spelling. Its only caller is the group header, and the
+rows it hands over are MERGED SIDEBAR ROWS, where
+`session-sidebar-fetch.js mergeLiveRow()` copies `info.activity_status`
+onto `row.status` so the probe rows and the live rows share one shape. So
+the field was `undefined` on every child, every child bucketed `unknown`,
+the fold picked `unknown` (last in `SUMMARY_PRIORITY`), and `outerFor`
+answered `dim` for that winner. The priority table and the ring fold were
+both already correct; the INPUT never arrived.
+
+**Why nothing caught it.** `tests/test_status_summary.node.mjs` had 23
+green tests and every one of them built its rows with `activity_status`,
+which is the shape no caller passes. And
+`tests/test_sidebar_groups_rename.node.mjs` renders the real
+`bodyHtml`, but loaded neither `status-led.js` nor
+`session-status-summary.js`, so `window.SessionStatusSummary` was absent
+and `headerHtml` took its "render the header without a LED" branch -
+green assertions over a header painting no light at all. A test that
+constructs its own input in a shape the app never produces is testing the
+test.
+
+**The fix.** `signalsFor(row)` in `client/js/session-status-summary.js` is
+the one place the two spellings are reconciled: whichever of
+`activity_status` / `status` is a non-empty string wins,
+`activity_status` first. Neither present stays `undefined` rather than
+defaulting to a state, so a row with no status field still answers
+`unknown/dim` - reconciling two names must not become "find something to
+say". It is NOT pushed into the caller: the row beside the header renders
+through `SessionStatusUI.dotHtml(r.status, ...)`, and a second copy of
+the adapter is a second chance to drift, which is the failure this module
+exists to prevent. `sectionHtml` already passed `rows` to `headerHtml`
+whether or not the section was folded; that is now documented as
+load-bearing rather than incidental, because the folded section emits no
+rows and the LED is the only thing left speaking for it.
+
+**Roll-up, unchanged and now reachable.** Inner is the highest-priority
+member state, `permission > input > working > unread(done) > idle > dead
+> unknown`. Outer is activity across the WHOLE group, folded
+independently: `active` if any member is working, `steady` if any is a
+live turn waiting on the user, `off` otherwise, `dim` only when the group
+is empty or every member is unmeasured. AN EMPTY GROUP READS
+`unknown/dim` and that is the documented choice - nothing to measure is
+not measured-and-quiet, and a calm light on an empty group is the false
+green this project keeps paying for.
+
+**Tests.** `test_status_summary.node.mjs` 23 -> 33: the sidebar spelling
+folds identically to the server spelling across all seven states, unread
+and the startup gate reach the fold from a sidebar row, a row carrying
+NEITHER name is `unknown` (the negative control - the reconciliation must
+not invent a status), `activity_status` wins when both are present, an
+empty string is not a status, plus the five roll-ups the owner named:
+all-idle -> `idle/off`, one working among idle -> `working/active`, one
+done-unread among idle -> `done/off`, a permission among working ->
+`waiting-permission/ACTIVE` (the two dimensions folded independently),
+and a notice with nothing running -> `waiting-input/steady`.
+`test_sidebar_groups_rename.node.mjs` 33 -> 37 and its stack now loads
+the LED modules: the header LED reads the rows, a COLLAPSED group is
+summarised from rows absent from its own markup, folding does not move
+what the header claims, and a header over a live member NEVER reads
+unknown across all six measured states. NEGATIVE CONTROL RUN both ways:
+with `signalsFor` removed from the call, 8 of the summary tests and all 4
+of the groups tests fail - the tests see the defect.
+
+Node sweep: 192 files, only the two known - `test_archive_full_page_mode`
+(pre-existing) and `led_state_for.node.mjs` (the piped-stdin CLI helper,
+which exits non-zero with no input by design).
+
+---
+
+## 2026-09-09 - a prompt from any client answers the session's toasts
+
+**The ask, verbatim.** "on the toasts, if its waiting on me and i type
+into this browser or a remote control session, the toasts should be
+removed, we can tell because i think when a new prompt is sent it should
+trip a hook." He is right about the hook: `UserPromptSubmit` fires
+whenever a prompt is submitted, whoever typed it and wherever - browser
+terminal, remote control session, or the keyboard on the Mac - so it is
+a fact about THE USER SHOWING UP, and a notification asking the user to
+show up is answered the moment they do.
+
+**Three rules, and the size of each set is the design.**
+`UserPromptSubmit` answers every kind (Stop, PermissionRequest,
+Notification, StartupPrompt) - the user typed, nothing is still waiting
+on them. `PreToolUse` answers a PermissionRequest and nothing else: a
+tool about to run proves a permission was granted and proves nothing
+about a notice the user has not read. `Stop` answers a permission, a
+notice and a startup prompt, and NEVER a "your turn".
+
+**A STOP NEVER ACKS A STOP, AND THAT IS STRUCTURAL RATHER THAN
+POSITIONAL.** Stop both raises the "your turn" card and answers others,
+so the obvious defect is a Stop eating the card it just created. Relying
+on call order - ack before recording, so the new toast cannot be seen -
+holds only until someone moves a line, and fails outright for a
+DUPLICATED Stop whose predecessor's card is a real unacked record by
+then. Excluding the KIND makes it hold for every ordering, every
+duplicate and every future call site.
+
+**The cutoff is the EVENT's instant, not the ack's.** The route stamps
+`received_at` at the top of the handler before any state is mutated, and
+a toast raised later than that is never answered by that event. A prompt
+redelivered late must not clear a notice about something that happened
+after the user typed - that destroys a record the user never saw, which
+is worse than a card that lingers. Idempotence falls out of `ack_toast`
+refusing a second ack: ten deliveries ack once and do nothing nine
+times, so no duplicate frames and no history churn.
+
+**The client half was the bigger gap.** `ToastManager.backfill` had only
+ever ADDED, which was correct while the only thing that could close a
+toast was a click here or a `toast.ack` frame from another tab. Neither
+is true once the SERVER closes toasts, and a surface with no socket for
+the raising session (launchpad, archive, a terminal attached elsewhere)
+has no frame to hear it on. `reconcileOpen` applies the open set in both
+directions each poll tick. Its guard is `ToastDismissedRing`'s race
+pointing the other way: a response describes the server as of when the
+request LEFT, so a card added after that instant is spared, and removed
+by the next tick whose snapshot can actually speak to it. Sparing is a
+delay, never an exemption. Removals read the RAW list, additions the
+ring-filtered one; reconciling never acks, because the record is already
+closed.
+
+**`ack_reason` closes docs/notifications.md open item 2.** History was
+two-valued because nothing stamped a reason. The human paths now write
+`dismissed`, the auto-ack writes `answered`, and a row reads open /
+dismissed / answered. A record acked before the field existed carries
+null and still reads `dismissed` - not having recorded which act cleared
+a toast is not evidence it cleared itself. `summarize()` reports
+`answered` as a SUBSET of `dismissed` rather than a sibling, so the count
+already on the history header did not silently change meaning.
+
+**No new clearing path for the LED.** `session_activity` already cleared
+`permission_open` and `notice_open` on exactly these three events, so the
+auto-ack matches a set that was already there. Asserted through the
+public resolver, not the private flags: a light saying "needs permission"
+with no card is the same lie as a card with no light.
+
+**Tests.** `test_toast_auto_ack.py` 20 cases - each rule with its
+negative control (PreToolUse must leave a Notification alone; no Stop may
+clear a "your turn", including an OLDER one), duplicates, the reorder
+where a late event meets a newer toast, the reorder where the Stop's own
+toast already exists, session scoping, the reason field, and the feature
+measured end to end through the real hook endpoint against what
+`GET /api/v1/toasts` actually serves - with another session's toast as
+the control. `test_toast_reconcile.node.mjs` 12 cases for card removal
+including the spared-then-removed race.
+`test_toast_history_render.node.mjs` 17 -> 19 (vocabulary is three words
+now, and an unrecognised reason still reads `dismissed`).
+
+Full pytest 5572 passed / 3 failed / 21 skipped - the three are the known
+environmental pre-existing ones. Node sweep 191 passed, only the
+pre-existing `test_archive_full_page_mode`.
+
+---
+
+## 2026-09-09 - a view clears a permission flag, and an open flag is verified against the pane
+
+**The report.** "media compression has a bad status and not clearing."
+`GET /sessions/list` for `cloude_Media_Compression` (`ses_949a8585`) read
+`activity_status: question`, `status_source: hook`, `unread: false`,
+while its pane tail showed no dialog at all - a settings warning about
+`Write(.claude/notes/**)`, a typed-but-unsubmitted prompt line "thats me,
+i have another session running", and `bypass permissions on`.
+
+### What the log says, traced to the id
+
+At **17:55:12.153Z** a `Notification` toast and at **17:55:12.165Z** a
+`PermissionRequest` toast were recorded **directly under `ses_949a8585`,
+with no `toast_session_id_remapped` line before either**. Every other
+hook from that pane in the same window logged a remap from
+`adopted:cloude_Media_Compression`: the `UserPromptSubmit` at
+17:55:20.489 (which auto-acked both of those toasts), the `Stop` at
+17:55:57.649, a `Notification` at 17:56:57.723, a `UserPromptSubmit` at
+17:57:16.642, a `Stop` at 17:57:26.806 and a `Notification` at
+17:58:26.897. `record_toast` and `auto_ack_toasts` both remap and both
+LOG when they do, so the absence of a remap on the 17:55:12 pair is
+positive evidence those two POSTs carried the live id literally - which
+the pane's own claude cannot produce.
+
+**Measured directly**: the claude running in that pane (pid 93139,
+started 2026-09-08 14:27:37Z, never restarted since) holds
+`CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression` in its own
+process environment. tmux copies the session env into a pane's process at
+spawn and cannot rewrite a running one, so that id is fixed for the life
+of the process. `hook_tokens.json` holds tokens for BOTH
+`ses_949a8585` and `adopted:cloude_Media_Compression`, both mapped to
+tmux name `cloude_Media_Compression`, which is why nothing was rejected -
+zero `hook_post_rejected_invalid_token` lines for this session, ever.
+
+**So**: the toast test's synthetic `PermissionRequest` set
+`permission_open` on `ses_949a8585` (the id `tmux show-environment`
+hands out, and the one a test script would naturally read), while every
+event that clears the flag arrived under `adopted:cloude_Media_Compression`
+and landed on a different tracker key. `record_hook_event` passes the RAW
+header id to `SessionActivityTracker.record_event` and does not remap,
+unlike the toast path either side of it. Confirmed live through
+`GET /sessions/away/summary`: `permission_open: true` on `ses_949a8585`,
+`notice_open: false`, `last_activity_at: null`.
+
+**`cloude_N8N` (`ses_36e98dcd`) cleared for exactly the reason Media
+Compression did not.** It took a `Notification` toast in the same 17ms
+burst (17:55:12.170Z), and its pane's claude (pid 58667) holds
+`CLOUDECODE_SESSION_ID=ses_36e98dcd` - the SAME id the synthetic toast
+used. So its own next `UserPromptSubmit` cleared `notice_open` on the key
+the flag was actually on. It reads `idle` now. The difference between the
+two sessions is not the event, it is whether the pane can still reach the
+key its flag sits on.
+
+### The rule this produced
+
+A flag set by an event channel keyed on an id the running agent can no
+longer be re-keyed to is not a claim, it is a stuck bit. Rather than add
+a second id remap and hope the two never drift, the flag is re-verified
+against the thing both ids share: the pane.
+
+- **FIX A** `session_view_clears.clear_view_state` now calls
+  `tracker.clear_permission(sid)` alongside `clear_notice(sid)`, on every
+  id registered for the pane. The owner's rule, verbatim: "when clicking
+  a tab, the session is marked read. if i want it unread i click unread."
+  The three hook-driven clears are untouched.
+- **FIX B** `src/core/session_permission_verify.py` (pure ladder +
+  matcher) and `session_permission_verify_apply.py` (the seam, called
+  from `_session_info_for` BEFORE `resolve()`). While `permission_open`
+  is set, dated, and older than `PERMISSION_TAIL_GRACE_SECONDS` (20) on a
+  pane measured live, ONE `capture-pane` per poll. Marker present -> keep.
+  Tail read, no marker -> clear + `permission_flag_cleared_no_dialog`,
+  which fires once per episode because clearing drops the stamp and the
+  gate then refuses. Tail UNREADABLE -> keep, refusing on no evidence.
+  Nothing here can invent a permission.
+- The stamp `permission_opened_at` is written on the False -> True
+  TRANSITION only, so a repeating `PermissionRequest` cannot push the
+  grace window out for as long as the duplicates keep arriving.
+
+### The markers were measured, not guessed
+
+Two real dialogs captured from a real `claude` on a THROWAWAY tmux socket
+(never `cloude`) with a `permissions.ask` rule in its own settings file,
+2026-09-09, versions 2.1.265 and 2.1.266:
+
+```
+ Do you want to proceed?          <- Bash,  ask rule on "Bash"
+ Do you want to create note2.txt? <- Write, ask rule on "Write", Bash denied
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend
+```
+
+The question line CHANGES with the tool, so a matcher keyed on the
+literal "Do you want to proceed?" would answer "no dialog" for every file
+operation - the exact family the owner's stuck session was about. The
+option block and the footer are identical across both. Note the contrast
+with the trust dialog `session_startup_gate.py` matches: that one is NOT
+numbered on 2.1.263+ and its footer reads "Enter to confirm · Esc to
+cancel". Two screens, two ladders, no shared pattern.
+
+### Item 4 needed no change
+
+The `question` tooltip already reads **waiting for permission**
+(`client/js/session-status-ui.js:58`) and the LED title already reads
+"waiting on you - permission" (`client/js/status-led.js:129`). No JS was
+touched, so no node sweep was owed.
+
+**Tests.** `test_session_permission_verify.py`, 35 cases. The matcher
+against BOTH captured dialogs and against TWO negative controls, one of
+which is the real captured tail of the stuck live session - all three
+fixture blocks verified line-for-line verbatim against the capture files.
+Plus an unseen third wording matched by shape, the phrase mid-sentence
+refused, the cost gate's four refusals, the ladder's four verdicts, the
+transition-only stamp, re-arming after a clear, and the seam end to end
+with a stubbed capture (no capture inside grace, none with no flag open,
+one per poll then none, keeps on dialog, keeps on unreadable, never
+invents, never raises). `test_status_view_and_transcript.py`'s
+`test_a_websocket_bind_leaves_a_permission_prompt_alone` was REVERSED to
+`..._clears_a_permission_prompt` with the reasoning recorded in place.
+
+## 2026-09-09 - closed out (922e400..dfddbdc), deployed and confirmed live
+
+13 commits (7 code, 6 docs/housekeeping), all deployed to live and verified:
+`./scripts/deploy-mini.sh --target live --verify-only` reported 529/529 file
+hashes matching on both destinations, boot held 18 sessions plus 1 benign
+skip against 19 live tmux sessions, and zero hook-token rejections in the
+post-deploy window.
+
+**Commits, newest first:**
+
+- `dfddbdc` - a view clears an open `permission_open`, and one left open past
+  `PERMISSION_TAIL_GRACE_SECONDS` (20s) is verified against the pane with one
+  `capture-pane` per poll before it is trusted (`session_permission_verify.py`
+  the pure ladder, `session_permission_verify_apply.py` the seam). Markers
+  measured from two real claude 2.1.265/266 dialogs: "Do you want to ...?",
+  "❯ 1. Yes", "Esc to cancel · Tab to amend". Root cause of the Media
+  Compression incident: a synthetic `PermissionRequest` landed on
+  `ses_949a8585` while the pane's own claude presents
+  `CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression` on every real hook
+  it fires (tmux fixes env into a process at spawn, cannot rewrite a running
+  one) - the toast path remaps that split and logs when it does, the
+  activity tracker did not, so nothing reachable could clear the flag. 35
+  test cases against both captured dialogs plus two negative controls,
+  including the real captured tail of the stuck session.
+- `389ae5b` - toasts are auto-answered by the hook event that resolves them:
+  `UserPromptSubmit` acks every open toast on the session, `PreToolUse` acks
+  permission, `Stop` acks permission and notice but never its own; a
+  `toast.ack` frame plus a per-poll reconcile, with an open/dismissed/
+  answered reason recorded in history.
+- `8e78f5d` - sidebar group-header roll-up fixed: children carried `status`,
+  the fold read `activity_status` - the two names for one field disagreed
+  and a folded group summarised wrong. `signalsFor` now reconciles both
+  names so a folded group's roll-up matches its children again.
+- `880247f` - `finished_unread` versus `idle` is derived from the unread
+  flag on every path by ONE function, `derive_read_state`
+  (`src/core/session_status.py`), called from the hook tracker's resolve,
+  the tmux fallback, the seed's `display_state`, the transcript ladder's
+  rung 3, and the assembled answer in `_session_info_for`. Shipped as a
+  one-directional rule (add unread to `idle`, never remove it from a stored
+  `finished_unread`) so a saved state is a cache, never a stale claim. The
+  outer ring now means activity alone; the outer `unread` state and its
+  `--led-color-unread` hue are retired.
+- `5e13cb1` - a view clears an open notice (never an open permission - a
+  `Notification` is a message that looking at answers, a `PermissionRequest`
+  is a blocking fact that looking at does not); hook-less sessions (13 of 19
+  live panes, started by hand with no hook env) get a transcript-driven
+  ladder (`session_transcript_status{,_read}.py`): an mtime inside
+  `WORKING_HEARTBEAT_TIMEOUT_SECONDS` reads `working` with an `expires_at`
+  the display enforces, a turn end newer than the instance-keyed ledger
+  reads `finished_unread` plus one auto-unread claim (first sight is a
+  baseline, so a restart never re-lights the fleet); a terminal-header LED
+  (`session-header-led.js`); `status_source`
+  (hook/transcript/tmux/seed_row/none) rides the `/sessions/list` wrapper
+  and renders in the tooltip only.
+- `bc12886` - idle gets its own grey fill, `--led-color-idle`, distinct from
+  `unknown`'s hollow rim and from `done`'s green; the ring is 1.5px with a
+  feathered edge, glow blur 6px.
+- `922e400` - the LED becomes one element: the fill is the `background-color`
+  for the inner state, and a three-layer `box-shadow` on that same span (a
+  hard ring, a low-alpha feather softening the ring's own edge, then a
+  blurred glow) is the outer, concentric with the dot at every fractional
+  x/y position. There is no pseudo-element and there must not be one - a
+  `::after` halo pixel-snaps its own box independently of the dot's box, so
+  a dot landing on a fractional position (routine in a flex row) drifted a
+  device pixel from its own ring.
+- `d419000`, `611780a`, `36e55c2`, `7587d96`, `f77a978` - docs-only:
+  18 legacy `cloude.db` backup files moved to Trash (v24 kept); restic now
+  covers `Development` and the app data dir; v24 backup and scratch dbs
+  moved to Trash; ClaudeArchive released to Trash after archive-nas
+  verification; disk cleanup closed at 38 GiB to 147 GiB free.
+
+**Housekeeping today, no commit behind it (database/disk operations, not
+code):** 32 GB of db backups and 37 GB of ClaudeArchive released to Trash
+after byte verification against copies on archive-nas (10.0.1.237, TrueNAS,
+`/mnt/ARCHIVE/vault/85_cloud-exports/claude/`, ssh user `truenas_admin`);
+`multihost.db` archived there with a full sha256; restic
+(`rest://10.0.10.80:8000/mini-m4`, job
+`/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh`, daily
+03:30) now covers `Development` and the app data dir with a `VACUUM INTO`
+db dump, two verify-loop bugs fixed, script committed (`2f26e45`) and
+pushed to Gogs after fixing a repo-local `core.sshCommand` that had been
+pinning a read-only deploy key; APFS local snapshots thinned; free space
+38 GiB to 147 GiB.
+
+**Test baseline at the end of this round:** pytest 5609 passed / 3 failed
+(the same three environmental: `test_home_write_guard`,
+`test_state_dir_resolution`, `test_version_probe`) / 21 skipped. Node 191
+tracked files, 1 known failure (`test_archive_full_page_mode.node.mjs`);
+`tests/led_state_for.node.mjs` is a piped-stdin CLI helper, not a
+standalone test.
+
+**Owner-verified today:** the dot goes grey on click; group headers roll up
+correctly again.
+
+**Still open after this round (carried from yesterday plus new), in value
+order:** the websocket push (`src/api/websocket.py` still carries no
+project/session-list message type, so state is polled, not pushed -
+re-measure whether polling is still the real cost before designing it);
+the big-file splits (`session_manager.py` ~7,700 lines, `routes.py` 4,022,
+`tmux_backend.py` 2,542, `launchpad.js` 6,472, `terminal.js` 2,422); the
+HTML-escape helper copy-pasted across 9 JS files; `PTYBackend` legacy
+branches remaining in 6 core files; the periodic agent-infer sweep (item
+3's one-shot inference at boot/adopt/first-hook is built, nothing re-checks
+a session already live when it shipped); toast history is process memory
+only, not durable, does not survive a restart; no bar raised for a WS drop
+while the user is present (only the 60s-away sleep/wake bar exists);
+`--name` dropped on a restart's resume; `FALLBACK_PROJECTS_ROOT` hardcoding
+`/Users/jsugamele` (`src/core/project_directory.py:85`);
+`record_claude_lifecycle_event` answering `LINEAGE_UNRESOLVED` for sessions
+created inside the real-hook test harness; the LED ring/glow are fixed px,
+not relative to the dot size; the adopted-id tracker key item (`dfddbdc`
+covers `permission_open` via the pane-verify fix - confirm every OTHER
+tracker flag for the same adopted/row-id split, or rekey the tracker on
+remap, rather than patching flags one at a time); gitleaks not installed on
+the mini; restic password rotation and the `.orig` script with an inline
+password (owner's call, deferred with credential rotation until this
+project is finished); watch restic repo growth from the nightly 4.6 GB
+dump; the archive README on the NAS records a stale size/hash for
+`cloude.db`; `refresh_tokens.db` now sits on the NAS (credential material,
+owner aware).
+
+---
+
+## 2026-09-09 - release/1.2: v1.1 merged with adamdev/master
+
+Two lines of this project that had diverged since `ba2aa5d` (2026-09-08)
+merged onto a new branch `release/1.2`, cut from `v1.1` (`d392aeb`) in a
+throwaway worktree so nothing touched the owner's checkout.
+
+**HIS TIP: `887b8fce9b9595f800b9a222ca4f9ef856c9edf0`** ("feat(brand): real
+app icon in the DMG background and a new hero banner"). Five commits newer
+than the `0d1a12c` the five comparison reports in
+`.claude/notes/compare-1.2/` were written against; all five are additive
+(clickable toast session name plus theme tint, release v1.0.36, docs and
+DMG branding, agent notes under `docs/`) and all five are taken.
+
+**17 CONFLICTED FILES**, resolved one at a time against the owner's six
+decisions rather than by picking a side per file. The auto-merged files
+were the more dangerous half: four of them merged cleanly and CONTRADICTED
+a decision, which is a merge that compiles and lies.
+
+### The six decisions, and what each one cost
+
+1. **UNREAD MODEL: HIS.** Unread rides the OUTER ring as a still green
+   ring, the `done` bucket stays, and his status-key legend
+   (`client/js/session-status-key.js`) ships. Our retired-ring paragraphs
+   in `CLAUDE.md` and `docs/session-status.md` are REWRITTEN to describe
+   what shipped and to record that the owner chose the ring on
+   2026-09-09, rather than left contradicting the code. Kept from our
+   side: the one-element box-shadow geometry (no pseudo-element, so
+   concentric is the only geometry available) and the grey `idle` fill for
+   a read session. Taken from his: the transport rung (`disconnected`),
+   the `notice` inner state and its light blue, and the ONE LIT DIAMETER
+   rule - which under our composition is true by construction, because the
+   five geometry tokens are declared once and no state rule may override
+   one. `tests/test_status_led.node.mjs` is his 48 cases as the base, our
+   composition and motion cases swapped in for the ones that measured his
+   `::after`, and the inner-dot-unread assertions deleted: **62 cases, all
+   passing**.
+2. **MANUAL MARK-UNREAD: KEPT, BEHIND A SETTING.** His branch deleted the
+   control from the whole client. Restored (11 client files reference it
+   again) and gated on a new `ui.show_mark_unread_control` boolean,
+   default true. `UIConfig` in `src/config.py`, wired into
+   `load_auth_config` (the negative-control test caught that a new block
+   is DROPPED unless it is read there explicitly), reported on
+   `GET /api/v1/features` and in the settings summary, read client-side by
+   a new `client/js/ui-flags.js` that follows `archive-entry.js`'s
+   probe-once pattern. ONE GATE: `markUnreadHtml` returns `''`, so every
+   surface hides it together. An unreadable config or a failed probe
+   leaves the control SHOWN - a flag that hides things must fail open.
+   Cover: 1 node case (3 states) plus `tests/test_ui_flags_setting.py` (8).
+3. **ROW CONTROLS: OURS.** His ~1100-line row-menu removal is dropped
+   entirely: `session-row-menu.js`, its gesture module and its stylesheet
+   are restored, along with `session-row-actions.js`, `kebab-icon.js`,
+   `session-sidebar-pin.js`, `session-sidebar-reorder.js`,
+   `project-list-render-guard.js` and `session-sidebar-density.css`; his
+   `session-row-inline-controls.css` and his two tests for that UI are
+   removed. VERIFIED, because the sidebar report warned this is the silent
+   one: `session-sidebar-rows.js` renders `SessionRowMenu.kebabHtml(r)`,
+   which stamps `data-row-status` on the KEBAB, and
+   `session-sidebar-clicks.js` reads it back off `[data-row-menu]`. His
+   hunk re-pointing that read at the ROW auto-merged and was reverted; had
+   it stayed, `runRestart` would have been handed `null` and every restart
+   would have reported "unknown" with nothing failing.
+4. **DEAD ROWS GO TO RECENT: OURS.** `tests/test_dead_row_renders_dead.node.mjs`
+   stays deleted, and his "GATE 1 IS NOW SHUT" paragraph - which claimed a
+   dead row is the only surface still reaching the respawn ladder - is
+   replaced, since decision 3 keeps restart on a live row.
+5. **CI: HIS.** `.github/workflows/tests.yml` (+51), `pytest.ini`'s
+   `.claude` exclusion, `scripts/ci/skip-audit.py` (+109) and its exempt
+   list all taken as-is. Baselines re-measured (below) and written into
+   `CLAUDE.md`.
+6. **VERSION: 1.2.0.** `macOS/package.json` and the three README
+   references (download link, badge, Path A). The Path A sha256 now points
+   at the release page rather than quoting 1.0.36's digest for a file that
+   does not exist. No tag created - the orchestrator tags after deploy.
+
+### Also applied, from the reports' standing rules
+
+- `verify_status_led_geometry.py` landed under `scripts/archive/verify/`
+  rather than top-level, with a README row and a note that it was written
+  against the pseudo-element construction that did NOT ship.
+- `session-status-summary.js` is ours (`signalsFor`, `outerFor`) with the
+  `done` bucket restored and his `inputIsStopped` hue rule taken back.
+  Activity outranks unread on the header ring, and a single-child group
+  now paints exactly what that child's row paints, case by case.
+- `session-sidebar-groups.js` / `.css` are ours (gutter, coloured count,
+  kebab on every band).
+- `client/js/session-sidebar-footer.js` is NEW: the status-light key, the
+  version line and the remembered-slots note extracted out of
+  `session-sidebar-rows.js`, which the new wiring pushed to 531 lines
+  against a 500-line budget its own suite asserts. Now 498.
+- Backend: all three shared files auto-merged. Read both halves rather
+  than assuming - his `subagent_depth` gate is a pure READ taken before
+  `record_hook_event` whose only effect is to skip `record_toast`, while
+  our `auto_ack_toasts` runs after and only moves an ALREADY OPEN toast to
+  `answered`. A suppressed toast was never opened, so there is nothing to
+  double-clear.
+
+### Measured baselines
+
+- **pytest: 5626 passed / 2 failed / 21 skipped**, against **5610 / 2 /
+  21** for `v1.1` alone in the same checkout minutes earlier. 16 tests
+  added, no new failures. The skip count reads 21 or 22 depending on
+  `pytest-randomly`'s ordering; `-p no:randomly` pins it at 21 and every
+  skip carries a named could-not-evaluate reason. The two are the known environmental ones
+  (`test_home_write_guard`, `test_version_probe`). The third `CLAUDE.md`
+  used to name, `test_state_dir_resolution`, now passes.
+- **node: 197 suites, all 197 passing**, against 193 with 2 failing at
+  `v1.1`. `test_archive_full_page_mode.node.mjs` is fixed on his side, and
+  `led_state_for` moved to `tests/helpers/`, out of the CI glob.
+- `scripts/scan_secrets.py`: exit 0, 1369 files, 8 detectors.
+- `tests/test_no_remote_assets.py`: 9 passed.
+
+### A trap worth keeping
+
+A fresh `git worktree` has no `config.json` (it is gitignored), and
+without it the suite reports **19 failed plus 26 errored** - 401s from the
+test client and FileNotFoundError from the route tests, every one of them
+an app that could not start. Reproduced identically on `v1.1` in a second
+throwaway worktree and cleared by copying the file in. Do not attribute a
+failure to a code change until the same run has been done on the base
+commit in the same directory.
+
+### Open
+
+- No git tag: the orchestrator tags `v1.2.0` after deploy.
+- `verify_status_led_geometry.py` measures a construction that did not
+  ship; rewrite it against the box-shadow composition or drop it.
+- The `ui` settings block has no editor in the settings SCREEN yet - it
+  round-trips through the API and is edited by hand in `config.json`.
+
+**Late catch, worth recording.** `UIFlags.ensure()` had NO CALLER when the
+merge commit landed. The module answers every flag's shipped default until
+its probe returns, which is the correct fail-open behaviour and is also
+exactly how a setting ships dead: `show_mark_unread_control` would have
+answered true forever and `ui.show_mark_unread_control: false` would have
+been a config key nothing ever read, with nothing failing and nothing
+logged. Fixed in a follow-up commit by calling it (unawaited, memoized to
+one request per page load) from `session-sidebar-fetch.js load()` and
+`launchpad.js loadRunningSessions()`, either of which may be the first
+surface a page load reaches, plus a test that fails if the caller
+disappears again. This is the "a fallback that cannot fire is not a
+fallback, and it is invisible" trap from CLAUDE.md, in a new place.
+
+---
+
+## 2026-09-09 DEPLOY RECORD - release/1.2 at 6768dcc to live (mac-mini-m4, port 8000)
+
+Deployed the merged 1.2 line from the release worktree, branch
+`release/1.2`, HEAD `6768dcc`, working tree clean. NOT TAGGED AND NOT
+PUSHED: browser check (a) failed, see "the one failure" below.
+
+**Deploy.** `./scripts/deploy-mini.sh --target live` selected "working tree
+is CLEAN, so deploying the committed state", 541 files, staged and hash
+checked 541/541 before production was touched, wrote the app bundle
+Resources then the server dir, pruned both, and re-verified after the
+restart. Banner `== DEPLOYED ==`. The re-run
+`./scripts/deploy-mini.sh --verify-only --target live` exited 0 with
+`== VERIFIED ==`, 541/541 on both destinations, mirror-clean, nothing
+copied. The supervisor did not give up and no kickstart was needed.
+
+**Boot, 2026-09-10T01:00:54Z.** `boot_readopt_complete` held 18, skipped 1,
+failed 0, live_count 19. held + skipped = 19 = `tmux -L cloude
+list-sessions | wc -l` = 19. `id_sources` all `hook_token` (18), zero
+`legacy_row`, zero `derived`, `no_row` 0, so no id was minted and no hook
+token was rotated. `status_seed_warm` seeded 19 of 19 examined.
+
+**Hooks after the restart.** Zero `hook_post_rejected_invalid_token`, zero
+`hook_post_rejected_non_loopback`, zero 403s and zero 410s on
+`/api/v1/hooks/claude-event`. 5 hook POSTs accepted, all 200, no non-200.
+Zero tracebacks in the post-restart window. Read off uvicorn's own access
+lines, not off a success-only application event, so "none rejected" is
+distinguishable from "none received".
+
+**Endpoints.** `GET /api/v1/features` returns
+`ui.show_mark_unread_control: true`, and the browser agrees:
+`UIFlags.showMarkUnreadControl()` answers true on a loaded page, so
+`UIFlags.ensure()` really has a caller. `GET /api/v1/sessions/list`
+returns 19 rows for 19 live tmux sessions, idle 16 / working 1 /
+finished_unread 2. The bearer was minted on the mini from `TOTP_SECRET`
+in the live install's `.env` via pyotp against `POST /api/v1/auth/verify`;
+the secret never left that box and neither it nor the token was printed.
+Negative control in the same pass: a bogus bearer returns 401, so the 200
+is evidence of the credential and not of an open endpoint.
+
+**Browser, live app, hard reloaded (a tab across a deploy does not
+refetch static assets).** Fresh bytes proven by presence rather than by a
+claim: `VersionFooter`, `UIFlags`, `StatusLed`, `TerminalLayoutWait` and
+`TerminalFrameGuard` are all defined on `window`, and every one of those
+files read `target MISSING` in the pre-deploy verify.
+
+- b PASS. The status-light key renders under "what the lights mean" with
+  seven states, and "done, unread" is drawn as a hollow GREEN ring,
+  visibly distinct from solid-green "working", solid-grey "idle" and the
+  hollow-grey "not measured".
+- c PASS end to end, on `cloude_Fantasy_Hockey_2026` / `ses_9523c563`,
+  the oldest live session by last activity (2026-09-03T14:15:12) and
+  already idle and read. Marked unread from its own row menu: the LED
+  became `status-dot--finished-unread`, title "done - unread (via tmux)",
+  `animationName: none` so it is STILL, and `::after` content `none` so
+  it is the single-element box-shadow build rather than the pseudo
+  element that used to drift a device pixel. NOTE THE SHAPE, because it
+  is the 2026-09-09 model and not the older one: the GREEN is the inner
+  dot, painted as `rgb(74,222,128) 0 0 0 2px inset`, while the outer
+  box-shadow rings are neutral grey at 0.18 and 0.063 alpha with a fully
+  transparent glow. The outer ring means activity alone and is correctly
+  OFF for a resting session. Clicking into the row cleared it: the
+  terminal bound (`Session: ses_9523c563 | PID: 23070`, footer
+  "Connected"), and the row came back `status-dot--idle`, title "idle -
+  read, nothing running", with the server reporting `unread=False` /
+  `idle`. THE NEGATIVE CONTROL IS THE LOAD-BEARING HALF: a blanket clear
+  would have passed the positive test perfectly, so the two sessions that
+  were already unread were re-read afterwards and BOTH stayed unread
+  (`cloude_Media_Compression`, `cloude_Hirschfeld`), on the server and in
+  the DOM.
+- d PASS. "mark unread for followup" is present in the sidebar row menu
+  on a live row.
+- e PASS. Every sidebar row carries the kebab, and the menu it opens
+  reads: pin to top, mark unread for followup, move to another group,
+  close session, restart the agent.
+- f PASS. All five group headers render the count in the fixed-width
+  gutter as plain coloured text `rgb(215,119,87)` (not a pill) plus a
+  `...` kebab BUTTON, the reserved "other" band included, whose button is
+  the smaller band menu, `Actions for the other group`. The pinned band
+  was NOT rendered at the time of the check because nothing is pinned, so
+  it was not measured live; it is the same `headerHtml` path and the same
+  unconditional `menuButtonHtml` call as "other", and pinning one of the
+  owner's sessions to see it was not worth the state change.
+- g PASS. Zero CSP violations across a full hard reload plus six seconds,
+  and zero console messages of any kind. The response carries
+  `default-src 'self'; script-src 'self'; style-src 'self'
+  'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data:;
+  font-src 'self' data:; frame-ancestors 'none';` with no third-party
+  origin in any directive. A DETECTOR THAT NEVER FIRES CANNOT PROVE A
+  ZERO, so the negative control was run in the same pass: an injected
+  image from `cdn.jsdelivr.net` raised exactly one `img-src` violation on
+  the same listener, which is what makes the zero above mean something.
+
+**The one failure: a, the version footer reads v1.0.33, not 1.2.0.** It is
+not a bad deploy and no redeploy can move it. `src/core/version.py`
+resolves `CLOUDE_APP_VERSION` FIRST, the Electron shell sets it from
+`app.getVersion()` (`macOS/server-manager.js:917`), and that is the
+PACKAGED BUNDLE's own version, baked into `app.asar` at build time.
+Measured: the running server's environment carries
+`CLOUDE_APP_VERSION=1.0.33`, `/Applications/Cloude Code.app` has
+`CFBundleShortVersionString` 1.0.33, and `bootstrap.js` has stamped
+`1.0.33` into the server dir's VERSION file. `deploy-mini.sh` ships
+`git ls-files src client` and cannot rewrite `app.asar`, so
+`macOS/package.json` saying 1.2.0 in the repo reaches nothing at runtime.
+`GET /api/v1/version` returns `{"version": "1.0.33", ...}` and the client
+renders that string in four places. MOVING IT MEANS REBUILDING AND
+REINSTALLING THE ELECTRON BUNDLE AT 1.2.0, which is a separate release
+artifact and a much larger blast radius than a source deploy, so it was
+not attempted unasked on a live install.
+
+Worth knowing while you are in there: the same endpoint reports
+`update_available`, latest 1.0.36, against remote
+`https://github.com/Adoom666/CloudeCode.git` - the upstream this project
+is forbidden to push to. An install on the 1.2 line will keep being told
+it is behind by a line it does not follow.
+
+**Not done, deliberately, because a and the step 3 version check failed:**
+no `v1.2.0` tag was created, and nothing was pushed to origin.
+
+---
+
+## 2026-09-10 - the electron bundle rebuilt at 1.2.0 and installed on live
+
+Closes the one failure recorded above: the footer read v1.0.33 because
+`CLOUDE_APP_VERSION` is set by the Electron shell from `app.getVersion()`,
+which is the PACKAGED bundle's own version. No source deploy can move it,
+so the bundle itself was rebuilt and reinstalled.
+
+**Build procedure, discovered rather than invented.** There is no build
+script under `scripts/`. The procedure is the one `.github/workflows/release.yml`
+encodes and the maintainer runs by hand: `cd macOS && npm install`, then
+`CSC_IDENTITY_AUTO_DISCOVERY=false npm run package`
+(`electron-builder --mac --publish never`). Built from the `release/1.2`
+worktree at `ecd0669`, electron-builder 24.13.3, electron 28.3.3,
+darwin arm64. The `afterPack` hook `macOS/scripts/adhoc-sign.js` ran and
+verified its own signature, which is not optional: without it the bundle
+carries no `Contents/_CodeSignature` at all. Outputs
+`macOS/dist/mac-arm64/Cloude Code.app` and
+`macOS/dist/Cloude Code-1.2.0-arm64.dmg` (120 MB). The .app was installed
+directly; the DMG is the distributable and was not needed for a local
+install.
+
+**NO VERSION SOURCE NEEDED FIXING.** `macOS/package.json` already read
+1.2.0 and it is the ONLY hand written source: electron-builder derives
+`CFBundleShortVersionString` and `CFBundleVersion` from it, `app.getVersion()`
+reads that, `server-manager.js:917` puts it in the spawn env, and
+`bootstrap.js` stamps the server dir's VERSION file from the same value.
+The repo carries no VERSION file (it is generated) and no Info.plist
+template. Every `1.0.x` literal found by grep across `macOS/`, `src/`,
+`client/` and `packaging/` is prose in a comment about the 2026-08-25
+adoption incident. So this round changed no code at all.
+
+**THE SOURCE DID NOT MOVE, AND THAT WAS MEASURED BEFORE THE SWAP.** The
+new bundle's `Contents/Resources/src` and `client` hash byte for byte
+identical to the installed 1.0.33 bundle's
+(`e14a7164...` and `0eaa57fa...`), because `deploy-mini.sh --target live`
+had already written `6768dcc` into both destinations and `ecd0669` is a
+docs only commit on top of it. The only thing that changed on disk is
+`app.asar` and the version. The same two hashes were re-measured on the
+server dir AFTER the restart, so the bundle resync put back what was
+already there.
+
+**Backup, one move from a rollback:**
+`/Applications/Cloude Code.app.rollback-1.0.33-20260910T085834`,
+matching the naming already beside it. Nothing was deleted; the owner's
+settings deny `rm`.
+
+**The restart was bootout then bootstrap, NOT `kickstart -k`, and the
+reason is the adoption gate.** `kickstart -k` SIGKILLs the Electron app,
+which orphans the python server onto launchd still holding port 8000. The
+new 1.2.0 bundle would then find a 1.0.33 server there,
+`decideAdoption` would answer `mismatch`, and `server-manager.js` would
+refuse to start OR stop it: a dead end wearing a correct log line. So
+`launchctl bootout gui/501/com.cloudecode.menubar` ran first, the app's
+own teardown took the server child with it (port 8000 free in 2s, measured,
+not assumed), and only then `launchctl bootstrap gui/501 <plist>`.
+
+**Measured after the restart (2026-09-10T12:59:09Z):**
+- 19 tmux sessions on `-L cloude` before and after, unchanged. Nothing was
+  typed into, restarted or closed.
+- `boot_readopt_complete` at 12:59:30.151048Z: `held: 18`, `skipped: 1`,
+  `live_count: 19`. Same shape as the last known good deploy.
+- ZERO `hook_post_rejected_invalid_token` in the whole post restart window.
+  The only hook token line is one `hook_tokens_restored`. The only warning
+  of any level is one `notifications.topic_missing`, which is unrelated.
+- The three version reads all agree: `CFBundleShortVersionString` 1.2.0 on
+  the installed bundle, `CLOUDE_APP_VERSION=1.2.0` in the RUNNING server
+  process env (`ps eww`, pid 66351), and the server dir VERSION file
+  stamped 1.2.0.
+- `GET /api/v1/version` returns `{"version": "1.2.0", ...}`, read through
+  the app's own authenticated client in a real browser.
+- The footer renders `v1.2.0` on a hard reload, in both `.home-bar__version`
+  and the sidebar `.version` span, and it is the ONLY version string in the
+  page text. It is fed by the server rendered
+  `<meta name="cloude-app-version" content="v1.2.0">`, so the painted value
+  and the endpoint have the same origin.
+- Zero CSP violations across a full load that produced 260 console
+  messages. THE NEGATIVE CONTROL WAS RUN IN THE SAME PASS, because a
+  detector that never fires cannot prove a zero: an injected image from
+  `cdn.jsdelivr.net` raised exactly one `img-src` violation on the same
+  listener, and was removed afterwards.
+
+**Still open, unchanged by this round:** the endpoint still reports
+`latest_version` 1.0.36 against `https://github.com/Adoom666/CloudeCode.git`,
+the upstream this project may not push to, so a 1.2 install keeps being
+told it is behind a line it does not follow. No `v1.2.0` git tag was
+created here either; that is a separate deliberate act and the release
+workflow triggers on it.
+
+---
+
+## 2026-09-10 - release/1.2.1: adam's listing round merged, plus the two gaps that are ours
+
+Built in a throwaway worktree on `release/1.2.1`, branched from
+`release/1.2` (344da42). NOT deployed, NOT tagged, NOT pushed - that is
+the orchestrator's step after validation.
+
+### Per commit
+
+- **merge** - `adamdev/master` 2b1fcb9 into `release/1.2`. Every code file
+  auto-merged. The two conflicts were both documentation and both were
+  test baseline numbers: kept ours (measured on this tree) and folded in
+  his "take your own baseline on a clean tree" discipline. His corrected
+  "the tail read was claimed to be free in steady state and it was not"
+  paragraph replaces our falsified sentence, which is the one place his
+  text overrides ours and is the right way round, because he measured it.
+  README now carries 1.2.1 everywhere and keeps his rebuilt 1.0.36 dmg
+  hash attributed to upstream.
+- **fix(listing) socket scope** - `listing_proves_alive` was trusting a
+  listing from ONE socket to stand in for a probe of ANOTHER. `StatusMap`
+  carries its socket, the function takes the socket being asked about,
+  and unstated-or-mismatched refuses. New test on two real throwaway
+  sockets, same name alive on A and killed on B, with the PRE-FIX rule
+  reproduced inline so the file fails if the old behaviour returns.
+  Also hoisted `kq = None` above the try in `pipe_wakeup._try_watch`.
+- **perf(listing) gap A** - the status seed's `read_instance_row` opened a
+  connection per session on `/sessions/list`. It now answers from HIS
+  index, which grew the four seed columns rather than acquiring a rival.
+  `InstanceIndex` gained `complete` (the `StatusMap` discipline) so an
+  index that could not be BUILT falls back instead of answering "no row"
+  and blanking the ladder. The index is skipped entirely when no held
+  session is hookless, which is his own 2b1fcb9 correction on this path.
+- **perf(permission) gap B** - measured before changing anything, and the
+  briefed premise did not hold: `should_capture_permission_tail` is
+  FAIL-CLOSED at every rung, so a healthy box already spent zero here.
+  That is now a measurement over six sessions rather than a docstring
+  claim. What WAS real is the re-look, bounded by
+  `PERMISSION_TAIL_RECHECK_SECONDS = 30` through a ledger keyed on the
+  CLAIM, not the session, so the first look at a new claim is never
+  delayed.
+- **version + docs** - `macOS/package.json` 1.2.0 to 1.2.1 (confirmed the
+  only hand-written declaration). CLAUDE.md gains the listing-cost
+  paragraphs and a re-measured test baseline.
+
+### Measured, in-process against real tmux, one listing pass
+
+| n sessions | datastore opens | pass p50 | pass p99 |
+|---|---|---|---|
+| 12, before | 60 | 40.0 ms | 42.2 ms |
+| 12, after | 49 | 33.9 ms | 46.8 ms |
+| 19, before | 95 | 58.9 ms | 68.4 ms |
+| 19, after | 77 | 49.7 ms | 57.2 ms |
+
+"Before" is the same tree with the bulk index forced to report it could
+not be built, so the seam falls through to the per-row connection - the
+pre-round shape, on the same panes, in the same process. The index costs
+one open and saves one per session.
+
+TRUST THE COUNT, NOT THE MILLISECONDS. That timing is a warm local
+database with no rows in it and n=15 passes; the p99 at 12 sessions is
+higher after than before, which is noise at that sample size and is left
+in rather than dropped. tmux subprocesses were 1 per pass at both 12 and
+19 sessions, which is his fix holding: the pre-round shape was
+`2N + 1`, so 39 at 19 sessions.
+
+### What was NOT measured, and why
+
+- **No live measurement.** Nothing was deployed and the live box was not
+  touched. The figures this work is aimed at are the review's:
+  `/sessions/list` p50 270.1 ms / p99 418.5 ms with 19 sessions, and a
+  no-op `/health` going from p50 45.3 ms quiet to 181.9 ms while a
+  listing is in flight. Re-measure there after deploy.
+- **No local HTTP timing.** A local server needs a `.env`, and the only
+  one available points at the live state dir and the live `cloude` tmux
+  socket, which a boot re-adopt would then attach to. The in-process
+  measurement above measures the same thing (the synchronous pass, and
+  the event loop gap around it) without that risk.
+- **NEAR MISS WORTH RECORDING**: an ad-hoc probe script written outside
+  pytest read the PRODUCTION `cloude` socket, because `socket_guard`'s
+  subprocess guard is installed by conftest and an ad-hoc script does not
+  get it. It was read-only (`list-panes -a`) and nothing was written, and
+  it was caught by the socket name appearing in its own debug output.
+  Every measurement was redone under pytest. Do not write throwaway tmux
+  probes outside the suite.
+
+### Follow-ups this round measured but did not close
+
+1. **FOUR name-keyed per-row datastore readers remain on
+   `/sessions/list`**, attributed by caller at 19 sessions:
+   `_restored_activity_state` 19, `_identity_for_live_name` 19,
+   `_label_for_tmux_name` 19, `_owned_instances_from_db` 19. They are not
+   folded into the index because all four take "the newest instance of
+   this name" while the index keys on the full triple; answering them
+   from it would be a silent behaviour change in the duplicate-name case.
+   Closing them means giving them the epoch the pass already holds, or a
+   second name-keyed bulk read. `tests/test_listing_pass_datastore_cost.py`
+   pins the ceiling at `4N + 2` and names the reader that grew.
+2. **OWNER DECIDES** whether `STARTUP_TAIL_RECHECK_SECONDS = 30` is an
+   acceptable worst case for noticing a session that becomes stuck LATER
+   (claude quit and hand-restarted in a pane whose `pane_pid` does not
+   move). First looks are unthrottled. Carried over from the round-2
+   review, still open.
+3. **A SUPPRESSED TOAST IS RECORDED, UNACKED AND UNRENDERABLE.** His
+   `ToastManager.add()` drops a toast for the ACTIVE session while our
+   `StartupGateLedger.claim_toast` is once per instance and the server has
+   already recorded it open; `reconcileOpen` only removes cards the server
+   has closed, so it never re-materialises. For a permission or startup
+   prompt on the session the user is looking at, silence is the intent.
+   Recorded here rather than left to be found.
+4. **`client/js/session-sidebar.js` WAS AT EXACTLY ITS 500-LINE BUDGET**,
+   so his 8-line toast-dismissal addition broke
+   `tests/test_sidebar_sessions.node.mjs` on the merged tree (it passed on
+   his). Fixed by extracting the rule to
+   `client/js/session-entry-toasts.js` and collapsing two delegating
+   methods to the one-line form the two methods above them already use.
+   The file has three lines of headroom now; the next addition there
+   needs an extraction, not a trim.
+
+### Verification
+
+- pytest, full, `-p no:randomly`: **5656 passed / 2 failed / 19 skipped**.
+  The two failures are the same environmental pair the baseline names
+  (`test_home_write_guard`, `test_version_probe`). Merge point read
+  5641/2/19 and `release/1.2` read 5628/2/19 in this same worktree.
+- node, exactly as CI runs it: **197 suites, 0 failing**.
+- `node --check` on every JS file touched: toast.js, session-sidebar.js,
+  session-entry-toasts.js, macOS/main.js.
+- `scripts/scan_secrets.py`: exit 0. The pre-commit hook ran normally on
+  every commit, gitleaks gate included; `--no-verify` was not used.
+
+## 2026-09-10 - release/1.2.1: adam's four newest folded in, the row menu held
+
+Owner authorised the fold ("2. yes all folded in"). Range
+`2b1fcb9..adamdev/master`, his tip `8898f07`. Merge commit `94ecc85`,
+both parents recorded, so his tip is in ancestry and cannot silently
+re-propose itself on the next fetch.
+
+### Per commit
+
+- **`4ae4b71` docs plan. TAKEN, unedited.** 242 lines, new file,
+  `docs/webui-performance-and-session-menu-plan.md`. His roadmap, taken
+  as his document.
+- **`46e7aca` mute. TAKEN.** Schema v26 (`sessions.notifications_muted`,
+  `notification_policy_generation`), nullable, no backfill, so the
+  absence of a decision on a row IS unmuted. VERIFIED rather than
+  believed: the gate sits BELOW `record_hook_event` (`routes.py:2286`
+  against the check at `2467`), so a muted `PermissionRequest` still sets
+  `permission_open` and still resolves `question`, and a muted `Stop`
+  still flips unread. `toast_auto_ack.py`, `session_view_clears.py` and
+  `client/js/toast.js` are untouched, so our toast semantics do not move.
+- **`6f79e90` themes. TAKEN.** Removes the SECOND WRITER of the terminal
+  palette (app.js's `Themes.applySession(agent_type)` running after
+  theme-navigation had painted the pin). `applyForTarget` survives as the
+  total function gotcha 7 requires and now hands both inputs to one
+  resolution, so this strengthens the invariant rather than widening it.
+- **`8898f07` row action menu. HELD, NOT RESOLVED. OWNER DECIDES.**
+
+### Why the row menu was held
+
+His `session-row-actions.js` DELETES `LIVE_STATUSES` and returns
+`[CLOSE]` alone for every non-dead status, under a comment block titled
+"NO LIVE-ROW RESTART LIST ANY MORE" citing the owner's 2026-09-08 "remove
+'add to group' / 'restart the agent'". His five menu items are rename,
+fork session, new session in folder, mute/unmute and close; pin goes back
+inline. Ours carries pin/unpin, mark unread, close/remove plus restart,
+and group filing.
+
+So it contradicts THREE settled decisions of the 1.2 round, not one:
+decision 3 (row controls are ours, the kebab WITH restart on live rows),
+decision 2 (manual mark-unread kept behind `ui.show_mark_unread_control`)
+and decision 4's replacement of his "only a dead row reaches the respawn
+ladder" claim. The 2026-09-08 instruction he cites is real; decision 3 is
+dated 2026-09-09 and is the later ruling. That tension is the owner's to
+settle, not a merge's.
+
+**Resolution applied:** all 25 of its paths resolved to OURS. The 19 we
+share were `git checkout HEAD --`'d; the 4 modules it adds alone
+(`session-row-menu-actions.js`, `session-row-menu-open.js`,
+`test_session_row_menu.node.mjs`, `test_session_row_menu_renders.py`) were
+removed; the 2 that decision 3 had already deleted
+(`test_session_row_inline_controls.node.mjs`,
+`test_session_row_controls_render.py`) stay deleted. Verified afterwards
+that no trace survives (`offersMenu`, `SessionRowMenuOpen`,
+`SessionRowMenuActions` all absent) and that our surface is intact
+(`LIVE_STATUSES` present, `actionsFor` still returns
+`[ACTION_CLOSE, ACTION_RESTART]` on a live row).
+
+**Dropped WHOLE, deliberately.** The commit is atomic: it also deletes
+double-click rename and routes rename through the new menu, so taking
+half would leave no way to rename a session at all.
+
+**Zero file overlap** between `8898f07` and the other three commits, so
+the drop cost the kept work nothing.
+
+### The consequence the owner should weigh
+
+**The mute feature now ships SERVER SIDE ONLY.** `46e7aca` touches no
+client file at all; its single UI control was the menu item in the
+dropped commit. So a mute is reachable through
+`PATCH /sessions/records/{session_uuid}/notifications` and through
+nothing a user can click. Recorded as a note in `docs/session-status.md`
+rather than papered over by inventing a control, which would have been
+the same class of unilateral product decision as resolving the menu.
+
+**→ ONE QUESTION FOR THE OWNER:** decision 3 kept the kebab WITH restart
+on a live row; adam's new menu replaces it with five different items and
+no restart. Take his menu and lose live-row restart, keep ours and lose
+his four new actions plus the only mute control, or have the two
+reconciled into one menu that keeps restart AND adds his four?
+
+Recovery either way is cheap and neither direction is lost:
+`git checkout 8898f07 -- <paths>` re-lands his version.
+
+### Two of his tests were repointed
+
+`test_session_notification_mute.py` imported `LIVENESS_ALIVE` from
+`src/core/session_liveness`, a module introduced by `ba2aa5d` - the
+commit the owner OVERRULED AND REVERTED (dead rows go to Recent,
+decision 4). Repointed at our settled three-value vocabulary,
+`session_status.LIVENESS_LIVE`. Test-only; no product code moved and
+decision 4 is untouched. His 43 mute cases all pass.
+
+### Verification
+
+- pytest **5708 passed / 2 failed / 19 skipped** against a 5656/2/19
+  baseline, so +52 and NO new failures. The two are the known
+  environmental pair (`test_home_write_guard`, `test_version_probe`).
+- Node **198 suites, 0 failing** (run exactly as CI).
+- `node --check` clean on all 4 touched JS files.
+- `scan_secrets.py` exit 0, gitleaks clean via the pre-commit hook.
+- Version confirmed still **1.2.1**; nothing bumped, tagged, pushed or
+  deployed.
+- Our 1.2.1 perf work verified intact: socket-scoped liveness
+  (`session_status_map`), index-backed seed row read
+  (`session_status_seed_read`), permission re-look throttle
+  (`PERMISSION_TAIL_RECHECK_SECONDS`). **No per-row query or per-row tmux
+  capture is added to the listing path**: `_session_info_for` does call
+  `notification_policy_for` per row, but it resolves against the
+  in-memory `_by_uuid` projection hydrated once at boot, not SQL.
+
+### 500-line rule
+
+His work pushes two PRODUCTION files over the line, both his and both
+left alone rather than restructured mid-merge:
+`src/core/session_notification_policy.py` (new, 563) and
+`src/core/notifications/idle_watcher.py` (459 -> 513). Four test files
+also cross. None is ours to extract; flagged for a later round.
+
+### For the later 1.3 re-port
+
+`feat/svelte-1.3` rebuilt the row menu on a plugin registry with
+mark-unread as a plugin. NOT touched here. Whatever the owner rules on
+the menu, the re-port must reconcile: `client/js/session-row-actions.js`
+(the `actionsFor` / `LIVE_STATUSES` contract and his `offersMenu`),
+`client/js/session-row-menu.js`, `client/js/session-row-menu-gestures.js`,
+`client/js/session-sidebar-rows.js`, `client/js/session-sidebar-clicks.js`
+(the `data-row-status` read, kebab vs row - the silent one),
+`client/js/session-sidebar-rename.js` (double-click vs menu item),
+`client/js/session-sidebar-fetch.js`, `client/js/session-sidebar.js`,
+`client/js/launchpad.js`, `client/js/project-list-render-guard.js`,
+`client/css/session-row-menu.css` and `client/index.html`. The theme
+change also re-ports: `client/js/themes/registry.js`,
+`client/js/theme-navigation.js`, `client/js/app.js`,
+`client/js/terminal.js`.
+
+### Unverified, stated plainly
+
+Nothing was run against a live install. The mute gate, the theme
+resolution and the dropped menu are verified by the test suites and by
+reading the merged code, NOT by clicking the app on the owner's box.
+His `test_terminal_theme_survives_agent_renders.py` and
+`test_session_row_menu_renders.py` drive real Chromium; the former runs
+here, the latter was removed with the menu.
+
+## 2026-09-10 later: the row action menu reconciled into ONE superset
+
+**OWNER'S RULING, verbatim:** "reconcile the two menus into ONE superset",
+and then the correction that shaped the rest of it: **"dont remove the
+rename. i said merge not take everything."**
+
+That correction became the general rule for the whole reconcile: WHERE
+HIS CHANGE REMOVES A BEHAVIOUR OF OURS, WE KEEP OURS AND ADD HIS
+ALONGSIDE, and a genuine either-or stops for the owner rather than being
+decided in the merge. Nothing hit that second case; every conflict here
+turned out to be additive once looked at.
+
+Third instruction, and it set the effort budget: **"dont forget we are
+rewriting this. so much of this is going to be rewritten properly."** The
+vanilla `client/js` menu is THROWAWAY - `feat/svelte-1.3` rebuilds this
+exact surface on the plugin registry - so the JS is the smallest correct
+diff and nothing was restructured for elegance. The TESTS were written to
+full care instead, because they are the specification that rewrite has to
+satisfy.
+
+### What the menu contains, on a LIVE row
+
+rename (R), mark unread (U), move to group (G), fork session (F), new
+session in folder (N), mute notifications (M), then a separator, then
+restart the agent (T) and close session (C). Pin is INLINE, adam's
+placement. Restart and close sit below the separator because both end the
+process running right now - on a live row a restart kills the pane and
+respawns it, so it is every bit as destructive as close.
+
+On a DEAD row: inline restart and remove, and NO menu, per decision 4. A
+dead row also still belongs in Recent rather than on the live list; this
+is only the honest rendering of one the reaper has not taken yet.
+
+### What was taken from each side
+
+- **HIS, as the base:** the three-module split
+  (`session-row-menu.js` item table + captured context,
+  `-actions.js` runners, `-open.js` panel/focus/keyboard), because a
+  declarative item table is what makes an eight-item superset a table
+  edit rather than a rewrite. With it: identity captured at PAINT TIME
+  (the list repaints every 5s), the capture-phase key handling that stops
+  a shortcut letter reaching the terminal, `aria-disabled` with a
+  reachable reason rather than the `disabled` attribute, and pin inline.
+- **OURS, kept:** `session-row-actions.js` ENTIRELY - `LIVE_STATUSES` and
+  `actionsFor` returning `[CLOSE, RESTART]` for a live row, which is
+  decision 3 - plus the three items (restart, mark unread, move to
+  group), the `ui.show_mark_unread_control` gate, the gestures module
+  (right click and long press, which his menu has no answer for), and the
+  open-menu repaint guard in `project-list-render-guard.js` that his
+  version had dropped.
+- **HIS `offersMenu`, taken and rewired:** it is DERIVED from `actionsFor`
+  rather than from a second status list, so pointing it at OUR
+  `actionsFor` gives the right answer for free - live and unknown get the
+  menu, dead keeps its inline pair - with no change to decision 3's logic.
+
+### The rename pair, which is the point of the correction
+
+**BOTH ENTRY POINTS SHIP, DRIVING ONE IMPLEMENTATION.** Double-click
+rename is untouched (`session-sidebar-rename.js` keeps `onDblClick`,
+`deferActivation` and `clearPending`; `session-sidebar.js` keeps its
+`dblclick` listener; `session-sidebar-clicks.js` keeps the deferral on the
+name). The menu's rename calls `SessionSidebarRename.beginEdit`, which is
+the SAME function both gestures already ended in - so there are in fact
+THREE doors (double-click, F2, menu) onto one editor, one seed, one
+validator and one commit path. `tests/test_session_row_menu_dispatch.node.mjs`
+drives all three and asserts they land in the same place, and that all
+three refuse an unrenameable row identically.
+
+**THE COST THE OWNER IS ACCEPTING BY KEEPING IT**, stated because his
+commit message is the only place it was written down: the deferral holds
+every click on a RENAMEABLE row's name for a measured ~250 ms before the
+row switches, so a double-click can claim it. That is the most-used
+interaction in the list paying for the rarest. Keeping the gesture keeps
+the delay. Worth a look on a phone; not changed here.
+
+### Everything in his commit that DELETES rather than adds
+
+Audited on request, so nothing goes through unseen:
+
+1. **Double-click rename** (`-94` in rename.js, the `dblclick` listener in
+   sidebar.js, the deferral in clicks.js). REFUSED, kept, per the owner.
+2. **The open-menu repaint guard** in `project-list-render-guard.js`.
+   KEPT, repointed at `SessionRowMenuOpen`.
+3. **The live row's inline close X.** Taken - it becomes the `close
+   session` item, which is what the ruling asks for.
+4. **`LIVE_STATUSES` / live-row restart** - not in this commit but in the
+   base it sits on. REFUSED; ours stands, and there is now a test that
+   fails if it goes again.
+
+Nothing else in the commit is a deletion. His launchpad menu wiring was
+NOT taken: our launchpad keeps its inline controls, so nothing of ours is
+lost there and the diff stays small.
+
+### The trap that would have compiled and lied
+
+`session-sidebar-clicks.js` `runRestart` read the row status off
+`data-row-status`, which OUR kebab stamped. Adam's trigger spells it
+`data-row-menu-status`. Reading the old spelling against the new trigger
+returns null and the picker reports EVERY restart as "unknown" with
+nothing failing - the exact defect `.claude/notes/compare-1.2/sidebar.md`
+flagged. Repointed, and called out in a comment at the site.
+
+### Tests: extended, never replaced
+
+- NEW `tests/test_session_row_menu_superset.node.mjs` (16 cases): the
+  eight items and their order, the separator group, distinct shortcuts,
+  restart on every measured-live status, the negative control that an
+  UNDETERMINED row offers none, restart availability being IDENTICAL to
+  `actionsFor` wherever a menu is drawn, the mark-unread flag with its
+  negative control, both flipping labels, move-to-group withheld off the
+  sidebar, fork and rename refusing WITH a reason, decision 4's dead row,
+  and the context round-tripping through the trigger unchanged.
+- NEW `tests/test_session_row_menu_dispatch.node.mjs` (8 cases): the three
+  rename doors, the identical refusal, and where restart / mark unread /
+  move to group actually go, including that a missing collaborator is a
+  no-op rather than an exception.
+- UPDATED behaviourally, not deleted: the row and parity suites now ask
+  what a row OFFERS (inline plus menu) instead of matching tooltip
+  strings, so they survive the Svelte port.
+
+**THE NEW GUARDS WERE MUTATION-TESTED**, because a test that cannot fail
+is worse than none. Dropping restart from a live row (adam's regression,
+reproduced deliberately) failed 5 superset cases and 1 row case; giving
+the menu a private rename instead of `beginEdit` failed 2 dispatch cases.
+Both mutations reverted.
+
+**Note for the Svelte port:** the two updated suites had assertions on
+generated HTML (`title="close session"`, inline-icon counts). Those are
+gone, replaced by action-set assertions. What remains markup-coupled and
+would need rework in 1.3: the trigger attribute round-trip case in
+`test_session_sidebar_rows.node.mjs` and the `offeredFor` regex helper in
+`test_session_row_actions.node.mjs`, both of which parse rendered HTML
+because this repo bundles no DOM.
+
+### Verification
+
+- pytest **5708 passed / 2 failed / 19 skipped**, identical to the
+  post-merge baseline; the two are the known environmental pair. This
+  round is client-side, so no Python moved.
+- Node **200 suites, 0 failing** (198 before, plus the two new files).
+- `node --check` clean on every JS file touched.
+- `scan_secrets.py` exit 0. Version confirmed still **1.2.1**.
+
+### Follow-ups, split by whether the code survives
+
+**PERMANENT, under `src/` - the Python is NOT being rewritten, so these
+should not quietly become permanent:**
+
+- [ ] `src/core/session_notification_policy.py` is **563 lines**, over the
+      500 rule. Suggested split: lift the durable-row half (hydration
+      query, `apply`, the generation counter) into
+      `session_notification_policy_store.py` and leave the pure verdict
+      ladder and its three values behind, which is the same seam
+      `session_startup_gate` / `_ledger` already uses.
+- [ ] `src/core/notifications/idle_watcher.py` is **513 lines**, newly
+      over after the mute gate landed. Suggested split: move the policy
+      consultation and its refusal reasons into a small
+      `idle_watcher_policy.py`, keeping the watcher loop itself under the
+      cap.
+
+**THROWAWAY, under `client/js` - deleted by the 1.3 Svelte rebuild, so
+NOT split here on purpose:**
+
+- `client/js/session-row-actions.js` 552 lines (already 519 and over
+  before this round).
+- `client/js/session-row-menu.js` 535 lines.
+
+### For the 1.3 re-port
+
+`feat/svelte-1.3` has this surface on a plugin registry with mark-unread
+already a plugin, so the eight items above are the target shape. Files it
+must reconcile: `client/js/session-row-menu.js` (the item table, the
+`available` vs `enabled` split, and the captured context),
+`session-row-menu-actions.js` (where each item goes),
+`session-row-menu-open.js` (focus, the capture-phase keyboard, the
+optional point placement), `session-row-menu-gestures.js` (right click and
+long press), `session-row-actions.js` (`actionsFor` / `offersMenu`),
+`session-sidebar-rows.js` (pin inline plus trigger),
+`session-sidebar-clicks.js` (the `data-row-menu-status` read),
+`session-sidebar-rename.js` (three doors, one `beginEdit`),
+`session-sidebar.js` (the dblclick listener),
+`project-list-render-guard.js`, `client/css/session-row-menu.css` and
+`client/index.html`. The two new test files are the specification and
+should port before the code does.
+
+## 2026-09-10 later still: two validator findings on the menu delta, fixed
+
+Independent validation failed the row-menu commit on 2 of 12 checks. Both
+were real. The other ten passed, including the live-row restart guard,
+which broke 7 cases across 3 files when forced rather than the 6 recorded
+above.
+
+### FINDING 1: the attribute-name bug was FIXED BUT NOT GUARDED
+
+The validator mutated the READER in `session-sidebar-clicks.js` back to
+the old spelling `data-row-status`, ran all 200 node suites, and got
+**zero failures**. So the "compiles and lies" regression the commit
+message claims to fix could come straight back and ship silently.
+
+**Why the existing cover could not see it, and the lesson.** There were
+two tests either side of the seam and neither crossed it: a WRITER-side
+assertion that the trigger carries `data-row-menu-status`, which passes
+happily while the reader looks somewhere else, and a READER-side dispatch
+test whose `runRestart` was a MOCK - and a mock never performs the
+attribute read at all. Two green tests, one unguarded contract. **When a
+writer and a reader agree by naming the same string, only a test that
+runs BOTH halves is evidence.**
+
+**The fix:** two cases in `tests/test_session_row_menu_dispatch.node.mjs`
+that render the REAL trigger through `SessionRowMenu.triggerHtml`, parse
+the attributes out of that rendered markup (never a hand-written map,
+which would be a third spelling that could agree with one side while the
+other drifted), and drive the REAL `SessionSidebarClicks.runRestart`
+against it with a recording picker. The status must arrive at
+`picker.open` as `working`, not null. The second case drives four
+statuses, because a wrong spelling reads null for every one and a single
+fixture could pass on a default.
+
+**MUTATION-PROVEN, before and after the split:** with the reader on the
+wrong spelling both new cases fail and the full 200-suite run reports 1
+failing file instead of 0. Reverted and re-confirmed green.
+
+### FINDING 2: two client files shipped over the 500-line rule
+
+`session-row-menu.js` 535 and `session-row-actions.js` 552. CLAUDE.md
+names this family as one that must not grow, and the owner has recorded
+"files over 500 lines" as a stated dislike, so shipping them was
+inconsistent with what we published the same day. Split along the seam the
+three-module structure already had - a LIFT each, no redesign, no new
+abstraction, no renamed export:
+
+| file | was | now |
+|---|---|---|
+| `client/js/session-row-menu.js` | 535 | **402** |
+| `client/js/session-row-menu-items.js` | - | **168** (the item table) |
+| `client/js/session-row-actions.js` | 552 | **449** |
+| `client/js/session-row-actions-confirm.js` | - | **166** (CONFIRM_COPY, `confirm`, `attachmentPreamble`) |
+
+`SessionRowMenu.ITEMS` is still re-exported and `SessionRowActions.confirm`
+/ `.attachmentPreamble` still exist under their own names, delegating, so
+no caller changed. A missing confirm module answers **false** - a
+destructive action must never proceed because its confirmation failed to
+load. Nine test sandboxes that load these modules standalone now load the
+split half too, and `test_server_status_panel.node.mjs` reads the pair as
+one source because its assertions are about the pair.
+
+### Verification after both fixes
+
+pytest **5708 passed / 2 failed / 19 skipped** (the two environmental);
+the three cost-ceiling suites `test_listing_seed_row_cost.py`,
+`test_listing_subprocess_cost.py`, `test_listing_liveness_socket_scope.py`
+**12 passed**; node **200 suites, 0 failing**; `node --check` clean;
+`scan_secrets.py` exit 0; version still **1.2.1**.
+
+The two `src/` follow-ups recorded above (`session_notification_policy.py`
+563, `notifications/idle_watcher.py` 513) are UNCHANGED and still open -
+that code is not being rewritten, so they still want a real split.

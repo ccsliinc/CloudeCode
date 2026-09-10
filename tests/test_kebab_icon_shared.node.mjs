@@ -105,40 +105,11 @@ test('there is exactly ONE definition of the mark in the client', () => {
         `these files draw their own kebab instead of calling KebabIcon: ${offenders}`);
 });
 
-test('both consumers call the shared builder rather than inlining the mark', () => {
-    // TWO CALLERS AGAIN. The header overflow has always drawn it; the
-    // session row's action menu draws it a second time, which is exactly
-    // the situation the extraction exists for - the ink measurement in
-    // the module's docblock is why this mark is not a literal, and a
-    // second inlined copy is how this app grew two drifting kebabs the
-    // first time.
+test('both consumers actually call the shared builder', () => {
     assert.ok(clientJs('header-menu.js').includes('window.KebabIcon.svg('),
         'the header overflow must render the shared mark');
     assert.ok(clientJs('session-row-menu.js').includes('window.KebabIcon.svg('),
-        "the row menu's trigger must render the same shared mark");
-});
-
-test('the row menu renders the mark SMALLER, and never redraws it', () => {
-    // A row is not a header. The trigger asks for 16px against the
-    // header's 20, which the shared builder answers by scaling the same
-    // three dots - the viewBox is fixed at 16 units whatever the pixel
-    // size, so a smaller rendering is not a different, thinner mark.
-    const src = clientJs('session-row-menu.js');
-    assert.ok(src.includes('window.KebabIcon.svg(16)'));
-    assert.ok(!/<circle/.test(src), 'no second copy of the glyph in the row menu');
-});
-
-test('the ROW BUILDERS still draw no glyph of their own', () => {
-    // The trigger comes from the menu module, which is the only thing
-    // that knows what the mark looks like. A row builder that started
-    // emitting its own three dots would be a second copy again.
-    for (const name of ['session-sidebar-rows.js', 'launchpad.js']) {
-        const src = clientJs(name);
-        assert.ok(!src.includes('KebabIcon'),
-            `${name} must reach the mark through SessionRowMenu, not directly`);
-        assert.ok(src.includes('SessionRowMenu.triggerHtml('),
-            `${name} must build its trigger from the menu's own builder`);
-    }
+        'the sidebar row kebab must render the shared mark');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

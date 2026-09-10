@@ -67,6 +67,10 @@
     "default_editor": "",
     "env": {}
   },
+  "_comment_ui": "CLIENT-SIDE SHOW/HIDE SWITCHES, ALL DEFAULT-ON. Every flag here turns OFF a control that ships, so an absent block, an absent key and an unparseable block all mean the same thing: show everything. show_mark_unread_control is the manual 'mark this session unread for followup' toggle on the sidebar row and the launchpad card. It is NOT the unread indicator - the status LED's still green ring is what says a session is unread, and that is not optional. Unread tracking is unaffected either way. Reported live at GET /api/v1/features and editable from the settings screen.",
+  "ui": {
+    "show_mark_unread_control": true
+  },
   "_comment_server_prefs": "Bind address and TLS preference, remembered across restarts so they do not have to be re-picked from the menu bar. bind_host is a PREFERENCE: the address actually bound is resolved by src/core/setup_state.py, which pins loopback until an authenticator has been paired, and uvicorn binds once so a change applies on the next restart. tls_preferred is recorded and NOT in force - this build serves plain HTTP and has no TLS terminator.",
   "server_prefs": {
     "bind_host": "",

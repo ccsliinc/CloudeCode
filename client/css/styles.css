@@ -152,6 +152,17 @@
      * pixel value that would drift out of sync with the other. */
     --project-gutter: 52px;
 
+    /* The sidebar group header's own gutter - sibling of
+     * `--project-gutter` above, same convention applied to the
+     * conversations panel's section headers (pinned / other / a user's
+     * own groups): a fixed-width column for the row count so a group
+     * name starts at the same x whether it holds "1" conversation or
+     * "120". Narrower than the project tree's because this gutter holds
+     * only the count (the chevron is a separate element after it, not
+     * sharing the column). See `.session-sidebar-group__gutter` in
+     * client/css/session-sidebar-groups.css. */
+    --sidebar-gutter: 22px;
+
     /* THE BOTTOM ROW hovers over the command line. One slot is one
      * button plus one gap, so the slot tokens are the only place a
      * horizontal offset is ever written.
@@ -4627,9 +4638,11 @@ body.home-header-active {
  * matched running sessions never renders this button at all - there is
  * nothing to expand, so no control is drawn (see renderProjectList()).
  * `width: 100%` fills its fixed-width `.project-node__gutter` column so
- * the count (see `.project-node__count` below) has a constant right
- * edge to align against, whether the chevron stands alone or the count
- * chip sits beside it. */
+ * the whole gutter stays one click target regardless of whether the
+ * chevron stands alone or the count (see `.project-node__count` below)
+ * sits beside it at its own fixed 4px gap - the count no longer needs
+ * this button's full width to align against, but the hit area still
+ * benefits from it. */
 .project-node__toggle {
     display: flex;
     align-items: center;
@@ -4654,14 +4667,30 @@ body.home-header-active {
     transform: rotate(90deg);
 }
 
-/* Pushed to the toggle's right edge rather than sitting beside the
- * chevron, and set in tabular figures so a digit swap (1 session going
- * to 10) never nudges its own right edge, let alone anything after it.
- * `.project-node--virtual` overrides size/opacity only - this rule is
- * still the one making that count's digits line up. */
+/* Sits tight beside the chevron, NOT pushed to the gutter's right edge.
+ * That was the owner's complaint, verbatim: "the session count, its 2
+ * far from the arrow and too close to the tab" - `margin-left: auto`
+ * shoved the count flush against the project card that follows in the
+ * grid's second column, so it read as crowding the project name while
+ * sitting nowhere near the fold chevron it belongs to. Removing the
+ * auto margin lets `.project-node__toggle`'s own `gap: 4px` (the same
+ * gap already separating every child of that flex button) do the
+ * spacing instead, so chevron and count now sit a fixed 4px apart and
+ * everything from there to the edge of `--project-gutter` is clear
+ * space before the card - no second gap token invented for one value
+ * already declared two rules up.
+ *
+ * Colour and weight match the sidebar's own count treatment
+ * (`.session-sidebar-group__count`, session-sidebar-groups.css,
+ * 2174b0d): accent-coloured plain text, never a pill. Tabular figures
+ * still matter here for a different reason than before - not to hold a
+ * right edge in place, but so a digit swap does not nudge the clear
+ * space that follows. `.project-node--virtual` overrides size/opacity
+ * only - this rule is still the one making that count's digits line up
+ * and colouring them. */
 .project-node__count {
-    margin-left: auto;
     font-variant-numeric: tabular-nums;
+    color: var(--color-accent);
 }
 
 /* Indented by the SAME token the row above uses for its gutter column,

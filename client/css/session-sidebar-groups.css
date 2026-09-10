@@ -95,20 +95,37 @@
     display: block;
 }
 
-/* ---- The header ROW: the fold button plus a user group's menu --------
+/* ---- The header ROW: count gutter, fold button, menu -----------------
  *
- * A user group's header is TWO controls, not one, so they cannot be a
- * single button: the fold toggle owns the whole label and count (a big,
- * forgiving target), and the menu sits at the end. `pinned` and `other`
- * emit no menu at all - see session-sidebar-groups.js - so this row is
- * one child wide for them and the flex layout collapses to exactly the
- * old geometry. That is deliberate: the pinned header must not shift
- * when user groups appear beside it.
+ * Every header is the same four slots in the same order: the count
+ * gutter first, then the fold toggle (chevron plus label), then the
+ * status summary when there is one, then the kebab. EVERY HEADER NOW
+ * CARRIES THE KEBAB, pinned and other included - a user group's opens
+ * rename/reorder/delete, a reserved band's opens whatever already
+ * applies to any section (fold/unfold). Rendering it everywhere is what
+ * keeps the menu column a straight line down the whole list; a header
+ * that quietly omitted it left a gap the eye reads as a mistake, not as
+ * "nothing to do here".
  */
 .session-sidebar-group__headerrow {
     display: flex;
     align-items: center;
     width: 100%;
+}
+
+/* Fixed-width column for the count, first in the row so the fold
+ * toggle - and therefore the group name inside it - starts at the same
+ * x under every header regardless of how many digits the count needs.
+ * `--sidebar-gutter` is declared once, in styles.css, beside its
+ * launchpad sibling `--project-gutter`. */
+.session-sidebar-group__gutter {
+    flex: 0 0 var(--sidebar-gutter);
+    width: var(--sidebar-gutter);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 4px;
 }
 
 /* THE MENU IS SYMMETRIC AND INSET, never an edge bar. scripts/
@@ -216,17 +233,20 @@
 
 /* A folded section still says how much it hides. The count is the only
  * thing standing between "collapsed" and "empty" once the rows are gone,
- * and those must not look the same. */
+ * and those must not look the same.
+ *
+ * PLAIN COLOURED TEXT, NOT A BADGE. "the number make it a colored font
+ * and not circle. it looks oval and i dont like it" - the pill
+ * (border-radius, its own background fill) is gone; this is a bare
+ * number in the accent colour, the same way this app already colours
+ * plain text elsewhere rather than boxing it. Tabular figures so the
+ * digits occupy a constant width inside the fixed gutter around them. */
 .session-sidebar-group__count {
-    margin-left: auto;
-    padding: 0 5px;
-    border-radius: var(--radius-pill);
-    background: var(--color-bg-overlay-soft);
-    color: var(--color-fg-faint);
-    font-size: 0.9em;
+    color: var(--color-accent);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.72em;
     font-weight: normal;
     letter-spacing: 0;
-    flex-shrink: 0;
 }
 
 .session-sidebar-group__body {
@@ -312,14 +332,13 @@
 
 /* ---- The "new group" button -------------------------------------------
  *
- * The row's own group chip is GONE: "no i dont need to see the group
- * name in the item. its in the group i can see the group on the
- * sidebar." Its action half moved into the row's overflow menu, and that
- * menu was removed in turn on 2026-09-08, so nothing on a session row
- * opens the picker any more. The picker itself is untouched and still
- * reached by `g` on a focused row, by Alt+Arrow across a band edge, and
- * by dragging the row onto a group header. This button, which creates a
- * group from the HEADER, is unaffected either way.
+ * The row's own group chip is GONE, this round: "no i dont need to see
+ * the group name in the item. its in the group i can see the group on
+ * the sidebar." Its action half (opening the picker) rides in the row's
+ * kebab menu now - see client/js/session-sidebar-group-actions.js
+ * `rowMenuItemHtml` and client/css/session-row-menu.css, which styles
+ * every folded control including this one. Nothing chip-shaped is left
+ * on the row itself.
  */
 .session-sidebar-group-add {
     display: inline-flex;
@@ -357,10 +376,10 @@
  * z-index MUST clear .session-sidebar-panel's 1100 (session-sidebar.css)
  * - this menu is appended to document.body as a sibling of the panel,
  * not a descendant of it, so a lower z-index here painted the menu
- * UNDER the sidebar instead of over it. 1200 is the value it has always
- * carried; it used to be shared with the row-level overflow menu, which
- * was removed on 2026-09-08, so this is now the only body-mounted menu
- * the sidebar opens.
+ * UNDER the sidebar instead of over it. 1200 matches
+ * .session-row-menu (session-row-menu.css), the row-level kebab this
+ * menu is the group-level equivalent of; the two are never open at the
+ * same time (openMenu is a single slot), so sharing a value is safe.
  */
 .session-sidebar-group-menu {
     z-index: 1200;

@@ -134,6 +134,11 @@ adoptable, an unreadable table yields `cannot_determine` and holds nothing, and 
 pass is SCHEDULED, never awaited - uvicorn binds at the lifespan `yield`, so an
 awaited pass is dead port (measured: 1.2 ms to bind, versus 49 ms awaited and 945 ms
 serial). It takes its own listing because `discover_existing` carries no epoch.
+A session the legacy metadata-driven reconcile registers first (PT-IMC, measured
+2026-09-08) is skipped here as `SKIP_ALREADY_HELD` by NAME before an epoch is ever
+resolved for it; `_record_epoch_for_already_registered` fills `_instance_epochs`
+from this pass's own listing anyway, because that gap is what left the status seed
+ladder unable to identify the instance for the life of the process.
 
 **EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
 The owner's rule, verbatim: "all sessions belong to projects, the root folder
@@ -198,6 +203,14 @@ unparseable file). Hooks POST to a loopback-only endpoint authenticated by an
 env-injected shared token. Events: `Stop`, `Notification`, `PermissionRequest`
 (these three also raise a toast), plus `UserPromptSubmit`, `PreToolUse`,
 `PostToolUse`, `SubagentStart`, `SubagentStop` (activity state only).
+**AND THREE OF THEM ANSWER TOASTS AS WELL AS RAISING THEM**: a prompt
+submitted from ANY client fires `UserPromptSubmit` wherever it was typed, so
+`src/core/toast_auto_ack.py` acks that session's open toasts as `answered`
+(`PreToolUse` acks only a permission; `Stop` acks a permission or a notice and
+NEVER the "your turn" it just raised, by KIND so the rule survives a duplicate
+or a reorder, and never a toast raised after the event's own instant). Clients
+drop the card on the `toast.ack` frame or, on a socket-less screen, when the
+poll reconciles the open set - see `docs/notifications.md`.
 
 Hook events arrive **unordered, and may be duplicated or dropped.** Every
 consumer in `src/core/session_activity.py` is therefore idempotent: last-write-
@@ -455,6 +468,100 @@ identity and launch and the LAST for the title. Collapsing them would be a silen
 change in the duplicate case nobody looks at. **Measure what is actually wrong,
 not what the last fix happened to be.**
 
+**AND THE SAME PASS OPENS A SQLITE CONNECTION PER ROW, WHICH IS THE HALF
+HIS INDEX DID NOT REACH.** `session_instance_index` was wired to
+`/sessions/attachable` only. `/sessions/list` has the identical shape one
+layer down: the status seed ladder's
+`session_status_seed_read.read_instance_row` opens its OWN connection, per
+session, for four columns off the row found by the SAME instance triple
+the index already keys on. Measured in-process against real tmux with 19
+live panes, one pass: **95 datastore opens before, 77 after** - the index
+costs one and saves one per session - and the synchronous pass itself
+**58.9 ms p50 / 68.4 p99 to 49.7 / 57.2**. Trust the COUNT, not the
+milliseconds: that timing is a warm local database with no rows in it, and
+the live figure it is meant to explain is 270.1 ms p50 against 418.5 p99
+with a no-op `/health` inflating from 45.3 ms quiet to 181.9 ms while a
+listing is in flight. **THE COST IS A BURST, NOT A DRIP**, and saying so
+accurately is the point: `seeded_display` re-derives at most once per 60s
+per session, so about one poll in twelve reaches the read - but the seeds
+warm together and therefore EXPIRE together, so the shape is N synchronous
+opens landing inside ONE pass, which is what a p99 is made of.
+
+**`InstanceIndex` NOW CARRIES `complete`, AND THAT IS WHAT MAKES IT SAFE TO
+READ FROM.** An empty index is harmless for a DECORATION - a missing title
+renders as nothing, exactly what the per-row read produced when the
+datastore would not open - and is NOT harmless for the seed, where `None`
+means "this instance could not be identified" and would blank the status
+ladder for every session in the pass. So `complete` is True only when a
+query actually RAN, a real answer of zero rows included, and the seam reads
+the index only then; anything else falls through to the connection it was
+always opening. Same discipline as `StatusMap.complete`, same sentence
+underneath it: a reading that did not happen is not a reading of nothing.
+The four seed columns join the FIRST-row group in the duplicate-triple
+rule, because `read_instance_row` also took an unordered `fetchone()`.
+**AND THE INDEX IS SKIPPED WHEN NOTHING CAN USE IT**, which is his own
+`2b1fcb9` correction applied to this path: the seam is reached only inside
+`if not hooks_seen(session_id)`, so a box where every session has fired a
+hook would pay one connection to answer nobody. `hooks_seen` is a
+NECESSARY condition and not a sufficient one, so that gate may over-include
+and must never under-include.
+
+**FOUR PER-ROW READERS REMAIN ON THIS PASS AND ARE DELIBERATELY NOT
+FOLDED IN.** Measured and attributed by caller, 19 sessions:
+`_restored_activity_state` 19, `_identity_for_live_name` 19,
+`_label_for_tmux_name` 19, `_owned_instances_from_db` 19. Every one is
+NAME-KEYED with a recency rule ("the newest instance of this name") while
+the index is keyed on the full instance triple, so answering them from it
+would be a silent behaviour change in the duplicate-name case nobody
+looks at. Closing them means giving them the epoch the pass already holds,
+or a second name-keyed bulk read; that is real work and was not done here.
+`tests/test_listing_pass_datastore_cost.py` pins the ceiling at `4N + 2`
+and its failure message names WHICH reader grew - **raising that bound is
+re-introducing the defect with the alarm switched off.**
+
+**THE PERMISSION VERIFY WAS CHECKED AND ITS GATE WAS ALREADY RIGHT, WHICH
+IS WORTH KEEPING BECAUSE THE OBVIOUS READ WAS WRONG.**
+`verify_open_permission` is a third potential per-row `capture-pane` on
+this pass, and the expectation was that it carried the startup gate's
+defect. It does not, and the difference is the DIRECTION of the refusals.
+`should_capture_tail`'s "no hook on record" is FAIL-OPEN: the ledger is
+in-memory, so a missing record makes it PASS, which is how 13 of 13
+healthy sessions captured on every poll forever.
+`should_capture_permission_tail` is FAIL-CLOSED at every rung - no open
+claim, no stamp, no capture - so a box with no dialog on any pane spends
+nothing here, measured over six sessions rather than asserted. What WAS
+real is the RE-look: both verdicts that KEEP the flag leave the gate
+passing next poll, so a genuinely open claim paid one subprocess every 5s
+until a human answered it. `PERMISSION_TAIL_RECHECK_SECONDS = 30` bounds
+that and nothing else. **THE LEDGER IS KEYED ON THE CLAIM,
+`(session_id, permission_opened_at)`, NOT ON THE SESSION**: a new
+`PermissionRequest` carries a new stamp, finds no record and is read at
+once, so the throttle can never delay the FIRST look at a claim - which is
+the only thing that catches a flag no reachable event can retire, the
+adopted-id stuck bit of gotcha 10. A session-keyed record would have
+delayed exactly that case, silently. A window opens only after a capture
+ACTUALLY happened, so a refusal cannot throttle the first real look once a
+pane comes back.
+
+**AND A LISTING MAY ONLY VOUCH FOR THE SOCKET IT WAS TAKEN FROM.**
+`listing_proves_alive` replaces a `backend.is_alive()` that probed THE
+BACKEND'S OWN socket with a lookup in a listing taken from the PROBE'S. As
+merged, neither was compared. A tmux session NAME is not unique across
+sockets and this app mints names from project slugs, so a name present on
+the probe's socket would have vouched for a dead session held by a backend
+pinned elsewhere - a green `Connected` dot over a corpse, this project's
+recurring failure. `StatusMap` now carries the socket the listing came
+from, read off the probe so it can never claim one it did not come from,
+and the function takes the socket the caller is asking ABOUT. Unstated on
+either side, or a mismatch, REFUSES - and a refusal costs exactly the
+pre-fix probe, so refusing too often is free and answering across sockets
+is not. `tests/test_listing_liveness_socket_scope.py` measures it on two
+real throwaway sockets with one name alive on A and killed on B, and
+reproduces the PRE-FIX rule inline so the file fails if the old behaviour
+returns rather than only checking that a keyword argument exists. Its
+positive control is load-bearing: a backend on the listing's own socket
+must still skip its probe, or a fix that refused everything would pass.
+
 **THE PIPE READER WAKES ON THE APPEND NOW, AND THE 20ms IS A BACKSTOP.**
 `TmuxBackend._tail_loop` used to `asyncio.sleep(0.02)` on every empty read, which
 made that interval a FLOOR ON KEYSTROKE LATENCY - the echo lands at a uniformly
@@ -507,13 +614,79 @@ The live capture shows no option numbers and the cursor on "No, exit", so the
 options read `❯ No, exit` then `  Yes, I trust this folder`. The startup gate
 matches the sentence text instead, for exactly that reason.
 
-**`unknown family` on a row whose record says `not_launched` is DATA, not a bug.**
-27 of 40 rows on the owner's box carry `agent_type` NULL with
-`agent_family_source='not_launched'`, which is the `auto_start_claude:false` plus
-a hand-sent claude command case named under "Restarting a session" above. The
-pane may well be running claude; the record says the app started no agent. Fixing
-that means filling `agent_type` from evidence, not defaulting the resolver to
-claude - a resolver that always finds something is worse than useless.
+**`unknown family` on a row whose record says `not_launched` is DATA, not a bug,
+AND IT IS NOW FILLED FROM THE PANE'S OWN PROCESS.** The shape is
+`agent_type` NULL beside `agent_family_source='not_launched'`: the
+`auto_start_claude:false` plus a hand-sent claude command case named under
+"Restarting a session" above. Both halves of the record are true - the app
+really did open a bare shell and really did start no agent - and neither can
+say what the human then typed into the pane. Re-measured 2026-09-08 on the
+owner's box: 12 rows carry that shape (it read 27 of 40 earlier; the
+population moves, re-measure rather than quoting either), and none of the 19
+live panes does, because every live row already carries a wrapper id.
+
+`src/core/session_agent_infer.py` is the ladder,
+`session_agent_infer_apply.py` the per-session seam and
+`session_agent_infer_sweep.py` the fleet pass. **THE EVIDENCE IS THE PANE'S
+PROCESS**: the claude command line in its process tree (one `ps -A`, walked
+with `claude_resume_argv`'s existing traversal rather than a second one),
+because that is the only thing that can tell `claude-chrome` from
+`claude-skip-permissions` - they fire identical hooks, print identical banners
+and differ only in their flags. `#{pane_current_command}` CORROBORATES and
+never creates: it answers the family when its basename is literally `claude`,
+and the claude VERSION STRING that 15 of 19 live panes report there selects no
+rung at all.
+
+**A HOOK IS NOT THE TRIGGER, AND ASSUMING IT WAS ALMOST SHIPPED A RUNG THAT
+COULD NEVER FIRE.** tmux copies `CLOUDECODE_SESSION_ID` and
+`CLOUDECODE_HOOK_TOKEN` into a pane's process AT SPAWN, so a claude a human
+typed into an already-running pane has neither and never announces itself.
+Measured 2026-09-08: 10 of the hand-started `not_launched` sessions have never
+fired a hook and never will - which is exactly the population this feature
+exists for. So the read is driven three ways: `sweep_live_sessions` at the END
+of the boot re-adopt pass and after an adoption, plus the per-session hook path
+for a session that DOES carry the env. A hook remains the STRONGEST evidence
+where it exists (it proves a claude is running before anything is read); its
+ABSENCE is simply not evidence of absence. The sweep costs TWO subprocesses for
+the whole fleet, and only if a row needs them - the row gate runs first, so a
+box whose sessions all carry an `agent_type` spends no `ps` at all. There is no
+periodic re-sweep yet, which is the known gap.
+
+**THE ANCHOR GATE IS WHY THIS CANNOT ALWAYS FIND SOMETHING.** A wrapper is
+named only when the observed argv carries at least one distinguishing flag AND
+exactly one configured claude-family wrapper passes that same set - equality,
+not subset, or a wrapper passing `--dangerously-skip-permissions` would claim
+a pane running that plus `--chrome`. Empty agreeing with empty is the absence
+of evidence, not two facts agreeing. Measured against the owner's real five
+wrappers: `cld`, `cldl` and `claude-skip-permissions` all reduce to the same
+single flag, so 16 of the 19 live panes tie three ways and get the bare family
+`claude`, and only the 3 running `--chrome` resolve to a wrapper id.
+
+The value is stored with `agent_family_source='inferred_process'`, a SIXTH
+family source that renders as the dashed guess pill, never the solid one. It
+is kept apart from `fingerprint` because the two were measured differently: a
+process read is the stronger guess, which is why it is the one guess allowed
+to name a wrapper, and it is still a guess. Writing it broke the premise
+`session_agent_evidence` was built on ("nothing writes an inference into
+`agent_type`"), so the row's source now travels with its value through
+`identity_for_live_name`, `choose_agent_evidence` and `stored_launch_for` -
+read one without the other and a guess paints solid.
+
+**AN INFERENCE IS NOT INTENT, so `session_agent_infer.restart_agent_type`
+keeps it out of the respawn ladder entirely.** `session_respawn.py` is
+unchanged: `RESPAWN_SHELL` still fires on an empty `#{pane_start_command}`,
+which is this whole population, and it fires BEFORE `agent_command` is
+consulted - so filling `agent_type` could never have changed that rung anyway.
+What it could have changed is an ADOPTED session with a real recorded start
+command, silently moving it off `RESPAWN_REPLAY` on a guess, and that is what
+`restart_agent_type` refuses. The restart picker's explicit choice remains the
+only thing that overrides the gate.
+
+The write happens at most once per pane: the WHERE clause requires
+`agent_type` empty and the source not `launched`, which the first success makes
+false, and an in-process memo keyed on the tmux INSTANCE keeps a `ps` off the
+`PreToolUse` path. Steady state on a healthy box is one indexed SELECT per pane
+per server process and no subprocess at all.
 
 ## How we work here
 
@@ -534,16 +707,34 @@ claude - a resolver that always finds something is worse than useless.
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. Current baseline, re-measured 2026-09-09 on a CLEAN tree
-  immediately before the listing-cost round, is **5329 passed / 2 failed /
-  18 skipped** in about 6m30s; the same tree with that round applied reads
-  5332 passed / 2 failed / 18 skipped, the three extra being its own new
-  tests. Both failures are environmental and pre-existing:
-  `test_nuke_sandbox.py::test_dry_run_deletes_nothing` and
-  `test_version_probe.py::test_current_version_empty_when_unresolvable`.
+  repo root. System python3 has no fastapi. Current baseline, re-measured
+  2026-09-10 on `release/1.2.1` with `-p no:randomly`, is
+  **5656 passed / 2 failed / 19 skipped**. The same worktree read
+  **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
+  **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
+  this round added 15, with no new failures at either step. Note the SKIP COUNT MOVES BY ONE between
+  runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
+  22 is not a test that stopped being measured; the skip REASONS are what
+  to read, and `-p no:randomly` pins it at 21. Two failures remain, both environmental
+  and pre-existing:
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
+  and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
+  The third this file used to name,
+  `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
+  now PASSES; it was never fixed on purpose, so treat it as environmental
+  in both directions rather than as a guarantee.
+  A CHECKOUT WITH NO `config.json` MANUFACTURES A FAKE FAILURE SET, and it
+  is a big one: 19 failed plus 26 errored in a fresh `git worktree`, every
+  one of them an app that could not start (401s from the test client,
+  FileNotFoundError from the route tests), and every one of them clearing
+  the moment the file is put back. `config.json` is gitignored, so a new
+  worktree never has it. Copy one in before you measure anything, and do
+  not attribute a failure to a code change until you have reproduced the
+  same run on the base commit in the same directory.
   TAKE YOUR OWN BASELINE ON A CLEAN TREE BEFORE YOU JUDGE YOUR OWN RUN -
   this figure has been stale twice, and the population of environmental
-  failures moves. Your job is to add no NEW ones. Watch for a broken environment
+  failures moves.
+  Your job is to add no NEW ones. Watch for a broken environment
   manufacturing a fake baseline: a `venv` symlink pointing at a
   `venv.nosync` directory that no longer exists lets the suite limp
   along and undercount silently, rather than failing outright. If the
@@ -557,13 +748,14 @@ claude - a resolver that always finds something is worse than useless.
   minutes apart) - it drives the real `cloude` tmux socket, which is the
   same class of flakiness INFRA-49 already names. A lone failure there
   without a code change behind it is not a new regression; re-run before
-  chasing it. Node: 192 suites, ALL PASSING (re-counted 2026-09-09 the way
-  `.github/workflows/tests.yml` runs them, one `node <suite>` per
-  `tests/*.node.mjs`; the previously-noted
-  `test_archive_full_page_mode.node.mjs` failure is gone). The piped-stdin CLI helper for
+  chasing it. Node: **197 tracked suites, all 197 passing** (re-counted
+  2026-09-09 at the 1.2 merge; v1.1 alone had 193, of which 2 failed).
+  `test_archive_full_page_mode.node.mjs`, the one long-standing node
+  failure this file used to name, is FIXED and now passes. The piped-stdin CLI helper for
   the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
-  exits non-zero when run with no input.
+  exits non-zero when run with no input - which is what it used to be
+  reported as, from `tests/led_state_for.node.mjs`, before the move.
 - **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
   launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
   against hooks it actually fired. It is off by default because it spends real
@@ -574,6 +766,7 @@ claude - a resolver that always finds something is worse than useless.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
+- **Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).** Owner's rule, 2026-09-08. The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
 
 ## Restarting a session, and picking what it comes back as
 
@@ -602,6 +795,61 @@ for a real subset of the sessions on a working box, because
 | Keep the row keyed on its instance after a kill | `src/core/session_instance_rekey.py` |
 | The arm control and the kill confirmation | `client/js/session-restart-live.js` |
 | What the user is told about the conversation | `client/js/session-restart-continuity.js` |
+| Recreate a session whose tmux is GONE | `src/core/session_recreate.py` |
+| Is the tmux session still on the socket | `src/core/session_recreate_presence.py` |
+| `GET /sessions/recreate/preview`, `POST /sessions/recreate` | `src/api/recreate_routes.py` |
+
+**A SESSION WHOSE TMUX IS GONE HAS NO PANE TO RESPAWN INTO, AND THAT WAS A
+DEAD END UNTIL 2026-09-08.** The respawn ladder reads a PANE, so a row whose
+tmux SESSION was killed outright - the server restarted, the machine rebooted,
+the name is simply absent from `tmux -L cloude list-sessions` - answers
+`cannot_determine`. Honest, and the only way back was a fresh session built by
+hand, which loses the row and with it the project binding, the title, the pinned
+theme, the unread key and the group filing. `src/core/session_recreate.py`
+closes it as punchlist item 22's remaining half: a new tmux session, in the
+conversation's own directory, under the wrapper the user picked, with
+`--resume <uuid>`, recorded onto the EXISTING row through
+`create_session(reuse_session_id=...)`. It decides only the one fact it owns -
+presence - and calls `plan_imported_restart` for the transcript guard, the
+directory spelling, the wrapper and the three conversation words, so the two
+create-a-session paths cannot drift.
+
+**THE GATE IS A MEASURED ABSENCE, AND `is_alive()` CANNOT PROVIDE ONE.** It
+runs `has-session` and returns a bool, so "no such session" and "tmux is
+missing, timed out, or errored" are the same False; recreating on that would
+spawn a second tmux beside a healthy one and rebind the row onto the newcomer,
+leaving the pane the user is talking to alive and unreferenced. So the
+measurement is a LISTING (`discover_existing()`, whose `ok` and `complete`
+already carry the discipline) and `session_recreate_presence.tmux_presence`
+keeps three outcomes apart: `gone` only when a COMPLETE listing ran and the
+name is not in it, `present` reported as the ladder's own `not_dead`, and
+`unknown` for a listing that did not run, one that ran with rows the parser
+refused, or a name outside the `cloude_` namespace the listing does not cover.
+Only `gone` may act. `tests/test_recreate_gate_real_tmux.py` measures the
+transition against a real throwaway socket, because a double agrees with
+whatever it was built to agree with.
+
+**ADDRESSED BY `session_uuid`, NOT BY THE TMUX NAME, and that was caught rather
+than designed.** The first draft resolved the row by name plus greatest epoch;
+`tests/test_no_name_keyed_session_identity.py` failed it, correctly - a name is
+reusable and this app re-mints them, so "the newest row with this name" is a
+recency guess, and a wrong answer rebinds a DIFFERENT session's row. The routes
+now take the durable key and read the tmux name OFF the row. The client bridges
+its own gap the same way: the sidebar addresses rows by name, so
+`SessionRestartOptions.recreateTarget` returns a uuid only when EXACTLY ONE
+record carries that name and null otherwise. A refusal costs the user the offer,
+which is what they had before the feature existed; a guess would cost them a
+session.
+
+**THE ROW IS RE-KEYED, NOT REPLACED.** The new tmux session is a new instance,
+so `session_restart.rebind_instance` moves the triple while holding
+`sessions.id` fixed. Group filing rides along because `session_group_membership`
+has keyed on `session_uuid` since v24 - the v8 table it replaced keyed on
+`tmux_name`, which is the landmine an earlier design of this feature would have
+walked into. The SAME tmux name is asked for so name-scoped per-device browser
+state survives, and it is free by construction because the gate only passes on a
+measured absence; the create path still uniquifies on collision, so the name
+actually taken is REPORTED rather than assumed.
 
 **A PREDICTION IS NEVER A PERMISSION, and that is why the preview reports the
 rung twice.** `resolve_respawn_plan` short-circuits on `not_dead` BEFORE it
@@ -715,20 +963,15 @@ sidesteps rather than fixes the `session_group_members` primary-key
 defect, which keys on `tmux_name`.
 
 It is DESTRUCTIVE and irreversible, so it is gated four times and no
-gate is derivable from a prediction. **GATE 1 IS NOW SHUT, AND THAT
-MAKES A LIVE RESTART UNREACHABLE FROM THE UI.** Gates 2 to 4 and every
-line of the server path described here are untouched and still tested;
-what is gone is the only control that handed a RUNNING session to them.
-If a live restart is ever offered again, put the control back - do not
-rebuild the gates, they never left.
+gate is derivable from a prediction. **ALL FOUR GATES ARE IN FORCE AND
+THE CONTROL IS REACHABLE**, which is the owner's 2026-09-09 call: the
+row's kebab menu stays and restart stays on it. One line of this project
+folded the row's controls back to inline pin and close and removed
+restart with the menu; that was not taken. See "The row's controls" under
+the status lights.
 
-1. `actionsFor` offered restart on a row whose status we POSITIVELY know
-   is live, and stopped on 2026-09-08: "remove 'add to group' /
-   'restart the agent' and the three dots now that they're not needed".
-   It now answers `['close']` for every live status and for `unknown`,
-   and `['restart', 'remove']` for `dead` - so a DEAD row is the one
-   surface in the app that still reaches the respawn ladder, which is
-   also the case restart exists for.
+1. `actionsFor` offers restart on a row whose status we POSITIVELY know
+   is live. `unknown` still gets close alone.
 2. The picker's arm checkbox (`SessionRestartLive.armHtml`, always
    emitted unchecked, takes no argument) is what unlocks the choices. `optionsHtml` derives
    `disabled` from `actionable_now` ALONE, so a live pane paints every
@@ -1089,10 +1332,15 @@ with the startup gate, `notice` is its own inner state and paints light
 blue. Light blue over a third warm hue because the pair has to survive
 red-green colourblindness - under protanopia and deuteranopia the green
 desaturates toward a pale khaki while a blue at this wavelength stays
-plainly blue. Summary priority is unchanged:
+plainly blue. Summary priority for the header's INNER dot is
 **permission > input > working > unread > done > dead > unknown**, and
 `notice` still buckets as `input` - the colour split is a rendering
-decision on the ROW, not a re-ranking.
+decision on the ROW, not a re-ranking. The `done` bucket means "finished
+and already read" and renders the grey `idle` dot. The header's RING is
+NOT looked up on the winning bucket: it is folded separately, from
+activity across the whole group, so a group holding one parked session
+and one busy one paints the parked dot inside a breathing ring rather
+than hiding the work behind the more urgent light.
 
 **A SESSION WAITING ON ITS OWN SUB-AGENTS IS NOT WAITING ON THE USER, AND
 NEITHER `Stop` NOR `Notification` MAY SAY IT IS.** claude fires `Stop`
@@ -1108,6 +1356,20 @@ session that wants nothing. The gate is one condition in
 is stored and the state machine is untouched, so a suppressed `Stop`
 still flips unread and still resolves its status. Only the interruption
 is skipped.
+
+**IT REFUSES TO RAISE; `toast_auto_ack.py` ANSWERS WHAT WAS RAISED. THE
+TWO CANNOT DOUBLE-CLEAR.** They are on opposite sides of the same
+handler and touch different state. The gate is a pure read of
+`subagent_depth` taken BEFORE `record_hook_event`, and its only effect is
+to skip the `raise_toast` call for `Stop` and `Notification` - it clears
+nothing, acks nothing and writes nothing. `auto_ack_toasts` runs after
+the event is recorded and only ever moves an ALREADY OPEN toast to
+`answered`, keyed by KIND and bounded by the event's own instant. A toast
+the gate suppressed was never opened, so there is nothing for the ack to
+find; a toast the gate allowed is acked exactly once, by the same
+kind-keyed rule that survives a duplicate or a reorder. Order is what
+makes that safe and it is deliberate: ack what is open first, then decide
+whether to raise.
 
 **`PermissionRequest` IS NEVER SUPPRESSED, AT ANY DEPTH**, because it is
 a HARD BLOCK - claude has stopped mid-turn and cannot continue until a
@@ -1145,7 +1407,7 @@ is not displaced by chatter. THERE IS NO SECOND RANKING; if the fold is
 unavailable the module groups NOTHING rather than inventing one. The
 pick is a pure FOLD over what is held, which is what makes the card
 upgrade in place, refuse to downgrade, and survive the same hook event
-twice. The `×n` badge counts the WINNER'S KIND, never the session's pile
+twice. The `xn` badge counts the WINNER'S KIND, never the session's pile
 - it sits beside the winner's title and would otherwise put a 7 next to a
 sentence that happened once - while the dismiss control, the "Dismiss
 all" disclosure and the overflow row all count RECORDS. The attachment
@@ -1161,41 +1423,52 @@ turn was over, `record_event` stamped it again, and a finished session
 painted `working` for the full 120s - `finished_unread` lasted a second
 and a half and `idle` was UNREACHABLE. The rule now: an event that CLOSES
 something stamps only when something was open for it to close.
-`SubagentStop` needs `subagent_depth > 0` (at zero it moves nothing and
-logs `subagent_stop_without_start` at debug); `PostToolUse` keys on a
-`turn_open` boolean that every OPENING event sets and `Stop` clears, and
-is refused ONLY when a `Stop` was POSITIVELY seen and nothing has opened
-since - never having seen a `Stop` is not evidence the turn ended.
+**`SubagentStop` NEVER STAMPS the heartbeat: it says work ENDED, so the
+only thing it moves is `subagent_depth`, and it moves that with the floor
+at 0.** It first shipped gated on `subagent_depth > 0` instead, and THE
+GATE IS NOT THE CLAIM IT STANDS FOR - a duplicated `SubagentStart`
+delivered after `Stop` raises the depth off the floor by itself, so the
+duplicated `SubagentStop` behind it passed the gate and stamped, at its
+own arrival time, ratcheting the expiry out on every further pair.
+`PostToolUse` cannot take a blanket refusal (it is the only event some
+legitimate turns emit late), so it keys on a `turn_open` boolean that
+every OPENING event sets and `Stop` clears, and is refused ONLY when a
+`Stop` was POSITIVELY seen and nothing has opened since - never having
+seen a `Stop` is not evidence the turn ended. Opening events still stamp
+unconditionally, so a stray `SubagentStart` after `Stop` still buys ONE
+bounded window keyed on itself; what no `SubagentStop` can do is extend
+it.
 
-**A DEAD SESSION KEEPS ITS ROW.** `dead` was unreachable from live data
-until 2026-09-08: `resolve_listing_liveness` answered ONE verdict, `gone`,
-for two different facts - "the backend says there is no such tmux session"
-and "the session is there and its pane is a corpse" - and
-`_session_info_for` dropped the row for both, while `/sessions/attachable`
-filters out every name bound to a live backend. So a killed pane VANISHED
-off the sidebar and the running list, with `dead`/`off` sitting in
-`status-led.js` and restart + remove sitting in `actionsFor('dead')`,
-never delivered a row to paint. `src/core/session_liveness.py` splits it
-four ways, borrowing the pane words from `session_respawn.py`:
-`alive` / `pane_dead` / `session_gone` / `unknown`. `pane_dead` KEEPS the
-row and says `dead`, because `remain-on-exit` holding the corpse open is
-the same fact that lets `respawn-pane` revive it; `session_gone` drops it
-exactly as before and the reaper files the stored row into the recent
-list, where a restart is a resume. Existence is read BEFORE the pane, so a
-stale `dead` row cannot keep a session tmux no longer has on screen.
-`keeps_row` is an ALLOW-LIST of what survives, so a verdict added later
-cannot silently inherit "make the row vanish".
+**A DEAD PANE DROPS OFF THE LIVE LIST AND BELONGS IN RECENT.** The
+owner's call, verbatim 2026-09-08: "they go into recent, they can
+disappear." A session whose process died has stopped, so its row leaves
+`GET /sessions/list` rather than lingering there wearing a dead light,
+and a restart from Recent is a resume. `dead`/`off` stays in the LED
+vocabulary but is GALLERY-ONLY - no live endpoint is meant to carry a
+dead row to the client. A round that read the same measurement as a bug
+and made a husk KEEP its row, painted dead, was overruled and reverted
+(`ba2aa5d`), and `tests/test_led_real_hooks.py` holds the line against a
+real killed pane. STILL OPEN: `remain-on-exit` keeps the husk's tmux
+session in the listing, and `session_lifecycle` reaps on ABSENCE from
+that listing, so the row leaves the live list without yet arriving in
+Recent. Closing that needs a reaper rung keyed on a MEASURED
+`#{pane_dead}`, which is a new durable writer and its own change.
 
-THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
-than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
-pipe-pane a corpse, so it raises and the pass (which gathers with
-`return_exceptions=True`) simply does not hold that session. The row does
-not disappear: with no live backend bound to the name,
-`/sessions/attachable` lists it and decorates it with
-`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
-surfaced a husk. The two are complementary - bound to a backend, the
-session says `dead` on `/sessions/list`; unbound, it says `dead` on
-`/sessions/attachable` - and after this change they finally agree.
+**A VIEW CLEARS AN OPEN `permission`, AND AN OPEN ONE IS VERIFIED
+AGAINST THE PANE AFTER 20 SECONDS.** Measured 2026-09-09,
+`cloude_Media_Compression` painted `question` over a pane holding no
+dialog because the flag was set on `ses_949a8585` while the claude in
+that pane posts its spawn-time `adopted:cloude_Media_Compression`, so
+every clearing hook landed on a different tracker key and nothing
+reachable could retire it; the toast path already remaps that split and
+the activity tracker does not. So `session_view_clears` now clears
+`permission_open` too, and while the flag is open past
+`PERMISSION_TAIL_GRACE_SECONDS` the listing pass takes ONE `capture-pane`
+and clears it when claude's dialog is not on screen - marker present
+keeps, marker absent clears and logs `permission_flag_cleared_no_dialog`,
+an UNREADABLE tail keeps, and the markers were read off two real dialogs
+(`Do you want to ...?`, `❯ 1. Yes`, `Esc to cancel · Tab to amend`)
+rather than guessed. See `src/core/session_permission_verify{,_apply}.py`.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an
@@ -1205,65 +1478,222 @@ live sessions report a claude VERSION STRING as `pane_current_command`, so
 that branch is the common case and all 15 were reporting a permanent
 `working` on no evidence. Hook-fed `working` still expires after 120s.
 
+**AND THAT LEFT `unknown` AS THE COMMON READING, SO A RESTING CLAUDE IS NOW
+SEEDED FROM EVIDENCE THAT OUTLIVES THE PROCESS.** `SessionActivityTracker` is
+in-memory and nothing hydrated it, so a restart left every session on the
+tmux tier: measured on live 2026-09-08 22:24Z, 19 live panes and 15 painting
+`unknown`. Ten had NEVER fired a hook and never will - hand-started without
+the hook env, last assistant turns dated 2026-07-16 and 2026-08-24, alive at
+an idle prompt for weeks. `src/core/session_status_seed.py` is the ladder
+(records in `_records`, cache in `_store`, the two reads and the seam in
+`_read`): rung A is `sessions.activity_state` judged by
+`activity_persist.restore_state` and read on the FULL INSTANCE TRIPLE, the
+same WHERE clause `write_state` writes on, because a name-scoped read answers
+for whichever epoch sorts newest; rung B is the last decidable record of the
+bound transcript, walked BACKWARDS through the one bounded reader
+(`claude_title_sync.read_tail_records`, now extracted so there is exactly
+one) so the newest evidence wins. **IT MAY CLAIM REST AND MAY NEVER CLAIM
+`working`**: a file carries no heartbeat, so a `working` seeded from one
+could never be expired - the identical defect the paragraph above just fixed,
+one tier down. A sidechain `end_turn` is UNDECIDABLE (a subagent finishing
+inside a live turn), and so is a slash-command envelope, which is what the
+measurement forced: claude intercepts `/rename` before it becomes a prompt
+but still writes a pseudo-`user` record about it, and reading those as
+prompts pinned the only two sessions the ladder refused at in-flight while
+both sat at an empty prompt. Wired at the boot re-adopt, after
+`POST /sessions/adopt`, and at ONE seam in `_session_info_for` reached only
+while the answer is still `unknown` on a pane measured LIVE, so a seed can
+add an answer and never overwrite a measured one. A hook retires it
+instantly (the seam is gated on `hooks_seen`), which is also what makes it
+idempotent - a seed is a cached READING, not an event. Read-only against the
+live DB and the real corpus before shipping: **all 15 unknowns would read
+`idle`**, every one via rung B, 0.27 ms median each. The negative control is
+separate and load-bearing, because a matcher that always finds something is
+worse than useless: over 400 sampled transcripts it splits 172 `at_rest` / 70
+`in_flight` / 158 `no_marker`. Full model in `docs/session-status.md`.
+
+**AND A HOOKLESS SESSION NOW READS ITS OWN TRANSCRIPT FOR WORK, because an
+mtime is a TIMESTAMP and the objection above was about a RECORD** - measured
+2026-09-09, only 6 of 19 live sessions had ever fired a hook, and three of
+the other thirteen had touched their transcript inside 36 minutes while
+painting the same rest as ones last touched in July;
+`src/core/session_transcript_status{,_read}.py` is rung 0 of the same ladder
+(mtime inside `WORKING_HEARTBEAT_TIMEOUT_SECONDS` -> `working`, carrying an
+`expires_at` that `display_state` enforces so the 60s seed cache cannot
+stretch it; a turn end NEWER than the one its instance-keyed ledger already
+holds -> `finished_unread` plus ONE auto-unread claim, where FIRST SIGHT IS A
+BASELINE so a restart never re-lights the fleet), gated on `hooks_seen` and
+NOT on the hook token store, which holds 33 entries for 19 live sessions
+including every adopted pane. **A VIEW NOW CLEARS AN OPEN `notice` AND NEVER
+AN OPEN `permission`** (`src/core/session_view_clears.py`, reached from the
+WS bind and from mark-read): a `Notification` is a message to the user and
+survived a 46-minute visit on BHPP, while a `PermissionRequest` is a blocking
+fact about the agent that looking at does not answer. `status_source`
+(`hook` / `transcript` / `seed_row` / `tmux` / `none`,
+`src/core/session_status_source.py`) rides the `/sessions/list` wrapper and
+renders in the TOOLTIP ONLY, and `client/js/session-header-led.js` finally
+puts the same LED beside the session name in the terminal header.
+
 **Unread is keyed on the INSTANCE**, `<tmux_name>@<#{session_created}>`,
 because a name is reused and a flag from a killed session reappeared on its
 successor. Set on `Stop` and by the user's control, cleared when a WS
 terminal binds. An unmeasurable epoch degrades to the legacy name key.
+**THE EPOCH HAS ONE SOURCE, `src/core/unread_identity.py`, AND IT IS THE
+LIVE TMUX LISTING** - set, clear and read all reach it through
+`SessionManager._unread_epoch`, because two derivations for one key are
+two keys the moment they disagree and a clear on a key nobody wrote can
+never be undone by clicking. It refuses the DB row's recorded epoch and
+the session_id-keyed `_instance_epochs` alike; its name-keyed cache is a
+memo of the tmux measurement, refreshed by every listing.
+**AND THE CLEAR ONLY HAPPENS IF A SOCKET ACTUALLY OPENS.** Measured
+2026-09-09: a session entered in a BACKGROUNDED tab opened none, because
+`waitForFontsAndLayout` ended on bare `requestAnimationFrame` awaits that
+a browser never runs for an unpainted tab, suspending
+`connectWebSocket()` before `openWebSocket()`. No socket means no
+`onclose`, so no reconnect rung fires either: the terminal sat on
+"Connecting to terminal..." for 35 minutes and resumed the instant the
+tab was painted. THERE WERE THREE such waits, not one - the sidebar
+rejoin and the adopt path each carry their own, ABOVE the
+`setTimeout(..., 500)` that schedules the connect, so fixing only the
+first changed nothing and only a live re-check found that.
+`client/js/terminal-layout-wait.js` races every wait against a timer - a
+layout wait may DELAY a connect, never CANCEL one - and
+`tests/test_terminal_layout_wait.node.mjs` fails the build if a bare rAF
+await reappears in `terminal.js`.
+
+**IT IS ONE FLAG, AND EVERY WRITER AND READER MUST MEASURE THE EPOCH.**
+The owner's rule, verbatim: "when clicking a tab, the session is marked
+read. if i want it unread i click unread." So `auto` and `manual` are two
+writers of one state: opening the tab clears BOTH (it used to spare
+`manual`), and so does clearing the control, through `UnreadStore.clear`.
+Both writers now resolve a measured epoch and `/sessions/list` reads with
+the `created_at_epoch` on its own bulk tmux probe rather than the
+`_instance_epochs` cache, which is EMPTY for every session predating the
+process and composed the legacy bare-name key - so a flag written under
+the instance key was on disk and invisible to the endpoint. And the LED
+finally receives it: `SessionStatusUI.dotHtml(status, signals)` takes
+`unread` and `startup_gate` as a second argument, no live caller passed
+it, and an unread `idle` session therefore painted a `steady` halo on
+every surface. Full model in `docs/session-status.md`.
+
+**`finished_unread` VERSUS `idle` IS DERIVED FROM THE UNREAD FLAG AT
+RESOLVE TIME, BY ONE FUNCTION, ON EVERY PATH** - `derive_read_state`
+(`src/core/session_status.py`), called from the hook tracker's resolve,
+the tmux fallback, the seed's `display_state`, the transcript ladder's
+rung 3 and the assembled answer in `_session_info_for`, so a saved
+`finished_unread` becomes `idle` the moment the flag clears and
+`activity_persist.write_state` stores only the base state. It shipped as
+a one-directional rule - adding unread to an `idle` and never removing it
+from a stored `finished_unread` - which is a cache rather than a
+derivation, and measured on live 2026-09-09 the owner opened
+`cloude_daily-briefing` and got `finished_unread` beside `unread: false`
+from `status_source: seed_row`, a green dot over a session he had just
+read.
+
+**THE OUTER RING CARRIES ACTIVITY AND THE FINISHED TURN, AND THE OWNER
+SETTLED THAT ON 2026-09-09.** `working` breathes; a live-but-stopped turn
+(`question` / `notice` / the startup gate) breathes too, because the turn
+is still open; a finished turn nobody has read takes `unread`, a crisp
+STILL green ring; a read session at rest takes `steady`, lit and still in
+its own dot's grey; a dead pane or a lost transport takes `off`, no ring
+at all; an unmeasured one takes `dim`. The INNER dot carries the session's
+state. MOTION is the load-bearing distinction: `active` is the only state
+that animates, so a light that MOVES is a session that is moving.
+
+That ruling settled a same-day reversal, and the reversal is HISTORY, not
+a live rule. Both lines of this project were fixing one report - "the ring
+around some of the leds are not gray, which means there should be
+background tasks. i dont think those few have any background tasks" - and
+fixed it opposite ways within hours. One retired the outer `unread` state
+and its `--led-color-unread` hue and moved unread onto the inner dot
+alone; the other kept the ring and simply stopped it breathing. The owner
+picked the ring, so `unread` IS an outer state, `--led-color-unread` DOES
+exist, and the `done` bucket stays in the summary priority. Anything in
+this file or in `docs/session-status.md` that reads as though unread lives
+on the inner dot is describing the branch that lost; fix it rather than
+working around it (gotcha 8).
 
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
-dot for the chat's status and an outer halo for activity and attention.
-`dotHtml` delegates to it, so every surface renders the same component -
-and every surface must now PASS IT SIGNALS (`unread`, `startup_gate`,
-`transport`), not just the status string, or the finished-turn ring and
-the disconnected red can never render. A WORKING session is solid green
-whatever its unread flag says, and `unknown` never takes the ring at all:
-the ring asserts that a turn FINISHED here, and neither of those measured
-one.
+dot for the chat's status AND an outer ring for activity and attention,
+so "a parked session with work still running behind it" is sayable on a
+group header. `dotHtml` delegates to it, so every surface renders the
+same component - and every surface must PASS IT SIGNALS (`unread`,
+`startup_gate`, `status_source`, `transport`), not just the status
+string, or the finished-turn ring, the disconnected red and the
+provenance tooltip can never render. A WORKING session is solid green and
+BREATHING whatever its unread flag says, and `unknown` never takes the
+GREEN ring at all (it takes the faint grey `dim` one): that green is a
+claim a turn FINISHED here, and neither of those two measured one.
 
-**THE ROW'S CONTROLS ARE INLINE ICONS, AND THERE IS NO OVERFLOW MENU.**
-They were folded into a per-row three-dot kebab in `cddc823` and unfolded
-again on 2026-09-08: "move the pin and close icons back to the inline
-icons. remove 'add to group' / 'restart the agent' and the three dots now
-that they're not needed." `client/js/session-row-menu.js`, its gesture
-module and `session-row-menu.css` are DELETED, so right-click and
-long-press on a row now open nothing. A sidebar row draws grip, light,
-name, theme swatch, startup gate, ownership badge, pin, action - where
-the action is close on a live row and restart plus remove on a dead one.
-The launchpad's running-session card already drew its action inline and
-is unchanged apart from losing the same live restart; the project-tree
-row never carried any of this and is untouched. `data-row-status` moved
-off the kebab onto the row, because the row is now the only element
-built from the whole payload and the restart flow reads it there.
+**THE VOCABULARY IS TAUGHT, NOT GUESSED AT.**
+`client/js/session-status-key.js` is the legend at the foot of the
+sidebar, and it describes the model above - nine inner states resolving
+onto five hues, plus the one two-part treatment. A nine-state colour
+vocabulary with no legend is a vocabulary nobody learns. If the legend and
+the light ever disagree, the light is not the thing to change quietly: one
+of them is wrong and a user has already learned the wrong one.
 
-TWO THINGS THE MENU CARRIED AWAY WITH IT, both deliberate and both
-lossy. FILING A SESSION INTO A GROUP has no pointer route left: the
-picker is untouched and still opens on `g` over a focused row, on
-Alt+Arrow across a band edge, and by dragging the row onto a group
-header, but on a phone that last one is the only route, which breaks the
-"drag is never the only way" rule at the head of
-`client/js/session-sidebar-group-actions.js`. And RESTARTING A LIVE
-SESSION is unreachable - see gate 1 under "Replacing what is running".
+BOTH RINGS ARE ONE ELEMENT: the inner is the span's `background-color`
+and the outer is a four-layer `box-shadow` on that same span (an optional
+hollow rim inside the dot, a hard `0 0 0 1.5px` ring, a low-alpha feather
+at the same spread that softens the ring's own edge, then a blurred
+glow), with every alpha mixed into the shadow colour by `color-mix`
+rather than an element `opacity` that would fade the fill too. There is
+NO pseudo-element, and there may not be one: the halo used to be an
+`::after`, and the browser pixel-snaps that box's position and size
+independently of the dot's box, so whenever the dot landed on a
+fractional x/y - routine in a flex row, or wherever a text baseline puts
+an inline box on a half pixel - the two circles came apart by a device
+pixel. Symmetric `inset` fixed the halo's own internal symmetry and NOT
+this, because the drift was between two boxes. A box-shadow is painted
+from the element's own border box, so concentric is the only geometry it
+can have.
 
-**A THUMB TARGET CANNOT BE AN OVERLAY IN BOTH AXES ONCE TWO CONTROLS SIT
-SIDE BY SIDE.** The kebab was last on the line with nothing to its
-right, so it bought a 44px target from a transparent `::after` that
-reached sideways for free. Pin and close are neighbours, so an overlay
-reaching sideways lands on the other control and a user aiming at pin
-closes the session. `client/css/session-row-inline-controls.css` splits
-it: WIDTH grows on the real box (36px, two of which cannot overlap) and
-HEIGHT on the overlay (44px, costing the row no pixels), at cozy and
-detailed only - a 24px compact row would steal its neighbours' taps.
+**ONE LIT DIAMETER FOR EVERY STATE**, and no per-state rule may touch a
+geometry token. The halo used to be sized per state, so the LIT object
+came out at three different diameters (9.0, about 14.7 and 15.3px) and
+only the two loud ones were visible - in a sidebar where one session is
+working and the rest are at rest, that paints one dot 60 percent wider
+than its neighbours, which is what the owner reported. Under the
+one-element composition the five geometry numbers are declared once and
+never overridden, so the rule holds by construction rather than by every
+state remembering to agree. `unread` is the state that used to break it.
 
-**AND THE NAME HAD TO BE PAID FOR OUT OF SOMETHING.** Measured in
-Chromium at a 330px viewport, where the sidebar is 85vw: the name column
-fell to 81.9px on a live row and **22.6px on a DEAD one**, which carries
-three controls, rendering "Punchlist Test" as "P...". The ownership
-badge is 58px of that line and is the most redundant glyph on the row -
-the builder already drops it outright at compact density - so it is
-hidden under `(pointer: coarse) and (max-width: 420px)`. That is a
-display rule, not a removal: the badge stays in the markup. Result,
-measured: live 125.5px (the kebab layout gave 117.9), dead 81.5px, row
-height unchanged at 46px, no horizontal scroll.
+`idle` (read, at rest) has its own grey fill, `--led-color-idle`, and
+sits under a still ring in that same grey, so opening a tab reads as
+visibly calmer than leaving it unread - a green ring becoming a grey one
+AND a recessed centre becoming a solid grey dot, two changes rather than
+one. See `docs/session-status.md`.
+
+**THE ROW'S CONTROLS LIVE IN A KEBAB MENU, AND RESTART IS ONE OF THEM.**
+They were folded into a per-row three-dot kebab in `cddc823`; one line of
+this project unfolded them again on 2026-09-08 back to inline pin and
+close, deleting `client/js/session-row-menu.js`, its gesture module and
+`session-row-menu.css`, and removing restart from a live row along with
+them. **That was not taken, 2026-09-09.** The kebab stays, right-click
+and long-press still open it, and `data-row-status` stays ON THE KEBAB,
+which is where `session-sidebar-clicks.js` reads it to hand the restart
+picker a measured status. THOSE TWO FILES GO THE SAME WAY OR THE MERGE
+COMPILES AND LIES: point the read at the row while the kebab is what
+carries the attribute and `runRestart` gets `null`, so every restart
+reports "unknown" instead of what was measured. Nothing throws; the
+picker just stops knowing anything.
+
+Keeping the menu also keeps the two things its removal would have cost,
+both of which were named honestly on the branch that removed it: FILING A
+SESSION INTO A GROUP keeps a pointer route (the picker still opens on `g`
+over a focused row, on Alt+Arrow across a band edge, and by dragging onto
+a group header, but on a phone the menu entry is the only one of those a
+thumb can reach), and RESTARTING A LIVE SESSION stays reachable, which is
+gate 1 under "Replacing what is running".
+
+**THE GROUP HEADER IS OURS TOO**: a fixed `--sidebar-gutter` span holding
+the count FIRST so every group name starts at the same x, the count as
+accent-coloured tabular-nums text rather than an oval pill, a kebab on
+the pinned and other bands as well as on named groups so the menu column
+is a straight line, and no numeric unread badge - the roll-up LED carries
+the same finished-turn ring the rows do, and two indicators for one fact
+is how they end up disagreeing.
 
 ## The transcript archive the app maintains
 
@@ -1393,6 +1823,11 @@ distribution mechanism and has to be run once per clone.
 counts as a secret, shared with the transcript message model. Add a detector
 there and a case to `tests/test_secret_detectors.py`; never write a second set
 of patterns. No matched value is ever printed, logged or stored, by any path.
+
+The hook runs a second gate after that scanner passes: gitleaks, against the
+same `.gitleaks.toml` config CI runs. Installed via Homebrew on mac-mini-m4
+(version 8.30.1, matching the version CI pins). A missing gitleaks binary does
+not refuse the commit, it prints a NOTE that the second gate did not run.
 
 Audit the tree with `./venv/bin/python3 scripts/scan_secrets.py`. Exit 2 means
 could-not-scan and is not a pass. Full detail in `docs/secret-scanning.md`.
@@ -1620,3 +2055,35 @@ exactly once, sits inside a `(min-width: 769px)` block, and carries
    read the code; a confidently wrong one sends it to write a bug. If you change
    behavior this file describes, update this file in the same change. If you find
    a claim here that reality contradicts, fix it and say so in the commit.
+9. **A bare `await requestAnimationFrame` never resolves in a hidden tab.**
+   A browser does not paint a backgrounded tab, so it never runs that
+   tab's rAF callbacks; anything awaiting one hangs there permanently, not
+   just slowly. `waitForFontsAndLayout()` suspended `connectWebSocket()`
+   before it ever opened a socket, and two other call sites
+   (`reconnectToExistingSession`, the adopt path) carried their own copies
+   of the same bare wait, so fixing the first one alone changed nothing -
+   only a live re-check in an actually-backgrounded tab caught the other
+   two. Anything that must happen for a background tab (a websocket
+   connect, a state clear, a save) must not wait on a frame; race it
+   against a timer instead, the way `client/js/terminal-layout-wait.js`
+   does, so the wait can delay the work but never cancel it.
+10. **A synthetic hook aimed at a row id can set a tracker flag the pane's
+    own claude can never clear, when that claude holds an adopted id.**
+    `cloude_Media_Compression`'s pane process presents
+    `CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression` on every real
+    hook it fires, because tmux fixed that env var into the process at
+    spawn and cannot rewrite a running one. A test's synthetic
+    `PermissionRequest` landed on `ses_949a8585` instead - the id
+    `tmux show-environment` hands back, and the one a script naturally
+    reads - with no `toast_session_id_remapped` line, because the toast
+    path only remaps when it recognizes the split; every REAL clearing
+    hook from that pane kept arriving under the adopted id and clearing a
+    key nothing was set on. The row painted `question` over a pane with no
+    dialog open, indefinitely. The fix in `dfddbdc` does not chase a
+    second remap: it re-verifies an open `permission_open` against the
+    PANE itself once it has sat open past 20 seconds, on the theory that
+    two ids can drift apart but the pane cannot lie about its own screen.
+    Any new tracker flag keyed on a session id needs the same question
+    asked of it: can this id and the pane's own id ever diverge, and if
+    they do, is there a way back to ground truth that does not depend on
+    either id being the right one.

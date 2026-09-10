@@ -149,16 +149,10 @@ ok(!/const renamePencil = s\.session_id\s*\n?\s*\?/.test(js),
     + 'reported bug');
 ok(/running-session-rename-unavailable/.test(js),
     'the unavailable pencil state is gone, so the control is being omitted again');
-// The receiver is not pinned - the verdict moved into `_renameVerdict`
-// so the pencil and the row's three-dot menu answer from one rule - but
-// the TEST is: `== null`, never a truthiness check.
-ok(/created_by_cloude == null/.test(js),
-    'ownership is being tested truthily; `!created_by_cloude` folds a '
+ok(/s\.created_by_cloude == null/.test(js),
+    'ownership is being tested truthily; `!s.created_by_cloude` folds a '
     + 'genuine null (server_status.py ships one) into "external" and '
     + 'invents an answer the datastore never gave');
-ok(/_renameVerdict\(s\)/.test(js),
-    'the pencil must read the shared verdict, or it can disagree with the '
-    + "menu's rename item about the same session");
 ok(/CANNOT DETERMINE/.test(js),
     'the third outcome is not named anywhere in the rename affordance');
 ok(/aria-disabled="true"/.test(js),

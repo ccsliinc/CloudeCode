@@ -54,7 +54,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 #: The record type Claude Code appends when a conversation is renamed,
 #: from ``/rename`` in the TUI or from a headless ``claude -p --resume``
@@ -89,6 +89,25 @@ CUSTOM_TITLE_NO_RECORD: str = "no_record"
 #: The file could not be read at all: absent, unreadable, or a path that
 #: is not a file. Never treated as an absence.
 CUSTOM_TITLE_UNREADABLE: str = "unreadable"
+
+# ---------------------------------------------------------------------
+# THE GENERIC TAIL READ. Extracted 2026-09-08 so there is exactly ONE
+# bounded reader of a transcript in this codebase. It was fused to the
+# custom-title scan when it was the only caller; a second caller
+# (``session_status_seed_read``, which needs the LAST RECORD rather than
+# the newest title) arrived, and rebuilding the window/clamp/partial-line
+# handling beside it would have been two readers to keep in step. The
+# bound, and the reasoning for it, are unchanged - see the module
+# docstring.
+# ---------------------------------------------------------------------
+
+#: The window was read. ``records`` holds every json object parsed out of
+#: it, oldest first, and may legitimately be empty.
+TAIL_READ_OK: str = "ok"
+
+#: The file could not be read at all. NEVER a synonym for an empty
+#: window: one is "could not look", the other is "looked, found nothing".
+TAIL_READ_UNREADABLE: str = "unreadable"
 
 # ---------------------------------------------------------------------
 # Application outcomes.
@@ -177,6 +196,140 @@ class TitleApplication:
     detail: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class TranscriptTailRead:
+    """The json records in a bounded window at the end of one transcript.
+
+    Description: the return of :func:`read_tail_records`. Frozen because
+      it reports a measurement of a file, not a plan.
+
+      - ``status``: :data:`TAIL_READ_OK` or :data:`TAIL_READ_UNREADABLE`.
+      - ``records``: every json OBJECT parsed out of the window, oldest
+        first. Empty on an unreadable file, and legitimately empty on a
+        readable one that holds no parseable object.
+      - ``file_size``: the file's size in bytes at read time.
+      - ``scanned_from``: the byte offset the read actually started at,
+        so the cost of a pass is inspectable rather than assumed.
+      - ``detail``: a plain sentence naming why, on the unreadable path.
+    Inputs: n/a.
+    Output: n/a (data holder).
+    """
+
+    status: str
+    records: Tuple[dict, ...] = ()
+    file_size: int = 0
+    scanned_from: int = 0
+    detail: Optional[str] = None
+
+    @property
+    def readable(self) -> bool:
+        """True only when the window was actually read.
+
+        Description: the one-line test a caller may build a refusal on,
+          so "an empty window" and "could not look" cannot be confused.
+        Inputs: n/a.
+        Output: bool.
+        Example: read_tail_records(p).readable
+        """
+        return self.status == TAIL_READ_OK
+
+
+def read_tail_records(
+    path: Optional[str],
+    *,
+    from_offset: int = 0,
+    tail_bytes: int = DEFAULT_TAIL_BYTES,
+) -> TranscriptTailRead:
+    """Every json record in the last ``tail_bytes`` of a transcript.
+
+    Description: reads AT MOST ``tail_bytes`` from the end of the file,
+      never the whole thing - see the module docstring for why that is a
+      bound rather than a tuning knob. ``from_offset`` moves the start
+      FORWARD only: the read begins at ``max(from_offset, size -
+      tail_bytes)``, so passing a previous pass's ``file_size`` makes a
+      steady-state pass read only what was appended since, while a file
+      that grew by more than ``tail_bytes`` still reads only the last
+      ``tail_bytes``. A shrunken or replaced file is handled by the same
+      clamp rather than by a special case.
+
+      The window's first line is dropped when the read did not start at
+      byte 0, because a mid-file start almost certainly lands inside a
+      line and half a json object is not a record. Any line that does not
+      parse is skipped in silence - a transcript is append-only and its
+      last line is routinely a partial write by a process still running,
+      which is a normal condition here and not an error worth logging.
+
+      NEVER RAISES. Every filesystem failure becomes
+      :data:`TAIL_READ_UNREADABLE` with a sentence, because both callers
+      run on paths where an exception would cost a live session its
+      status or its name.
+    Inputs: path (str | None) - the transcript jsonl. from_offset (int) -
+      a byte offset already consumed; only ever moves the start forward.
+      tail_bytes (int) - the hard cap on how much is read.
+    Output: TranscriptTailRead.
+    Example:
+      read_tail_records('/x/abc.jsonl').records[-1]['type'] -> 'system'
+    """
+    if not path:
+        return TranscriptTailRead(
+            TAIL_READ_UNREADABLE,
+            detail="no transcript path was given, so nothing was read",
+        )
+
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        return TranscriptTailRead(
+            TAIL_READ_UNREADABLE,
+            detail=f"the transcript could not be measured: {exc.strerror or exc}",
+        )
+
+    start = max(0, min(int(from_offset or 0), size), size - max(1, int(tail_bytes)))
+    # ``min`` before ``max`` so a from_offset past the end of a truncated
+    # file cannot produce a negative or out-of-range start.
+    start = min(start, size)
+
+    try:
+        with open(path, "rb") as handle:
+            if start:
+                handle.seek(start)
+            window = handle.read()
+    except OSError as exc:
+        return TranscriptTailRead(
+            TAIL_READ_UNREADABLE,
+            file_size=size,
+            scanned_from=start,
+            detail=f"the transcript could not be read: {exc.strerror or exc}",
+        )
+
+    lines = window.split(b"\n")
+    if start > 0 and lines:
+        # A mid-file start lands inside a line. Half a record is not a
+        # record, so it is dropped rather than parsed hopefully.
+        lines = lines[1:]
+
+    records: list = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            # A partial trailing line from a live writer, or a line the
+            # window cut in half. Normal here; see the docstring.
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+
+    return TranscriptTailRead(
+        TAIL_READ_OK,
+        records=tuple(records),
+        file_size=size,
+        scanned_from=start,
+    )
+
+
 def read_newest_custom_title(
     path: Optional[str],
     *,
@@ -213,57 +366,19 @@ def read_newest_custom_title(
     Example:
       read_newest_custom_title('/x/abc.jsonl').title -> 'Punchlist'
     """
-    if not path:
+    read = read_tail_records(
+        path, from_offset=from_offset, tail_bytes=tail_bytes
+    )
+    if not read.readable:
         return CustomTitleRead(
             CUSTOM_TITLE_UNREADABLE,
-            detail="no transcript path was given, so nothing was read",
+            file_size=read.file_size,
+            scanned_from=read.scanned_from,
+            detail=read.detail,
         )
-
-    try:
-        size = os.path.getsize(path)
-    except OSError as exc:
-        return CustomTitleRead(
-            CUSTOM_TITLE_UNREADABLE,
-            detail=f"the transcript could not be measured: {exc.strerror or exc}",
-        )
-
-    start = max(0, min(int(from_offset or 0), size), size - max(1, int(tail_bytes)))
-    # ``min`` before ``max`` so a from_offset past the end of a truncated
-    # file cannot produce a negative or out-of-range start.
-    start = min(start, size)
-
-    try:
-        with open(path, "rb") as handle:
-            if start:
-                handle.seek(start)
-            window = handle.read()
-    except OSError as exc:
-        return CustomTitleRead(
-            CUSTOM_TITLE_UNREADABLE,
-            file_size=size,
-            scanned_from=start,
-            detail=f"the transcript could not be read: {exc.strerror or exc}",
-        )
-
-    lines = window.split(b"\n")
-    if start > 0 and lines:
-        # A mid-file start lands inside a line. Half a record is not a
-        # record, so it is dropped rather than parsed hopefully.
-        lines = lines[1:]
 
     newest: Optional[str] = None
-    for raw in lines:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            record = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
-            # A partial trailing line from a live writer, or a line the
-            # window cut in half. Normal here; see the docstring.
-            continue
-        if not isinstance(record, dict):
-            continue
+    for record in read.records:
         if record.get("type") != CUSTOM_TITLE_RECORD_TYPE:
             continue
         value = record.get(CUSTOM_TITLE_FIELD)
@@ -273,8 +388,8 @@ def read_newest_custom_title(
     if newest is None:
         return CustomTitleRead(
             CUSTOM_TITLE_NO_RECORD,
-            file_size=size,
-            scanned_from=start,
+            file_size=read.file_size,
+            scanned_from=read.scanned_from,
             detail=(
                 "the tail of the transcript holds no custom-title "
                 "record, so claude has not renamed this conversation "
@@ -285,8 +400,8 @@ def read_newest_custom_title(
     return CustomTitleRead(
         CUSTOM_TITLE_FOUND,
         title=newest,
-        file_size=size,
-        scanned_from=start,
+        file_size=read.file_size,
+        scanned_from=read.scanned_from,
     )
 
 

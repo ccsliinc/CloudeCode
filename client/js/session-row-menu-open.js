@@ -264,10 +264,17 @@ console.log('[SessionRowMenuOpen Module] Loading...');
      *   Opening closes whatever was open first, so there is never a
      *   second menu on screen, and captures the row's identity ONCE. The
      *   panel is built from that snapshot and never re-reads the row.
-     * Inputs: trigger (Element) - a rendered `[data-row-menu]` button.
+     * Inputs:
+     *   trigger (Element) - a rendered `[data-row-menu]` button.
+     *   opts (object|null) - optional `{point: {x, y}}`. When given the
+     *     panel is placed AT THAT POINT instead of against the trigger,
+     *     which is what keeps a right-click and a long-press opening
+     *     where the user actually pressed. The trigger is still the
+     *     identity and the focus-return target; only the geometry moves.
+     *     See client/js/session-row-menu-gestures.js.
      * Output: boolean - whether a menu is now open.
      */
-    function open(trigger) {
+    function open(trigger, opts) {
         close({ restoreFocus: false });
         var menu = window.SessionRowMenu;
         if (!trigger || !menu) return false;
@@ -288,7 +295,14 @@ console.log('[SessionRowMenuOpen Module] Loading...');
         openCtx = ctx;
         trigger.setAttribute('aria-expanded', 'true');
         clampHeight(panel);
-        if (window.AnchorPopover) window.AnchorPopover.place(panel, trigger);
+        var point = (opts && opts.point) || null;
+        if (window.AnchorPopover) {
+            if (point && typeof window.AnchorPopover.placeAt === 'function') {
+                window.AnchorPopover.placeAt(panel, point.x, point.y);
+            } else {
+                window.AnchorPopover.place(panel, trigger);
+            }
+        }
 
         panel.addEventListener('click', function (e) {
             var itemEl = e.target.closest

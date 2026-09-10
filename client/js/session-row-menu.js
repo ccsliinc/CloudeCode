@@ -68,76 +68,15 @@ console.log('[SessionRowMenu Module] Loading...');
     var REASON_CLASS = 'session-row-menu__reason';
 
     /**
-     * The five items, in render order, each with the letter that runs it.
-     *
-     * ``enabled`` and ``reason`` take the captured context and answer for
-     * THAT row. ``reason`` is only consulted when ``enabled`` is false,
-     * and must return a sentence a user can act on, never a code.
-     *
-     * ``separatorBefore`` is true on exactly one item. Close is the only
-     * destructive entry here and it sits apart from the four that are
-     * not, so a mis-aimed keystroke or thumb lands on empty space rather
-     * than on the control that kills a process.
+     * The eight items, in render order. LIFTED OUT to
+     * client/js/session-row-menu-items.js for the 500-line rule; see that
+     * file for the table itself and for why each item is shaped as it is.
+     * Re-exported below as `SessionRowMenu.ITEMS`, unchanged, so nothing
+     * that reads it had to move.
      * @type {Array<object>}
      */
-    var ITEMS = [
-        {
-            id: 'rename',
-            shortcut: 'R',
-            separatorBefore: false,
-            label: function () { return 'rename'; },
-            enabled: function (ctx) { return !!ctx.renameable; },
-            reason: function (ctx) {
-                return ctx.renameReason
-                    || 'cannot rename: this session has no live backend to send the change to';
-            },
-        },
-        {
-            id: 'fork',
-            shortcut: 'F',
-            separatorBefore: false,
-            label: function () { return 'fork session'; },
-            enabled: function (ctx) { return !!ctx.forkable; },
-            reason: function (ctx) {
-                return ctx.forkReason
-                    || 'cannot fork: cloudecode did not create this session, so it '
-                    + 'has no recorded conversation to branch from';
-            },
-        },
-        {
-            id: 'new-in-folder',
-            shortcut: 'N',
-            separatorBefore: false,
-            label: function () { return 'new session in folder'; },
-            // ALWAYS OFFERED, and that is a measured choice rather than
-            // an oversight. The folder is read from the stored session
-            // record when the item is ACTIVATED, not when the row is
-            // painted, so at paint time nothing here knows whether one
-            // will be found. Painting it disabled would be a claim
-            // nobody checked; a lookup that comes back empty says so
-            // then, naming the session it could not place.
-            enabled: function () { return true; },
-            reason: function () { return ''; },
-        },
-        {
-            id: 'mute',
-            shortcut: 'M',
-            separatorBefore: false,
-            label: function (ctx) {
-                return ctx.muted ? 'unmute notifications' : 'mute notifications';
-            },
-            enabled: function () { return true; },
-            reason: function () { return ''; },
-        },
-        {
-            id: 'close',
-            shortcut: 'C',
-            separatorBefore: true,
-            label: function () { return 'close session'; },
-            enabled: function () { return true; },
-            reason: function () { return ''; },
-        },
-    ];
+    var ITEMS = (window.SessionRowMenuItems
+        && window.SessionRowMenuItems.ITEMS) || [];
 
     /**
      * Description: HTML-escape for an attribute, routed through
@@ -222,13 +161,37 @@ console.log('[SessionRowMenu Module] Loading...');
         var owned = !!row.created_by_cloude;
         var sid = row.session_id || null;
         var forkable = owned && !!row.name;
+        var status = row.status || 'unknown';
+        // DERIVED, NEVER RE-LISTED. SessionRowActions.actionsFor is the
+        // one place that decides which controls a status gets, so asking
+        // it is what keeps decision 3's live-row restart and this menu
+        // from drifting apart. No module here keeps a second status list.
+        var actions = (window.SessionRowActions
+            && typeof window.SessionRowActions.actionsFor === 'function')
+            ? window.SessionRowActions.actionsFor(status)
+            : [];
+        var restartable = actions.indexOf(
+            window.SessionRowActions ? window.SessionRowActions.ACTION_RESTART : 'restart'
+        ) !== -1;
+        // ASK THE ONE GATE rather than reading the flag again. An empty
+        // return is how markUnreadHtml hides the control everywhere, so
+        // an empty return is how this item disappears too.
+        var markUnreadAvailable = !!(window.SessionStatusUI
+            && typeof window.SessionStatusUI.markUnreadHtml === 'function'
+            && window.SessionStatusUI.markUnreadHtml(row.name || '', false) !== '');
+        var groupable = (o.surface || 'sidebar') === 'sidebar'
+            && !!window.SessionSidebarGroupActions;
         return {
             name: row.name || '',
             label: (row.label != null && String(row.label)) || '',
             sessionId: sid,
             surface: o.surface || 'sidebar',
             owned: owned,
-            status: row.status || 'unknown',
+            status: status,
+            unread: !!row.unread,
+            restartable: restartable,
+            markUnreadAvailable: markUnreadAvailable,
+            groupable: groupable,
             renameable: !!o.renameable,
             renameReason: o.renameReason || '',
             forkable: forkable,
@@ -264,6 +227,10 @@ console.log('[SessionRowMenu Module] Loading...');
             + 'data-row-menu-surface="' + esc(c.surface) + '" '
             + 'data-row-menu-owned="' + (c.owned ? '1' : '0') + '" '
             + 'data-row-menu-status="' + esc(c.status) + '" '
+            + 'data-row-menu-unread="' + (c.unread ? '1' : '0') + '" '
+            + 'data-row-menu-restartable="' + (c.restartable ? '1' : '0') + '" '
+            + 'data-row-menu-mark-unread="' + (c.markUnreadAvailable ? '1' : '0') + '" '
+            + 'data-row-menu-groupable="' + (c.groupable ? '1' : '0') + '" '
             + 'data-row-menu-renameable="' + (c.renameable ? '1' : '0') + '" '
             + 'data-row-menu-rename-reason="' + esc(c.renameReason) + '" '
             + 'data-row-menu-forkable="' + (c.forkable ? '1' : '0') + '" '
@@ -294,6 +261,10 @@ console.log('[SessionRowMenu Module] Loading...');
             surface: attr('data-row-menu-surface') || 'sidebar',
             owned: attr('data-row-menu-owned') === '1',
             status: attr('data-row-menu-status') || 'unknown',
+            unread: attr('data-row-menu-unread') === '1',
+            restartable: attr('data-row-menu-restartable') === '1',
+            markUnreadAvailable: attr('data-row-menu-mark-unread') === '1',
+            groupable: attr('data-row-menu-groupable') === '1',
             renameable: attr('data-row-menu-renameable') === '1',
             renameReason: attr('data-row-menu-rename-reason'),
             forkable: attr('data-row-menu-forkable') === '1',
@@ -310,7 +281,11 @@ console.log('[SessionRowMenu Module] Loading...');
      */
     function itemsFor(ctx) {
         var c = ctx || {};
-        return ITEMS.map(function (item) {
+        return ITEMS.filter(function (item) {
+            // An item with no `available` predicate is always rendered,
+            // so a new entry cannot vanish by forgetting to write one.
+            return typeof item.available !== 'function' || !!item.available(c);
+        }).map(function (item) {
             var ok = !!item.enabled(c);
             return {
                 id: item.id,

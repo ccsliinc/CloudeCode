@@ -125,7 +125,10 @@ def test_a_pane_on_the_trust_dialog_is_awaiting_a_keypress(live: RealHookApp) ->
         "trust dialog",
         want_status=("idle", "unknown", "running", "working"),
         want_inner=("waiting-input",),
-        want_outer=("active",),
+        # 2026-09-09: STEADY, not breathing. A pane parked on its trust
+        # dialog is a live turn that is not moving, and the ring means
+        # activity - see docs/session-status.md.
+        want_outer=("steady",),
         want_gate=("awaiting_startup_prompt",),
         timeout=50.0,
     )
@@ -160,8 +163,11 @@ def test_answering_the_dialog_fires_session_start_and_opens_the_gate(
         live,
         "SessionStart",
         want_status=("idle", "unknown"),
-        want_inner=("done", "unknown"),
-        want_outer=("steady", "dim"),
+        # 2026-09-09: `idle` (read, at rest) got its own inner state and
+        # dropped the `done` green fill it used to share with
+        # `finished_unread` - see docs/session-status.md.
+        want_inner=("idle", "unknown"),
+        want_outer=("off", "dim"),
         want_gate=("ready",),
     )
 
@@ -179,10 +185,10 @@ def test_a_real_turn_with_tool_calls_paints_working(live: RealHookApp) -> None:
         "UserPromptSubmit+tools",
         want_status=("working", "working_subagent"),
         want_inner=("working",),
-        # `active` ONLY since the 2026-09-08 five-colour pass. A working
-        # session no longer takes the unread halo: that halo is now the
-        # green finished-turn ring, and a ring saying a turn ended around
-        # a session that is mid-turn is two contradictory claims.
+        # `active` ONLY, and it no longer varies with the unread flag: a
+        # working session is working. The unread ring is the green
+        # finished-turn one, and a ring saying a turn ENDED around a
+        # session that is mid-turn is two contradictory claims.
         want_outer=("active",),
         timeout=60.0,
     )
@@ -196,13 +202,16 @@ def test_a_real_turn_with_tool_calls_paints_working(live: RealHookApp) -> None:
 def test_a_real_stop_with_nobody_viewing_paints_finished_unread(
     live: RealHookApp,
 ) -> None:
-    """``Stop`` sets the auto-unread flag, and the halo has to show it."""
+    """``Stop`` sets the auto-unread flag, and the DOT has to show it."""
     await_state(
         live,
         "Stop (unviewed)",
         want_status=("finished_unread",),
+        # 2026-09-09: the green dot is the whole signal. It used to
+        # breathe an amber ring, which read as background work on the one
+        # state that means the opposite.
         want_inner=("done",),
-        want_outer=("unread",),
+        want_outer=("off",),
         timeout=180.0,
     )
     assert "Stop" in live.ledger.events(live.session_id), (
@@ -273,7 +282,7 @@ def test_a_trailing_subagent_stop_does_not_re_arm_the_heartbeat(
         f"  led:        {led}\n"
         f"  hooks seen: {live.ledger.describe()}"
     )
-    assert led["inner"] == "done" and led["outer"] == "unread", (
+    assert led["inner"] == "done" and led["outer"] == "off", (
         f"the light disagrees with the status it was given: {led} from "
         f"{observed}"
     )
@@ -284,16 +293,20 @@ def test_a_trailing_subagent_stop_does_not_re_arm_the_heartbeat(
 # =========================================================================== #
 
 
-def test_binding_a_terminal_clears_the_unread_halo(live: RealHookApp) -> None:
+def test_binding_a_terminal_clears_the_unread_light(live: RealHookApp) -> None:
     """A WS terminal binding is the ONLY thing that clears auto-unread.
 
-    The assertion is about the HALO, which is what binding a terminal is
-    responsible for. It also now asserts that the dot lands on ``idle``,
-    because that is the state punchlist item 4 made UNREACHABLE: with the
-    trailing ``SubagentStop`` re-arming the heartbeat, clearing the unread
-    halo revealed ``working`` underneath for the rest of the 120s window
-    rather than a session at rest. Reaching ``idle`` here is the live
-    proof of the fix the previous test asserts against the event.
+    The assertion is about BOTH RINGS, which is what the owner's
+    2026-09-09 ruling makes observable: unread is the green ``unread``
+    ring around a ``done`` centre, read is the grey ``idle`` dot under a
+    ``steady`` ring. Both change, so a half-applied clear cannot pass. It
+    also
+    asserts the status itself lands on ``idle``, because that is the state
+    punchlist item 4 made UNREACHABLE: with the trailing ``SubagentStop``
+    re-arming the heartbeat, clearing the flag revealed ``working``
+    underneath for the rest of the 120s window rather than a session at
+    rest. Reaching ``idle`` here is the live proof of the fix the previous
+    test asserts against the event.
     """
     before = live.signals()
     assert before.get("unread") is True, (
@@ -305,25 +318,28 @@ def test_binding_a_terminal_clears_the_unread_halo(live: RealHookApp) -> None:
     def cleared(observed: dict[str, Any]) -> bool:
         return (
             observed.get("unread") is False
-            and led_state_for(observed)["outer"] != "unread"
+            and led_state_for(observed)["inner"] != "done"
         )
 
     matched, observed = poll_until(live.signals, cleared, timeout=30.0)
     led = led_state_for(observed or {})
     record("terminal bound", observed or {}, led)
     assert matched, (
-        "binding a WS terminal did not clear the unread halo.\n"
+        "binding a WS terminal did not clear the unread light.\n"
         f"  last signals: {observed}\n"
         f"  hooks seen:   {live.ledger.describe()}"
     )
     assert (observed or {}).get("activity_status") == "idle", (
-        "the halo cleared but the dot did not reach idle, which is what "
+        "the flag cleared but the dot did not reach idle, which is what "
         "punchlist item 4 made unreachable.\n"
         f"  last signals: {observed}\n"
         f"  last led:     {led}\n"
         f"  hooks seen:   {live.ledger.describe()}"
     )
-    assert led["inner"] == "done" and led["outer"] == "steady", (
+    assert led["inner"] == "idle" and led["outer"] == "steady", (
+        # 2026-09-09: `idle` is its own grey inner state and the ring goes
+        # from green to that same grey, still and lit. See
+        # docs/session-status.md and client/js/status-led.js.
         f"the light disagrees with the status it was given: {led} from "
         f"{observed}"
     )
@@ -366,6 +382,8 @@ def test_a_real_permission_request_paints_the_waiting_state(
         # is light blue (it is not), and a startup prompt landing here
         # would be `waiting-input`. See client/js/status-led.js.
         want_inner=("waiting-permission", "waiting-input", "notice"),
+        # The turn is still OPEN, so the ring breathes. Only a resting
+        # session stops moving.
         want_outer=("active",),
     )
 
@@ -418,28 +436,37 @@ def test_a_bogus_token_is_refused_and_moves_nothing(live: RealHookApp) -> None:
 # =========================================================================== #
 
 
-def test_a_killed_pane_paints_dead_rather_than_leaving_the_live_list(
+def test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead(
     live: RealHookApp,
 ) -> None:
-    """MEASURED, and it is now what the LED vocabulary always implied.
+    """THE OWNER'S DECISION, NOT A DEFECT CHARACTERISATION. Verbatim,
+    2026-09-08: "they go into recent, they can disappear."
 
-    THIS TEST USED TO ASSERT THE OPPOSITE, and the docstring it carried
-    said so out loud: ``_session_info_for`` ran ``resolve_listing_liveness``
-    and DROPPED the row on ``LIVENESS_GONE``, ``/sessions/attachable``
-    filters out every name bound to a live backend, and so a killed pane
-    VANISHED off both live surfaces. ``ledStateFor``'s ``dead``/``off``
-    and ``actionsFor('dead')``'s restart + remove existed the whole time
-    and were unreachable from live data.
+    So a session whose process was killed DROPS OFF THE LIVE LIST. Its
+    lifecycle has stopped and it belongs in Recent, where a restart is a
+    resume; it does not linger in the sidebar wearing a dead light. The
+    ``dead``/``off`` state in ``ledStateFor`` is real and stays, but it is
+    GALLERY-ONLY - no live endpoint is meant to carry a dead row to the
+    client, and this test is what holds that line.
 
-    ``src/core/session_liveness.py`` split that one verdict into
-    ``pane_dead`` and ``session_gone``. THIS IS THE ``pane_dead`` CASE:
-    ``kill_agent`` SIGKILLs the pane's PROCESS, and ``remain-on-exit``
-    keeps the pane - which is also what makes ``respawn-pane`` able to
-    revive it. So the row stays where the user left it, saying ``dead``,
-    offering restart and remove, until the user acts.
-    ``kill_session`` is the other mode and the other case.
+    An earlier round read the same measurement as a bug and shipped the
+    opposite rule (a husk KEPT its row, painted dead). That was overruled
+    and reverted. If you are here because this assertion is in your way,
+    the answer is not to loosen it: it encodes a product decision, so
+    changing it needs the owner, not a patch.
 
-    A ROW THAT DISAPPEARS IS WORSE THAN A ROW THAT SAYS DEAD.
+    THE KNOWN GAP, AND IT IS DELIBERATELY OBSERVED RATHER THAN ASSERTED.
+    ``kill_agent`` SIGKILLs the process and ``remain-on-exit`` holds the
+    pane open, so the tmux SESSION is still there and still appears in the
+    listing the reaper works from - and ``session_lifecycle`` reaps on
+    ABSENCE from that listing. The row therefore leaves the live list
+    without yet arriving in Recent. That is the second half of the owner's
+    decision and it is not built; it needs a reaper rung keyed on a
+    MEASURED ``#{pane_dead}``, which is a new durable writer and its own
+    change. The recent-list membership is RECORDED below so a run says
+    what it was, and deliberately not asserted in either direction:
+    asserting absence would pin the gap open, and asserting presence would
+    fail a build for work nobody has done yet.
     """
     assert live.row() is not None, (
         "the session had already left /sessions/list before it was killed, "
@@ -447,59 +474,39 @@ def test_a_killed_pane_paints_dead_rather_than_leaving_the_live_list(
     )
     live.kill_agent()
 
-    signals = await_state(
-        live,
-        "pane killed",
-        want_status=("dead",),
-        want_inner=("dead",),
-        want_outer=("off",),
-        timeout=30.0,
+    gone, last = poll_until(live.row, lambda row: row is None, timeout=30.0)
+    assert gone, (
+        "a pane whose process was SIGKILLed is still being listed as live "
+        f"after 30s: {last}\npane tail:\n{live.pane_tail(6)}"
     )
-    assert signals["activity_status"] == "dead"
+    record("pane killed", live.signals(), led_state_for(live.signals()))
 
-    # STILL NOT ON /sessions/attachable, and that is correct rather than
-    # a leftover: the session has a live backend registration, so the
-    # route filters it out of the adopt list on purpose. The row reaches
-    # the user through /sessions/list, which is where the sidebar merge
-    # and the launchpad running list both read it from.
     attachable = live._httpx.get("/api/v1/sessions/attachable")
     assert attachable.status_code == 200, attachable.text
     names = {
         row.get("tmux_session") or row.get("name") for row in attachable.json()
     }
     assert live.tmux_name not in names, (
-        "a session with a live backend must not be offered for self-adopt; "
-        f"rows: {names}"
+        "the dead pane reappeared on /sessions/attachable, which would make "
+        "`dead` reachable after all - assert it here instead of asserting "
+        f"its absence. rows: {names}"
     )
 
-
-# =========================================================================== #
-# 9. the tmux session itself going away                                        #
-# =========================================================================== #
-
-
-def test_a_killed_tmux_session_does_leave_the_live_list(
-    live: RealHookApp,
-) -> None:
-    """THE OTHER HALF OF THE SPLIT, and the reason it is a split.
-
-    ``kill_session`` removes the tmux session itself. There is no pane
-    left to paint dead and nothing a respawn could land in, so the row
-    correctly LEAVES ``/sessions/list`` - the behaviour the previous test
-    used to assert for a case where it was wrong.
-
-    RUNS LAST ON PURPOSE. It destroys the module-scoped session, so
-    nothing after it can measure anything.
-    """
-    assert live.row() is not None, (
-        "the row was already gone before the tmux session was killed, so "
-        "this test measured nothing"
+    # THE SECOND HALF OF THE DECISION, observed and printed rather than
+    # asserted - see the docstring. When the reaper learns to file a
+    # measured husk, this prints True and the honest change is to promote
+    # it to an assertion here.
+    recent = live._httpx.get("/api/v1/sessions/recent")
+    in_recent: Any = "unreadable"
+    if recent.status_code == 200:
+        body = recent.json()
+        rows = body if isinstance(body, list) else body.get("sessions", [])
+        in_recent = any(
+            (row.get("tmux_session") or row.get("tmux_name")) == live.tmux_name
+            for row in rows
+            if isinstance(row, dict)
+        )
+    TIMELINE.append(
+        f"    killed pane in /sessions/recent: {in_recent} "
+        f"(HTTP {recent.status_code})"
     )
-    live.kill_session()
-
-    gone, last = poll_until(live.row, lambda row: row is None, timeout=30.0)
-    assert gone, (
-        "a session tmux no longer has is still being listed after 30s: "
-        f"{last}"
-    )
-    record("tmux session killed", {"activity_status": None}, {"inner": None, "outer": None})

@@ -31,13 +31,13 @@
  *                       hook signal at all) tmux reports a non-shell
  *                       foreground process - the old "running".
  *   finished_unread  - a Stop hook landed and nobody has looked since, OR
- *                       the persisted unread flag is set. Since the
- *                       2026-09-08 five-colour pass this is the ONLY
- *                       surviving indicator of it: the manual mark-unread
- *                       envelope was removed from the sidebar and the
- *                       launchpad, and this state now paints a green ring
- *                       around a cleared centre instead. Server-side unread
- *                       TRACKING is untouched.
+ *                       the user manually pinned this session unread for
+ *                       followup. THE LED IS WHAT SAYS SO: since the
+ *                       owner's 2026-09-09 ruling this state paints a
+ *                       still green ring around a recessed centre. The
+ *                       manual toggle that SETS it is a separate thing
+ *                       and still ships, behind
+ *                       `ui.show_mark_unread_control`.
  *   idle             - alive, nothing pending, already seen.
  *   unknown          - status could not be determined (non-tmux backend,
  *                       tmux query failed, or hooks not installed AND
@@ -63,9 +63,15 @@ console.log('[SessionStatusUI Module] Loading...');
         question: 'your turn - claude needs your permission',
         notice: 'your turn - claude wants your attention',
         working_subagent: 'working - a subagent is active',
-        working: 'working - agent active',
-        finished_unread: 'finished - unread',
-        idle: 'idle - waiting at the shell',
+        working: 'working',
+        finished_unread: 'done - unread',
+        // MEASURED 2026-09-09: 15 of 19 live panes were running claude,
+        // not a shell, so "waiting at the shell" was wrong about four
+        // fifths of the sessions it described. `idle` means the light
+        // has nothing to report: the session has been read and nothing
+        // is running in it. It does NOT mean a bare shell, and it never
+        // did - a bare shell is only one of the ways to get here.
+        idle: 'idle - read, nothing running',
         // feat/ended-sessions-visibility. NOT a synonym for `dead`, and
         // the difference is the whole reason it earns a key: `dead` is a
         // tmux session that still EXISTS holding an exited process, so it
@@ -75,14 +81,64 @@ console.log('[SessionStatusUI Module] Loading...');
         // a stored record. Reusing `dead` for it would have told the user
         // to go clear up a pane that does not exist.
         stopped: 'ended - the session is no longer running',
-        unknown: 'status unknown',
+        // NOT MEASURED, not "nothing is happening". The two are
+        // different facts about the world and this is the one that has
+        // to keep saying so out loud.
+        unknown: 'not measured',
         // Back-compat: a stale cached response (pre feat/hook-driven-status
         // server, or a browser tab that hasn't reloaded yet) may still send
         // the old tmux-only 'running' string. Map it onto 'working' rather
         // than falling through to 'unknown' so a half-upgraded deployment
         // still renders something meaningful.
-        running: 'working - agent active',
+        running: 'working',
     };
+
+    /**
+     * How each `status_source` reads in the tooltip.
+     *
+     * Description: PROVENANCE, NEVER STATE. The server resolves where a
+     *   status came from (src/core/session_status_source.py) and this is
+     *   the only place the client renders it. It is appended to the
+     *   label and NOTHING ELSE: no class, no color, no shape. One status
+     *   with two appearances would undo the single vocabulary the light
+     *   rests on, and a user cannot be expected to learn a second colour
+     *   axis that means "how sure are we".
+     *
+     *   'none' is absent on purpose. When nothing measured the status
+     *   there is nothing to credit, and appending "via nothing" reads as
+     *   a fault rather than as the honest silence it is.
+     * @type {Object<string, string>}
+     */
+    const SOURCE_SUFFIX = {
+        hook: 'via hooks',
+        transcript: 'via transcript',
+        seed_row: 'via the session record',
+        tmux: 'via tmux',
+    };
+
+    /**
+     * Label for a status, with its provenance appended when known.
+     *
+     * Description: The ONE composer, so the dot, the LED title and any
+     *   plain-text caller cannot drift on how a source is worded. An
+     *   unknown or missing source returns the bare label unchanged,
+     *   which is exactly what an older server payload produces.
+     * Inputs:
+     *   status (string|null|undefined) - raw activity_status value.
+     *   statusSource (string|null|undefined) - raw status_source value.
+     * Output:
+     *   string - e.g. 'working (via hooks)', or 'working'.
+     * Example:
+     *   labelWithSource('idle', 'transcript')
+     *     -> 'idle - read, nothing running (via transcript)'
+     */
+    function labelWithSource(status, statusSource) {
+        const label = STATUS_LABELS[normalizeStatus(status)];
+        const suffix = Object.prototype.hasOwnProperty.call(
+            SOURCE_SUFFIX, statusSource,
+        ) ? SOURCE_SUFFIX[statusSource] : '';
+        return suffix ? `${label} (${suffix})` : label;
+    }
 
     /**
      * CSS modifier class per status - kept separate from STATUS_LABELS so
@@ -110,7 +166,8 @@ console.log('[SessionStatusUI Module] Loading...');
      *   first or the later replacements would be re-escaped ("<" becoming
      *   "&amp;lt;"). All five characters are handled so the result is
      *   correct inside either quoting style and survives a round trip
-     *   through `element.dataset`.
+     *   through `element.dataset`, which is what the mark-unread handlers
+     *   in launchpad.js and session-sidebar.js read back.
      *
      *   Deliberately string-based rather than the
      *   `div.textContent = s; return div.innerHTML` trick used elsewhere
@@ -177,7 +234,7 @@ console.log('[SessionStatusUI Module] Loading...');
      */
     function dotHtml(status, signals) {
         const key = normalizeStatus(status);
-        const label = STATUS_LABELS[key];
+        const label = labelWithSource(key, (signals || {}).status_source);
         const cssClass = STATUS_DOT_CLASS[key];
 
         // THE LED IS THE INDICATOR NOW, and this is the one seam that
@@ -194,12 +251,14 @@ console.log('[SessionStatusUI Module] Loading...');
         // one, and this is the indicator that tells a user their session
         // is dead.
         //
-        // `signals` carries the three fields the LED needs that a bare
-        // status string cannot express - `unread` (which drives the halo
-        // independently of the dot), `startup_gate` (a separate probe
-        // from the hook stream) and `transport` (whether THIS browser's
+        // `signals` carries the four fields the LED needs that a bare
+        // status string cannot express - `unread` (which drives the
+        // green finished-turn RING; the owner's 2026-09-09 ruling, see
+        // client/js/status-led.js), `startup_gate` (a separate probe
+        // from the hook stream), `transport` (whether THIS browser's
         // socket to the session is up, which no server response can
-        // report - see client/js/session-transport.js). It is optional: a
+        // report - see client/js/session-transport.js) and
+        // `status_source` (provenance, tooltip only). It is optional: a
         // caller that passes nothing gets a correct LED for the status
         // alone, just without the finished-turn ring.
         if (globalThis.StatusLed) {
@@ -253,10 +312,111 @@ console.log('[SessionStatusUI Module] Loading...');
      * Output:
      *   string - human-readable label.
      * Example:
-     *   labelFor('idle') -> 'idle - waiting at the shell'
+     *   labelFor('idle') -> 'idle - read, nothing running'
      */
     function labelFor(status) {
         return STATUS_LABELS[normalizeStatus(status)];
+    }
+
+    /**
+     * Build the markup for the manual "mark unread for followup" toggle.
+     *
+     * Description: A small button, distinct from the status dot, so the
+     *   user can flag a session for later attention regardless of its
+     *   current live activity state. Carries `aria-pressed` (not just a
+     *   CSS class) so the toggled state is exposed to assistive tech, and
+     *   `title`/`aria-label` name the action in words. The caller wires
+     *   the click handler (this module only builds markup); `data-*`
+     *   attributes carry what the handler needs to know which row was
+     *   clicked and its CURRENT state, so the handler can send the
+     *   opposite value without re-querying the DOM.
+     *
+     *   RETURNS '' WHEN `ui.show_mark_unread_control` IS FALSE. The
+     *   owner kept this control and asked for a switch rather than the
+     *   deletion one line of this project shipped; see
+     *   src/config.py::UIConfig. Unread TRACKING and the LED's unread
+     *   ring are unaffected by the flag - only this button goes.
+     * Inputs:
+     *   tmuxName (string) - literal tmux session name (unread is keyed by
+     *     name server-side, not session_id - see PATCH
+     *     /sessions/{name}/unread).
+     *   unread (boolean) - current unread state for this row.
+     * Output:
+     *   string - HTML for a single inline `<span role="button">`.
+     * Example:
+     *   markUnreadHtml('cloude_myproj', false) ->
+     *     '<span class="mark-unread-toggle" role="button" ...>...</span>'
+     */
+    function markUnreadHtml(tmuxName, unread) {
+        // THE ONE GATE, so every surface hides it together. Both callers
+        // (session-sidebar-rows.js and launchpad.js) interpolate this
+        // return value straight into a row's HTML, so an empty string
+        // removes the control from all of them and there is no second
+        // place to remember. `UIFlags` answers the DEFAULT (shown) until
+        // its probe lands and whenever it cannot run at all, so a failed
+        // read never takes the control away - see client/js/ui-flags.js.
+        if (globalThis.UIFlags && !globalThis.UIFlags.showMarkUnreadControl()) {
+            return '';
+        }
+        const label = unread
+            ? 'clear unread flag'
+            : 'mark unread for followup';
+        const pressed = unread ? 'true' : 'false';
+        // tmuxName is the only user-controlled value in this module. A
+        // session name is free text, so it can hold a quote, an angle
+        // bracket, or an ampersand; interpolating it raw put arbitrary
+        // markup into the attribute list. The previous quote-only replace
+        // left `&` alone, which silently corrupted any name containing an
+        // entity-shaped substring on the way back out through
+        // `dataset.markUnread`.
+        const safeName = escapeAttr(tmuxName);
+        return (
+            `<span class="mark-unread-toggle${unread ? ' mark-unread-toggle--active' : ''}" ` +
+            `role="button" tabindex="0" aria-pressed="${pressed}" ` +
+            `title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" ` +
+            `data-mark-unread="${safeName}" data-unread-current="${pressed}">` +
+            `${unread ? envelopeFilledSvg() : envelopeOutlineSvg()}</span>`
+        );
+    }
+
+    /**
+     * Envelope glyph, "not flagged unread" state - a plain outline, same
+     * family as trashIconSvg (16x16 viewBox, stroke="currentColor",
+     * fill="none", stroke-width 1.5). No `stroke` color set on the paths
+     * themselves; the caller's CSS `color` drives the stroke via
+     * currentColor so the icon recolors with the row/theme like every
+     * other control in the app.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   envelopeOutlineSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function envelopeOutlineSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '</svg>'
+        );
+    }
+
+    /**
+     * Envelope glyph, "flagged unread" state - the same envelope outline
+     * plus a solid notification dot in the top-right corner, so the two
+     * states are distinguishable by shape (not color alone).
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   envelopeFilledSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function envelopeFilledSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<circle cx="12.5" cy="3.5" r="2.5" fill="currentColor" stroke="var(--color-bg, #000)" stroke-width="0.75"/>' +
+            '</svg>'
+        );
     }
 
     /**
@@ -417,18 +577,48 @@ console.log('[SessionStatusUI Module] Loading...');
         );
     }
 
+    /**
+     * Archive-box glyph: a lid line over a box outline with a small
+     * handle slot. Same family as pencilIconSvg/trashIconSvg (16x16
+     * viewBox, stroke="currentColor", fill="none", stroke-width 1.5) -
+     * the launchpad's project-row archive control used to draw the
+     * file-cabinet emoji (U+1F5C4) here, a filled, detailed glyph that
+     * did not match the rest of the row's flat stroke icons. This is
+     * the same box already used by the header's message-archive button
+     * (#archiveBtn, index.html), pulled out as a shared function so both
+     * surfaces draw one archive icon rather than two independent copies.
+     * Inputs: none.
+     * Output: string - a self-contained `<svg>` element, 16x16 viewBox.
+     * Example:
+     *   archiveIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
+     */
+    function archiveIconSvg() {
+        return (
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
+            '<rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+            '<path d="M6.5 8.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+            '</svg>'
+        );
+    }
+
     window.SessionStatusUI = {
         escapeAttr,
         normalizeStatus,
         dotHtml,
         labelFor,
+        labelWithSource,
+        markUnreadHtml,
         trashIconSvg,
         closeIconSvg,
         restartIconSvg,
         pencilIconSvg,
+        envelopeOutlineSvg,
+        envelopeFilledSvg,
         folderIconSvg,
         fileIconSvg,
         lockIconSvg,
+        archiveIconSvg,
     };
     console.log('[SessionStatusUI Module] Exported as window.SessionStatusUI');
 })();

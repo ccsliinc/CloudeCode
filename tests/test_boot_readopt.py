@@ -570,6 +570,45 @@ async def test_running_the_pass_twice_holds_each_session_once(
 
 
 @pytest.mark.asyncio
+async def test_a_session_registered_ahead_of_this_pass_still_gets_its_epoch(
+    state_dir, monkeypatch
+):
+    """PT-IMC, measured on live boot 2026-09-08.
+
+    ``SessionManager._lifespan_tmux_reconcile`` - the legacy,
+    metadata-driven reconcile - can register a session's tmux name a
+    fraction of a second before this pass builds its plan.
+    ``plan_readopt`` then skips the name as SKIP_ALREADY_HELD before it
+    ever resolves an epoch for it, and nothing in the legacy path writes
+    ``manager._instance_epochs``. Simulate that race directly: register
+    a session the SAME way the legacy path does (a row in
+    ``manager.sessions``/``manager.backends``, no entry in
+    ``_instance_epochs``) and run this pass over a listing that names the
+    same tmux session.
+    """
+    mgr = SessionManager()
+    name = "cloude_PT-IMC"
+    backend = FakeBackend("ses_legacy", "/tmp", session_name=name)
+    mgr.backends["ses_legacy"] = backend
+    mgr.sessions["ses_legacy"] = Session(id="ses_legacy", working_dir="/tmp")
+    assert "ses_legacy" not in mgr._instance_epochs, (
+        "the legacy path never writes this - that is the whole defect"
+    )
+    install_backends(
+        monkeypatch,
+        discover=TmuxListing.answered([]),
+        attachable=listing_rows((name, EPOCH_A)),
+    )
+
+    report = await readopt_surviving_sessions(mgr)
+
+    assert report.plan.skipped_for(SKIP_ALREADY_HELD) == [name]
+    assert report.held == []
+    assert backend.attach_calls == 0
+    assert mgr._instance_epochs["ses_legacy"] == EPOCH_A
+
+
+@pytest.mark.asyncio
 async def test_one_refused_pane_does_not_take_the_others_down(
     state_dir, monkeypatch
 ):

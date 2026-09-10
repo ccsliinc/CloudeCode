@@ -189,6 +189,15 @@ class ToastManager {
     this.ATTACHMENT_KIND = ATTACHMENT_KIND;
     /** id -> server-shape toast. Insertion-ordered = arrival-ordered. */
     this._byId = new Map();
+    /**
+     * id -> epoch ms this card was first seen HERE. Read only by
+     * `reconcileOpen`, to tell a card the server has closed from one the
+     * server has not heard of yet because it arrived after the poll
+     * snapshot was taken. Injectable clock so the rule is testable
+     * without waiting for one.
+     */
+    this._addedAt = new Map();
+    this._now = () => Date.now();
     /** User expanded the overflow row; the cap is suspended until reset. */
     this._expanded = false;
     /** Set true once the container has had its live-region attrs applied. */
@@ -449,7 +458,78 @@ class ToastManager {
       return;
     }
     this._byId.set(toast.id, toast);
+    // WHEN THIS CARD BECAME OURS. Read by `reconcileOpen` and by nothing
+    // else: a poll response is a SNAPSHOT of the server taken when the
+    // request left, so a card that arrived after that instant is
+    // legitimately absent from it and must not be treated as closed. The
+    // stamp is set only on first sight, so a supersession refreshing the
+    // record in place above does not reset a card's age.
+    this._addedAt.set(toast.id, this._now());
     this._render();
+  }
+
+  /**
+   * Reconcile the local card set against the server's OPEN set, removing
+   * cards the server no longer lists.
+   *
+   * WHY THIS EXISTS. `backfill` only ever ADDS. That was correct while
+   * the only thing that could close a toast was a click in this browser
+   * (which removes the card locally) or a click in another tab (which
+   * arrives as a `toast.ack` frame). Neither is true any more: the
+   * server now closes toasts by itself when a hook says the user turned
+   * up - see src/core/toast_auto_ack.py - and a surface holding no
+   * WebSocket for the raising session has no frame to hear that on. Its
+   * only channel is the poll, and a poll that can only add is a card
+   * that never leaves.
+   *
+   * THE GUARD IS THE MIRROR OF ToastDismissedRing'S. That ring stops a
+   * card the user just dismissed coming BACK from a snapshot taken
+   * before the ack landed. This is the same race pointing the other way:
+   * a `toast.new` frame that arrived AFTER the poll request left is
+   * absent from the response through no fault of its own, and removing
+   * it would delete a card the server does hold. So a card is removed
+   * only when the snapshot is NEWER than the card. A card younger than
+   * the snapshot survives until a later tick can speak to it.
+   *
+   * IT NEVER ACKS. Every id removed here is one the server has already
+   * closed, so syncing an ack back would be a write with nothing to
+   * change, aimed at a record that may belong to a session this browser
+   * is not attached to. Removal is a rendering fact only.
+   *
+   * @param {Array} openToasts - the server's open set, raw (server-shape
+   *   objects or bare ids). NOT the ring-filtered list: an id the ring
+   *   is suppressing is one this browser already dropped, so subtracting
+   *   it from the open set would only make a no-op removal look real.
+   * @param {object} [opts]
+   * @param {number} [opts.since] - epoch ms at which the snapshot was
+   *   requested. Cards added at or after this are spared. Omitting it
+   *   means "this set is authoritative right now", which is only true
+   *   for a caller that has no request instant to offer.
+   * @returns {number} how many cards were removed.
+   * Example: ToastManager.reconcileOpen([{id: 'a'}], {since: t}) -> 1
+   */
+  reconcileOpen(openToasts, { since } = {}) {
+    if (!Array.isArray(openToasts)) return 0;
+    const open = new Set();
+    for (const entry of openToasts) {
+      if (!entry) continue;
+      const id = (typeof entry === 'string') ? entry : entry.id;
+      if (id) open.add(id);
+    }
+    const stale = [];
+    for (const id of this._byId.keys()) {
+      if (open.has(id)) continue;
+      if (since !== undefined && since !== null) {
+        const addedAt = this._addedAt.get(id);
+        // No stamp means the card predates this bookkeeping (a manager
+        // built before the field, or a card injected by a test). Treat
+        // it as old enough to reconcile rather than pinning it forever.
+        if (addedAt !== undefined && addedAt >= since) continue;
+      }
+      stale.push(id);
+    }
+    for (const id of stale) this.dismiss(id, { syncToServer: false });
+    return stale.length;
   }
 
   /**
@@ -464,6 +544,9 @@ class ToastManager {
     const toast = this._byId.get(toastId);
     if (!toast) return;
     this._byId.delete(toastId);
+    // Drop the age stamp with the card, or a long-lived tab accumulates
+    // one entry per notification it has ever shown.
+    this._addedAt.delete(toastId);
 
     const el = this._cardFor(toastId);
     if (el) {
@@ -484,6 +567,30 @@ class ToastManager {
     // something. The flag is set by client/js/attachment-toast.js.
     if (syncToServer && toast && toast.session_id && !toast.local) {
       this._ack(toastId, toast.session_id);
+    }
+
+    // ANNOUNCE THE DISMISSAL, so the cross-session poller can suppress
+    // this id until its ack lands. Raising went global in
+    // toast-global-poll.js, which means a poll tick can now return a
+    // snapshot taken BEFORE the ack above was applied - and feeding that
+    // back through `add()` would resurrect the card the user just
+    // dismissed, in front of them. The poller's ToastDismissedRing
+    // listens for this and filters the id out for a minute.
+    //
+    // AN EVENT RATHER THAN A DIRECT CALL: this module must keep working
+    // with no poller loaded (it did for three releases), and a hard
+    // reference would make the poller a load-order dependency of every
+    // dismissal path. Fired for BOTH sync values on purpose - a
+    // server-driven ack from another tab is equally a reason not to
+    // re-add the id here.
+    try {
+      document.dispatchEvent(new CustomEvent('cloude:toast-dismissed', {
+        detail: { id: toastId, sessionId: toast ? toast.session_id : null },
+      }));
+    } catch (err) {
+      // CustomEvent is unavailable in the node stub suites, which do not
+      // exercise the poller. Swallowed rather than logged: it is not a
+      // fault in a browser and the suites would print it on every case.
     }
   }
 
@@ -1035,6 +1142,31 @@ class ToastManager {
       window.AttachmentToast.renderThumbs(el, group.toasts);
     }
 
+    // CLICK THE CARD, GO TO THE SESSION THAT RAISED IT. Only meaningful
+    // now that raising is global: before, every card was about the
+    // session already on screen. The handler sits on the CARD and the
+    // dismiss button below calls stopPropagation, so "dismiss" cannot
+    // also mean "navigate". Reading a notification is not answering it,
+    // so this never acks.
+    //
+    // IT READS THE `winner`, WHICH IS ONE SESSION BY CONSTRUCTION. This
+    // used to read a `newest` local, back when a group could hold cards
+    // from more than one session; the group key is now the SESSION
+    // itself, so the winner's session is the card's session and there is
+    // nothing left to pick between.
+    el.dataset.sessionId = winner.session_id || '';
+    if (winner.session_id && window.ToastNavigate) {
+      el.classList.add('toast--clickable');
+      el.setAttribute('tabindex', '0');
+      el.addEventListener('click', () => window.ToastNavigate.go(winner));
+      el.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter' || evt.key === ' ') {
+          evt.preventDefault();
+          window.ToastNavigate.go(winner);
+        }
+      });
+    }
+
     const dismissBtn = document.createElement('button');
     dismissBtn.type = 'button';
     dismissBtn.className = 'toast__dismiss';
@@ -1048,7 +1180,13 @@ class ToastManager {
     dismissBtn.setAttribute('aria-label', label);
     dismissBtn.setAttribute('title', label);
     dismissBtn.textContent = '×';
-    dismissBtn.addEventListener('click', () => this.dismissGroup(key));
+    dismissBtn.addEventListener('click', (evt) => {
+      // Do not let the dismiss click bubble into the card's
+      // navigate handler above - dismissing a card must not also
+      // yank the user into the session it was about.
+      if (evt && typeof evt.stopPropagation === 'function') evt.stopPropagation();
+      this.dismissGroup(key);
+    });
     el.appendChild(dismissBtn);
 
     if (isNew) {

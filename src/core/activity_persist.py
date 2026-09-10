@@ -33,6 +33,7 @@ from src.core.session_activity import WORKING_HEARTBEAT_TIMEOUT_SECONDS
 from src.core.session_status import (
     STATUS_DEAD,
     STATUS_UNKNOWN,
+    derive_read_state,
 )
 
 logger = structlog.get_logger(__name__)
@@ -63,6 +64,19 @@ STALE_AFTER = timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 60)
 #: received no hook since is still idle, so those are trusted until
 #: something contradicts them.
 PERISHABLE = ("working", "working_subagent", "question", "notice")
+
+#: THE COLUMN HOLDS A BASE STATE, NOT A READ VERDICT. ``finished_unread``
+#: is ``idle`` seen through the unread flag, and that flag is durable in a
+#: store of its own, keyed on the tmux instance. A row that RECORDS the
+#: projection records an answer nothing rewrites when the user opens the
+#: tab, and that is exactly what shipped: measured on live 2026-09-09,
+#: ``cloude_daily-briefing`` read ``finished_unread`` from this column
+#: beside ``unread: false``. So ``write_state`` collapses the pair back to
+#: ``idle`` through ``session_status.derive_read_state`` on the way in,
+#: and every reader projects it back out against the flag as measured.
+#: Rows written before this still carry the old spelling; they are
+#: reconciled on read by the same function, which is why the fix did not
+#: need a migration.
 
 RESTORE_OK = "restored"
 RESTORE_STALE = "stale"
@@ -165,6 +179,10 @@ def write_state(
     """
     if not tmux_name or not state:
         return False
+    # ONE SPELLING IN THE COLUMN. See the note on PERISHABLE above: the
+    # read half of this pair belongs to the unread store, not to a
+    # column, and this is the boundary that keeps it out.
+    state = derive_read_state(state, unread=False) or state
     if tmux_created_epoch is None:
         logger.debug(
             "activity_state_write_no_epoch",

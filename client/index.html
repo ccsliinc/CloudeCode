@@ -62,6 +62,11 @@
          theme CSS custom properties (--color-accent, etc.) are available
          as fallbacks for the per-toast accent border. -->
     <link rel="stylesheet" href="/static/css/toast.css" />
+    <!-- Notification history (punchlist 8) plus the clickable-card rule
+         the toast stack gained when raising went global (punchlist 7).
+         After toast.css so it can override .toast, and after styles.css
+         for the theme custom properties both fall back to. -->
+    <link rel="stylesheet" href="/static/css/toast-history.css" />
     <!-- Session sidebar. Loaded after styles.css for the same
          token-availability reason as toast.css. -->
     <link rel="stylesheet" href="/static/css/session-sidebar.css" />
@@ -78,6 +83,11 @@
          from both painting it. Its own markup comes from
          client/js/status-led.js. -->
     <link rel="stylesheet" href="/static/css/status-led.css" />
+    <!-- Position (only) for the same LED when it rides in the terminal
+         header beside the session name. Paint still comes from
+         status-led.css above, which must therefore load first. Its own
+         markup comes from client/js/session-header-led.js. -->
+    <link rel="stylesheet" href="/static/css/session-header-led.css" />
     <!-- Row density, the per-row reorder/pin controls, and the two
          three-outcome blocks the list can render instead of rows. Its own
          file so session-sidebar.css stays under the 500-line convention;
@@ -85,6 +95,13 @@
          base row padding there. -->
     <link rel="stylesheet" href="/static/css/session-sidebar-density.css" />
     <link rel="stylesheet" href="/static/css/session-sidebar-groups.css" />
+    <!-- The row's kebab and the panel it opens. MUST load after
+         session-sidebar.css and session-sidebar-density.css: those size
+         .session-sidebar-row-pin, .mark-unread-toggle and
+         .session-sidebar-row-delete as small square icon buttons for the
+         row, and this file re-styles those same elements as full-width
+         labelled menu items once they are inside the panel. -->
+    <link rel="stylesheet" href="/static/css/session-row-menu.css" />
     <!-- The foldable key to the status lights, at the foot of the session
          sidebar. AFTER session-sidebar-density.css, whose quiet footer
          note treatment it matches, and after status-led.css - the key's
@@ -94,18 +111,6 @@
          session-status-key.css, whose quiet footer treatment it matches
          and below which it sits. -->
     <link rel="stylesheet" href="/static/css/version-footer.css" />
-    <!-- The conversation row's inline pin and close/restart/remove, sized
-         for a thumb. MUST load after session-sidebar.css and
-         session-sidebar-density.css: those size both controls as 18px
-         square icon buttons, and this file widens them on a coarse
-         pointer. Loaded earlier it would silently lose the tap targets. -->
-    <link rel="stylesheet" href="/static/css/session-row-inline-controls.css" />
-    <!-- The session row's three-dot action menu, and the panel it opens.
-         MUST load after session-sidebar.css, session-sidebar-density.css
-         and session-row-inline-controls.css: those size row controls as
-         small square icon buttons, and this file has to win over them
-         for the trigger. -->
-    <link rel="stylesheet" href="/static/css/session-row-menu.css" />
     <!-- The launch-wrapper pill on a running-session row. After
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
@@ -241,6 +246,12 @@
          in archive-tlist.css, and load order is the whole mechanism -
          each selector is no more specific than the one it replaces. -->
     <link rel="stylesheet" href="/static/css/archive-panes.css" />
+    <!-- The away bar shown after a measured absence. Its own file because
+         it must be an OVERLAY inside .terminal-container: an in-flow child
+         there steals rows from #terminal, and the resize that follows is
+         an ESC[2J that erases the alternate screen. See
+         client/css/terminal-away-bar.css. -->
+    <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
 </head>
 <body>
     <!-- Item 9: deep-link error banner. Populated by router.js when the
@@ -786,6 +797,11 @@
          drifting copies of it before. -->
     <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
+    <!-- The two CROSS-SESSION toast reads, extending API.prototype the
+         way api-archive.js does. MUST load after api.js: `class API` is
+         not hoisted across scripts and this file refuses loudly rather
+         than defining nothing. -->
+    <script src="/static/js/api-toasts.js"></script>
     <script src="/static/js/auth.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
@@ -797,6 +813,21 @@
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- punchlist 7 - a toast raised by ANY session reaches the browser,
+         whatever session is on screen. Two things used to filter them:
+         the toast.new WS frame is fanned out only to sockets bound to the
+         raising session, and terminal.js backfills the ATTACHED session
+         alone, at WS open. The poller works on every screen, including
+         the launchpad and archive, which hold no terminal socket at all.
+         The ring is what stops a poll tick resurrecting a card whose ack
+         is still in flight; it must load BEFORE the poller that uses it.
+         ToastNavigate is the click target on a card - it resolves a real
+         /sessions/list row before entering, because a synthesised one
+         carries no pinned_theme (gotcha 7). All three load AFTER toast.js
+         and after api-toasts.js, whose two methods the poller calls. -->
+    <script src="/static/js/toast-dismissed-ring.js"></script>
+    <script src="/static/js/toast-navigate.js"></script>
+    <script src="/static/js/toast-global-poll.js"></script>
     <!-- The one CLIENT-raised toast kind: the receipt for a file the user
          attached to the prompt. It contributes the thumbnail strip that
          toast.js asks for by name and nothing else - the card itself is
@@ -839,12 +870,26 @@
     <script src="/static/js/version-footer.js"></script>
     <!-- Shared status-dot rendering. Must load BEFORE launchpad.js and
          session-sidebar.js, both of which call window.SessionStatusUI. -->
+    <!-- The owner's client-side show/hide switches, probed once per page
+         load off GET /api/v1/features. AFTER api.js, whose call() it
+         uses, and BEFORE session-status-ui.js, whose markUnreadHtml asks
+         it whether to render the control at all. A page that loads it
+         late is not broken: every flag answers its default (shown) until
+         the probe lands, so the worst case is one poll of showing a
+         control the owner switched off. -->
+    <script src="/static/js/ui-flags.js"></script>
     <script src="/static/js/session-status-ui.js"></script>
+    <!-- The status light in the terminal header. Must load AFTER
+         session-status-ui.js (it renders through window.SessionStatusUI)
+         and BEFORE session-sidebar.js, whose poll and whose
+         setActiveSession both call window.SessionHeaderLed. -->
+    <script src="/static/js/session-header-led.js"></script>
     <!-- Shared X (close) / trash (remove) row control: which one a session
          row gets, its tooltip, and its confirm copy. Must load AFTER
          session-status-ui.js (uses its glyphs) and BEFORE launchpad.js,
          terminal.js and session-sidebar.js, all of which call
          window.SessionRowActions. -->
+    <script src="/static/js/session-row-actions-confirm.js"></script>
     <script src="/static/js/session-row-actions.js"></script>
     <!-- Session detail: renders HOW a session became yours (origin) and
          which project it belongs to. The row badge shows only ours vs
@@ -894,21 +939,6 @@
          Pure decision logic - markup and screen state in, a verdict out -
          so this is its only ordering constraint. -->
     <script src="/static/js/project-list-render-guard.js"></script>
-    <!-- Viewport-clamped placement for every popover in the app. Moved
-         ABOVE launchpad.js with the row menu below, which is its first
-         load-order-constrained consumer; every other caller reaches it at
-         open time and is unaffected by the move. -->
-    <script src="/static/js/anchor-popover.js"></script>
-    <!-- The session row's three-dot ACTION MENU, in three files: the item
-         table and the markup (pure), what each item does, and the
-         opening/keyboard/focus half that is the only one touching the
-         document. Must load BEFORE session-sidebar-rows.js and
-         launchpad.js, which both build a trigger into their row markup,
-         and AFTER kebab-icon.js (the glyph), api.js (the mute write) and
-         anchor-popover.js (the viewport clamp). -->
-    <script src="/static/js/session-row-menu.js"></script>
-    <script src="/static/js/session-row-menu-actions.js"></script>
-    <script src="/static/js/session-row-menu-open.js"></script>
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
@@ -966,11 +996,13 @@
          call window.AnchorPopover.place(). launchpad.js also calls it
          (placeNewFabMenu) but loads earlier - that is fine, because the
          call happens on a user tap, long after every script has run. -->
+    <script src="/static/js/anchor-popover.js"></script>
     <!-- Terminal measurement guard. Must load BEFORE terminal-layout.js
          and terminal.js, both of which fit through
          window.TerminalMetrics.guardedFit so an untrustworthy cell
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
+    <script src="/static/js/terminal-layout-wait.js"></script>
     <!-- Transient-geometry guard. Must load BEFORE terminal-layout.js,
          whose requestFit() asks it how long to wait and whose flush()
          asks it whether a settled grid is worth a pty_resize at all. A
@@ -1000,6 +1032,15 @@
          session's bytes out of another session's terminal. -->
     <script src="/static/js/terminal-frame-guard.js"></script>
     <script src="/static/js/terminal.js"></script>
+    <!-- Punchlist item 1: after a measured absence, OFFER full history, a
+         summary of what happened, or just carry on, instead of the app
+         picking silently. terminal-away-gap.js is pure (every rule and
+         every sentence) and must load BEFORE terminal-away-bar.js, which
+         self-installs a heartbeat on DOMContentLoaded and reads
+         window.TerminalController. Neither touches the reconnect buffer's
+         keep rule; they layer on top of it. -->
+    <script src="/static/js/terminal-away-gap.js"></script>
+    <script src="/static/js/terminal-away-bar.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
          ClipboardTools.pasteFromClipboard(). Must load AFTER terminal.js,
@@ -1103,6 +1144,12 @@
     <!-- Row markup for the sidebar list; must load BEFORE session-sidebar.js
          paints. -->
     <script src="/static/js/session-sidebar-rename.js"></script>
+    <!-- The foot of the conversations list: the status-light key then
+         the version line. AFTER session-status-key.js and
+         version-footer.js, whose builders it joins, and BEFORE
+         session-sidebar-rows.js, which calls it. Its own file only so
+         session-sidebar-rows.js stays under the 500-line budget. -->
+    <script src="/static/js/session-sidebar-footer.js"></script>
     <script src="/static/js/session-sidebar-rows.js"></script>
     <script src="/static/js/session-sidebar-groups.js"></script>
     <!-- Restart: ASK, then act, then land back in the session. The
@@ -1124,6 +1171,10 @@
          keep that file under the 500-line budget. Must load BEFORE it:
          the controller's handlers delegate straight into this. -->
     <script src="/static/js/session-sidebar-clicks.js"></script>
+    <!-- Entering a session dismisses its toast cards. Split out of
+         session-sidebar.js for the same 500-line reason, and must load
+         BEFORE it for the same reason: setActiveSession calls into this. -->
+    <script src="/static/js/session-entry-toasts.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
@@ -1139,6 +1190,28 @@
          move a session between them. Loads AFTER reorder because it
          borrows that module's live-region announcer. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
+    <!-- The reserved bands' (pinned/other) kebab menu, split out to keep
+         session-sidebar-group-actions.js under the 500-line budget. Must
+         load AFTER it: reuses its showMenu/announce/repaint rather than
+         a second copy of any of the three. -->
+    <script src="/static/js/session-sidebar-band-menu.js"></script>
+    <!-- The row's action menu, and the gestures that open it. Three
+         modules: session-row-menu.js is the item table and the captured
+         context, -actions.js runs a chosen item, -open.js owns the panel,
+         focus and the keyboard. -actions.js delegates into
+         session-sidebar-clicks.js (restart, mark unread),
+         session-sidebar-group-actions.js (move to group) and
+         session-sidebar-rename.js (rename), so it must load after all of
+         them; -open.js calls -actions.js and places itself with
+         anchor-popover.js. The gesture module must load after the menu
+         AND after session-sidebar.js, whose #session-sidebar-list it
+         attaches to; it owns right click and long press only, because
+         -open.js binds the trigger tap itself. -->
+    <script src="/static/js/session-row-menu-items.js"></script>
+    <script src="/static/js/session-row-menu.js"></script>
+    <script src="/static/js/session-row-menu-actions.js"></script>
+    <script src="/static/js/session-row-menu-open.js"></script>
+    <script src="/static/js/session-row-menu-gestures.js"></script>
 
     <!-- Settings panel — gear-icon modal folding in the theme chooser
          (moved here from the header, see #settingsBtn's comment) plus the
@@ -1174,6 +1247,13 @@
          AFTER settings-sections.js and BEFORE settings-panel.js, which
          calls its render()/wire()/collect(). -->
     <script src="/static/js/settings-workspace.js"></script>
+    <!-- punchlist 8 - the notification history, mounted as a slot into
+         the settings panel's existing "notifications" tab. The renderer
+         is pure and decides every word a row claims; the panel only
+         places nodes and fetches. Both load BEFORE settings-panel.js,
+         which calls window.ToastHistoryPanel.mount() from mountSlots(). -->
+    <script src="/static/js/toast-history-render.js"></script>
+    <script src="/static/js/toast-history-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
     <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -

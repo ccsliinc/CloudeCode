@@ -19,11 +19,13 @@
  * one drops it and unfolds that section, losing nothing, because a fold
  * is graded as a preference and not as data.
  *
- * PINNED IS NOT A GROUP, and the header row says so without a caption:
- * a user group's header carries a menu button (rename, reorder, delete),
- * and `pinned` and `other` do not, because there is nothing to rename or
- * delete about them. Offering the control would be offering an action
- * that cannot work.
+ * PINNED IS NOT A GROUP, but every header still carries a kebab so the
+ * menu column lines up down the whole list. A real group's kebab opens
+ * rename/reorder/delete (`data-group-menu`); `pinned` and `other` open
+ * the smaller menu of whatever already applies to any section - fold or
+ * unfold, the chevron's own action offered through a second control -
+ * because there is nothing to rename or delete about a reserved band and
+ * offering that would be offering an action that cannot work.
  *
  * TWO RULES ABOUT WHEN A HEADER EXISTS AT ALL, and they are different:
  *
@@ -95,22 +97,63 @@ console.log('[SessionSidebarGroups Module] Loading...');
     }
 
     /**
+     * Description: the kebab button for one header. EVERY HEADER GETS
+     *   ONE NOW - pinned and other used to render none at all, which put
+     *   a hole in the column every menu button otherwise shares. A real
+     *   user group still opens its full rename/reorder/delete menu
+     *   (`data-group-menu`); a reserved band opens the smaller menu of
+     *   whatever already applies to any section - today that is only
+     *   fold/unfold, exposed as a second route to the same action the
+     *   chevron already performs (`data-group-menu-band`). Nothing here
+     *   invents an action neither route already had.
+     * Inputs: key (string). uuid (string|null) - a real group's uuid, or
+     *   null for a reserved band. label (string).
+     * Output: string - HTML for one `<button>`.
+     */
+    function menuButtonHtml(key, uuid, label) {
+        const esc = window.SessionSidebarRows.esc;
+        const title = uuid
+            ? `Rename, reorder or remove the ${label} group`
+            : `Actions for the ${label} group`;
+        const attr = uuid
+            ? `data-group-menu="${esc(uuid)}"`
+            : `data-group-menu-band="${esc(key)}"`;
+        return (
+            `<button type="button" class="session-sidebar-group__menu" `
+            + `${attr} `
+            + `title="${esc(title)}" `
+            + `aria-label="${esc(title)}" `
+            + `aria-haspopup="menu">`
+            + '<span aria-hidden="true">&#8943;</span></button>'
+        );
+    }
+
+    /**
      * Description: one section header, drawn as a row of the list rather
      *   than as a caption floating above it. It is a real `<button>` so
      *   the fold is operable by keyboard and reachable by tab, and it
      *   carries `aria-expanded` plus `aria-controls` pointing at the body
      *   it opens.
      *
+     *   THE ROW READS COUNT, THEN CHEVRON, THEN NAME, THEN KEBAB. The
+     *   count sits in a FIXED-WIDTH GUTTER (`--sidebar-gutter`, the
+     *   sibling of the launchpad's `--project-gutter` - one convention,
+     *   not two) so a name starts at the same x whether its section
+     *   holds "1" conversation or "120": a gutter sized to its own
+     *   content would slide every name over by however many digits the
+     *   count happened to need. The count itself is plain coloured text,
+     *   not a pill - a badge reads as a count of something bad
+     *   (unread, notifications); this is just how many rows are in the
+     *   section.
+     *
      *   THE HEADER CARRIES A SUMMARY LED, which is the only thing that
      *   answers "is there anything in here I need to deal with" while the
      *   section is FOLDED. It is a fold over the section's own rows via
      *   SessionStatusSummary, so it cannot disagree with the lights
      *   underneath it - both resolve through the same mapping rather than
-     *   through two copies of the rules. It is the SAME component the
-     *   rows draw, so it takes every treatment they take, including the
-     *   green ring around a cleared centre that says a turn finished in
-     *   here and nobody has looked. There is no numeric unread badge
-     *   beside it any more - see summaryHtml for why it went.
+     *   through two copies of the rules. The unread count is not shown as
+     *   a separate badge; it rides in the LED's own outer ring plus its
+     *   title/aria-label.
      * Inputs: key (string) - one of KEYS. count (number) - rows in the
      *   section, shown so a folded section still says how much it hides.
      *   collapsed (boolean). rows (Array<object>|undefined) - the
@@ -127,19 +170,7 @@ console.log('[SessionSidebarGroups Module] Loading...');
         const title = `${verb} the ${label} group (${count} `
             + `${count === 1 ? 'conversation' : 'conversations'})`;
         const uuid = groupUuidOf(key);
-        // A USER GROUP GETS A MENU BUTTON; A RESERVED BAND DOES NOT, and
-        // that asymmetry is the UI saying out loud that pinned is not a
-        // group. There is nothing to rename or delete about "pinned" or
-        // "other", so offering the control would be offering an action
-        // that cannot work.
-        const menu = uuid
-            ? (`<button type="button" class="session-sidebar-group__menu" `
-                + `data-group-menu="${esc(uuid)}" `
-                + `title="${esc(`Rename, reorder or remove the ${label} group`)}" `
-                + `aria-label="${esc(`Rename, reorder or remove the ${label} group`)}" `
-                + `aria-haspopup="menu">`
-                + '<span aria-hidden="true">&#8943;</span></button>')
-            : '';
+        const menu = menuButtonHtml(key, uuid, label);
         // Absent only if the module failed to load; the header still
         // renders, just without the roll-up. A missing summary is better
         // than a missing header.
@@ -148,8 +179,11 @@ console.log('[SessionSidebarGroups Module] Loading...');
                 + window.SessionStatusSummary.summaryHtml(rows)
                 + '</span>')
             : '';
+        const gutter = `<span class="session-sidebar-group__gutter">`
+            + `<span class="session-sidebar-group__count">${count}</span></span>`;
         return (
             '<div class="session-sidebar-group__headerrow">'
+            + gutter
             + `<button type="button" class="session-sidebar-group__header" `
             + `data-group-toggle="${esc(key)}" `
             + `aria-expanded="${collapsed ? 'false' : 'true'}" `
@@ -157,7 +191,6 @@ console.log('[SessionSidebarGroups Module] Loading...');
             + `title="${esc(title)}" aria-label="${esc(title)}">`
             + chevronHtml()
             + `<span class="session-sidebar-group__label">${esc(label)}</span>`
-            + `<span class="session-sidebar-group__count">${count}</span>`
             + '</button>'
             + summary
             + menu
@@ -208,6 +241,14 @@ console.log('[SessionSidebarGroups Module] Loading...');
      *   rows. A folded section emits an EMPTY body element rather than no
      *   body at all, so `aria-controls` always resolves to something real
      *   and the drop target for a drag survives the fold.
+     *
+     *   THE HEADER GETS `rows` WHETHER OR NOT THE SECTION IS FOLDED, and
+     *   that is load-bearing rather than incidental. The body above is
+     *   emptied on a fold; the summary LED is a fold over the MODEL, so
+     *   it keeps answering for a section whose rows are not in the
+     *   markup at all. Anything that tried to read the section's state
+     *   back off the DOM would go silent at exactly the moment the LED
+     *   is the only thing left saying anything.
      * Inputs: key (string), rows (Array<object>), density (string),
      *   collapsed (boolean).
      * Output: string - HTML.
@@ -314,8 +355,8 @@ console.log('[SessionSidebarGroups Module] Loading...');
     }
 
     window.SessionSidebarGroups = {
-        bodyHtml, sectionHtml, headerHtml, chevronHtml, split, bands,
-        labelFor, KEYS, LABELS,
+        bodyHtml, sectionHtml, headerHtml, chevronHtml, menuButtonHtml,
+        split, bands, labelFor, KEYS, LABELS,
     };
     console.log('[SessionSidebarGroups Module] Exported as window.SessionSidebarGroups');
 })();

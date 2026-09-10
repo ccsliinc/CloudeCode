@@ -368,9 +368,97 @@ console.log('[SessionRowMenuActions Module] Loading...');
      * Inputs: itemId (string), ctx (object).
      * Output: Promise<void>.
      */
+    /**
+     * Run OUR restart, through the picker the row's inline control used.
+     *
+     * Description: decision 3 of the 1.2 merge keeps restart on a LIVE
+     *   row, and this is the control that carries it now that the row's
+     *   own restart button folded into the menu. It DELEGATES to
+     *   ``SessionSidebarClicks.runRestart``, which opens
+     *   client/js/session-restart-picker.js - so the arm checkbox, the
+     *   confirm modal and the four gates in front of ``respawn-pane -k``
+     *   are the ones already reviewed. This module adds an entry point
+     *   and no second path to the respawn ladder.
+     *
+     *   SIDEBAR ONLY. The launchpad has no restart picker wired, and the
+     *   menu item is stamped unavailable there rather than refused here.
+     * Inputs: ctx (object) - the captured context.
+     * Output: Promise<void>
+     * Example: await runRestart(ctx)
+     */
+    async function runRestart(ctx) {
+        var rowEl = rowElementFor(ctx);
+        if (!rowEl) {
+            say(ctx, 'cannot restart "' + (ctx.label || ctx.name)
+                + '": its row is no longer on screen');
+            return;
+        }
+        var clicks = window.SessionSidebarClicks;
+        if (!clicks || typeof clicks.runRestart !== 'function') return;
+        await clicks.runRestart(window.SessionSidebar, ctx.name, rowEl);
+    }
+
+    /**
+     * Toggle OUR unread flag, through the row's own handler.
+     *
+     * Description: the inline control this replaces carried the name and
+     *   the current flag in its dataset, and
+     *   ``SessionSidebarClicks.onMarkUnreadClick`` reads exactly those
+     *   two fields. So the menu hands it an element carrying the same
+     *   two, rather than calling the API itself: one implementation, and
+     *   the repaint that follows a successful toggle comes for free.
+     *
+     *   The element is DETACHED on purpose. It is an argument, not a
+     *   control - nothing renders it and nothing can click it.
+     * Inputs: ctx (object) - the captured context.
+     * Output: Promise<void>
+     * Example: await runMarkUnread(ctx)  // flips ctx.unread
+     */
+    async function runMarkUnread(ctx) {
+        var clicks = window.SessionSidebarClicks;
+        if (!clicks || typeof clicks.onMarkUnreadClick !== 'function') return;
+        var proxy = document.createElement('button');
+        proxy.dataset.markUnread = ctx.name;
+        // The handler flips this, so it must report what the ROW showed
+        // when the menu was opened - the frozen snapshot, not a re-read.
+        proxy.dataset.unreadCurrent = ctx.unread ? 'true' : 'false';
+        await clicks.onMarkUnreadClick(window.SessionSidebar, proxy);
+    }
+
+    /**
+     * Open OUR group picker for this row.
+     *
+     * Description: delegates to
+     *   ``SessionSidebarGroupActions.openPickerFor``, the module that
+     *   already owns group filing, so the picker, its entries and its
+     *   assignment call are unchanged. The trigger is used as the anchor
+     *   because the menu that was covering it has just closed and the
+     *   trigger is the thing still on screen at that spot.
+     * Inputs: ctx (object) - the captured context.
+     * Output: void
+     * Example: runMoveToGroup(ctx)
+     */
+    function runMoveToGroup(ctx) {
+        var groups = window.SessionSidebarGroupActions;
+        if (!groups || typeof groups.openPickerFor !== 'function') return;
+        var rowEl = rowElementFor(ctx);
+        var anchor = rowEl
+            ? rowEl.querySelector('[data-row-menu]')
+            : null;
+        if (!anchor) {
+            say(ctx, 'cannot file "' + (ctx.label || ctx.name)
+                + '": its row is no longer on screen');
+            return;
+        }
+        groups.openPickerFor(anchor, ctx.name);
+    }
+
     async function run(itemId, ctx) {
         if (!ctx) return;
         if (itemId === 'rename') return runRename(ctx);
+        if (itemId === 'mark-unread') return runMarkUnread(ctx);
+        if (itemId === 'move-to-group') return runMoveToGroup(ctx);
+        if (itemId === 'restart') return runRestart(ctx);
         if (itemId === 'fork') return runFork(ctx);
         if (itemId === 'new-in-folder') return runNewInFolder(ctx);
         if (itemId === 'mute') return runToggleMute(ctx);
@@ -383,6 +471,9 @@ console.log('[SessionRowMenuActions Module] Loading...');
         recordFor: recordFor,
         rowElementFor: rowElementFor,
         runRename: runRename,
+        runRestart: runRestart,
+        runMarkUnread: runMarkUnread,
+        runMoveToGroup: runMoveToGroup,
         runFork: runFork,
         runNewInFolder: runNewInFolder,
         runToggleMute: runToggleMute,

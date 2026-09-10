@@ -55,6 +55,39 @@ and the audit mode below is the tool for pre-existing content.
 Timing on this repository, measured: a three-file commit scans in 0.084
 seconds, and a full-tree audit of 907 files takes 1.02 seconds.
 
+## Second gate: gitleaks
+
+The hook runs a second scanner after the python one passes:
+
+```sh
+gitleaks git --staged <repo> --config .gitleaks.toml --redact --no-banner
+```
+
+the same tool and the same `.gitleaks.toml` config CI runs
+(`.github/workflows/secret-scan.yml`). The two are complementary, not
+redundant, measured 2026-08-31: the python scanner catches a 1Password
+`ops_` service account token, which gitleaks's default ruleset has no
+rule for at all; gitleaks names roughly 170 vendor formats (stripe,
+sendgrid, twilio, npm, and more) the python scanner would only ever
+catch through its generic entropy heuristic, which is off by default
+because it is unusable over source (see above). Running only one of
+them locally is what let a commit pass this hook and then fail CI.
+
+Install it with `brew install gitleaks`. Installed on mac-mini-m4
+(10.0.1.150) via Homebrew, 2026-09-10, version 8.30.1, matching the
+version CI pins by version and sha256 in
+`.github/workflows/secret-scan.yml`. The hook reads that pinned version
+out of the workflow file and compares it against the local
+`gitleaks version` on every run, printing a NOTE, never a refusal, on a
+mismatch, since rules can differ between versions.
+
+A missing `gitleaks` binary or a missing `.gitleaks.toml` does not
+refuse the commit. Both print a NOTE that the second gate did not run
+and exit 0, because a hook nobody can get past gets uninstalled and
+then both gates are gone. That NOTE means exactly what it says, not
+"clean": the python scanner passed, gitleaks did not run, and CI still
+runs gitleaks against the same config and can still reject the commit.
+
 ## Audit mode
 
 ```sh

@@ -86,20 +86,12 @@ function loadArrangement(seed, throws = false) {
  * Output: object - the SessionSidebarRows module.
  */
 function loadRows() {
-    // status-led.js and session-status-key.js come along because the
-    // foot of the list is the KEY now, and it draws real LEDs. Stubbing
-    // them would test a legend that is not the shipped one.
-    const { window } = loadModules([
-        'status-led.js', 'session-status-key.js',
-        'session-listing-state.js', 'session-sidebar-rows.js',
-    ]);
+    const { window } = loadModules(['session-listing-state.js', 'session-sidebar-rows.js']);
     window.SessionStatusUI = { dotHtml: () => '<span class="status-dot"></span>', markUnreadHtml: () => '' };
-    // `offersMenu` is what decides between the inline X and the row's
-    // three-dot menu, so a stub without it makes every row throw. Kept
-    // faithful to the real rule rather than hardcoded: only a dead row
-    // draws the inline control.
     window.SessionRowActions = {
         html: () => '<button data-session-action="close"></button>',
+        // rows.js asks this to decide menu vs inline controls. A live row
+        // gets the menu; only `dead` keeps its inline pair.
         offersMenu: (status) => status !== 'dead',
     };
     return window.SessionSidebarRows;
@@ -600,7 +592,7 @@ await test('the sidebar row builder never receives a lifecycle it could act on',
 
 await test('zero rows from a FAILED listing renders CANNOT DETERMINE, never the empty state', () => {
     const Rows = loadRows();
-    const html = Rows.listHtml([], 'cozy', { ok: false, reason: 'tmux_missing', detail: 'tmux is gone' }, null);
+    const html = Rows.listHtml([], 'cozy', { ok: false, reason: 'tmux_missing', detail: 'tmux is gone' }, [], null);
     assert.ok(html.includes('CANNOT DETERMINE'), 'the failure must be stated');
     assert.ok(html.includes('tmux is gone'), 'and it must say what failed');
     assert.ok(html.includes('data-listing-reason="tmux_missing"'), 'machine-readable too');
@@ -612,7 +604,7 @@ await test('zero rows from a FAILED listing renders CANNOT DETERMINE, never the 
 
 await test('zero rows from a listing that ANSWERED still renders the honest empty state', () => {
     const Rows = loadRows();
-    const html = Rows.listHtml([], 'cozy', { ok: true }, null);
+    const html = Rows.listHtml([], 'cozy', { ok: true }, [], null);
     assert.ok(html.includes('no other conversations'));
     assert.ok(!html.includes('CANNOT DETERMINE'));
 });
@@ -660,12 +652,12 @@ await test('a fetch whose LIVE list failed is still ok - that probe answers a di
 });
 
 // =====================================================================
-// THE ARRANGEMENT NOTICE AND THE STATUS-LIGHT KEY ARE REALLY RENDERED.
+// THE ARRANGEMENT NOTICE AND THE MISSING NOTE ARE REALLY RENDERED.
 // =====================================================================
 
 await test('an unreadable arrangement renders a notice ALONGSIDE the fallback rows', () => {
     const Rows = loadRows();
-    const html = Rows.listHtml([row({ name: 'a' })], 'cozy', { ok: true },
+    const html = Rows.listHtml([row({ name: 'a' })], 'cozy', { ok: true }, [],
         { status: 'unreadable', reason: 'stored value is not valid JSON' });
     assert.ok(html.includes('CANNOT LOAD your saved order'));
     assert.ok(html.includes('stored value is not valid JSON'), 'it must say why');
@@ -675,43 +667,21 @@ await test('an unreadable arrangement renders a notice ALONGSIDE the fallback ro
 await test('a healthy arrangement renders NO notice - a check that never clears is furniture', () => {
     const Rows = loadRows();
     for (const st of [null, { status: 'ok' }, { status: 'default' }]) {
-        assert.ok(!Rows.listHtml([row()], 'cozy', { ok: true }, st).includes('CANNOT LOAD'));
+        assert.ok(!Rows.listHtml([row()], 'cozy', { ok: true }, [], st).includes('CANNOT LOAD'));
     }
 });
 
-await test('THE HELD-SLOTS NOTE IS GONE FROM THE FOOT OF THE LIST', () => {
-    // Removed 2026-09-09 at the owner's request: "1 remembered position
-    // is held for a session not currently listed" named an internal
-    // bookkeeping detail no reader could act on. The FEATURE is not
-    // orphaned - session-sidebar-arrangement.js still keeps those slots
-    // and the count is still stamped on the list element, which the
-    // signature test below covers. Only the sentence went, so this
-    // asserts the sentence and not the slots.
-    const Rows = loadRows();
-    assert.equal(typeof Rows.missingNoteHtml, 'undefined',
-        'the builder must go with the markup it built');
-    const src = repoFile('client', 'js', 'session-sidebar-rows.js');
-    assert.ok(!src.includes('remembered position is'),
-        'no copy of the sentence may survive in the builder');
-    for (const rows of [[], [row({ name: 'a' })]]) {
-        const html = Rows.listHtml(rows, 'cozy', { ok: true }, null);
-        assert.ok(!html.includes('remembered'), 'and none is rendered');
-    }
-});
-
-await test('THE STATUS-LIGHT KEY SITS WHERE THAT NOTE SAT, and lists every state', () => {
-    // It replaces the note at the foot of the list, it ships COLLAPSED,
-    // and it draws REAL LEDs - see client/js/session-status-key.js. A
-    // legend that hand-drew its own swatches would be a second copy of
-    // the component and free to disagree with the rows above it.
-    const Rows = loadRows();
-    for (const rows of [[], [row({ name: 'a' })]]) {
-        const html = Rows.listHtml(rows, 'cozy', { ok: true }, null);
-        assert.ok(html.includes('data-status-key'), 'the key rides every branch');
-        assert.ok(html.includes('aria-expanded="false"'), 'and ships collapsed');
-        assert.ok(html.includes('<span class="status-led"'),
-            'the swatches are the real component');
-    }
+await test('held slots for gone sessions are counted on screen, and only when there are any', () => {
+    // The builder moved to session-sidebar-footer.js with the rest of
+    // the list's foot, so session-sidebar-rows.js could stay under the
+    // 500-line budget this same file asserts. Same markup, same rule.
+    const { window } = loadModules(['session-sidebar-footer.js']);
+    const Foot = window.SessionSidebarFooter;
+    assert.equal(Foot.missingNoteHtml([]), '');
+    const one = Foot.missingNoteHtml(['ghost']);
+    assert.ok(one.includes('data-order-missing="1"'));
+    assert.ok(one.includes('remembered position is held'));
+    assert.ok(Foot.missingNoteHtml(['a', 'b']).includes('data-order-missing="2"'));
 });
 
 // =====================================================================
@@ -969,6 +939,7 @@ await test('every new sidebar file stays under the 500-line budget', () => {
         ['js', 'session-sidebar.js'], ['js', 'session-sidebar-rows.js'],
         ['js', 'session-sidebar-arrangement.js'], ['js', 'session-sidebar-density.js'],
         ['js', 'session-sidebar-reorder.js'], ['js', 'session-sidebar-fetch.js'],
+        ['js', 'session-entry-toasts.js'],
         ['js', 'session-listing-state.js'], ['css', 'session-sidebar-density.css'],
         ['css', 'session-sidebar.css'],
     ];
@@ -984,6 +955,7 @@ await test('nothing added here uses an em-dash, an en-dash, or an emoji', () => 
         ['client', 'js', 'session-sidebar-density.js'],
         ['client', 'js', 'session-sidebar-reorder.js'],
         ['client', 'js', 'session-sidebar-fetch.js'],
+        ['client', 'js', 'session-entry-toasts.js'],
         ['client', 'js', 'session-listing-state.js'],
         ['client', 'js', 'session-sidebar-rows.js'],
         ['client', 'js', 'session-sidebar.js'],

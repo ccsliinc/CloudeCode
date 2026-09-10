@@ -205,10 +205,20 @@ test('the sidebar wrapper also carries the honest fallback', () => {
 // ---- one component, two real callers --------------------------------------
 
 test('THE SIDEBAR FOOTER ACTUALLY CALLS THE SHARED COMPONENT', () => {
+    // The sidebar's version line is built in session-sidebar-footer.js,
+    // which session-sidebar-rows.js calls. It was inlined in rows.js
+    // until the 1.2 merge and moved out so that file could stay under
+    // the 500-line budget tests/test_sidebar_sessions.node.mjs asserts.
+    // The property under test is unchanged: ONE component, two callers.
+    const foot = repoFile('client', 'js', 'session-sidebar-footer.js');
+    assert.ok(
+        foot.includes('window.VersionFooter.sidebarFooterHtml()'),
+        'session-sidebar-footer.js must render its version line through VersionFooter, not build one itself',
+    );
     const rows = repoFile('client', 'js', 'session-sidebar-rows.js');
     assert.ok(
-        rows.includes('window.VersionFooter.sidebarFooterHtml()'),
-        'session-sidebar-rows.js must render its version line through VersionFooter, not build one itself',
+        rows.includes('SessionSidebarFooter'),
+        'and the list must actually render that footer',
     );
 });
 

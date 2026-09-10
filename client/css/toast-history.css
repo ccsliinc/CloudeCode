@@ -1,0 +1,193 @@
+/*
+ * Notification history - punchlist item 8.
+ * ------------------------------------------------------------------
+ * Paints the read-only list that client/js/toast-history-panel.js mounts
+ * into the settings panel's `notifications` tab. Every word it draws is
+ * decided in client/js/toast-history-render.js; nothing here changes
+ * what a row CLAIMS.
+ *
+ * TWO OUTCOMES ARE STYLED AND THERE IS DELIBERATELY NO THIRD. The server
+ * records `acknowledged` as a bare boolean and nothing stamps which act
+ * set it, so `open` and `dismissed` are the only states that exist. A
+ * third colour here would imply a distinction the data cannot support.
+ *
+ * OPEN IS THE ONE THAT STANDS OUT. A dismissed record is history; an
+ * open one is a notification still waiting on the user, which is the
+ * whole reason the owner asked for this page ("in case i miss
+ * something"). So `open` carries the accent and `dismissed` is muted.
+ *
+ * Token names follow toast.css: var(--color-x, <fallback>) throughout,
+ * so a theme that defines none of them still renders legibly.
+ */
+
+.toast-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.toast-history__heading {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-fg, #d4d4d4);
+}
+
+.toast-history__note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--color-fg-muted, #858585);
+}
+
+.toast-history__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* The list is the only thing on this tab that can grow without bound,
+     so it scrolls inside itself rather than pushing the tab strip and
+     the channel fields off the panel. */
+  /* vh first, dvh immediately after: the raw unit is the fallback for a
+     browser that has no dvh, and the dvh line is what survives a mobile
+     URL bar sliding in and out. Order is load-bearing and is asserted by
+     tests/test_viewport_units.node.mjs. */
+  max-height: 46vh;
+  max-height: 46dvh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.toast-history__empty {
+  margin: 0;
+  padding: 12px 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--color-fg-muted, #858585);
+}
+
+.toast-history__row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border, #3e3e42);
+  border-left: 3px solid var(--color-border, #3e3e42);
+  border-radius: 4px;
+  background: var(--color-bg-card, #252526);
+}
+
+/* Still waiting on the user. */
+.toast-history__row[data-outcome="open"] {
+  border-left-color: var(--color-accent, #ff8800);
+}
+
+/* Already dealt with - present, but not competing for attention. */
+.toast-history__row[data-outcome="dismissed"] {
+  opacity: 0.72;
+}
+
+/* Cleared BECAUSE the user turned up and typed, rather than by a click.
+   Same recessive weight as a dismissal - both are done with - because
+   the distinction is a fact to read in the row, not a call to act. */
+.toast-history__row[data-outcome="answered"] {
+  opacity: 0.72;
+}
+
+.toast-history__row--jump {
+  cursor: pointer;
+}
+
+.toast-history__row--jump:hover,
+.toast-history__row--jump:focus-visible {
+  background: var(--color-bg-hover, #323235);
+  outline: none;
+}
+
+.toast-history__row--jump:focus-visible {
+  border-color: var(--color-accent, #ff8800);
+}
+
+.toast-history__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.72rem;
+}
+
+.toast-history__kind {
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  color: var(--color-info, #4fc1ff);
+}
+
+.toast-history__row[data-kind="PermissionRequest"] .toast-history__kind,
+.toast-history__row[data-kind="StartupPrompt"] .toast-history__kind {
+  color: var(--color-warning, #fbbf24);
+}
+
+.toast-history__row[data-kind="Stop"] .toast-history__kind {
+  color: var(--color-success, #4ade80);
+}
+
+.toast-history__session {
+  color: var(--color-fg, #d4d4d4);
+  font-weight: 600;
+}
+
+.toast-history__outcome {
+  margin-left: auto;
+  color: var(--color-fg-muted, #858585);
+}
+
+.toast-history__title {
+  font-size: 0.85rem;
+  color: var(--color-fg, #d4d4d4);
+}
+
+.toast-history__body {
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--color-fg-muted, #858585);
+  /* A Stop's body is the tail of the transcript and can be long; three
+     lines is enough to recognise it without turning a fifty-row list
+     into a wall. The full text is on the session itself. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.toast-history__time {
+  font-size: 0.7rem;
+  color: var(--color-fg-muted, #858585);
+}
+
+.toast-history__more {
+  align-self: flex-start;
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--color-fg, #d4d4d4);
+  background: var(--color-bg-card, #252526);
+  border: 1px solid var(--color-border, #3e3e42);
+  border-radius: 4px;
+}
+
+.toast-history__more:hover {
+  background: var(--color-bg-hover, #323235);
+}
+
+/* The toast card itself became clickable when raising went global: most
+   cards on screen are now about a session the user is NOT looking at,
+   so the card is the shortest route to it. The dismiss button stops the
+   click propagating, so dismissing never navigates. */
+.toast.toast--clickable {
+  cursor: pointer;
+}
+
+.toast.toast--clickable:focus-visible {
+  outline: 2px solid var(--toast-accent, var(--color-accent, #ff8800));
+  outline-offset: 2px;
+}

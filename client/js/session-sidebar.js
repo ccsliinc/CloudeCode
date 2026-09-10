@@ -105,13 +105,21 @@ class SessionSidebarController {
             this.close();
         });
         this.listEl.addEventListener('click', (e) => this._onRowClick(e));
-        // NO dblclick LISTENER. Double-click rename is gone: renaming is
-        // F2 on a focused row, or the `rename` item in the row's
-        // three-dot menu (client/js/session-row-menu.js). It was removed
-        // because the gesture cost every click on a renameable name a
-        // measured 250 ms hold before the row would switch, which is the
-        // single most-used interaction in this list paying for the
-        // rarest one.
+        this.listEl.addEventListener('dblclick', (e) => {
+            if (window.SessionSidebarRename) window.SessionSidebarRename.onDblClick(e);
+        });
+        // Keyboard activation (Enter/Space) for the mark-unread toggle -
+        // it's a `role="button"` span, not a real <button>, so it needs
+        // explicit key handling to be operable without a mouse.
+        this.listEl.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const toggleEl = e.target.closest('[data-mark-unread]');
+            if (!toggleEl) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._onMarkUnreadClick(toggleEl);
+        });
+
         this._wired = true;
         // The panel ships CLOSED, and closed here means "slid off screen by
         // a transform" - which on its own leaves every row still focusable.
@@ -174,24 +182,22 @@ class SessionSidebarController {
     /**
      * Description: record which session is currently attached so the row
      *   list can mark it active and the click handler can no-op on a
-     *   self-click. This is also the single source of truth ToastManager
-     *   reads to decide whether a session's own notifications are "news" -
-     *   see client/js/toast.js `_isActiveSession` - so switching into a
-     *   session clears whatever card is still showing for it: the user is
-     *   looking at it now, so a card about it is stale the instant this
-     *   runs.
+     *   self-click, and dismiss its toast cards - the rule, and why it is
+     *   a file of its own, are in client/js/session-entry-toasts.js.
      * Inputs: sessionId (string|null), tmuxName (string|null).
      * Output: void.
      */
     setActiveSession(sessionId, tmuxName) {
         this._activeSessionId = sessionId || null;
         this._activeTmuxName = tmuxName || null;
-        if ((this._activeSessionId || this._activeTmuxName) && window.ToastManager
-            && typeof window.ToastManager.dismissForSessionEntry === 'function') {
-            window.ToastManager.dismissForSessionEntry(this._activeSessionId, this._activeTmuxName);
-        }
+        window.SessionEntryToasts?.dismissFor(this._activeSessionId, this._activeTmuxName);
         if (this.isOpen) this._fetchAndRender();
     }
+
+    /** Description: the tmux session this tab is attached to, or null.
+     *  Public so the terminal header's light reads the SAME answer this
+     *  list does. Inputs: none. Output: string|null. */
+    activeTmuxName() { return this._activeTmuxName; }
 
     /** Description: toggle open/closed. Inputs: none. Output: void. */
     toggle() {
@@ -414,7 +420,7 @@ class SessionSidebarController {
             'data-groups-state', G ? G.current().status : 'nogroups',
         );
         this.listEl.innerHTML = window.SessionSidebarRows.listHtml(
-            rows, density, this._listing, state, groups,
+            rows, density, this._listing, missing, state, groups,
         );
         if (window.SessionSidebarReorder) window.SessionSidebarReorder.afterRender();
         if (window.SessionSidebarRename) window.SessionSidebarRename.afterRender();
@@ -475,12 +481,16 @@ class SessionSidebarController {
     async activateRow(rowEl) { await window.SessionSidebarClicks.activateRow(this, rowEl); }
 
     /**
+     * Description: toggle the manual unread flag for one row.
+     * Inputs: toggleEl (Element). Output: Promise<void>.
+     */
+    async _onMarkUnreadClick(toggleEl) { await window.SessionSidebarClicks.onMarkUnreadClick(this, toggleEl); }
+
+    /**
      * Description: run a row's destructive action (close or remove).
      * Inputs: btnEl (Element). Output: Promise<void>.
      */
-    async _onRowActionClick(btnEl) {
-        await window.SessionSidebarClicks.onRowActionClick(this, btnEl);
-    }
+    async _onRowActionClick(btnEl) { await window.SessionSidebarClicks.onRowActionClick(this, btnEl); }
 }
 
 window.SessionSidebar = new SessionSidebarController();

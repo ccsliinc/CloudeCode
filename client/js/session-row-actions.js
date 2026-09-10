@@ -74,25 +74,38 @@ console.log('[SessionRowActions Module] Loading...');
     const STOPPED_STATUSES = ['dead'];
 
     /**
-     * NO LIVE-ROW RESTART LIST ANY MORE, and this comment is the record
-     * of why there is no constant here.
+     * Statuses that mean "we positively know this session is RUNNING".
+     * A row in one of these may offer restart alongside close, because
+     * restarting a live session is now a supported operation
+     * (respawn-pane -k, same tmux name, same row).
      *
-     * ``LIVE_STATUSES`` was the allow-list of states in which a RUNNING
-     * row was also offered restart, added when respawn learned to
-     * replace a live pane. The owner removed that control on 2026-09-08:
-     * "remove 'add to group' / 'restart the agent'". A running row now
-     * offers close and nothing else, so there is no list left to consult
-     * and the constant would be dead weight that reads like a rule.
+     * ``unknown`` IS DELIBERATELY ABSENT HERE TOO, and for the sharper
+     * version of the same reason: offering restart on a row whose state
+     * we could not read would put a control that KILLS A RUNNING PROCESS
+     * in front of a user on the strength of a guess.
      *
-     * NOTHING SERVER-SIDE WAS REMOVED WITH IT. ``resolve_respawn_plan``
-     * still answers ``RESPAWN_NOT_DEAD`` for a live pane without
-     * ``live_restart_confirmed``, ``RespawnPlan.kills_live_pane`` is
-     * still the only thing that passes ``-k``, and the picker still
-     * carries its arm box and its confirm modal. What changed is that no
-     * surface in this app now hands a live session to that path. If a
-     * live restart is offered again, the control is what must come back;
-     * the gates behind it never left.
+     * ``stopped`` IS ABSENT, and it is not a near miss. It means the
+     * tmux instance is GONE, not that a pane is holding an exited
+     * process, so there is no pane to kill and nothing to respawn into.
+     * That is the distinction session-status-ui.js spells out at length
+     * where it explains why ``stopped`` is not a synonym for ``dead``.
+     *
+     * The list is an allow-list rather than "everything that is not
+     * dead" so a status added to the vocabulary later cannot silently
+     * inherit a destructive control. Every entry is a live-pane state in
+     * client/js/session-status-ui.js, including the ``running``
+     * back-compat alias a half-upgraded tab still sends.
+     * @type {Array<string>}
      */
+    const LIVE_STATUSES = [
+        'working',
+        'working_subagent',
+        'question',
+        'notice',
+        'finished_unread',
+        'idle',
+        'running',
+    ];
 
     /**
      * Hover tooltip + accessible name per action. Identical text goes to
@@ -124,67 +137,6 @@ console.log('[SessionRowActions Module] Loading...');
     const BASE_CLASS = 'session-row-action';
 
     /**
-     * Confirm-modal copy per action.
-     *
-     * Accuracy is the whole point of this table. A dialog that misstates
-     * consequences is worse than no dialog, because it teaches the user
-     * that dialogs in this app can be clicked through. That cuts both
-     * ways: do not overstate ("everything is deleted"), and do not
-     * understate ("nothing on disk is touched").
-     *
-     * WHAT EACH ACTION ACTUALLY DOES, on every path it can take. Both
-     * actions reach the server through the same two calls; which one runs
-     * is decided by whether a session id resolves for the row, NOT by
-     * which glyph was clicked:
-     *
-     *   path A - a session id resolves (row carries data-session-id, or
-     *     GET /sessions/list matches the tmux name) -> DELETE /sessions ->
-     *     SessionManager.destroy_session(). Stops the idle watcher, stops
-     *     the backend (kills tmux), **`shutil.rmtree`s
-     *     `<working_dir>/.cloude_uploads`**, and may unlink
-     *     session_metadata.json. THIS PATH TOUCHES DISK.
-     *   path B - no session id resolves -> DELETE /sessions/external/{name}
-     *     -> a bare `tmux kill-session` plus dropping the ownership
-     *     record. Touches no user files.
-     *
-     * The sidebar's own-tab row additionally routes through
-     * TerminalController.destroySession(), which is always path A.
-     *
-     * So REMOVE can and does delete files from the project folder: the
-     * uploads bucket is real user content, not app scratch. Both dialogs
-     * therefore name it. On path B there is no tracked session and so no
-     * bucket for CloudeCode to remove, which makes the sentence vacuous
-     * rather than false; stating it unconditionally keeps the copy short
-     * and errs toward warning instead of toward surprise.
-     *
-     * The transcript JSONL is never touched on ANY path, which is why
-     * both dialogs can promise that unconditionally.
-     * @type {Object<string, {title: string, primaryLabel: string, details: string}>}
-     */
-    const CONFIRM_COPY = {
-        [ACTION_CLOSE]: {
-            title: 'close session',
-            primaryLabel: 'close',
-            details:
-                'this cannot be undone. the running process is terminated, ' +
-                'and files uploaded to this session are removed from the ' +
-                "project's .cloude_uploads folder. the transcript is kept " +
-                'and stays under ~/.claude/projects.',
-        },
-        [ACTION_REMOVE]: {
-            title: 'remove session',
-            primaryLabel: 'remove',
-            details:
-                'this cannot be undone. this session already exited, so no ' +
-                'running process is stopped, but files uploaded to it are ' +
-                "removed from the project's .cloude_uploads folder. the " +
-                'leftover tmux shell is cleared and cloudecode forgets the ' +
-                'entry. the transcript is kept and stays under ' +
-                '~/.claude/projects.',
-        },
-    };
-
-    /**
      * Escape a value for interpolation into an HTML attribute.
      *
      * Description: session names come from tmux and from user input, so
@@ -207,25 +159,33 @@ console.log('[SessionRowActions Module] Loading...');
     /**
      * Decide which action a row with this status is allowed to offer.
      *
-     * Description: two cases now, where there used to be three.
+     * Description: three cases, and the third is not the second.
      *
-     *   A DEAD row is unchanged, and it is the reason this function
-     *   still knows the word restart at all: restart first, because it
-     *   is what the user came for, then remove. This is the one place
-     *   in the app that still reaches the respawn ladder.
+     *   A DEAD row is unchanged: restart first, because it is what the
+     *   user came for, then remove.
      *
-     *   EVERY OTHER ROW GETS CLOSE, and nothing else. A row we
-     *   positively know is live briefly offered restart as well; the
-     *   owner removed it on 2026-09-08 along with the row's overflow
-     *   menu. An unknown row never had it, because a control that kills
-     *   a running process is not something to offer on a guess.
+     *   A row we positively know is LIVE now offers restart too, after
+     *   close. It is second rather than first on purpose - close is
+     *   where the muscle memory already points on these rows, and moving
+     *   it would relocate a destructive control under a cursor that had
+     *   learned where it was.
+     *
+     *   OFFERING IT IS NOT PERMITTING IT. This control opens the restart
+     *   picker; a live restart still needs the arm box AND the confirm
+     *   modal inside it (client/js/session-restart-picker.js), and the
+     *   server still refuses without `confirm_restart_live`. Three
+     *   gates, and this is only the first.
+     *
+     *   An UNKNOWN row gets close alone, exactly as before. We could not
+     *   read its state, and a control that kills a running process is
+     *   not something to offer on a guess.
      * Inputs:
      *   status (string|null|undefined) - raw activity_status/status value
      *     from the API payload.
      * Output:
      *   Array<string> - one or two ACTION_* ids, in render order.
      * Example:
-     *   actionsFor('working')  -> ['close']
+     *   actionsFor('working')  -> ['close', 'restart']
      *   actionsFor('dead')     -> ['restart', 'remove']
      *   actionsFor(undefined)  -> ['close']   // unknown is never guessed
      */
@@ -240,30 +200,31 @@ console.log('[SessionRowActions Module] Loading...');
             // finished.
             return [ACTION_RESTART, ACTION_REMOVE];
         }
-        // EVERY OTHER STATUS GETS CLOSE ALONE - a measured live one and an
-        // unmeasurable one alike. They arrive at the same answer by two
-        // different routes and that is fine, but they are not the same
-        // fact: a live row lost its restart because the owner asked for
-        // the control to go, while an unknown row never had one, because
-        // a control that kills a running process is not something to
-        // offer on a guess.
+        if (LIVE_STATUSES.indexOf(key) !== -1) {
+            return [ACTION_CLOSE, ACTION_RESTART];
+        }
         return [ACTION_CLOSE];
     }
 
     /**
-     * Whether a row with this status offers the three-dot ACTION MENU.
+     * Whether a row with this status draws the three-dot ACTION MENU.
      *
-     * Description: the menu replaced the live row's close X, so the two
-     *   are the same question asked once - a row that would have painted
-     *   ``close`` inline paints the menu instead, and ``close session``
-     *   is an item inside it. A DEAD row is untouched: it keeps its
-     *   inline restart and remove, because none of the five menu items
-     *   is what a stopped session needs and its two controls are what
-     *   the respawn ladder is reached through.
+     * Description: the menu carries every action except pin, so the
+     *   question "does this row get a menu" is the same question as
+     *   "would this row have painted a close X" - a running row gets the
+     *   menu, and `close session` is an item inside it.
      *
-     *   Derived from ``actionsFor`` rather than from a second status
-     *   list, so the row and the menu cannot come to disagree about
-     *   which one a status gets. See client/js/session-row-menu.js.
+     *   DERIVED FROM ``actionsFor``, never from a second status list, so
+     *   the row and the menu cannot come to disagree about which one a
+     *   status gets. That matters here more than usual: OUR ``actionsFor``
+     *   keeps RESTART on a live row (decision 3 of the 1.2 merge, settled
+     *   by the owner on 2026-09-09), and the menu's own restart item
+     *   asks this same function whether to offer it.
+     *
+     *   A DEAD row answers false. It keeps its inline restart and remove
+     *   and gets no menu, because the menu's items are what a RUNNING
+     *   session needs. A dead row is also not meant to be on the live
+     *   list at all - decision 4 sends it to Recent.
      * Inputs:
      *   status (string|null|undefined) - raw activity status.
      * Output:
@@ -271,6 +232,7 @@ console.log('[SessionRowActions Module] Loading...');
      * Example:
      *   offersMenu('working') -> true
      *   offersMenu('dead')    -> false
+     *   offersMenu(undefined) -> true   // unknown still closes
      */
     function offersMenu(status) {
         return actionsFor(status).indexOf(ACTION_CLOSE) !== -1;
@@ -291,7 +253,7 @@ console.log('[SessionRowActions Module] Loading...');
      * Example:
      *   actionFor('working') -> 'close'
      *   actionFor('dead')    -> 'restart'
-     *   // a dead row's SECOND action is remove; this accessor cannot
+     *   // a live row's SECOND action is restart; this accessor cannot
      *   // see it, which is why new code calls actionsFor instead.
      */
     function actionFor(status) {
@@ -406,74 +368,32 @@ console.log('[SessionRowActions Module] Loading...');
     /**
      * Ask the user to confirm an action, naming the session.
      *
-     * Description: routes through `App.showConfirmModal()`, the app's ONE
-     *   confirmation implementation - this module adds copy, never a
-     *   second modal. The modal escapes its own arguments, so the display
-     *   name is passed raw here.
-     *
-     *   No archive check is performed. This app has no notion of the
-     *   user's conversation archive: nothing in the client, the API, or
-     *   src/core knows whether a transcript has been archived, and there
-     *   is no endpoint that could answer it. Asserting "not archived" in
-     *   this modal would be an invented fact, so the copy stays silent on
-     *   it and states only what is verifiable against the server code.
+     * Description: the copy and the modal call LIVE IN
+     *   client/js/session-row-actions-confirm.js, lifted there for the
+     *   500-line rule. This stays the entry point every call site already
+     *   uses. With that module absent the answer is NO: a destructive
+     *   action must never proceed because its confirmation failed to load.
      * Inputs:
      *   action (string) - ACTION_CLOSE or ACTION_REMOVE.
      *   displayName (string) - session name as shown in the row.
+     *   context (object|null) - optional attachment facts.
      * Output:
      *   Promise<boolean> - true only on an explicit confirm click.
-     * Example:
-     *   await confirm('close', 'api-work') -> true
      */
     function confirm(action, displayName, context) {
-        const copy = CONFIRM_COPY[action] || CONFIRM_COPY[ACTION_CLOSE];
-        const verb = action === ACTION_REMOVE ? 'remove' : 'close';
-        return window.App.showConfirmModal(
-            copy.title,
-            `${verb} "${displayName}"?`,
-            attachmentPreamble(context) + copy.details,
-            copy.primaryLabel,
-            'cancel'
-        );
+        var mod = window.SessionRowActionsConfirm;
+        if (!mod) return Promise.resolve(false);
+        return mod.confirm(action, displayName, context);
     }
 
     /**
      * Sentences naming what is CURRENTLY ATTACHED to the target session.
-     *
-     * Description: a confirmation that only describes the operation in
-     *   the abstract lets the user destroy something they are looking at
-     *   without being told. These two facts are the ones a list-based
-     *   surface (the status panel) cannot convey from the row alone, so
-     *   they lead the details rather than trail them. Both are omitted
-     *   when absent rather than stated in the negative, so a plain row
-     *   keeps the short copy it has always had - this cannot change the
-     *   text of any existing call site that passes no context.
-     * Inputs:
-     *   context (object|null|undefined) - optional
-     *     `{openInApp: boolean, attachedClients: number}`.
-     * Output:
-     *   string - zero, one or two sentences, each ending in a space.
-     * Example:
-     *   attachmentPreamble({openInApp: true, attachedClients: 1})
-     *     -> 'this session is open in cloudecode right now, and that '
-     *      + 'terminal will disconnect. 1 tmux client is attached to it '
-     *      + 'right now and will be detached. '
+     * See client/js/session-row-actions-confirm.js.
+     * Inputs: context (object|null). Output: string.
      */
     function attachmentPreamble(context) {
-        if (!context) return '';
-        let out = '';
-        if (context.openInApp) {
-            out += 'this session is open in cloudecode right now, and that '
-                + 'terminal will disconnect. ';
-        }
-        const attached = Number(context.attachedClients) || 0;
-        if (attached > 0) {
-            out += attached === 1
-                ? '1 tmux client is attached to it right now and will be detached. '
-                : `${attached} tmux clients are attached to it right now and `
-                  + 'will be detached. ';
-        }
-        return out;
+        var mod = window.SessionRowActionsConfirm;
+        return mod ? mod.attachmentPreamble(context) : '';
     }
 
     /**
@@ -509,6 +429,7 @@ console.log('[SessionRowActions Module] Loading...');
         ACTION_CLOSE,
         ACTION_REMOVE,
         ACTION_RESTART,
+        LIVE_STATUSES,
         STOPPED_STATUSES,
         ATTR_ACTION,
         ATTR_NAME,

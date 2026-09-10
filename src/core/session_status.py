@@ -162,6 +162,79 @@ ACTIVITY_STATUS_PRIORITY: tuple[str, ...] = (
     STATUS_UNKNOWN,
 )
 
+# ---------------------------------------------------------------------------
+# READ AND UNREAD ARE ONE PAIR OF STATES SEEN THROUGH ONE FLAG.
+# ---------------------------------------------------------------------------
+
+
+#: The two states that are the SAME session at rest, told apart only by
+#: whether anybody has looked. Kept as a pair so nothing has to re-spell
+#: the relationship, and so a reader can see at a glance that these two
+#: strings are not independent values.
+READ_STATE_PAIR: tuple[str, str] = (STATUS_IDLE, STATUS_FINISHED_UNREAD)
+
+
+def derive_read_state(state: Optional[str], *, unread: bool) -> Optional[str]:
+    """Project a session's resting state through its unread flag.
+
+    Description: THE ONE PLACE ``finished_unread`` and ``idle`` are told
+        apart, for every source of a status - the hook tracker, the tmux
+        fallback, the durable row seed and the transcript ladder all end
+        here, and so does the listing that assembles them. Pure, total
+        and idempotent: applying it twice with the same flag is applying
+        it once, and every state outside ``READ_STATE_PAIR`` is returned
+        untouched, so a caller may run it over any status without having
+        to know which ones it concerns.
+
+        WHY IT HAD TO EXIST, MEASURED ON LIVE 2026-09-09 at 5e13cb1. The
+        owner opened the daily-briefing tab and the light did not change.
+        ``/sessions/list`` for ``cloude_daily-briefing`` reported
+        ``unread: false`` beside ``activity_status: finished_unread``,
+        ``status_source: seed_row``: the WS bind had cleared the flag
+        correctly, and the durable row still held the word
+        ``finished_unread`` from before the view, which the seed path
+        returned verbatim. Every source had its own half of this rule and
+        one of them only had the half that ADDS unread - ``idle`` plus a
+        set flag became ``finished_unread``, while ``finished_unread``
+        plus a cleared flag stayed exactly as it was. A one-directional
+        derivation is not a derivation, it is a cache.
+
+        THE FLAG IS THE FACT AND THE STATE IS THE VIEW OF IT. The unread
+        flag is durable, keyed on the tmux instance and owned by
+        ``UnreadStore``; ``finished_unread`` is a rendering of the pair
+        (at rest, not yet seen). So this function never writes a flag and
+        never reads one of its own - the caller supplies the flag it
+        measured, and the answer is a function of that measurement alone.
+        Write paths use it with ``unread=False`` to store the BASE state,
+        which is why ``sessions.activity_state`` no longer bakes a read
+        verdict into a column that cannot be updated when the flag moves.
+    Inputs:
+        state: an activity status, or None when nothing was resolved.
+            Any value outside ``READ_STATE_PAIR`` is returned unchanged,
+            including None - a state nobody measured is not made into a
+            rest claim by a flag.
+        unread: the session's persisted unread flag, as MEASURED by the
+            caller. Keyword-only so no call site can pass it positionally
+            and mean something else.
+    Output:
+        str | None: ``finished_unread`` when the session is at rest and
+            unread, ``idle`` when it is at rest and read, and the input
+            unchanged otherwise.
+    Example:
+        >>> derive_read_state(STATUS_FINISHED_UNREAD, unread=False)
+        'idle'
+        >>> derive_read_state(STATUS_IDLE, unread=True)
+        'finished_unread'
+        >>> derive_read_state(STATUS_WORKING, unread=True)
+        'working'
+        >>> derive_read_state(None, unread=True) is None
+        True
+    """
+    if state not in READ_STATE_PAIR:
+        return state
+    return STATUS_FINISHED_UNREAD if unread else STATUS_IDLE
+
+
 #: Foreground command names tmux reports for a bare interactive/login shell
 #: with nothing else running in it. Anything NOT in this set (and not dead)
 #: is treated as "running" - see module docstring for why we can't be more
@@ -219,17 +292,84 @@ def resolve_pane_status(
 
 
 # ---------------------------------------------------------------------------
-# Listing liveness USED TO LIVE HERE, and it has moved.
+# Listing liveness: EXISTENCE IS NOT LIVENESS.
 #
-# ``resolve_listing_liveness`` and the ``LIVENESS_*`` vocabulary are now in
-# ``src/core/session_liveness.py``, because the answer it gives is no longer
-# a status STRING (which is what this file is the single source of truth
-# for) - it is a four-valued verdict about whether a row is drawn at all,
-# and it has to name pane states, which ``src/core/session_respawn.py``
-# already spells. Splitting ``gone`` into ``pane_dead`` and ``session_gone``
-# is what stopped a session whose process died from vanishing out of the
-# sidebar instead of painting the ``dead`` light this file defines.
+# A tmux session can exist with nothing alive inside it. ``remain-on-exit``
+# holds a pane open after its foreground process exits, so ``has-session``
+# keeps returning rc=0 forever and a husk reads as a healthy session. That
+# is the false green this resolver exists to end: the running list used to
+# gate on existence alone, so a session whose pane had died stayed listed
+# as running indefinitely while the red dot beside it - which reads
+# ``#{pane_dead}`` - correctly said otherwise.
 #
-# Nothing is re-exported from here. A second spelling of the same
-# vocabulary is exactly the drift that split would have re-introduced.
+# THREE OUTCOMES, per CLAUDE.md. "The pane is dead" and "I could not ask
+# tmux" are different answers and must not render the same way. Dropping an
+# unmeasurable session from the list would assert it ENDED; keeping it as
+# running would assert it is ALIVE. Neither was measured, so the caller
+# keeps the row and renders it ``unknown``.
 # ---------------------------------------------------------------------------
+
+#: The backend exists and something is alive in it.
+LIVENESS_LIVE: str = "live"
+
+#: Measured absence: the session is gone, or it exists as a dead husk.
+#: Either way it is not running and must not be listed as running.
+LIVENESS_GONE: str = "gone"
+
+#: Could not evaluate. NOT a synonym for either of the above.
+LIVENESS_UNKNOWN: str = "unknown"
+
+
+def resolve_listing_liveness(
+    exists: Optional[bool], pane_status: Optional[str]
+) -> str:
+    """Decide whether a session belongs in the running list.
+
+    Description: Combines the backend's EXISTENCE answer with tmux's
+        pane-level LIVENESS answer into one three-valued verdict. Pure
+        function, no I/O, so the rule is testable without a tmux binary.
+        Callers pass the pane status they already hold from the bulk
+        ``list_pane_status_all()`` probe - this adds no subprocess call.
+
+    Inputs:
+        exists: The backend's own existence answer (``is_alive()``), or
+            None when that could not be determined. For tmux this is
+            ``has-session``, which says the session EXISTS and says
+            nothing about whether its pane still has a live process.
+        pane_status: A ``resolve_pane_status()`` value for this session's
+            pane, or None when pane introspection does not APPLY to this
+            backend at all (PTYBackend has no pane; there, existence of
+            the child process genuinely is liveness). None means "not
+            applicable", which is different from ``STATUS_UNKNOWN``,
+            which means "asked, and could not tell".
+
+    Output:
+        str: ``LIVENESS_LIVE``, ``LIVENESS_GONE`` or ``LIVENESS_UNKNOWN``.
+
+    Example:
+        >>> resolve_listing_liveness(True, STATUS_DEAD)
+        'gone'
+        >>> resolve_listing_liveness(True, STATUS_IDLE)
+        'live'
+        >>> resolve_listing_liveness(True, STATUS_UNKNOWN)
+        'unknown'
+        >>> resolve_listing_liveness(None, STATUS_IDLE)
+        'unknown'
+    """
+    if exists is None:
+        return LIVENESS_UNKNOWN
+    if not exists:
+        # A definite "no session here" from the backend itself.
+        return LIVENESS_GONE
+    if pane_status is None:
+        # No pane to introspect (PTYBackend). The process check IS the
+        # liveness check for that backend, and it said yes.
+        return LIVENESS_LIVE
+    if pane_status == STATUS_DEAD:
+        # THE HUSK. tmux is holding a corpse open via remain-on-exit.
+        return LIVENESS_GONE
+    if pane_status == STATUS_UNKNOWN:
+        # The session exists but the pane probe could not answer. We do
+        # not get to call that running, and we do not get to call it over.
+        return LIVENESS_UNKNOWN
+    return LIVENESS_LIVE

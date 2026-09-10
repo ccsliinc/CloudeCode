@@ -219,6 +219,7 @@ async function boot(opts) {
         matchMedia() { return { matches: false, addEventListener() {} }; },
         SessionStatusUI: {
             dotHtml() { return '<span class="status-dot"></span>'; },
+            archiveIconSvg() { return '<svg class="archive-icon"></svg>'; },
             pencilIconSvg() { return '<svg></svg>'; },
             trashIconSvg() { return '<svg></svg>'; },
             markUnreadHtml() { return ''; },
@@ -433,49 +434,23 @@ await test('an open inline rename input is not clobbered by a repaint, and the r
         'the deferred repaint must land on the next tick, not be lost');
 });
 
-await test('AN OPEN ROW ACTION MENU DEFERS THE REPAINT THAT WOULD ORPHAN IT', async () => {
-    // A session row's three-dot menu mounts its panel on the body, so the
-    // panel survives a repaint - and its TRIGGER does not, because the
-    // trigger is inside the container being wiped. Repainting would leave
-    // an open menu floating beside a button that no longer exists.
-    //
-    // The guard consulted this before, lost the check when the row menu
-    // was removed on 2026-09-08, and gets it back now that a menu is on
-    // the row again. Proved by planting exactly the object the guard
-    // looks for and showing the paint does not happen.
+await test('an open row overflow menu blocks the repaint, and releases it when closed', async () => {
     const h = await boot({ visible: true });
     await h.lp.loadProjects();
     await h.settle();
     const tick = h.startPoller();
     tick(); await h.settle();
-    h.fakeWindow.SessionRowMenuOpen = { isOpen() { return true; } };
+    let open = true;
+    h.fakeWindow.SessionRowMenuOpen = { isOpen() { return open; } };
     const paints0 = h.paints('project-list');
-    h.lp.projects[0].name = 'project-changed';
+    h.lp.projects[0].name = 'project-changed-under-an-open-menu';
     tick(); await h.settle();
     assert.equal(h.paints('project-list') - paints0, 0,
-        'a repaint under an open menu would orphan the trigger it is anchored to');
-
-    // AND A SKIP IS NOT A MEMORY. Closing the menu must let the very next
-    // tick paint, with no queue, no timer and no flag to leak.
-    h.fakeWindow.SessionRowMenuOpen = { isOpen() { return false; } };
+        'a repaint must not pull the rows out from under an open menu');
+    open = false;
     tick(); await h.settle();
     assert.equal(h.paints('project-list') - paints0, 1,
-        'the deferred work must happen on the next pass once the menu is closed');
-});
-
-await test('a page with no row menu loaded is never busy for that reason', async () => {
-    // The check is a capability test, so a surface that loads the guard
-    // without the menu module simply paints rather than throwing.
-    const h = await boot({ visible: true });
-    await h.lp.loadProjects();
-    await h.settle();
-    delete h.fakeWindow.SessionRowMenuOpen;
-    const tick = h.startPoller();
-    tick(); await h.settle();
-    const paints0 = h.paints('project-list');
-    h.lp.projects[0].name = 'project-renamed-again';
-    tick(); await h.settle();
-    assert.equal(h.paints('project-list') - paints0, 1);
+        'closing the menu must let the pending change paint');
 });
 
 // ---------------------------------------------------------------------

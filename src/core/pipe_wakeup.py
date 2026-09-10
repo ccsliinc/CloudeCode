@@ -123,6 +123,11 @@ class PipeWaiter:
             # Constructed outside a running loop. There is nothing to
             # register with, so stay on the fallback.
             return
+        # Bound BEFORE the try so the cleanup below can name it without
+        # asking whether it exists. ``select.kqueue()`` itself is the
+        # first thing that can raise, and a name that may or may not be
+        # bound is a cleanup that may or may not run.
+        kq = None
         try:
             kq = select.kqueue()
             kq.control(
@@ -141,9 +146,9 @@ class PipeWaiter:
         except (OSError, ValueError, NotImplementedError) as exc:
             logger.debug("pipe_waiter_watch_unavailable", exc_info=False)
             try:
-                if "kq" in dir() and kq is not None:
+                if kq is not None:
                     kq.close()
-            except (OSError, UnboundLocalError):
+            except OSError:
                 pass
             return
         self._kq = kq

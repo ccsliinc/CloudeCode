@@ -28,6 +28,36 @@ client mirrors the same set in `client/js/session-status-ui.js`.
 and "I looked and found rest" are different claims and must never render
 the same way.
 
+### The legend, in one place
+
+**THE DOT IS THE STATE AND WHETHER IT HAS BEEN READ; THE RING IS
+ACTIVITY.** Green `done` means finished and unread, grey `idle` means
+finished and read, and only a session with something RUNNING in it
+breathes. See "The LED: two independent dimensions" below.
+
+The words a user reads live in `STATUS_LABELS`
+(`client/js/session-status-ui.js`) and nowhere else; every surface gets
+them through `dotHtml`, so they cannot drift between the sidebar, the
+launchpad and the terminal header.
+
+| state | tooltip |
+|---|---|
+| `question` | waiting for permission |
+| `notice` | wants your attention |
+| `working` | working |
+| `working_subagent` | working - a subagent is active |
+| `finished_unread` | done - unread |
+| `idle` | idle - read, nothing running |
+| `dead` | dead - process exited |
+| `unknown` | not measured |
+
+`idle` used to read "idle - waiting at the shell", which was wrong about
+four fifths of the sessions it described: measured 2026-09-09, 15 of 19
+live panes were running claude, not a shell. `idle` means the light has
+nothing to report - read, and nothing running - and a bare shell is only
+one of the ways to get there. `unknown` used to read "status unknown",
+which sounds like a fault; it is a measurement that was not taken.
+
 ### Why `question` and `notice` are two states, not one
 
 They were one state until 2026-09-08, and that state was named `question`
@@ -126,53 +156,27 @@ session can show one status card and one receipt.
 first and outranks every hook signal. Hooks cannot observe a dead process,
 so nothing else may report `dead`.
 
-**A DEAD SESSION KEEPS ITS ROW, and until 2026-09-08 it did not.** `dead`
-is only worth having if the user can see it, and they could not: the
-listing pass resolved one verdict, `gone`, from two different facts - "the
-backend says there is no such tmux session" and "the session is there and
-its pane is a corpse" - and dropped the row for both.
-`GET /sessions/attachable` cannot catch either, because the route filters
-out every tmux name bound to a live backend so the UI never offers
-self-adopt. So a session whose process died VANISHED off the sidebar and
-the running list, while `dead`/`off` sat in the LED table below and
-`actionsFor('dead')` sat ready with restart and remove. Measured against a
-real agent by `tests/test_led_real_hooks.py`, which pinned the vanishing
-as the behaviour that existed.
+**`dead` IS GALLERY-ONLY: a dead pane drops off the live list and belongs
+in Recent.** The owner's call, verbatim 2026-09-08: "they go into recent,
+they can disappear." A session whose process died has stopped, so
+`_session_info_for` drops its row from `GET /sessions/list` rather than
+leaving it in the sidebar wearing a dead light, and a restart from Recent
+is a resume. The `dead` row in the table above and the `dead`/`off` LED
+state below stay documented and stay implemented - they are what the
+archive and the attachable-session decorator render - but no live
+endpoint is meant to carry a dead row to the client. A round that read
+the same measurement as a bug and made a husk KEEP its row, painted dead,
+was overruled and reverted (`ba2aa5d`);
+`tests/test_led_real_hooks.py::test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead`
+holds the line against a real killed pane.
 
-`src/core/session_liveness.py` splits it into four named outcomes, and the
-pane words are borrowed from `session_respawn.py` rather than spelled a
-second time:
-
-| verdict | what was measured | what happens to the row |
-|---|---|---|
-| `alive` | the session exists and its pane is live | listed, normal status |
-| `pane_dead` | the session exists, `#{pane_dead}` = 1 | **listed, says `dead`** |
-| `session_gone` | the backend says there is no such session | dropped; the reaper files the stored row as ended and it appears in the recent list |
-| `unknown` | could not ask | listed, says `unknown` |
-
-`pane_dead` keeps the row because `remain-on-exit` holding the corpse open
-is the same fact that lets `respawn-pane` revive it - restart and remove
-are both real actions on that row, and neither is reachable on a row that
-is not drawn. `session_gone` has no pane to paint and nothing a respawn
-could land in, so it moves to the recent list, where a restart is a
-resume. Existence is read BEFORE the pane, so a stale `dead` in the bulk
-status map can never keep a row alive for a session tmux no longer has.
-
-The startup gate reads a `pane_dead` session as `ready` - the narrow claim
-"not blocked on a startup prompt", which is true of a corpse - raises no
-toast for it, and captures no scrollback, so a dead row costs nothing per
-poll.
-
-THE BOOT RE-ADOPT STILL REFUSES A DEAD PANE, and that is correct rather
-than a hole this left. `attach_existing(needs_pipe_setup=True)` cannot
-pipe-pane a corpse, so it raises and the pass (which gathers with
-`return_exceptions=True`) simply does not hold that session. The row does
-not disappear: with no live backend bound to the name,
-`/sessions/attachable` lists it and decorates it with
-`map_tmux_fallback(STATUS_DEAD)`, which is the path that has ALWAYS
-surfaced a husk. The two are complementary - bound to a backend, the
-session says `dead` on `/sessions/list`; unbound, it says `dead` on
-`/sessions/attachable` - and after this change they finally agree.
+STILL OPEN, and the test records it rather than asserting it:
+`remain-on-exit` keeps a husk's tmux SESSION in the listing, and
+`src/core/session_lifecycle.py` reaps on ABSENCE from that listing, so the
+row leaves the live list without yet arriving in Recent. Closing that
+needs a reaper rung keyed on a MEASURED `#{pane_dead}` - a new durable
+writer, in the one module whose entire premise is never writing a verdict
+nobody measured, so it is its own change and not a footnote to this one.
 
 **Hook events are unordered, duplicated and droppable.** Every consumer in
 `session_activity.py` is idempotent: last-write-wins booleans, counters
@@ -194,16 +198,34 @@ stream rather than through the tmux fallback that was fixed for the same
 lie. The punchlist recorded it as "activity reads working for minutes
 after a resume".
 
-The rule: an event that CLOSES something stamps the heartbeat only when
-something was open for it to close. `SubagentStop` needs
-`subagent_depth > 0`, which is already the exact record of an unmatched
-`SubagentStart`; at zero it decrements nothing, stamps nothing, moves no
-state and logs `subagent_stop_without_start` at debug. `PostToolUse` has
-no counter (parallel tool calls and a droppable `PreToolUse` would
-desynchronise one), so it keys on a `turn_open` boolean that every
-OPENING event (`UserPromptSubmit`, `PreToolUse`, `SubagentStart`) sets and
-`Stop` clears. Opening events still stamp unconditionally - there is
-nothing they could be late for.
+**The rule: `SubagentStop` never stamps the heartbeat.** It reports that
+work ENDED, so the only thing it may move is `subagent_depth`, and it
+moves that with the floor at 0. At depth 0 it moves nothing at all and
+logs `subagent_stop_without_start` at debug.
+
+It first shipped gated on `subagent_depth > 0` instead - stamp only when
+a subagent was open to close - and **the gate is not the claim it stands
+for**. Hooks are duplicated: a duplicated `SubagentStart` delivered after
+`Stop` raises the depth off the floor by itself, and the duplicated
+`SubagentStop` behind it then passes the gate and stamps, through the
+very guard meant to refuse it. Worse, it stamps at its OWN arrival time,
+so every further duplicated pair pushes the expiry out again - a ratchet
+with no ceiling, driven entirely by strays. A guard keyed on a number the
+stream it distrusts can move is not a guard. Refusing outright loses
+nothing: a subagent FINISHING is not work happening now, so if the turn
+really is still running the parent's next `PreToolUse` / `PostToolUse`
+re-arms the heartbeat within one tool call.
+(`tests/test_session_activity.py::test_a_duplicated_subagent_pair_after_stop_cannot_ratchet_the_heartbeat`)
+
+`PostToolUse` cannot take the same blanket refusal - it is the only event
+some legitimate turns emit late - and it has no counter to key on
+(parallel tool calls and a droppable `PreToolUse` would desynchronise
+one), so it keys on a `turn_open` boolean that every OPENING event
+(`UserPromptSubmit`, `PreToolUse`, `SubagentStart`) sets and `Stop`
+clears. Opening events still stamp unconditionally - there is nothing
+they could be late for - so a stray `SubagentStart` after `Stop` still
+buys ONE bounded window keyed on itself. What no `SubagentStop` can do is
+extend it.
 
 **The refusal is narrow, which is what makes it a measurement.**
 `PostToolUse` is refused ONLY when a `Stop` has POSITIVELY been seen for
@@ -256,25 +278,472 @@ That is the stale `working` recorded on the punchlist as lasting minutes
 after a resume: it did not last minutes, it lasted until a hook arrived to
 overrule it.
 
+## Seeding at boot, and why it may only ever claim rest
+
+The fallback above is honest and it is not enough. `SessionActivityTracker`
+is an in-memory dict that nothing hydrates at boot or at adopt, so a
+restart leaves every surviving session with no hook signal, and a pane
+running claude has no tmux answer either. **Measured on live 2026-09-08
+22:24Z: 19 live panes, 15 painting `unknown`.** Ten of them had never
+fired a hook and never will - they were started by hand, without the hook
+environment, and their last assistant turns are dated 2026-07-16 and
+2026-08-24. They had been sitting at an idle prompt for weeks and the
+light could not say so. The owner's complaint, verbatim: "on the homepage
+and sidebar many status unknown."
+
+So a second source of evidence is consulted, one that OUTLIVES the
+process. `src/core/session_status_seed.py` is the pure ladder,
+`session_status_seed_records.py` reads what a transcript record means,
+`session_status_seed_store.py` is the cache, and
+`session_status_seed_read.py` does the two reads and holds the seam.
+
+**IT MAY CLAIM REST. IT MAY NEVER CLAIM WORK.** That asymmetry is the
+whole design and it is not a conservatism knob. Rest is self-evidencing: a
+conversation whose last record ends a turn is at rest until something
+appends to it, and nothing has, which is exactly why
+`activity_persist.PERISHABLE` excludes `idle`. Work is a claim about right
+now and it needs a heartbeat to expire it. Hooks carry one; a file on disk
+does not. A `working` seeded from a transcript could never be expired by
+anything, so it would be a permanent lie the moment it was wrong - the
+identical defect that had a raw tmux `running` painting 15 sessions busy
+on no evidence, one tier further down.
+
+The rungs, in order. Each names what it MEASURED.
+
+| Rung | Evidence | Answers |
+|---|---|---|
+| 0 | the transcript AS IT STANDS NOW: its mtime, and its newest turn end | `working` / `finished_unread` / `idle`, and nothing else may |
+| A | `sessions.activity_state` / `activity_state_at` for THIS instance | that state, if `restore_state` still trusts it |
+| B | the last decidable record of the bound transcript | `idle` when it ends a turn; nothing otherwise |
+| C | a bare shell pane | `idle` already, before this ladder is reached |
+| D | everything else | `unknown`, which is a real answer |
+
+## Sessions without hook plumbing
+
+**Measured on live 2026-09-09, f77a978: only 6 of 19 live sessions had
+ever fired a hook.** The other thirteen were started by hand without the
+hook environment, so the state machine above will never hold a signal for
+them and their light rested entirely on rung B, which can say `idle` and
+nothing else. Three of those thirteen had touched their transcript inside
+the previous 36 minutes and painted exactly the same rest as sessions
+last touched in July. A session doing work is the one thing a status
+light exists to show, and for two thirds of the fleet it could not show
+it.
+
+`src/core/session_transcript_status.py` is the ladder that closes it
+(pure), with its reads and its turn ledger next door in
+`session_transcript_status_read.py`. It is reached ONLY through the seed
+seam, which runs only while `SessionActivityTracker.hooks_seen` is False,
+so a hooked session is never touched by it: hooks are that session's
+truth and the first hook of the process retires the seed for good.
+
+**An mtime is a TIMESTAMP, and that is why rung 0 may claim work when
+rung B may not.** The objection above is about the CONTENT of a record,
+which says what happened and carries no clock of its own; it is not an
+objection to a file's modification time. A claim built on an mtime is
+expired by the same `WORKING_HEARTBEAT_TIMEOUT_SECONDS` a hook heartbeat
+uses, so a transcript that stops growing stops claiming work within one
+window whether or not anything else ever happens. `StatusSeed` carries
+`expires_at` and `display_state` refuses a seed whose claim has run out,
+which matters because the seed cache holds a reading for up to sixty
+seconds - without it, a `working` measured at the end of its window would
+be served for another minute.
+
+| Rung | What it measured | Answers |
+|---|---|---|
+| 1 | the transcript file was written inside the heartbeat window | `working`, carrying an expiry |
+| 2 | a turn end NEWER than the one already recorded for this pane | `finished_unread`, and sets the auto unread flag ONCE |
+| 3 | the turn end already recorded | `finished_unread` while unread, `idle` once a view cleared it |
+| 4 | mid-turn when last written, and that was longer ago than a heartbeat | nothing; the session stays `unknown` |
+| 5 | no transcript, or one that could not be read | nothing, and the two are named separately |
+
+**FIRST SIGHT OF A TURN END IS A BASELINE, NOT AN INSTRUCTION.** Rung 2
+is written as "newer than the one already recorded", never "not yet
+recorded", and that is load-bearing. The turn ledger is in memory, so a
+server restart empties it; a first-sighting claim would light every
+hookless session on the box unread on every restart, including
+conversations that ended in July. The first reading for an instance
+records the timestamp and claims nothing. `claude_title_sync` applies the
+same rule to a `custom-title` for the same reason.
+
+The ledger is keyed on the tmux INSTANCE (`<tmux_name>@<epoch>`, composed
+by `UnreadStore.compose_key` rather than re-spelled), its baseline only
+ever moves FORWARD, and only the two turn-end rungs may move it - rung 1
+carries a timestamp too, but it is a file mtime and not a turn boundary,
+and recording it would push the baseline past turn ends nobody observed.
+
+**Why the gate is `hooks_seen` and not the hook token store.** Membership
+in `hook_tokens.json` looks like the stronger gate and is not one:
+measured on live 2026-09-09 it holds 33 entries against 19 live tmux
+sessions, and every externally adopted pane is in it, because an adopt
+mints a token for a pane it never spawned into. A token proves this app
+minted one; it does not prove a hook can ever arrive. Gating on it would
+have refused the ladder to exactly the sessions it was built for.
+
+## Where a status came from
+
+`GET /sessions/list` carries `status_source` beside `activity_status` on
+the WRAPPER. Five values, defined once in
+`src/core/session_status_source.py`, in descending strength of evidence:
+
+| Value | Meaning |
+|---|---|
+| `hook` | Claude Code's own lifecycle hooks are live for this session this run. The agent said what it was doing. |
+| `transcript` | Measured off the conversation file: its mtime, or the last decidable record in its tail. |
+| `seed_row` | Restored from `sessions.activity_state`, judged still worth something by `restore_state`. |
+| `tmux` | tmux alone: a dead pane, a bare shell, or the honest `unknown` a non-shell foreground process earns. |
+| `none` | Nothing answered. Said out loud rather than left blank. |
+
+**It is rendered in the tooltip and nowhere else** - `via hooks`, `via
+transcript` - by `SessionStatusUI.labelWithSource`. It never changes a
+colour, a class or a shape. One status with two appearances would undo
+the single vocabulary the light rests on, and a user cannot be expected
+to learn a second colour axis meaning "how sure are we". The source is
+DERIVED FROM THE RUNG THAT ANSWERED, never from what the caller believed,
+so a status and its provenance can only travel together.
+
+## The light in the terminal header
+
+The sidebar row, the launchpad card and the project tree all painted an
+LED; the terminal header - the surface on screen the whole time you are
+working in a session - showed only the name, so the status of the session
+you were IN was the one status you had to open a list to read.
+`client/js/session-header-led.js` puts the same light beside the title,
+rendered through `SessionStatusUI.dotHtml` rather than its own markup, so
+it inherits the two-ring model, the colours and the legend copy and
+cannot drift from the other surfaces.
+
+It is fed by the sidebar's own poll (one call site in
+`_fetchAndRender`) reading the SAME merged row the list just painted. That
+poll runs only while the drawer is open, so the module also arms a
+fallback timer at the same cadence which stands down whenever the sidebar
+is polling: AT MOST ONE POLLER, EVER. With no session attached it fetches
+nothing and removes the light, because a light left under a header that
+now names the launchpad is a claim about something that is not on screen.
+
+**Rung A is read on the full instance triple**, `(tmux_socket, tmux_name,
+tmux_created_epoch)` - byte-for-byte the WHERE clause
+`activity_persist.write_state` writes on. A tmux name is reused the moment
+its owner dies, so two rows can carry one name at once, and a name-scoped
+read answers for whichever epoch sorts newest, which is a different
+question. No epoch means no instance was identified, and that is refused
+outright rather than guessed at. A stale PERISHABLE state
+(`working`/`question`/`notice`) is refused; a stale `idle` or
+`finished_unread` is kept.
+
+**Rung B walks the tail BACKWARDS and stops at the first decidable
+record**, so the newest evidence wins. An old end-of-turn can never
+outrank a newer prompt - the same ordering the startup gate uses when it
+reads a hook before it reads the scrollback, and for the same reason: old
+evidence is stale evidence. It reads through the one bounded reader this
+codebase has, `claude_title_sync.read_tail_records` (64 KB, 0.27 ms median
+against the real corpus).
+
+Three record shapes end a turn: `system`/`turn_duration`,
+`system`/`stop_hook_summary`, and an assistant whose `message.stop_reason`
+is `end_turn` or `stop_sequence`. A user prompt, a `tool_result`, and an
+assistant that stopped on `tool_use` are in flight and seed nothing.
+Everything else is UNDECIDABLE and the walk continues - collapsing that
+third value into either of the other two is how a ladder starts inventing
+boundaries.
+
+**A SIDECHAIN RECORD IS UNDECIDABLE**, and it is the subtle one. A record
+with `isSidechain` true belongs to a SUBAGENT running inside the parent's
+turn, so its `end_turn` says the subagent finished and says nothing about
+the conversation the user is watching. Reading one as rest would paint
+idle over the longest-running work there is.
+
+**A SLASH COMMAND IS NOT A PROMPT**, and the live measurement is what
+forced that rung. claude intercepts slash commands before they become
+prompts - which is why no hook event carries a `/rename` - but it still
+writes a pseudo-`user` record about one, wrapped in `<command-name>` /
+`<local-command-caveat>` envelopes whose own text says "DO NOT respond to
+these messages". Read as prompts, those pinned two sessions at in-flight
+forever while both sat at an empty `>`. They are now UNDECIDABLE, not
+rest: the walk continues to a boundary claude really wrote, so a slash
+command can never manufacture an idle either.
+
+**Where it is wired.** Warmed at the end of the boot re-adopt
+(`session_boot_readopt.py`, beside `sweep_live_sessions`) and after
+`POST /sessions/adopt`, so the FIRST listing after a restart is already
+right. Applied at the one seam in `SessionManager._session_info_for`,
+reached ONLY while the answer is still `unknown` and the pane was measured
+LIVE - so a seed can add an answer and can never overwrite a measured one.
+
+**A live hook always wins, immediately.** The seam is gated on
+`SessionActivityTracker.hooks_seen`, so the first hook event of the
+process retires the seed for good: there is no expiry to wait out and no
+value to clear. That gate is also what makes seeding idempotent. A seed is
+a cached READING of durable evidence, not an event applied to a state
+machine, so re-deriving it any number of times converges on the same
+answer - unlike the hook consumers, which had to be made idempotent by
+hand.
+
+**The periodic re-seed, and its one honest direction.** A hand-started
+claude has no hook plumbing at all, so its light would freeze at whatever
+the first seed said for the life of the process. The seam re-derives rung
+B every `SEED_REFRESH_INTERVAL_SECONDS` (60s; about 6ms a minute for a
+fleet of twenty). Re-deriving can move a session from `idle` back to
+`unknown` when the transcript grows an in-flight record, which is correct:
+a growing transcript is evidence the rest claim has expired, NOT evidence
+of work. Polling a file more often does not make it a heartbeat. A session
+with live hook signal is never re-seeded.
+
+**Measured read-only against the live database and the real corpus before
+this shipped:** all 15 of the sessions painting `unknown` would read
+`idle`, every one of them via rung B, dated by its own transcript - the
+oldest 2026-04-23, the newest 2026-09-08. Per-session cost 0.27ms median,
+1.09ms max. The negative control that matters is separate, because a
+matcher that always finds something is worse than useless: over 400
+randomly sampled transcripts the ladder splits 172 `at_rest` / 70
+`in_flight` / 158 `no_marker`, so it demonstrably refuses.
+
+
 ## Unread
+
+ONE FLAG, TWO WRITERS. The owner's rule, verbatim: "when clicking a tab,
+the session is marked read. if i want it unread i click unread. it allows
+me to know whats waiting." So `auto` and `manual` are two writers of the
+SAME user-visible state, not two states.
 
 **Set** on `Stop` (the `auto` flag), and by the user's explicit control
 (the `manual` flag). A session is unread if either is set.
 
-**There is no longer a client control for the `manual` flag.** The unread
-envelope was removed from the sidebar and the launchpad on 2026-09-08 -
-see "The envelope is gone" below. `PATCH /sessions/{name}/unread` still
-exists and still works; nothing in the UI calls it.
+**Cleared**, BOTH sub-flags together, by either of two events: a WS
+terminal binding to the session (`SessionManager.mark_session_viewed` -
+the strongest "the user is looking at this" signal the server has), or
+the user clearing the control (`PATCH /sessions/{name}/unread` with
+`false`). Both go through `UnreadStore.clear`, which drops the pair in
+one write.
 
-**Cleared** when a WS terminal actually binds to the session
-(`SessionManager.mark_session_viewed`) - the strongest "the user is
-looking at this" signal the server has, deliberately stronger than merely
-appearing in a poll response. That clears `auto` only. A conversation the
-user pinned unread for followup stays flagged after they open it, until
-they clear it themselves.
+### Read and unread are DERIVED, never stored
+
+`finished_unread` and `idle` are ONE resting state seen through ONE flag,
+and which of the two a session is, is decided at resolve time by
+`session_status.derive_read_state` - the single function every source runs
+through. Two directions, not one: no path may answer `finished_unread`
+while the flag is False, and a session at rest whose flag IS set must
+answer `finished_unread`.
+
+**MEASURED ON LIVE 2026-09-09 at 5e13cb1.** The owner opened the
+daily-briefing tab and nothing changed. `/sessions/list` for
+`cloude_daily-briefing` answered `activity_status: finished_unread` beside
+`unread: false`, with `status_source: seed_row`: the WebSocket bind had
+cleared the flag exactly as designed, and the durable row still held the
+word `finished_unread` stamped before the view. The seed path returned it
+verbatim and the green dot stayed green over a session that had been read.
+
+Each source had its own half of the rule and one of them had only the half
+that ADDS unread. **A one-directional derivation is not a derivation, it
+is a cache** - and a cache of a fact that moves is a lie with a timestamp.
+
+The callers, all of them applying the same pure function:
+
+| where | what it derives |
+|---|---|
+| `SessionActivityTracker.resolve` | the hook path's resting tail |
+| `session_activity.map_tmux_fallback` | the tmux-only path (attachable rows too) |
+| `session_status_seed.display_state` | the durable row and the transcript seed |
+| `session_transcript_status.resolve_transcript_status` | the hookless ladder, rung 3 |
+| `SessionManager._session_info_for` | the assembled answer, against the flag as it stands |
+
+`_session_info_for` re-applying it is not belt and braces for its own
+sake: the seed path can SET the flag on the way past (a newly measured
+turn end), so the assembled answer is derived after that write. The
+function is idempotent, so running it over a value a source already
+derived cannot change it.
+
+**THE COLUMN HOLDS THE BASE STATE.** `activity_persist.write_state`
+collapses the pair back to `idle` on the way into
+`sessions.activity_state`, because the flag is durable in a store of its
+own and a row that records the projection records an answer nothing
+rewrites when the user opens the tab. Rows written before this still carry
+the old spelling and are reconciled on read by the same function, which is
+why the fix needed no migration.
+
+**THE ONE RUNG THAT IS NOT DERIVED IS THE ONE THAT SETS THE FLAG.** The
+transcript ladder's rung 2 has just MEASURED a turn end newer than
+anything recorded, and reports `claim_turn_end_at` so the seam writes the
+auto flag. Deriving there against the flag as it stood BEFORE that
+measurement would answer `idle` about a turn that finished unseen. Every
+other rung reads the flag; that one moves it.
+
+### A view clears an open `notice` AND an open `permission`
+
+Both paths route through `src/core/session_view_clears.py` so there is
+one definition of what looking at a session resolves.
+
+**Measured on live 2026-09-09: the session named BHPP painted the
+terracotta `notice` light for 46 minutes ACROSS A VISIT.** The owner
+opened the tab, read it, left, and the light was still asking for
+attention. `notice` is set by claude's `Notification` hook (the one it
+fires after about sixty seconds of waiting for input), it outranks the
+heartbeat, and the only things that cleared it were `UserPromptSubmit`,
+`PreToolUse` and `Stop` - all three the AGENT doing something. None of
+them is the user showing up, and "come and look at me" is a claim only
+the user can answer.
+
+**`question` was deliberately untouched by a view until 2026-09-09, and
+what changed is worth keeping.** The old argument: a `PermissionRequest`
+means claude is STOPPED until a human answers a yes/no, so it is a fact
+about the agent rather than a message to the user, glancing at it does
+not answer it, and clearing it on a view would turn the one light meaning
+"this cannot proceed without you" into one meaning "you looked at it".
+That reasoning is sound and it was still protecting the wrong thing.
+
+**Measured on live 2026-09-09: `cloude_Media_Compression` painted the
+permission light over a pane holding no dialog at all**, for over an hour
+and across a visit. Its tail read a settings warning, a typed prompt line
+and `bypass permissions on`. The flag had been set on session id
+`ses_949a8585`, while the claude actually running in that pane was
+measured - in its own process environment - to hold
+`CLOUDECODE_SESSION_ID=adopted:cloude_Media_Compression`, a spawn-time
+value tmux cannot rewrite into a running process. The hook token store
+held tokens for BOTH ids against the one tmux name, so nothing was
+rejected and no log line looked wrong; the pane's own `UserPromptSubmit`
+and both its later `Stop` events simply landed on a different tracker key.
+**NOTHING REACHABLE FROM THAT PANE COULD EVER RETIRE THE FLAG.** The
+toast path already survives this exact split (it remaps a stale id onto
+the live one before it stores or acks); the activity tracker does not.
+
+A claim no observation can retire is not a careful claim, it is a stuck
+bit. So the flag now has three retirement paths instead of one: the hook
+events that answer it (unchanged, and still the fastest when the ids line
+up), the user viewing the session, and the pane being read and found to
+hold no dialog.
+
+### An open `permission` is verified against the pane after 20 seconds
+
+`src/core/session_permission_verify.py` is the ladder,
+`session_permission_verify_apply.py` the seam that runs it from the
+listing pass, before `resolve()` so the corrected flag produces the
+status rather than a second place patching one.
+
+While `permission_open` has been set for longer than
+`PERMISSION_TAIL_GRACE_SECONDS` (20) on a pane measured LIVE, the listing
+pass takes ONE `capture-pane` for that session and looks for claude's
+permission dialog. The gate (`should_capture_permission_tail`) is the
+same shape as the startup gate's, and for the same reason: in steady
+state the set it admits is EMPTY, so a healthy box pays nothing. Do not
+move that capture into the unconditional path.
+
+Three outcomes, and only one clears:
+
+| Pane read | Marker | Verdict |
+|---|---|---|
+| yes | present | keep `question` - the hook was right |
+| yes | absent | clear `permission_open`, log `permission_flag_cleared_no_dialog` once |
+| no | n/a | KEEP. Not having managed to look is not evidence of absence |
+
+The markers were **measured, not guessed** - a real `claude` on a
+throwaway tmux socket with a `permissions.ask` rule in its own settings
+file, 2026-09-09, versions 2.1.265 and 2.1.266. Two wordings were
+captured because assuming one would have shipped a matcher that misses
+the other: the Bash prompt asks `Do you want to proceed?` and the Write
+prompt asks `Do you want to create note2.txt?`, so a matcher keyed on the
+literal first string answers "no dialog" for every file operation. What
+IS identical across both is the option block (`❯ 1. Yes` / `2. No` -
+NUMBERED, unlike the trust dialog) and the footer `Esc to cancel · Tab to
+amend`. Any of the three keeps the flag.
+
+The direction of error is deliberate. A false positive keeps a flag that
+is already set, which costs nothing new; a false negative paints a
+blocked session as idle. So the matcher is broad, and the negative
+controls in `tests/test_session_permission_verify.py` are the load-
+bearing tests - a matcher that always finds something would pass every
+positive case and clear nothing, forever. The stamp that dates the claim
+is written on the False -> True transition ONLY, so a repeating
+`PermissionRequest` cannot push the grace window out indefinitely.
+
+Nothing here can INVENT a permission: only a hook opens this claim, and
+the pane may only close it.
+
+No time expiry was added either. The owner's rule, verbatim: "a session
+left alone should not go gray. if i dont focus the tab it keeps its
+color." A notice is cleared by a person, not by a clock.
+
+Only the READ direction is a view. Marking a session UNREAD is the user
+saying "come back to this", which is the opposite of having looked, so it
+moves nothing else.
+
+The manual flag used to survive being viewed, on the theory that a
+followup pin outranks a glance. The owner's rule is the opposite and the
+simpler contract: opened means read. And clearing only the half the user
+happened to have set would leave a `Stop`-flagged row unread while the
+control the user just clicked reported itself off - a dead control.
+
+**THE CONTROL ITSELF IS OPTIONAL, THE STATE IS NOT.** One line of this
+project deleted the mark-unread control from the whole client on the
+grounds that the LED's green ring already says a session is unread. The
+owner kept it and put it behind a setting instead,
+`ui.show_mark_unread_control` in `config.json` (default true, reported on
+`GET /api/v1/features`, gated in exactly one place -
+`SessionStatusUI.markUnreadHtml` returns `''` and every surface loses it
+together). The INDICATOR and the CONTROL are two different things: the
+ring says a turn is waiting, the control is how the user says one is.
 
 **Stored** server-side, not in `localStorage`, because the user drives
 this from a phone and a desktop and the flag has to follow them.
+
+### One flag, one key, or it is two flags
+
+THE EPOCH COMES FROM TMUX AND NOTHING ELSE, and since 2026-09-09 it comes
+through exactly one function. `src/core/unread_identity.py` owns the
+question; `SessionManager._unread_epoch` is the only caller in that file,
+and the set (`Stop`), the other set (the manual control), the clear
+(`mark_session_viewed`) and the read (`_session_info_for` and the
+attachable listing) all go through it. Two derivations for one key is two
+keys the moment they disagree, and a clear that lands on a key nobody
+wrote leaves a flag no click can ever clear while every layer in between
+reads correct.
+
+The two answers it deliberately refuses are the ones that used to compete
+with it. `_instance_epochs` is keyed by session_id and seeded from the
+create / adopt / boot-readopt paths out of the DATABASE ROW, so it is
+empty for every session predating the process and otherwise answers "what
+did this process decide when it first saw this handle", not "what does
+tmux say now". A row's recorded epoch answers what the epoch WAS when the
+row was written. Only the live listing answers the question the key asks.
+
+The memo behind `unread_identity.resolve_epoch` is a MEMO OF THAT
+MEASUREMENT, not a second source: every value in it was read out of a tmux
+listing, it is keyed by tmux NAME rather than by session_id, and every
+listing the manager performs refreshes it (`remember` / `remember_listing`),
+so a recycled name cannot keep its predecessor's epoch for longer than one
+poll. A probe is spent only on a miss, which is what keeps this callable
+from the hook path. A failed probe changes nothing - a transient tmux
+failure is not evidence an epoch moved - and an unmeasurable epoch
+degrades to the legacy bare-name key rather than minting a second entry.
+
+### Opening the tab only marks it read if a WebSocket actually opens
+
+The clear hangs off the WS bind, so anything that stops the socket from
+opening stops the session being marked read. Measured on live 2026-09-09:
+a session entered in a BACKGROUNDED browser tab never opened one at all.
+`TerminalController.connectWebSocket()` awaited
+`waitForFontsAndLayout()`, which ended on two bare
+`await new Promise(requestAnimationFrame)` calls, and a browser does not
+run rAF for a tab it is not painting. The connect suspended inside that
+await, before `openWebSocket()` - and because no socket existed there was
+no `onclose`, so no rung of the auto-reconnect ladder could fire either.
+The terminal sat on "Connecting to terminal..." (the string set on the
+line above the await) and the row kept its unread light with nothing able
+to clear it. The suspended connect completed the instant the tab was painted,
+35 minutes later.
+
+FIXING ONE OF THEM WAS NOT ENOUGH, and only re-verifying on live caught
+it. `reconnectToExistingSession` (the sidebar row click) and the adopt
+branch of `connectToSession` each carried their own bare double-rAF
+await, and both sit ABOVE the `setTimeout(() => this.connectWebSocket(),
+500)` in the same async function - so the connect was not merely
+suspended, it was never SCHEDULED.
+
+`client/js/terminal-layout-wait.js` is the rule now: a layout wait may
+DELAY a connect, never CANCEL one. Every wait there is raced against a
+timer, because `setTimeout` fires in a background tab and rAF does not,
+and a timed-out wait is reported rather than thrown - the caller connects
+on the geometry it has and the resize handshake corrects the grid on the
+first real paint, the same path a rotation already takes.
 
 ### The key is the INSTANCE
 
@@ -310,6 +779,20 @@ nothing. The state model above is untouched by it: a muted session still
 records every hook event, still resolves to `question` when it is blocked
 on a permission prompt, still flips unread on a `Stop`, and still paints
 its LED exactly as it would have. What is skipped is the interruption.
+
+**THE CONTROL IS THE ROW'S ACTION MENU.** "mute notifications" is one of
+the eight items in a session row's three-dot menu, and it is the only one
+of them with no other owner, so its request lives in the menu's own action
+module: `PATCH /sessions/records/{session_uuid}/notifications` with
+`{muted}`, keyed on the DURABLE record because tmux reuses names. The
+label states the result and flips with the row, so a muted session offers
+"unmute notifications". See `client/js/session-row-menu.js` (the item
+table) and `client/js/session-row-menu-actions.js` (`runToggleMute`).
+
+The menu is a reconciled superset settled by the owner on 2026-09-10:
+rename, mark unread, move to group, fork session, new session in folder,
+mute, then restart and close below a separator. Pin stays inline. A DEAD
+row draws inline restart and remove and no menu at all.
 
 | Piece | File |
 |---|---|
@@ -400,23 +883,110 @@ that nobody has looked at.
 
 `client/js/status-led.js` and `client/css/status-led.css`.
 
-One flat dot had to answer two questions at once - what is the chat doing,
-and does it want my attention - and could not. `finished_unread` exists as
-a whole extra state only to say "done, and also unread", and there was no
-way at all to say "working, and also unread". Two rings say both.
+One flat dot had to answer two questions at once - WHAT STATE the chat is
+in, and WHETHER ANYTHING IS RUNNING in it - and could not. An agent stopped
+on a permission prompt is a live turn making no progress; a conversation
+that ended an hour ago and one mid-tool-call are both "not blocked". Two
+rings say both.
+
+**THE TWO RINGS ANSWER TWO QUESTIONS.** The INNER dot is the session's
+own state. The OUTER ring is activity and attention: breathing means
+something is running right now, steady means lit and still, `unread` is
+the crisp green finished-turn ring, off means nothing at all, dim means
+nothing was measured.
+
+**UNREAD RIDES THE RING, and the owner settled that on 2026-09-09.** Two
+lines of this project fixed the same reported defect - a ring pulsing on
+sessions with nothing running in them, "the ring around some of the leds
+are not gray, which means there should be background tasks. i dont think
+those few have any background tasks" - and fixed it in opposite ways. One
+retired the outer `unread` state and moved unread onto the inner dot; the
+other KEPT the ring, stopped it breathing, and made it a still green. The
+owner chose the ring. MOTION is what carries the original complaint now:
+`active` is the only state that animates, so a light that MOVES is a
+session that is moving, and a resting session's ring takes its own dot's
+grey. Do not reintroduce the inner-dot-unread model - it was decided
+against, not forgotten.
 
 **Inner dot** (`data-inner`), the chat's own status:
-`working`, `waiting-permission`, `waiting-input`, `notice`, `done`,
-`dead`, `disconnected`, `unknown`.
+`working`, `waiting-permission`, `waiting-input`, `notice`, `idle`,
+`done`, `dead`, `disconnected`, `unknown`.
 
-**Outer halo** (`data-outer`), activity and attention:
-`active` (breathing), `steady` (lit, still), `unread` (a crisp, still
-green ring), `off` (dead, no halo at all), `dim` (not measured).
+`idle` was added 2026-09-09. Owner's report, verbatim: "i need the lights
+to go idle, (i think thats gray) when i click on a tab. there needs to be
+a read/idle color." Before it, a session that had been read (server
+`activity_status: 'idle'`) painted the same dot as one that had not, and
+only the ring told them apart. `idle` is a neutral grey
+(`--led-color-idle`), a SOLID dot - not the hollow `unknown` treatment,
+because one is a measurement and the other is the absence of one - and it
+pairs with a steady ring in that same grey. So opening a tab changes two
+things at once: the green ring becomes grey, and the recessed centre
+becomes a solid grey dot.
+
+**Outer ring** (`data-outer`), activity and attention:
+`active` (breathing - something is running), `steady` (lit and still),
+`unread` (a crisp, still green ring around a recessed centre), `off` (no
+ring at all - a dead pane, or a transport we have lost), `dim` (not
+measured).
 
 They are set separately and every combination renders. No rule in the
 stylesheet reads one to decide the other.
 
-### Five colours, eight states
+### One element, and why there is no pseudo-element
+
+BOTH RINGS ARE PAINTED ON ONE SPAN. The inner ring is its
+`background-color`; the outer ring and its glow are two layers of ONE
+`box-shadow` on that same span - a hard `0 0 0 var(--led-ring-width)`
+spread ring, then a blurred layer beyond it. There is no `::after`, and
+there may not be one.
+
+The halo WAS an `::after`, and that is what the owner kept seeing. A box
+gets its position and its size pixel-snapped by the layout engine, and
+snapped independently of its parent's box, so whenever the dot itself
+landed on a fractional x or y - routine inside a flex row, or wherever a
+text baseline puts an inline box on a half pixel - the halo's box rounded
+one way and the dot's rounded the other, and the two circles came apart by
+a device pixel. Giving the halo a single symmetric `inset` (2026-09-08)
+fixed its own INTERNAL symmetry, so its left and right offsets could no
+longer disagree, and did not fix this at all: the drift was BETWEEN TWO
+BOXES, not inside one. The owner's report after that shipped, verbatim:
+"the circles are still not lining up properly. can we do the same with
+only one icon?"
+
+A box-shadow is not a box. It is painted from the element's own border box,
+at that box's own subpixel position, so it cannot be snapped to a different
+grid than the fill it surrounds. Concentric stops being something a rule
+arranges and becomes the only geometry available. Nothing in this component
+may reintroduce a second box, and nothing may take it out of flow.
+
+TRANSPARENCY LIVES IN THE COLOUR, NOT IN `opacity`. The old halo was its
+own element and could carry its own `opacity` without touching the dot. One
+element cannot - `opacity` would fade the state colour at the centre too -
+so every alpha is mixed into the shadow's own colour with
+`color-mix(in srgb, <hue> <alpha>, transparent)`, which this app's
+stylesheets already use. Hue and alpha stay separate tokens
+(`--led-ring-ink`, `--led-ring-alpha`, `--led-glow-alpha`) so a theme can
+restyle one without the other.
+
+THE HOLLOW `unknown` RIM IS A SHADOW LAYER, NOT A SECOND DECLARATION.
+There is one `box-shadow` property on the element and the outer ring needs
+it, so an inner-state rule declaring its own would silently erase the outer
+ring for that one state and the two dimensions would stop being
+independent. `--led-inset-ring` carries it as a layer instead, defaulting
+to a no-op `inset 0 0 0 0 transparent` so the layer count never changes.
+For the same reason `off` zeroes the ring and glow ALPHAS rather than
+setting `box-shadow: none`, which would take the rim with it.
+
+THE LEGACY REFEREE MAY NOT RESET `box-shadow`. `.status-dot.status-led` is
+two classes and beats every rule in the component, so a reset there would
+blank the outer ring on every LED in the app. The legacy shadows it used to
+cancel are single-class rules in `status-dot.css`, which loads BEFORE
+`status-led.css`, so source order already handles them. Its `animation`
+reset survives, scoped off the one breathing state with `:not()` - a
+blanket reset ties with the breathing rule at (0,2,0) and wins on order,
+which would kill the pulse everywhere.
+
+### Five colours, nine states
 
 Asked for on 2026-09-08, in the owner's words: "if the session is fully
 stopped waiting for a response, then yellow. if it's still working but
@@ -427,7 +997,7 @@ grey filled dot". The grey fill was withdrawn on 2026-09-09 - see the
 cleared centre below - and the quote is left whole because the ask it
 records is still the ask.
 
-The eight inner state NAMES stay eight. Only the paint collapses onto
+The nine inner state NAMES stay nine (`idle` joined them on 2026-09-09). Only the paint collapses onto
 five hues, and the accessible label still says which state it is, because
 colour was never allowed to be the only signal here.
 
@@ -436,7 +1006,7 @@ colour was never allowed to be the only signal here.
 | green | `working`, `working_subagent` | `--led-color-working` -> `--color-success` |
 | yellow | `question`, `awaiting_startup_prompt` | `--led-color-permission` / `--led-color-waiting` -> `--color-warning` |
 | light blue | `notice` | `--led-color-notice` -> `--color-info` |
-| grey | `idle`, `unknown` | `--led-color-idle` / `--led-color-unknown` -> `--color-fg-muted` |
+| grey | `idle`, `done`, `unknown` | `--led-color-idle` / `--led-color-unknown` -> `--color-fg-muted` |
 | red | `dead`, transport disconnected | `--led-color-dead` / `--led-color-disconnected` -> `--color-danger` |
 | green ring, cleared centre | `finished_unread` | `--led-color-unread` ring, `--led-fill: transparent` |
 
@@ -472,26 +1042,28 @@ light grey with the dark grey center". Two copies of "clear the middle"
 would be free to drift into one state showing the real background and the
 other showing a grey somebody picked, so the count of that declaration is
 asserted in `tests/test_status_led.node.mjs`. The two are told apart by
-HUE and by WHERE THE BAND SITS - a grey 2px rim on the 9px dot for
-`unknown`, a green 2.5px band on the 15.3px halo box for the ring - never
-by the centre.
+HUE ALONE - a grey 2px rim on the 9px dot for `unknown`, the same 2px
+rim in green for the ring - never by the centre. Same construction, one
+different token, which is precisely what the owner asked for.
 
 The permission orange this replaced (`--color-status-pending`, `#ffa500`)
 sat too close to the red the dead light takes. At nine pixels an orange
 and a red in the same list read as one colour.
 
-### The envelope is gone
+### The envelope ICON is gone, the control is not
 
 `finished_unread` used to be carried by an unread ENVELOPE ICON beside the
-row name on the sidebar and the launchpad, which doubled as the manual
-mark-unread control. Both were removed on 2026-09-08 and the green ring is
-what says it now. Unread TRACKING is untouched: `src/core/unread_store.py`
-still keys on the instance, `Stop` still sets it, binding a WS terminal
-still clears it, and `PATCH /sessions/{name}/unread` still exists. Only
-the client control went, along with its click and keyboard handlers in
-`launchpad.js`, `session-sidebar-clicks.js` and `session-sidebar.js`, and
-its CSS. Nothing carries `data-row-unread` any more, because nothing
-reads it.
+row name on the sidebar and the launchpad. That icon is gone and the green
+ring is what says it now: one fact, one indicator, in one vocabulary.
+
+THE MANUAL CONTROL IS A DIFFERENT THING AND STILL SHIPS. The ring SAYS a
+session is unread; the control is how the user MAKES one unread, which is
+the owner's rule verbatim - "if i want it unread i click unread". It lives
+in the row's kebab menu and on the launchpad card, behind
+`ui.show_mark_unread_control` (default true). Unread TRACKING is untouched
+either way: `src/core/unread_store.py` still keys on the instance, `Stop`
+still sets it, binding a WS terminal still clears it, and
+`PATCH /sessions/{name}/unread` still exists and is still called.
 
 ### The mapping
 
@@ -507,7 +1079,7 @@ is the ONE place the server vocabulary becomes a pair of rings.
 | other | `notice` | any | any | `notice` | `active` |
 | other | `working` / `working_subagent` / `running` | any | any | `working` | `active` |
 | other | `finished_unread` | any | any | `done` | `unread` |
-| other | `idle` | any | no | `done` | `steady` |
+| other | `idle` | any | no | `idle` | `steady` |
 | other | `idle` | any | yes | `done` | `unread` |
 | other | `unknown` / absent / unrecognised | any | any | `unknown` | `dim` |
 
@@ -515,7 +1087,55 @@ Order matters. A dead TRANSPORT outranks everything: nothing we are
 showing is fresh once the socket is down, so the light may not keep
 asserting the last status it happened to see. Then `dead` (an unread flag
 must not paint a corpse as something to go and read), then anything
-blocking on the user, then activity.
+blocking on the user, then activity, then rest.
+
+`working` does NOT take the unread ring: it is working, and the ring says
+so. The unread turn behind it is still counted by the group fold, which
+reads the row's own flag rather than the colour of a light
+(`summarizeStates`).
+
+THE `idle` + `unread: true` ROW IS DEFENSIVE, NOT NORMALLY REACHABLE. The
+server derives this pair from the flag on every path (see "read and unread
+are derived, never stored" above), so a well-formed row never carries both
+at once. If one ever arrives contradictory, the row renders identically to
+`finished_unread` (`done` / `unread`) rather than the grey `idle` dot -
+the unread flag is the louder, more urgent claim, and
+`session-status-summary.js`'s group rollup depends on it: its `unread`
+bucket is inner `done`, so a row that disagreed would make the header lie
+about its own child (`tests/test_status_summary.node.mjs`, "a single-child
+group renders the same LED state as that child").
+
+THE GROUP HEADER FOLDS THE TWO DIMENSIONS SEPARATELY, for the same reason
+a row keeps them apart. Its inner dot is the highest-priority state among
+the members (permission > input > working > unread > done > dead >
+unknown); its ring is folded across the WHOLE group - `active` if any
+member has an open turn, `unread` if none does and something in there is
+unread, `dim` when nothing was measured, `steady` for a group at rest that
+has been read, `off` otherwise. So a group holding one parked session and
+one busy one paints the parked dot inside a breathing ring, which is both
+facts at once. ACTIVITY OUTRANKS UNREAD on that ring, because the ring
+carries both and only one can be painted: a breathing ring expires on its
+own, a green unread ring does not.
+
+It folds the group's member ROWS from the merged list rather than anything
+in the DOM - which is what lets a COLLAPSED group, whose rows are
+deliberately not in the markup, still report - and those rows spell the
+state `status`, not `activity_status`, so
+`session-status-summary.js signalsFor()` reconciles the two names in one
+place; reading only the server's spelling made every header on live paint
+`unknown/dim` at 880247f, an empty group and a group of twelve idle
+sessions alike.
+
+THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
+`SessionStatusUI.dotHtml(status, signals)` takes `unread`, `startup_gate`,
+`status_source` and `transport` as a second argument because a bare status
+string cannot express any of them, and until 2026-09-08 no live caller
+passed it. The flag reached the row, was fingerprinted by both repaint
+signatures and forced a repaint - and was dropped at the last inch, so an
+`idle` unread session rendered identically to one with nothing waiting on
+it. `tests/test_unread_led_one_field.node.mjs` renders one
+`/sessions/list` row through the sidebar row, the launchpad card and the
+project-tree row and fails if any of the three disagrees.
 
 Two rows changed with the five-colour pass and both are deliberate.
 **A working session is solid green whatever its unread flag says** - the
@@ -549,72 +1169,66 @@ session".
 
 ### Motion
 
-`active` breathes on a 2s ease-in-out cycle, opacity and scale together,
-on the HALO only - the dot itself never animates, so the state colour
-stays at full strength at every point in the cycle. `steady` is lit and
-still. `off` has no halo. Under `prefers-reduced-motion: reduce` the glow
-stays and the pulse stops; the active/resting distinction moves entirely
-into opacity.
+`active` is the only state that breathes, on a 2s ease-in-out cycle. The
+keyframes animate the GLOW LAYER of the box-shadow only - its spread and
+its alpha, both off the one `--led-glow-rest` fraction so it shrinks and
+dims together and reads as a glow swelling rather than a light
+flickering. The fill stays at full strength at every point in the cycle,
+and the hard ring is byte-identical at both ends of the animation, so it
+is the shape that says where the LED ends.
 
-`unread` DOES NOT BREATHE since the five-colour pass. It is the
-finished-turn ring, and an outline that pulses stops reading as an outline
-at nine pixels. Motion is therefore a signal in its own right now: a light
-that moves is a session that is moving.
+`unread` DOES NOT BREATHE, and that is the point of keeping it. An
+outline that pulses stops reading as an outline at nine pixels, and the
+defect both lines of this project were fixing was a ring pulsing on a
+session with nothing running in it. Motion is therefore a signal in its
+own right: a light that moves is a session that is moving.
 
-**It is DRAWN AS A RING, NOT AS A DISC, and that is not a style
-preference.** The halo pseudo-element carries `z-index: -1`, which inside
-the element's own stacking context paints it ABOVE the element's
-background - and the element's background IS the dot. Every other halo
-gets away with that because it is a wash at 0.18 to 0.55 opacity, so the
-dot reads straight through it. An OPAQUE disc at the same z-index hides
-the dot completely: measured in a 6x render, `finished_unread` came out a
-solid green blob with no grey in it at all. So the `::after` drops its
-fill and draws the band with an inset shadow instead, leaving the middle
-clear.
+NOTHING IN THE ANIMATION MOVES THE ELEMENT. No transform, no width, no
+margin, no inset - `box-shadow` is a paint-only property, so the dot's own
+box is identical at every frame and the LED cannot drift against the text
+it sits beside. That is the same guarantee the one-element rewrite bought
+statically, held across time. (It costs a repaint per frame rather than a
+composited transform; the repainted region is about 18px square, and the
+alternative is a second box.)
 
-**AND THE DOT UNDER IT IS CLEARED TOO, since 2026-09-09.** The first
-version left the grey `done` dot filled inside the band, which the owner
-rejected. `--led-fill: transparent` now removes it, so what shows in the
-middle is the row background rather than a second light - the `unknown`
-dot's construction in a different hue. The inner state is still `done`
-and still resolves to the grey ink; only the paint of the centre changed,
-so nothing in the state machine or the summary fold moved.
-
-Geometry: `--led-lit-scale` 1.7 with a `--led-ring-width` of 2.5px. At
-the 9px default that is a 15.3px lit object and an unmistakable 2.5px of
-green. **This ring is what sets the size for every other state** - see
-Sizing below. It used to override the halo scale in its own block; it
-must not do that again. Measured on a real render at 8x device scale,
-before and after the cleared centre, the painted extent was IDENTICAL to
-the hundredth of a pixel in all nine states: 15.75px for the four
-breathing ones, 16.00 for the ring, 15.62 for `steady`, 15.38 for `dim`,
-and 9.00 for the two `off` states, which carry no halo at all by design.
-Clearing a fill moves paint, not geometry.
+`steady` is lit and still: a session at rest that has been read, its ring
+in its own dot's grey. `off` has no ring and no glow at all, for a dead
+pane or a transport we have lost - a corpse must not glow. Under
+`prefers-reduced-motion: reduce` the ring and glow stay and the pulse
+stops - the base rule already paints the full lit value, so killing the
+animation is the whole of it, and the reduced-motion block must NOT
+restate the shadow or the two would drift apart. The active/resting
+distinction lives entirely in the ring and glow alphas.
 
 Every state colour is a named token declared exactly once, at the top of
-`status-led.css`, and every one of them defers to a palette token that all
-of `client/css/themes` already declares. A theme that wants a different
+`status-led.css`, and every one defers to a palette token all of
+`client/css/themes` already declares. A theme that wants a different
 palette redefines `--led-color-*`, never these rules.
 
 ### Sizing
 
-**ONE LIT DIAMETER FOR EVERY STATE.** `--led-size` (9px) is the dot and
-`--led-lit-scale` (1.7) multiplies it into the halo box, so everything
-the component paints in any state fits inside one 15.3px circle. States
-differ in colour, opacity and fill. They never differ in size. Both
-tokens are declared once, on `.status-led`, and **no `[data-inner]` or
-`[data-outer]` rule may override either**.
+**ONE LIT DIAMETER FOR EVERY STATE.** Everything the component paints, in
+any state, fits inside the same circle. States differ in colour, alpha
+and fill. They never differ in size.
+
+Under the one-element composition that is true BY CONSTRUCTION rather
+than by every state rule remembering to agree: the five geometry numbers
+(`--led-size` 9px, `--led-ring-width` 1.5px, `--led-ring-feather-blur`
+1px, `--led-glow-blur` 6px, `--led-glow-spread` 1.5px) are declared once
+on `.status-led` and **no `[data-inner]` or `[data-outer]` rule may
+override any of them**. `unread` is the state that used to break the
+rule, by sizing its own halo, and its rule now sets colour, alpha and the
+inset rim only.
 
 Every call site renders at the 9px default: the sidebar row
 (`session-sidebar-rows.js`) and the launchpad card (`launchpad.js`) both
 call `dotHtml()` with no `size`. A surface that needs a different size
-passes `size` to `ledHtml()`, which scales `--led-size` and the halo with
-it.
+passes `size` to `ledHtml()`, which scales `--led-size`.
 
 **Why that had to be written down.** Until 2026-09-09 the halo was sized
 per state AND drawn partly outside its own box, so the LIT object came
 out at three different diameters while the ELEMENT box measured 9px in
-every one of them - which is exactly why no test caught it:
+every one of them - which is exactly why no CSS-text test caught it:
 
 | state | halo box | painted outside it | what a reader sees |
 |---|---|---|---|
@@ -628,30 +1242,20 @@ The bottom three are invisible on a real row, so in a sidebar where one
 session is working and the rest are at rest, that one dot read about 60
 percent wider than its neighbours. That is what the owner reported.
 
-**The glow is a radial gradient, not a spread box-shadow, and that is the
-load-bearing half of the fix.** A spread shadow paints beyond the element
-it sits on by definition, so it can never be held to a declared diameter.
-A gradient fades out AT the box edge, so the halo's painted extent IS its
-box and is measurable. `--led-halo-core` (55 percent) is how far out the
-halo stays fully opaque before it fades: at 55 percent of 15.3px that is
-an 8.4px core, just inside the 9px dot, so the only thing outside the dot
-is falloff. That is the owner's 2026-09-08 calibration ("glowing is still
-to big. like 1 or 2 px larger than the front circle") expressed as a
-shape rather than as a smaller number.
-
 Earlier configurations, if you are tracing a regression: 1.3x halo plus a
 1.5px spread glow put the lit object at about 14.7px with a hard-edged
-11.7px core, so a working session read as a wider dot rather than a lit
-one; 1.7x/0.3x put it at about 21px; the original 2.6x/0.62x put it at
-about 35px, larger than the row text itself. The breathing keyframes
-scale the halo between 0.92 and 1, never past its resting size, so the
-tokens are the true maximum rather than a floor the animation overshoots.
+11.7px core; 1.7x/0.3x put it at about 21px; the original 2.6x/0.62x put
+it at about 35px, larger than the row text itself. The breathing
+keyframes move the GLOW's alpha and spread only, never past the resting
+value, so the tokens are the true maximum rather than a floor the
+animation overshoots.
 
-`scripts/verify_status_led_geometry.py` measures all forty (inner, outer)
-pairs in a real Chromium, across three themes and two viewports, and
-fails if two of them differ or if anything paints outside its box. A CSS
-read cannot do that job: the divergence was in what the box RESOLVES to
-once a per-state override and a pseudo-element's own shadow are composed.
+`scripts/archive/verify/verify_status_led_geometry.py` measures the
+(inner, outer) pairs in a real Chromium, across themes and viewports.
+A CSS-text read cannot do that job: the divergence was in what the box
+RESOLVES to once a per-state override is composed. Note the script was
+written against the pseudo-element construction that preceded the
+one-element rewrite; re-read it before trusting a run.
 
 ### Rolling a group up
 
@@ -665,6 +1269,12 @@ row uses, so a header takes every treatment a row takes - including the
 green ring around a cleared centre for a finished turn nobody has read. It
 is not a header-shaped dot, and building one would be how the two come to
 disagree.
+
+**The ring is folded across the whole group, not looked up on the
+winning bucket** (`outerFor`), so a group holding one parked session and
+one busy one paints the parked dot inside a breathing ring. Activity
+outranks unread there, because the ring carries both and only one can be
+painted.
 
 **There is no numeric unread badge beside it.** A yellow `(n)` pill used
 to carry the unread count on every group header; it was removed on
@@ -682,14 +1292,20 @@ without being stopped. Permission leads because it is the only bucket
 guaranteed to make no progress at all until a human acts - a header that
 hoisted a chatty notification over a parked session would point the user
 at the wrong row. Both outrank working because they are about the user
-and will stay that way; working resolves on its own. Dead sits BELOW done deliberately -
-a group with one corpse and nine busy sessions must not read as dead. An
-EMPTY group is `unknown`, not `done`: nothing to measure is not the same
-as measured-and-quiet.
+and will stay that way; working resolves on its own. `idle` (the grey
+read-and-at-rest dot) sits below `unread` - the louder of the two rest
+states - and above `dead`, so a group with one unread and ten
+read-and-idle sessions still bubbles unread, and a group of nothing but
+idle sessions reads idle rather than falling all the way to unknown. Dead
+sits BELOW both deliberately - a group with one corpse and nine busy
+sessions must not read as dead. An EMPTY group is `unknown`, not `done`:
+nothing to measure is not the same as measured-and-quiet.
 
-Each child is bucketed from the LED state it already resolved to, not from
+Each child is bucketed from the INNER dot it already resolved to, not from
 its raw `activity_status`, so a header cannot disagree with the rows under
-it.
+it. The unread COUNT is read off each row's own flag rather than off the
+colour of a light, so a working session with an older unread turn is still
+counted even though its dot says `working`.
 
 **The `input` bucket holds two hues and its RANK did not move.** Since the
 five-colour pass, `waiting-input` is yellow (stopped on a startup prompt)

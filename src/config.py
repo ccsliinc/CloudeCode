@@ -509,6 +509,39 @@ class ServerPrefsConfig(BaseModel):
     tls_preferred: bool = False
 
 
+# The config.json key the UI switches live under. Named once, imported
+# rather than spelled twice, the same way WORKSPACE_KEY and
+# SERVER_PREFS_KEY are in src/core/workspace_settings.py.
+UI_KEY = "ui"
+
+
+class UIConfig(BaseModel):
+    """Client-side surfaces the owner can switch off.
+
+    ADDITIVE AND DEFAULT-ON. Every flag here hides something that ships
+    enabled, so a config.json predating this block loads with the app
+    exactly as it was. A flag that defaulted to False would silently
+    remove a capability from every install that upgraded.
+
+    ``show_mark_unread_control`` is the manual "mark this session unread
+    for followup" toggle on the sidebar row and the launchpad card. The
+    LED's green finished-turn ring already SAYS a session is unread; this
+    is the control that SETS it, which is a different thing. The owner's
+    rule, verbatim: "when clicking a tab, the session is marked read. if i
+    want it unread i click unread." One line of this project deleted the
+    control on the grounds that the indicator made it redundant; the owner
+    kept it and asked for a switch instead, 2026-09-09. Unread TRACKING is
+    untouched by this flag either way - `PATCH /sessions/{name}/unread`
+    still exists and the LED still paints the state.
+
+    Fields:
+        show_mark_unread_control: Whether the manual unread toggle is
+            rendered. True (shown) unless explicitly set to false.
+    """
+
+    show_mark_unread_control: bool = True
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration loaded from JSON and .env."""
     # feat/launch-wrappers - schema/migration marker. Absent from every
@@ -578,6 +611,12 @@ class AuthConfig(BaseModel):
     # this.
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     server_prefs: ServerPrefsConfig = Field(default_factory=ServerPrefsConfig)
+    # Client-side surfaces the owner can switch off. Same additive,
+    # all-default shape as the two above, for the same downgrade-safety
+    # reason: a config.json predating it loads unchanged, and one
+    # carrying it still loads on an older build because Settings
+    # declares extra="ignore".
+    ui: UIConfig = Field(default_factory=UIConfig)
 
 
 # Agent-type values resolved as a bare FAMILY name and never looked up as
@@ -1393,6 +1432,21 @@ class Settings(BaseSettings):
                 )
                 server_prefs_config = ServerPrefsConfig()
 
+            # Client-side show/hide switches. Same malformed-block
+            # tolerance as the two above, and the fallback is the
+            # ALL-DEFAULT object, which shows every control - an
+            # unparseable block must not be able to hide a capability.
+            ui_data = data.get(UI_KEY, {}) or {}
+            try:
+                ui_config = UIConfig(**ui_data)
+            except Exception:
+                import structlog
+                structlog.get_logger().warning(
+                    "invalid_ui_config_block",
+                    raw=ui_data,
+                )
+                ui_config = UIConfig()
+
             # Build AuthConfig with secrets from .env (via Settings)
             # and configuration from JSON file
             config_version = data.get("config_version", 0)
@@ -1429,6 +1483,7 @@ class Settings(BaseSettings):
                 terminal_commands=terminal_commands_config,
                 workspace=workspace_config,
                 server_prefs=server_prefs_config,
+                ui=ui_config,
             )
 
             # Validate secrets are set
@@ -1676,6 +1731,13 @@ class Settings(BaseSettings):
             # never LOGGED, which is the property that actually matters for
             # the secrets some of them will hold.
             "workspace": cfg.workspace.model_dump(),
+            # Client-side surfaces the owner can switch off. Reported here
+            # so the settings screen round-trips them, and ALSO on
+            # GET /api/v1/features, which is what the client actually
+            # gates rendering on - /config/settings is fetched only when
+            # the settings screen opens, and a sidebar row has to know
+            # before then. See src/main.py::features.
+            "ui": cfg.ui.model_dump(),
             "server_prefs": {
                 **cfg.server_prefs.model_dump(),
                 # The address in force right now, read from the STARTUP

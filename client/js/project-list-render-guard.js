@@ -46,23 +46,14 @@
  * that treated it as such would silently freeze the launchpad on any
  * page whose markup it did not recognise.
  *
- * BUSY IS MEASURED IN THE CONTAINER WE ARE ABOUT TO WIPE. A live inline
- * rename input means a user is mid-interaction with something a repaint
- * would delete under their hands. The focus test is scoped with
- * `container.contains()` on purpose: a focused input anywhere else on
- * the page is none of this guard's business, and a page-wide focus test
- * would let one stray focused field freeze the list indefinitely.
- *
- * IT ASKS THE ROW'S ACTION MENU TOO. A session row's three-dot menu
- * (client/js/session-row-menu-open.js) is a panel a repaint would pull
- * out from under a finger: the panel itself is mounted on the body and
- * survives, but the TRIGGER it is anchored to is inside the container
- * being wiped, so a repaint would leave an open menu floating beside a
- * button that no longer exists. The check is `isOpen()` and nothing
- * more - deferring while a menu is open costs one poll tick and the
- * menu is open for seconds, not minutes. It is asked THROUGH a
- * capability test, so a page that loads the guard without the menu is
- * simply never busy for that reason rather than throwing.
+ * BUSY IS MEASURED IN THE CONTAINER WE ARE ABOUT TO WIPE. An open row
+ * overflow menu (`SessionRowMenu.isOpen()` - its own predicate, reused
+ * rather than re-derived) and a live inline rename input both mean a
+ * user is mid-interaction with something a repaint would delete under
+ * their hands. The focus test is scoped with `container.contains()` on
+ * purpose: a focused input anywhere else on the page is none of this
+ * guard's business, and a page-wide focus test would let one stray
+ * focused field freeze the list indefinitely.
  *
  * Named for its first consumer, but `isBusy` is shared: launchpad.js
  * consults it from `renderRunningSessions()` too, because the inline
@@ -141,9 +132,10 @@ console.log('[ProjectListRenderGuard Module] Loading...');
     /**
      * Is the user mid-interaction with something inside this container?
      *
-     * Description: a live inline rename input, or focus sitting in an
-     *   editable field INSIDE the container. Either one makes a repaint
-     *   destructive rather than merely wasteful.
+     * Description: an open row overflow menu, a live inline rename
+     *   input, or focus sitting in an editable field INSIDE the
+     *   container. Any of the three makes a repaint destructive rather
+     *   than merely wasteful.
      * Inputs: opts (object) - {container: Element, doc: Document}.
      * Output: boolean.
      * Example: if (guard.isBusy({container: el, doc: document})) return;
@@ -153,16 +145,17 @@ console.log('[ProjectListRenderGuard Module] Loading...');
         var doc = (opts && opts.doc) || (typeof document !== 'undefined' ? document : null);
         if (!container) return false;
 
+        // OURS, KEPT. A repaint under an open row menu is guarded here.
+        // The open/close state moved to SessionRowMenuOpen in the
+        // 2026-09-10 reconcile; the predicate is the same one.
+        var menu = typeof window !== 'undefined' ? window.SessionRowMenuOpen : null;
+        if (menu && typeof menu.isOpen === 'function' && menu.isOpen()) return true;
+
         if (typeof container.querySelector === 'function') {
             for (var i = 0; i < EDITOR_SELECTORS.length; i++) {
                 if (container.querySelector(EDITOR_SELECTORS[i])) return true;
             }
         }
-
-        // AN OPEN ROW MENU IS AN INTERACTION IN PROGRESS. See the file
-        // header: the panel survives a repaint and its trigger does not.
-        var menu = typeof window !== 'undefined' ? window.SessionRowMenuOpen : null;
-        if (menu && typeof menu.isOpen === 'function' && menu.isOpen()) return true;
 
         var active = doc ? doc.activeElement : null;
         if (active

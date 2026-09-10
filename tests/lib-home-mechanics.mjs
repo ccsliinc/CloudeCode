@@ -154,6 +154,7 @@ export function loadLaunchpad(docOverrides = {}) {
             dotHtml() { return '<span class="status-dot"></span>'; },
             pencilIconSvg() { return '<svg class="pencil"></svg>'; },
             trashIconSvg() { return '<svg class="trash"></svg>'; },
+            archiveIconSvg() { return '<svg class="archive-icon"></svg>'; },
         },
         localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
         addEventListener() {},

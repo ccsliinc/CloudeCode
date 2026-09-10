@@ -265,8 +265,9 @@ def test_subagent_stop_returns_to_plain_working():
     t = _t()
     t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
     t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    # depth back to 0, but PostToolUse-equivalent heartbeat (SubagentStop
-    # itself refreshes last_tool_event_ts) keeps it "working", not idle.
+    # Depth back to 0. Still "working" rather than idle, and note WHICH
+    # event pays for that: the heartbeat the SubagentSTART stamped, which
+    # is still inside its window. The SubagentStop contributed nothing.
     assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
 
 
@@ -451,18 +452,122 @@ def test_a_trailing_subagent_stop_leaves_idle_reachable():
     assert t.resolve("s1", STATUS_RUNNING, unread=False, now=trailing) == STATUS_IDLE
 
 
-def test_a_subagent_stop_that_closes_a_real_subagent_still_stamps():
+def test_a_subagent_stop_that_closes_a_real_subagent_still_decrements():
     """THE NEGATIVE CONTROL, and it is the load-bearing one. A guard that
-    refused every SubagentStop would pass both tests above and silently
-    delete working_subagent's exit heartbeat."""
+    refused every SubagentStop OUTRIGHT - the decrement along with the
+    stamp - would pass every refusal test above and wedge the session in
+    working_subagent forever, with no event left that could ever lower
+    the depth. So the decrement is asserted on its own."""
     t = _t()
     t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
     later = T0 + timedelta(seconds=30)
     t.record_event("s1", EVENT_SUBAGENT_STOP, now=later)
-    # depth 1 -> 0, and the stamp moved to ``later``: still working at a
-    # moment the T0 heartbeat alone would already have expired.
-    check = later + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS - 5)
-    assert t.resolve("s1", STATUS_RUNNING, now=check) == STATUS_WORKING
+    # Depth 1 -> 0: the session leaves working_subagent for plain working,
+    # on the heartbeat the START stamped and which is still inside its
+    # window at ``later``.
+    assert t.resolve("s1", STATUS_RUNNING, now=later) == STATUS_WORKING
+
+
+def test_a_subagent_stop_that_closes_a_real_subagent_does_not_stamp():
+    """THE TIGHTENING ITSELF, stated as a measurement rather than a
+    preference. A SubagentStop reports that work ENDED, so it never moves
+    ``last_tool_event_ts`` - not even the legitimate one that closes a
+    real subagent. The heartbeat therefore expires 120s after the
+    SubagentSTART, and the version that gated the stamp on
+    ``subagent_depth > 0`` fails this: it would still read working here."""
+    t = _t()
+    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
+    later = T0 + timedelta(seconds=30)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=later)
+    # A moment past the START's window but well inside a window the STOP
+    # would have opened, had it been allowed to stamp one.
+    check = T0 + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 1)
+    assert check < later + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS)
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=check) == STATUS_IDLE
+
+
+def test_a_duplicated_subagent_pair_after_stop_cannot_ratchet_the_heartbeat():
+    """THE HOLE THE DEPTH GATE LEFT, and the reason the rule is now a flat
+    refusal rather than ``subagent_depth > 0``.
+
+    Hooks are duplicated. A duplicated SubagentSTART delivered after Stop
+    raises the depth off the floor all by itself, so the duplicated
+    SubagentSTOP behind it satisfied a ``depth > 0`` gate and stamped -
+    through the very guard meant to refuse it. Worse, it stamped at ITS
+    OWN arrival time, so every further duplicated pair pushed the expiry
+    out again: a ratchet with no ceiling, driven entirely by strays.
+
+    Under the flat refusal the ceiling is fixed by the START, and this is
+    what pins it. NOTE WHAT IS NOT CLAIMED: an OPENING event still stamps
+    unconditionally (there is nothing it could be late for), so the stray
+    START does buy one heartbeat window. That window is bounded and it is
+    keyed on the START; the point of this test is that no SubagentStop can
+    extend it."""
+    t = _t()
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    stray_start = T0 + timedelta(seconds=1.5)
+    stray_stop = T0 + timedelta(seconds=3.0)
+    t.record_event("s1", EVENT_SUBAGENT_START, now=stray_start)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray_stop)
+    # A second duplicated pair, later still - the ratchet's second click.
+    t.record_event("s1", EVENT_SUBAGENT_START, now=stray_start)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray_stop)
+    expiry = stray_start + timedelta(
+        seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 1
+    )
+    # Still inside the window a stamping SubagentStop would have opened.
+    assert expiry < stray_stop + timedelta(
+        seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS
+    )
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=expiry) == STATUS_IDLE
+    assert (
+        t.resolve("s1", STATUS_RUNNING, unread=True, now=expiry)
+        == STATUS_FINISHED_UNREAD
+    )
+
+
+def test_the_measured_real_timeline_finishes_and_then_reaches_idle():
+    """THE SEQUENCE A REAL claude 2.1.265 ACTUALLY FIRED, in the order the
+    server received it (tests/test_led_real_hooks.py, 2026-09-08):
+    UserPromptSubmit, PreToolUse, PostToolUse, Stop, and then a
+    SubagentStop about 1.5s later on a turn with no subagent anywhere in
+    it. It must read finished_unread across that stray, and idle once the
+    user has looked - the state punchlist 4 made unreachable."""
+    t = _t()
+    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
+    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
+    t.record_event("s1", EVENT_STOP, now=T0)
+    stray = T0 + timedelta(seconds=1.5)
+    t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray)
+    assert (
+        t.resolve("s1", STATUS_RUNNING, unread=True, now=stray)
+        == STATUS_FINISHED_UNREAD
+    )
+    # The user opens the tab: unread clears, and the light must settle.
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=stray) == STATUS_IDLE
+
+
+def test_the_measured_real_timeline_duplicated_and_reordered_converges():
+    """The same timeline delivered the way the transport actually behaves:
+    every event twice, and the stray SubagentStop arriving BEFORE the Stop
+    it really followed. Idempotent last-write-wins means all three
+    orderings land on the same answer."""
+    t = _t()
+    stray = T0 + timedelta(seconds=1.5)
+    for _ in range(2):
+        t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
+        t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
+        t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)  # early stray
+        t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
+        t.record_event("s1", EVENT_STOP, now=T0)
+        t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray)  # late stray
+    assert (
+        t.resolve("s1", STATUS_RUNNING, unread=True, now=stray)
+        == STATUS_FINISHED_UNREAD
+    )
+    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=stray) == STATUS_IDLE
 
 
 def test_subagent_start_then_stop_then_subagent_stop_does_not_re_arm():

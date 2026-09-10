@@ -10,12 +10,12 @@
 // (session-sidebar.css) put the menu BEHIND the open sidebar: the two
 // numbers conflicted directly, with no clipping or overflow involved.
 //
-// The row-level overflow menu was built after and got this right at
-// `z-index: 1200`, which is why it layered correctly and the group menu
-// did not. The fix brought the group menu up to the same value. That row
-// menu was removed on 2026-09-08 (pin and close are inline icons again),
-// so this is now the only body-mounted menu the sidebar opens and the
-// comparison below is against the panel alone.
+// `.session-row-menu` (session-row-menu.css), the row-level kebab this
+// menu is the group-level equivalent of, was built after and got this
+// right at `z-index: 1200`, which is why it layers correctly and the
+// group menu did not. The fix brings the group menu up to the same
+// value; the two never coexist (session-sidebar-group-actions.js keeps
+// `openMenu` as a single slot), so sharing a number is safe.
 //
 // Run with: node tests/test_sidebar_group_menu_stacking.node.mjs
 
@@ -100,9 +100,11 @@ function decl(body, prop) {
 
 const groupsCss = clientFile('css', 'session-sidebar-groups.css');
 const sidebarCss = clientFile('css', 'session-sidebar.css');
+const rowMenuCss = clientFile('css', 'session-row-menu.css');
 
 const groupsRules = rules(groupsCss);
 const sidebarRules = rules(sidebarCss);
+const rowMenuRules = rules(rowMenuCss);
 
 /**
  * Pull the numeric z-index off the first rule matching `selector`.
@@ -131,34 +133,16 @@ test('.session-sidebar-group-menu paints above .session-sidebar-panel', () => {
         + `(${panelZ}), or the menu paints behind the open sidebar`);
 });
 
-const rowMenuRules = rules(clientFile('css', 'session-row-menu.css'));
-
-test('.session-row-menu paints above the open sidebar it opens from', () => {
-    // Same stacking comparison as the group menu above, and it exists for
-    // the same reason: the row menu's panel is appended to document.body
-    // at runtime and is `position: fixed`, so it is a sibling of the
-    // sidebar rather than a child of it. A panel that opened from a row
-    // and then painted BEHIND the list holding that row would look like a
-    // control that does nothing.
-    const menuZ = zIndexOf(rowMenuRules, '.session-row-menu');
-    const panelZ = zIndexOf(sidebarRules, '.session-sidebar-panel');
-    assert.ok(menuZ > panelZ,
-        `row menu z-index (${menuZ}) must exceed the sidebar panel's (${panelZ})`);
-});
-
-test('only the row menu stylesheet styles the row menu', () => {
-    // One class, one file. A second sheet reaching for `.session-row-menu`
-    // would silently re-style items whose sizing this file deliberately
-    // overrides, and the cascade order between the two would decide the
-    // result rather than either author.
-    const dir = path.join(__dirname, '..', 'client', 'css');
-    const offenders = fs.readdirSync(dir).filter(
-        (name) => name.endsWith('.css')
-            && name !== 'session-row-menu.css'
-            && fs.readFileSync(path.join(dir, name), 'utf8')
-                .includes('.session-row-menu'));
-    assert.deepEqual(offenders, [],
-        `these stylesheets also style the row menu: ${offenders}`);
+test('.session-sidebar-group-menu matches its row-level sibling, .session-row-menu', () => {
+    // Not load-bearing on its own (either menu clearing the panel is
+    // sufficient), but the two are the group- and row-level versions of
+    // the same control and should share a layer now that both are fixed.
+    const menuZ = zIndexOf(groupsRules, '.session-sidebar-group-menu');
+    const rowMenuZ = zIndexOf(rowMenuRules, '.session-row-menu');
+    assert.equal(menuZ, rowMenuZ,
+        'the group menu and the row kebab menu are never open at the same '
+        + 'time (each keeps a single-slot "open menu" reference), so they '
+        + 'can safely share a z-index layer');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

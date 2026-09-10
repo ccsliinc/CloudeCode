@@ -33,49 +33,52 @@ Claude Code gives no delivery guarantee):
     events in the "wrong" order, converges to the same state a correctly-
     ordered stream would reach. See ``record_event`` for the field-by-field
     reasoning.
-  - ``SubagentStop`` floors ``subagent_depth`` at 0 rather than going
-    negative, so a duplicate/late Stop can never wedge depth negative and
-    starve a later, legitimate SubagentStart of the "still nested" signal.
-  - A CLOSING EVENT ONLY COUNTS AS WORK IF SOMETHING IS OPEN FOR IT TO
-    CLOSE. See the section below - this is the rule that stops a finished
-    turn painting ``working`` for two minutes.
-A CLOSING EVENT IS NOT A HEARTBEAT ON ITS OWN (measured 2026-09-08, and
-it is punchlist item 4). ``tests/test_led_real_hooks.py`` put a real
-claude 2.1.265 in a real pane and watched what it POSTs: on a turn with
-NO SUBAGENT ANYWHERE IN IT, ``SubagentStop`` arrives about 1.5s AFTER
-``Stop`` (Stop+38.96s / SubagentStop+40.46s, reproduced twice). ``Stop``
-had just set ``last_tool_event_ts`` to None precisely to say the turn was
-over, and ``SubagentStop`` stamped it again - so the heartbeat re-armed
-and ``resolve`` reported ``working`` for the full 120s on a session
-sitting at an empty prompt. ``finished_unread`` lasted about a second and
-a half and ``idle`` was UNREACHABLE in between: the light claiming work
-nothing can see, arriving through the hook stream this time rather than
-through the tmux fallback that was fixed for the same lie.
-
-The rule now: an event that CLOSES something (``SubagentStop``,
-``PostToolUse``) stamps the heartbeat only when there was something open
-for it to close. ``SubagentStop`` needs ``subagent_depth > 0``, which is
-already the exact record of an unmatched ``SubagentStart``.
-``PostToolUse`` has no counter (tool calls run in parallel and a dropped
-``PreToolUse`` would desynchronise one), so it keys on ``turn_open``.
-OPENING events (``UserPromptSubmit``, ``PreToolUse``, ``SubagentStart``)
-still stamp unconditionally - they cannot be late, because there is
-nothing they could be late for.
-
-THE REFUSAL IS NARROW ON PURPOSE, and the narrowing is what makes it a
-measurement rather than a guess. ``PostToolUse`` is refused ONLY when a
-``Stop`` has POSITIVELY been seen for this session and no opening event
-has landed since. Never having seen a ``Stop`` (a fresh session, a server
-restart mid-turn) is not evidence the turn is over, so that case still
-stamps. The remaining hole - a turn whose ``UserPromptSubmit`` AND
-``PreToolUse`` were both dropped, leaving only a ``PostToolUse`` - costs
-one under-claimed ``working``, corrected by the next opening event.
-
+  - A CLOSING EVENT IS NEVER A HEARTBEAT ON ITS OWN, and ``SubagentStop``
+    only ever floors ``subagent_depth`` at 0 rather than going negative.
+    See the section below: between them these are what stop a finished
+    turn painting ``working`` for two minutes after it ended.
   - A missing ``Stop`` (the process died mid-turn, no clean shutdown) is
     handled by the HEARTBEAT TIMEOUT below, not by trying to detect the
     death from the hook stream (hooks cannot see a dead process either -
     only tmux can, which is why ``resolve()`` still takes tmux's dead check
     as the one authoritative override).
+
+A CLOSING EVENT IS NOT A HEARTBEAT (measured 2026-09-08, punchlist item
+4). ``tests/test_led_real_hooks.py`` put a real claude 2.1.265 in a real
+pane and watched what it POSTs: on a turn with NO SUBAGENT ANYWHERE IN
+IT, ``SubagentStop`` arrives about 1.5s AFTER ``Stop``, reproduced twice.
+``Stop`` had just set ``last_tool_event_ts`` to None precisely to say the
+turn was over, and ``SubagentStop`` stamped it again, so the heartbeat
+re-armed and ``resolve`` reported ``working`` for the full 120s on a
+session sitting at an empty prompt. ``finished_unread`` lasted a second
+and a half and ``idle`` was UNREACHABLE in between.
+
+THE RULE: ``SubagentStop`` NEVER STAMPS THE HEARTBEAT. It reports that
+work ENDED, so the only thing it may move is ``subagent_depth``, and it
+moves that with the floor at 0.
+
+It first shipped gated on ``subagent_depth > 0`` instead - stamp only
+when a subagent was open to close - and THE GATE IS NOT THE CLAIM IT
+STANDS FOR. A DUPLICATED ``SubagentStart`` delivered after ``Stop``
+raises the depth off the floor by itself, and the duplicated
+``SubagentStop`` behind it then passes the gate and stamps. A guard keyed
+on a number the very stream it distrusts can move is not a guard.
+Refusing outright loses nothing: a subagent FINISHING is not work
+happening now, so if the turn really is still running the parent's next
+``PreToolUse`` / ``PostToolUse`` re-arms the heartbeat within one tool
+call, and under-claiming ``working`` is this module's safe direction.
+
+``PostToolUse`` cannot take the same blanket refusal - it is the only
+event some legitimate turns emit late - so it keys on ``turn_open``, and
+the refusal is NARROW: refused ONLY when a ``Stop`` has POSITIVELY been
+seen for this session and no opening event has landed since. Never having
+seen a ``Stop`` (a fresh session, a server restarted mid-turn) is not
+evidence the turn is over, so that case still stamps. The remaining hole
+- a turn whose ``UserPromptSubmit`` AND ``PreToolUse`` were both dropped,
+leaving only a ``PostToolUse`` - costs one under-claimed ``working``,
+corrected by the next opening event.
+
+OPENING events still stamp unconditionally: nothing to be late for.
 """
 
 from __future__ import annotations
@@ -96,6 +99,7 @@ from src.core.session_status import (
     STATUS_UNKNOWN,
     STATUS_WORKING,
     STATUS_WORKING_SUBAGENT,
+    derive_read_state,
 )
 
 # ---------------------------------------------------------------------------
@@ -212,7 +216,11 @@ def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
         # which is not either of the other two.
         return STATUS_UNKNOWN
     if tmux_status == STATUS_IDLE:
-        return STATUS_FINISHED_UNREAD if unread else STATUS_IDLE
+        # ONE DERIVATION, shared with the hook path and both seeds. See
+        # ``session_status.derive_read_state``: the read/unread half of
+        # this vocabulary is a projection of the flag, never a value a
+        # source gets to decide for itself.
+        return derive_read_state(STATUS_IDLE, unread=unread)
     return STATUS_UNKNOWN
 
 
@@ -234,10 +242,28 @@ class SessionActivitySignal:
     #: "hooks are not installed / haven't fired yet" - only the latter
     #: falls back to ``map_tmux_fallback``.
     hook_seen: bool = False
-    #: True between an unresolved ``PermissionRequest`` and the next
-    #: UserPromptSubmit or PreToolUse event. THE AGENT IS STOPPED while
-    #: this is set - it cannot proceed until the user answers.
+    #: True while a ``PermissionRequest`` is believed unresolved. THE
+    #: AGENT IS STOPPED while this is set - it cannot proceed until the
+    #: user answers. THREE THINGS RETIRE IT, and it needs all three: the
+    #: next UserPromptSubmit / PreToolUse / Stop (the answer being given,
+    #: and the fastest route WHEN the events reach this same key), the
+    #: user viewing the session (``clear_permission`` via
+    #: ``session_view_clears``), and the pane being read and found to hold
+    #: no dialog (``session_permission_verify``). The last two exist
+    #: because the first is a closed loop only while every event lands on
+    #: this key, and on live 2026-09-09 one session's did not.
     permission_open: bool = False
+    #: When ``permission_open`` last went False -> True, or None while it
+    #: is clear. It exists because a PermissionRequest is a CLAIM that
+    #: something is on screen, and the pane is the only thing that can
+    #: confirm it - see ``src/core/session_permission_verify.py``. Stamped
+    #: ONLY on the transition, never refreshed by a duplicate: a duplicated
+    #: PermissionRequest means "still blocked", and letting it re-stamp
+    #: would push the verification grace window out for as long as the
+    #: duplicates kept arriving, which is exactly when verification is
+    #: most needed. Cleared to None everywhere the flag clears, so a
+    #: stale stamp can never outlive the claim it dates.
+    permission_opened_at: Optional[datetime] = None
     #: True between an unresolved ``Notification`` and the next
     #: UserPromptSubmit or PreToolUse event. Claude wants attention and is
     #: NOT blocked, which is why it is a second boolean rather than a
@@ -255,13 +281,11 @@ class SessionActivitySignal:
     subagent_depth: int = 0
     #: True while the hook stream shows a turn IN PROGRESS. Set by every
     #: OPENING event (UserPromptSubmit / PreToolUse / SubagentStart),
-    #: cleared by ``Stop``. It exists so a CLOSING event can tell "this
-    #: tool result belongs to the turn running right now" from "this is a
-    #: straggler from the turn that already ended", which is the whole of
-    #: punchlist item 4. A boolean rather than a counter deliberately:
-    #: parallel tool calls and a droppable ``PreToolUse`` would make a
-    #: counter drift, and a drifting counter is a worse lie than a coarse
-    #: one. Read TOGETHER WITH ``last_stop_ts`` - see ``record_event``.
+    #: cleared by ``Stop``. It exists so a late ``PostToolUse`` can be told
+    #: from one belonging to the turn running right now. A boolean rather
+    #: than a counter deliberately: parallel tool calls and a droppable
+    #: ``PreToolUse`` would make a counter drift, and a drifting counter is
+    #: a worse lie than a coarse one. Read TOGETHER WITH ``last_stop_ts``.
     turn_open: bool = False
     #: Wall-clock time of the most recent Stop. Consulted by
     #: ``record_event`` (a Stop we have POSITIVELY seen is what licenses
@@ -319,6 +343,14 @@ class SessionActivityTracker:
             # duplicate, or a second distinct permission prompt before the
             # first resolved, both just mean "still blocked" - correct
             # either way.
+            #
+            # THE STAMP IS THE TRANSITION, NOT THE EVENT. Only a
+            # False -> True move dates the claim; a duplicate leaves the
+            # original stamp alone so the pane verification's grace window
+            # cannot be pushed out indefinitely by a repeating hook. See
+            # the field comment on ``permission_opened_at``.
+            if not state.permission_open:
+                state.permission_opened_at = now
             state.permission_open = True
         elif kind == EVENT_NOTIFICATION:
             # Deliberately does NOT touch permission_open. The two flags
@@ -329,6 +361,7 @@ class SessionActivityTracker:
             state.notice_open = True
         elif kind == EVENT_USER_PROMPT_SUBMIT:
             state.permission_open = False
+            state.permission_opened_at = None
             state.notice_open = False
             # An OPENING event: a prompt was submitted, so a turn is live
             # again even though this event stamps no heartbeat of its own
@@ -342,6 +375,7 @@ class SessionActivityTracker:
             # "permission answered" event at all. It clears BOTH for the
             # same reason: the user showing up is what resolves either.
             state.permission_open = False
+            state.permission_opened_at = None
             state.notice_open = False
             state.turn_open = True
             state.last_tool_event_ts = now
@@ -366,18 +400,18 @@ class SessionActivityTracker:
             state.turn_open = True
             state.last_tool_event_ts = now
         elif kind == EVENT_SUBAGENT_STOP:
-            # A CLOSING event, and ``subagent_depth`` is already the exact
-            # record of how many SubagentStarts are unmatched. At depth 0
-            # there is no subagent to close, so this closes nothing and
-            # claims nothing: it does not decrement (the floor, unchanged
-            # - a negative depth would permanently hide a later legitimate
-            # Start) and, the fix for punchlist item 4, IT DOES NOT STAMP
-            # THE HEARTBEAT. claude fires one of these after every Stop
-            # on a turn with no subagent in it; stamping it re-armed
-            # ``working`` for 120s on a finished session.
+            # A SubagentStop NEVER STAMPS THE HEARTBEAT. It reports that
+            # work ENDED, so the only thing it may move is the depth, and
+            # it moves that with the floor (a negative depth would
+            # permanently hide a later legitimate Start). See the module
+            # docstring: gating the stamp on ``subagent_depth > 0``, as
+            # this did until it was tightened, gates it on a number a
+            # DUPLICATED SubagentStart delivered after ``Stop`` can raise
+            # off the floor by itself, so the straggler pair Start-then-
+            # Stop re-armed ``working`` on a finished turn through the
+            # very guard meant to stop it.
             if state.subagent_depth > 0:
                 state.subagent_depth -= 1
-                state.last_tool_event_ts = now
             else:
                 logger.debug(
                     "subagent_stop_without_start",
@@ -389,6 +423,7 @@ class SessionActivityTracker:
             # attention, no in-flight tool work, no in-flight subagent. A
             # duplicate Stop re-applies the exact same reset - harmless.
             state.permission_open = False
+            state.permission_opened_at = None
             state.notice_open = False
             state.subagent_depth = 0
             state.last_tool_event_ts = None
@@ -469,13 +504,138 @@ class SessionActivityTracker:
                 else STATUS_WORKING
             )
 
-        if unread:
-            return STATUS_FINISHED_UNREAD
-
-        if tmux_status == STATUS_UNKNOWN:
+        # AT REST. Which of the two resting states this is, is not a
+        # decision this state machine makes - it is the unread flag,
+        # applied by the one function every other source applies too.
+        # ``unknown`` is untouched by it deliberately: not having
+        # measured a session is not a claim that it is resting, so an
+        # unread flag may not turn it into one.
+        if tmux_status == STATUS_UNKNOWN and not unread:
             return STATUS_UNKNOWN
 
-        return STATUS_IDLE
+        return derive_read_state(STATUS_IDLE, unread=unread)
+
+    def clear_notice(self, session_id: str) -> bool:
+        """Clear an open ``Notification`` because the user LOOKED. Idempotent.
+
+        Description: the ONE thing outside the hook stream that may move
+            this state machine, and it may move exactly one field.
+            ``notice`` means "claude wants you to look"; a WebSocket
+            terminal binding to the session, or the user's explicit
+            mark-read control, is the user looking. Nothing in the hook
+            stream carries that fact - the three events that clear
+            ``notice_open`` today (``UserPromptSubmit`` / ``PreToolUse``
+            / ``Stop``) are all the AGENT acting, which is why a
+            notification survived a 46-minute visit on live 2026-09-09.
+
+            IT DOES NOT TOUCH ``permission_open``, and that is a
+            division of labour rather than a policy: the permission has
+            its own clear next door (``clear_permission``), which the
+            same view path calls, and which the pane check also calls.
+            One field per method keeps a caller that wants only one of
+            them from having to want both.
+
+            Idempotent and order-tolerant like every other update here:
+            clearing a notice that is not open is a no-op, and a
+            ``Notification`` arriving after this call simply re-opens
+            one, which is correct - that is a NEW request for attention.
+        Inputs:
+            session_id: cloudecode session id.
+        Output:
+            bool: True when a notice was actually open and has been
+            cleared, False when there was nothing to clear. Returned so a
+            caller can log the difference rather than guess at it; no
+            caller is required to act on it.
+        Example:
+            >>> t = SessionActivityTracker()
+            >>> t.record_event("s1", EVENT_NOTIFICATION)
+            >>> t.clear_notice("s1")
+            True
+            >>> t.clear_notice("s1")
+            False
+        """
+        state = self._signals.get(session_id)
+        if state is None or not state.notice_open:
+            return False
+        state.notice_open = False
+        logger.debug("notice_cleared_by_view", session_id=session_id)
+        return True
+
+    def clear_permission(self, session_id: str) -> bool:
+        """Clear an open ``PermissionRequest``. Idempotent.
+
+        Description: the second thing outside the hook stream that may
+            move this state machine, and like ``clear_notice`` it may
+            move exactly one claim (the flag and the stamp that dates it,
+            which are one fact in two fields).
+
+            IT HAS TWO CALLERS AND THEY ANSWER THE SAME QUESTION FROM
+            OPPOSITE ENDS. ``session_view_clears`` calls it because the
+            OWNER showed up - his rule, verbatim: "when clicking a tab,
+            the session is marked read. if i want it unread i click
+            unread." ``session_permission_verify_apply`` calls it because
+            the PANE was read and holds no dialog, which is the only
+            evidence that can retire a flag whose agent can no longer be
+            reached by a clearing hook.
+
+            WHY THE VIEW MAY NOW CLEAR IT, having deliberately not done
+            so before. The old reasoning was that looking at a permission
+            prompt does not answer it, so a view clearing it would paint
+            false green. Measured on live 2026-09-09 that argument
+            protected the wrong thing: ``cloude_Media_Compression`` held
+            ``question`` with NO dialog on its pane at all, because the
+            hooks that clear the flag arrived under a DIFFERENT session
+            id than the one the flag was set on, and no event reachable
+            from that pane could ever retire it. A claim no observation
+            can retire is not a safe claim, it is a stuck one. The pane
+            check next door is the honest retirement path; the view is
+            the user's own override of it, consistent with every other
+            attention state on this screen.
+
+            Order-tolerant: a ``PermissionRequest`` arriving after this
+            call simply re-opens the flag with a FRESH stamp, which is
+            correct - that is a new prompt, and it gets its own grace
+            window before the pane is asked about it.
+        Inputs:
+            session_id: cloudecode session id.
+        Output:
+            bool: True when a permission was actually open and has been
+            cleared, False when there was nothing to clear.
+        Example:
+            >>> t = SessionActivityTracker()
+            >>> t.record_event("s1", EVENT_PERMISSION_REQUEST)
+            >>> t.clear_permission("s1")
+            True
+            >>> t.clear_permission("s1")
+            False
+        """
+        state = self._signals.get(session_id)
+        if state is None or not state.permission_open:
+            return False
+        state.permission_open = False
+        state.permission_opened_at = None
+        return True
+
+    def permission_open_since(self, session_id: str) -> Optional[datetime]:
+        """When this session's open permission claim was first raised.
+
+        Description: the accessor the pane-verification seam reads, so
+            nothing outside this module has to reach into ``_signals``.
+            Returns None both when no permission is open and when the
+            session is unknown - the caller treats either as "nothing to
+            verify", which is the same action for both.
+        Inputs:
+            session_id: cloudecode session id.
+        Output:
+            datetime | None - naive UTC stamp of the False -> True move.
+        Example:
+            >>> SessionActivityTracker().permission_open_since("s1") is None
+            True
+        """
+        state = self._signals.get(session_id)
+        if state is None or not state.permission_open:
+            return None
+        return state.permission_opened_at
 
     def hooks_seen(self, session_id: str) -> bool:
         """True iff at least one hook event has ever landed for this session.

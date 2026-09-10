@@ -9,9 +9,12 @@
  * scrolls the list out from under you. It is also completely unreachable
  * by keyboard. So every capability below has at least two routes:
  *
- *   move a session into a group   drag onto the group   |  `g` on the
- *                                 (session-sidebar-      |  focused row,
- *                                  reorder.js)           |  or Alt+Arrow
+ *   move a session into a group   drag onto the group   |  the row's
+ *                                 (session-sidebar-      |  group picker
+ *                                  reorder.js)           |  (kebab menu),
+ *                                                        |  or `g` on the
+ *                                                        |  focused row,
+ *                                                        |  or Alt+Arrow
  *                                                        |  across a band
  *                                                        |  edge
  *   create a group                the picker's "new      |  the header's
@@ -23,20 +26,9 @@
  *                                 move up / move down    |  focused header
  *
  * The picker is a real menu of real buttons, so it is tabbable, operable
- * by Enter and Space for free, and works identically under a finger.
- *
- * IT LOST ITS ONE POINTER-DISCOVERABLE ENTRY POINT on 2026-09-08. The
- * row's overflow menu carried an "add to a group" item, and the owner
- * removed that menu: "remove 'add to group' / 'restart the agent' and
- * the three dots now that they're not needed". `openPickerFor` and
- * everything under it is untouched and still reached by `g` on a focused
- * row; what went is the BUTTON that opened it. On a PHONE that leaves
- * dragging the row onto a group header as the only route, because there
- * is no keyboard to press `g` on. The rule at the top of this file -
- * drag is never the only way to do anything - now holds only where a
- * keyboard exists. Recorded rather than quietly accepted: if a pointer
- * route is wanted back, a button calling `openPickerFor` is what has to
- * come back.
+ * by Enter and Space for free, and works identically under a finger. It
+ * is deliberately the SAME control from the kebab and from `g`, so there
+ * is one thing to learn and one thing to test.
  *
  * ALL THREE MOVE ROUTES END IN `commitAssignment`, which ends in ONE API
  * call. They cannot drift apart in what a move means, and there is one
@@ -219,6 +211,54 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
     }
 
     /**
+     * Description: the row's kebab-menu entry for filing a conversation
+     *   into a group - the moved twin of the row's old group CHIP.
+     *
+     *   THE CHIP USED TO DO TWO JOBS: name the group on the row, and open
+     *   this same picker. "no i dont need to see the group name in the
+     *   item. its in the group i can see the group on the sidebar" killed
+     *   the first job outright; this function is what is left of the
+     *   second. It is built here rather than in
+     *   client/js/session-sidebar-rows.js because this module is what
+     *   already owns the group-picking domain - openPickerFor,
+     *   commitAssignment, the store lookups - and
+     *   client/js/session-row-menu.js pulls it into the panel exactly the
+     *   way it pulls pin from SessionSidebarRows and mark-unread from
+     *   SessionStatusUI: one control, built by the module that owns it.
+     *
+     *   An UNGROUPED row still gets the control, same as the chip did -
+     *   a control that only appears once you have used it cannot be
+     *   discovered.
+     *
+     *   Emits NOTHING when the group model is unknown or unreadable.
+     *   Offering to file a conversation into a table we could not read
+     *   is offering an action that cannot work.
+     * Inputs: name (string) - tmux name.
+     * Output: string - HTML, possibly empty.
+     */
+    function rowMenuItemHtml(name) {
+        const G = store();
+        if (!G) return '';
+        const uuid = G.groupOf(name);
+        const group = uuid ? G.groupByUuid(uuid) : null;
+        const title = group ? 'move to another group' : 'add to a group';
+        const label = group ? `Move ${name} to another group` : `Add ${name} to a group`;
+        return (
+            '<button type="button" class="session-row-menu-group" '
+            + `data-group-pick="${esc(name)}" `
+            + `title="${esc(title)}" aria-label="${esc(label)}" `
+            + 'aria-haspopup="menu">'
+            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" '
+            + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+            + 'stroke-linejoin="round" aria-hidden="true">'
+            + '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 '
+            + '2-2h5l2 3h9a2 2 0 0 1 2 2z"/>'
+            + '</svg>'
+            + '</button>'
+        );
+    }
+
+    /**
      * Description: the group picker for one session row - the NON-DRAG
      *   way to file a conversation. Lists every group, plus "other", plus
      *   "new group", with the row's current group marked.
@@ -276,10 +316,10 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
 
     /**
      * Description: the menu on a user group's own header - rename,
-     *   reorder and delete. Reserved bands emit no menu button, so this
-     *   is only ever reached for a real group.
-     * Inputs: anchor (Element), groupUuid (string).
-     * Output: void.
+     *   reorder and delete. A reserved band's kebab carries
+     *   `data-group-menu-band` instead (session-sidebar-band-menu.js),
+     *   so this is only ever reached for a real group.
+     * Inputs: anchor (Element), groupUuid (string). Output: void.
      */
     function openGroupMenu(anchor, groupUuid) {
         const G = store();
@@ -398,6 +438,13 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
                 openGroupMenu(groupMenu, groupMenu.getAttribute('data-group-menu'));
                 return;
             }
+            const bandMenu = e.target.closest && e.target.closest('[data-group-menu-band]');
+            if (bandMenu && window.SessionSidebarBandMenu) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.SessionSidebarBandMenu.open(bandMenu, bandMenu.getAttribute('data-group-menu-band'));
+                return;
+            }
             const picker = e.target.closest && e.target.closest('[data-group-pick]');
             if (picker) {
                 e.preventDefault();
@@ -446,7 +493,8 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
     window.SessionSidebarGroupActions = {
         init, refresh, commitAssignment, openPickerFor, openGroupMenu,
         renameGroup, deleteGroup, moveGroup, createGroupThenAssign,
-        closeMenu,
+        closeMenu, rowMenuItemHtml,
+        showMenu, announce, repaint, // reused by session-sidebar-band-menu.js
     };
     console.log('[SessionSidebarGroupActions Module] Exported as window.SessionSidebarGroupActions');
 })();
