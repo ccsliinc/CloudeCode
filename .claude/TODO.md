@@ -6714,3 +6714,42 @@ owner's double-click rename by following his commit's intent.
   inverted ruling into the shared `docs/DECISIONS.md`. Do not read docs from it.
 - Every branch pushes to `origin`; releases and coord also to `adamdev`. NEVER
   `upstream`.
+
+## 2026-09-10 - BACKLOG (refined): the sleep/wake AWAY BAR is full width and overlapping when the sidebar is out
+
+Supersedes and sharpens the earlier "idle warning goes full width" entry: the
+owner has now identified the actual component and its content, so this is the
+away bar, not a generic idle notice.
+
+Owner's report, verbatim: "the idle bar is wide when the sidebar is out and its
+overlapping. away 2 hr 49 min / close / show full history / show summary / just
+continue / this pane is a full-screen app, so tmux kept no scrollback for it:
+full history repaints the current screen and replace"
+
+- [ ] SYMPTOM: the bar spans the full viewport width when the sidebar is out
+  (pinned/open and holding layout space), and it OVERLAPS rather than sitting
+  beside. It presumably sizes against the viewport instead of the content
+  column, so the sidebar's gutter is never subtracted. UNCONFIRMED: whether it
+  is fixed-position or a flow element with a width rule, and WHAT it overlaps
+  (the sidebar, the terminal, or the header). Measure before fixing; do not
+  guess which of those it is.
+- The component is the sleep/wake bar shipped 2026-09-08: `client/js/terminal-away-bar.js`
+  and `terminal-away-gap.js`, fed by `src/core/session_away_report.py` and
+  `GET /api/v1/sessions/away/summary`. The sidebar gutter token is
+  `--sidebar-gutter`.
+- CONTENT OBSERVED, useful for reproducing: heading "away 2 hr 49 min", then
+  the controls close / show full history / show summary / just continue, then
+  the explanatory sentence "this pane is a full-screen app, so tmux kept no
+  scrollback for it: full history repaints the current screen and replace".
+- [ ] SECOND, POSSIBLY SEPARATE DEFECT: that explanatory sentence reads
+  truncated ("and replace", not "and replaces ..."). Determine whether the
+  string itself is cut in the source or whether the element is clipping its
+  text. If the element is clipping, that is the same layout bug and closes with
+  it; if the string is wrong in the source, it is a copy fix and independent.
+- Fix belongs in the SVELTE rewrite if the terminal screen has moved by the
+  time this is picked up (it is the LAST slice, per
+  `.claude/notes/svelte-migration-launchpad.md`, so it will be vanilla for a
+  while). A CSS-only fix in the current client is acceptable and expected to be
+  thrown away.
+- Related open question from an earlier session, still unanswered: what "show
+  full history" is supposed to do, versus "show summary".
