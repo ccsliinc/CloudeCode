@@ -122,6 +122,34 @@ STARTUP_HOOK_GRACE_SECONDS: int = 20
 #: scrolled away, this one looks for something that is on screen NOW.
 STARTUP_TAIL_LINES: int = 200
 
+#: How long a pane-tail reading stands before the gate pays for another
+#: one, per tmux instance.
+#:
+#: WHY THIS EXISTS AT ALL. ``should_capture_tail`` was written on the
+#: claim that its refusals make the capture free in steady state, because
+#: "a session that has fired a hook can never be awaiting a startup
+#: prompt" and "a healthy session fires one within half a second of
+#: birth". Both sentences are true and the conclusion still does not
+#: hold, because the hook record is IN-MEMORY and per server process: an
+#: idle session that fired its last hook before this process started has
+#: no record and will never acquire one, so it is alive, long past the
+#: grace window, and hookless on every poll for as long as it lives.
+#: MEASURED 2026-09-09 on the owner's box: 13 of 13 live sessions took a
+#: capture on every listing poll, 349 ms of the 1008 ms that pass spent
+#: in tmux subprocesses, forever, on a box with nothing wrong with it.
+#:
+#: 30s AGAINST A 5s LISTING POLL is a six-fold cut, and it costs nothing
+#: in detection latency for the case the gate was built for. Only a
+#: RE-look is throttled: an instance with no reading on record is read
+#: immediately, so a freshly launched session parked on its folder-trust
+#: dialog is still caught on the first poll past the grace window. What
+#: the interval bounds is how long a session that becomes stuck LATER -
+#: the user quits claude and starts it again by hand inside a pane whose
+#: ``#{pane_pid}`` does not move, so nothing invalidates the record - can
+#: sit unnoticed. Half a minute to notice a state that needs a human
+#: anyway is the right trade for six-sevenths of the cost.
+STARTUP_TAIL_RECHECK_SECONDS: int = 30
+
 
 # ---------------------------------------------------------------------------
 # What a blocking startup prompt looks like. EVERY marker below was read
@@ -206,6 +234,8 @@ def should_capture_tail(
     first_hook_at: Optional[datetime],
     instance_age_seconds: Optional[float],
     grace_seconds: int = STARTUP_HOOK_GRACE_SECONDS,
+    tail_age_seconds: Optional[float] = None,
+    recheck_seconds: int = STARTUP_TAIL_RECHECK_SECONDS,
 ) -> bool:
     """Is reading this pane's scrollback worth a subprocess call?
 
@@ -217,8 +247,24 @@ def should_capture_tail(
         prompt (see the module docstring on evidence ordering), and a
         healthy session fires one within half a second of birth. So the
         capture runs only for a pane that is alive, past the grace
-        window, and has produced NO hook - which on a working box is the
-        empty set, and on a broken one is exactly the rows in question.
+        window, and has produced NO hook.
+
+        THAT SET IS NOT EMPTY ON A WORKING BOX, and the claim that it is
+        was this project's most expensive wrong sentence. The hook record
+        lives in ``StartupGateLedger``, which is IN-MEMORY and per server
+        process, so a session that fired its last hook before this
+        process started has none and never will. Measured 2026-09-09: 13
+        of 13 live sessions, every one of them healthy, took a capture on
+        EVERY listing poll - 349 ms of a 1008 ms pass, run synchronously
+        on the event loop, which is what turned a listing cost into
+        keystroke lag in the terminal.
+
+        The fourth refusal is what closes it: a reading that is still
+        fresh stands rather than being re-taken. A ``tail_age_seconds``
+        of None means nothing is on record for this instance, which reads
+        as "look now" - so the FIRST look is never delayed and the case
+        the gate exists for (a session parked on its folder-trust dialog
+        since birth) is detected exactly as promptly as before.
 
         Deliberately a separate predicate from ``resolve_startup_gate``
         rather than an early return inside it: the resolver must stay
@@ -231,6 +277,9 @@ def should_capture_tail(
         instance_age_seconds: age of the tmux instance, or None when it
             could not be dated.
         grace_seconds: override for tests.
+        tail_age_seconds: seconds since the last usable tail reading for
+            THIS instance, or None when there is none on record.
+        recheck_seconds: how long a reading stands. Override for tests.
     Output:
         bool - True when the caller should capture a tail and pass it to
         ``resolve_startup_gate``.
@@ -245,7 +294,11 @@ def should_capture_tail(
         return False
     if instance_age_seconds is None:
         return False
-    return instance_age_seconds >= grace_seconds
+    if instance_age_seconds < grace_seconds:
+        return False
+    if tail_age_seconds is not None and tail_age_seconds < recheck_seconds:
+        return False
+    return True
 
 
 def resolve_startup_gate(
@@ -255,6 +308,7 @@ def resolve_startup_gate(
     instance_age_seconds: Optional[float],
     tail: Optional[str],
     grace_seconds: int = STARTUP_HOOK_GRACE_SECONDS,
+    remembered_match: Optional[bool] = None,
 ) -> str:
     """Answer "is this session blocked on an unanswered startup prompt?".
 
@@ -271,9 +325,18 @@ def resolve_startup_gate(
           4. The instance could not be dated, or is younger than the
              grace window -> ``unknown``. A session that is merely young
              has not been observed to be stuck.
-          5. No tail was captured -> ``unknown``.
+          5. No tail was captured AND none is remembered for this
+             instance -> ``unknown``.
           6. A marker matched -> ``awaiting_startup_prompt``.
           7. The tail was read and nothing matched -> ``ready``.
+
+        A FRESH READING ALWAYS OUTRANKS A REMEMBERED ONE, and the
+        remembered one is consulted only at rung 5, where the alternative
+        is refusing. ``should_capture_tail`` throttles how often a tail
+        is re-read (see ``STARTUP_TAIL_RECHECK_SECONDS``), so without
+        this the row would flap between a measured verdict and
+        ``unknown`` on alternating polls - a throttle that made the
+        answer worse rather than cheaper.
 
         Rung 7 is the one asymmetry worth naming, and it matches the rule
         this codebase already applies to transcripts: not having looked
@@ -289,6 +352,10 @@ def resolve_startup_gate(
             created, or None when it could not be dated.
         tail: captured scrollback text, or None when no capture was made.
         grace_seconds: override for tests.
+        remembered_match: the verdict of the last capture taken for THIS
+            instance, when the caller declined to take a fresh one; None
+            when nothing is remembered. Used only where a fresh reading
+            is absent.
     Output:
         str - one of ``ALL_STARTUP_GATES``.
     Example:
@@ -308,6 +375,8 @@ def resolve_startup_gate(
     if instance_age_seconds < grace_seconds:
         return GATE_UNKNOWN
     matched = detect_startup_prompt(tail)
+    if matched is None:
+        matched = remembered_match
     if matched is None:
         return GATE_UNKNOWN
     return GATE_AWAITING if matched else GATE_READY

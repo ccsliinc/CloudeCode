@@ -8,11 +8,11 @@
 
 **Drive your Mac's live Claude Code sessions from your phone. Real terminal, real keystrokes, real control — while the session runs in tmux whether you're watching or not.**
 
-### [Download Cloude Code 1.2.0 for macOS](https://github.com/ccsliinc/CloudeCode/releases/download/v1.2.0/Cloude.Code-1.2.0-arm64.dmg)
+### [Download Cloude Code 1.2.1 for macOS](https://github.com/ccsliinc/CloudeCode/releases/download/v1.2.1/Cloude.Code-1.2.1-arm64.dmg)
 
 Apple Silicon, macOS 13+. Open the DMG and drag the app to Applications. That is the whole install.
 
-![Version](https://img.shields.io/badge/version-1.2.0-d77757)
+![Version](https://img.shields.io/badge/version-1.2.1-d77757)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
 ![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20(Apple%20Silicon)-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB)
@@ -340,11 +340,15 @@ Three rules for these:
 
 ```bash
 # 1. Download
-curl -LO https://github.com/ccsliinc/CloudeCode/releases/download/v1.2.0/Cloude.Code-1.2.0-arm64.dmg
+curl -LO https://github.com/ccsliinc/CloudeCode/releases/download/v1.2.1/Cloude.Code-1.2.1-arm64.dmg
 
 # 2. Verify
-shasum -a 256 Cloude.Code-1.2.0-arm64.dmg
-# expected: see the sha256 published on the v1.2.0 release page
+shasum -a 256 Cloude.Code-1.2.1-arm64.dmg
+# expected: see the sha256 published on the v1.2.1 release page
+#
+# Upstream's own rebuilt 1.0.36 DMG, for anyone verifying that artifact:
+#   Cloude.Code-1.0.36-arm64.dmg
+#   a40a2c54e18c8e1e5a7636540942cc2c901ec726736fafe8d403378a53c43ae7
 ```
 
 3. Open the DMG, drag **Cloude Code** to `/Applications`, and launch it. The first run provisions the venv, installs dependencies, generates your secrets, and pops a QR window — scan it with your authenticator app.

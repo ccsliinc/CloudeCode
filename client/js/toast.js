@@ -73,6 +73,22 @@
  *     syncToServer=false to skip the round-trip).
  *   - Server-driven ack (from another browser) -> dismiss(id, {syncToServer:
  *     false}) - no echo back to the server.
+ *   - User clicks the card's session name -> the SAME switch a sidebar row
+ *     click runs, PLUS this same ack-every-member teardown: arriving at the
+ *     session is what a card exists to prompt, so the click also retires it.
+ *
+ * NO CARD FOR THE SESSION ON SCREEN, in either direction. `add()` refuses a
+ * toast whose session is the one `SessionSidebar` says is currently active
+ * (`_isActiveSession`) - if the user is looking at it, whatever the toast
+ * says is already visible in the live terminal. And switching INTO a
+ * session (`SessionSidebar.setActiveSession`) clears whatever card was
+ * still showing for it via `dismissForSessionEntry`, because a card that
+ * arrived while the user was elsewhere is stale the instant they arrive.
+ * Both read/write the identical (sessionId, tmuxName) pair app.js already
+ * sets before the WS connects, so there is no second flag and no race
+ * against the attach backfill. The one exception is the attachment
+ * receipt (`toast.local`), which is not a session-status event at all and
+ * keeps rendering for the active session exactly as it always has.
  *
  * No localStorage cross-tab sync; the WS broadcast is the source of truth
  * for ack propagation.
@@ -365,6 +381,44 @@ class ToastManager {
   }
 
   /**
+   * Is a toast about the session the user is looking at RIGHT NOW.
+   *
+   * THE SINGLE SOURCE OF TRUTH IS SessionSidebar, not a second flag kept
+   * here. app.js calls `SessionSidebar.setActiveSession(sessionId,
+   * tmuxName)` on every navigation into a terminal - and with (null,
+   * null) on the way out to the launchpad or archive - synchronously,
+   * BEFORE `TerminalController.connectToSession` opens the WS or
+   * requests the attach backfill. `session-sidebar-clicks.js` already
+   * reuses the identical pair (`ctrl._activeTmuxName`) for the same
+   * question on a self-click, so this is the second reuse, not a new
+   * flag: inventing a local copy would be one more thing to forget to
+   * clear on the way to the launchpad.
+   *
+   * NO RACE. Because the flag is set BEFORE the WS/backfill that could
+   * feed a toast for that very session, every `add()` call for it -
+   * whether the live `toast.new` frame or the attach backfill - already
+   * sees the session as active by the time it runs. Hook events arrive
+   * unordered, duplicated and droppable; this reads live state on every
+   * call rather than latching anything, so a duplicate or a late arrival
+   * answers exactly the same as the first.
+   *
+   * MATCHED ON EITHER id or tmux name, never both required: a toast
+   * recorded before the server carried identity may carry only one.
+   *
+   * Inputs: toast (object) - server-shape toast.
+   * Output: boolean.
+   */
+  _isActiveSession(toast) {
+    const sidebar = window.SessionSidebar;
+    if (!sidebar || !toast) return false;
+    const sid = toast.session_id;
+    const name = toast.session_name;
+    if (sid && sidebar._activeSessionId && sid === sidebar._activeSessionId) return true;
+    if (name && sidebar._activeTmuxName && name === sidebar._activeTmuxName) return true;
+    return false;
+  }
+
+  /**
    * Add a toast to the UI.
    * @param {object} toast - shape: { id, session_id, kind, title, body,
    *   color, created_at, acknowledged }
@@ -373,6 +427,15 @@ class ToastManager {
     if (!toast || !toast.id) return;
     if (toast.acknowledged) return; // server says already done; don't show
     if (!this._container()) return;
+    // NEVER A CARD FOR THE SESSION ON SCREEN. If the user is looking at
+    // it, whatever the toast says is already visible in the terminal
+    // itself - a card would be telling them something they can see with
+    // their own eyes. `toast.local` is excluded: the attachment receipt
+    // (client/js/attachment-toast.js) is raised for the session the user
+    // is TYPING into, which is normally this same active session, and it
+    // is not a session-status event at all (see COALESCE_KEY) - it must
+    // keep rendering exactly as it always has.
+    if (!toast.local && this._isActiveSession(toast)) return;
     // A KNOWN ID IS EITHER A DUPLICATE OR A SUPERSESSION, AND THE
     // DIFFERENCE IS IN THE CONTENT, NOT THE ID.
     //
@@ -636,6 +699,45 @@ class ToastManager {
         this.dismiss(id, { syncToServer: false });
       }
     }
+  }
+
+  /**
+   * Clear whatever session-status card is showing for a session the user
+   * has just switched INTO. The counterpart to `_isActiveSession`'s gate
+   * on `add()`: that stops a NEW card appearing for the active session,
+   * this clears one that arrived EARLIER, while the session was not yet
+   * active - e.g. it fired while the user was on a different session,
+   * and they have now switched back into it. Called from
+   * `SessionSidebar.setActiveSession`, the same place that sets the
+   * active-session flag `_isActiveSession` reads, so a switch clears the
+   * card in the same beat it stops a new one from appearing.
+   *
+   * SYNCS TO THE SERVER, unlike `dismissBySession`: that method assumes
+   * the session was just DESTROYED, so acking would be a pointless round
+   * trip to a row that is going away anyway. Here the session is exactly
+   * as alive as it was a moment ago; the dismissal has to stick the same
+   * way any other one does.
+   *
+   * EXCLUDES the local receipt, for the same reason `add()` does: it is
+   * not a session-status event, and switching into a session must not
+   * touch a pending attachment thumbnail.
+   *
+   * Inputs: sessionId (string|null), tmuxName (string|null).
+   * Output: number - how many toasts were dismissed.
+   * Example: ToastManager.dismissForSessionEntry('ses_1', 'cloude_x') -> 1
+   */
+  dismissForSessionEntry(sessionId, tmuxName) {
+    if (!sessionId && !tmuxName) return 0;
+    const ids = [];
+    for (const [id, toast] of this._byId.entries()) {
+      if (!toast || toast.local) continue;
+      if ((sessionId && toast.session_id === sessionId)
+          || (tmuxName && toast.session_name === tmuxName)) {
+        ids.push(id);
+      }
+    }
+    for (const id of ids) this.dismiss(id, { syncToServer: true });
+    return ids.length;
   }
 
   /**
@@ -1007,6 +1109,14 @@ class ToastManager {
             { dataset: { name: winner.session_name, sessionId: winner.session_id || '' } },
           );
         }
+        // THE CLICK ALSO DISMISSES THE CARD. The user just arrived at the
+        // session this card is about, which is the same "already seen it"
+        // fact that keeps a card from appearing for the session on screen
+        // (see `_isActiveSession`) - clicking the name is how that fact
+        // becomes true a moment early. Reuses `dismissGroup`, the SAME
+        // teardown the x button runs, rather than a second one: every
+        // member gets acked, so nothing is left orphaned unacked server-side.
+        this.dismissGroup(key);
       });
     }
     el.appendChild(session);

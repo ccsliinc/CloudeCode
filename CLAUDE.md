@@ -395,10 +395,112 @@ the transcript-presence guard uses, for the same reason. `ready` claims only
 "not blocked on a startup prompt", NOT "healthy": a pane measured dead answers
 `ready` here, and `activity_status` is what says it died.
 
-**Steady state costs nothing, because the tail is only read when the cheap
-signals already point at a stuck session.** `should_capture_tail` gates the one
-`capture-pane` on alive + past the grace window + no hook, which on a working
-box is the empty set. Do not move that capture up into the unconditional path.
+**THE TAIL READ WAS CLAIMED TO BE FREE IN STEADY STATE AND IT WAS NOT, AND
+THAT SENTENCE IS WHY THE TERMINAL LAGGED.** `should_capture_tail` gates the one
+`capture-pane` on alive + past the grace window + no hook, and this file used to
+say that set "on a working box is the empty set". It is not. The hook record
+lives in `StartupGateLedger`, which is IN-MEMORY and per server process, so a
+session that fired its last hook before this process started has none and never
+acquires one. Measured 2026-09-09 on the owner's box: **13 of 13 live sessions,
+all healthy, took a capture on every 5s listing poll, forever.** The fourth
+refusal closes it - a reading younger than `STARTUP_TAIL_RECHECK_SECONDS` (30s)
+stands instead of being re-taken, the ledger carries the verdict
+(`record_tail_read` / `last_tail_match` / `tail_age_seconds`), and
+`resolve_startup_gate` consults that remembered verdict ONLY at rung 5, where
+the alternative is refusing. Only a RE-look is throttled: an instance with
+nothing on record is read immediately, so a session parked on its trust dialog
+since birth is detected exactly as promptly as before. A throttle without the
+remembered verdict would flap the row between a measured answer and `unknown`
+on alternating polls, which is worse than the cost it saves. Do not move that
+capture up into the unconditional path.
+
+**THE LISTING PASS RUNS ON THE EVENT LOOP, SO ITS COST IS TERMINAL LATENCY.**
+This is the rule the two paragraphs above and the section below all serve.
+`list_session_infos` is `async def` whose body is entirely SYNCHRONOUS, so for
+as long as it runs the server does nothing else at all: it cannot read the tmux
+pipe carrying terminal output, cannot spawn the `send-keys` that delivers a
+keystroke, and cannot answer another request. Measured 2026-09-09, 13 live
+sessions: **27 tmux subprocesses and 1008 ms per pass** (one bulk
+`list-panes -a` at 282 ms, then `has-session` x13 at 377 ms and `capture-pane`
+x13 at 349 ms), polled every 5s by the sidebar and again by the launchpad. The
+user reported it as typing lag and as a sidebar click taking two seconds; the
+click's own endpoint measured **45-64 ms**, so essentially all of that two
+seconds was queueing. The control that proves the mechanism is
+`GET /sessions/records`, which does its work in a threadpool: its own cost is
+5.8 ms and its p99 was 161 ms, all of it spent waiting to be served.
+
+**A SECOND SUBPROCESS MUST NEVER ASK WHAT THE BULK ROW ALREADY SAYS, BUT ONLY
+THE POSITIVE HALF OF THAT ROW IS EVIDENCE.** `backend.is_alive()` is
+`tmux has-session`, and `list-panes -a` in the same pass already enumerates
+every live session BY NAME. `src/core/session_status_map.py` is where the fact
+that makes the row usable travels with the data: `StatusMap` is a `dict`
+subclass carrying `complete`, so every existing consumer and every plain-dict
+test double is untouched. **The asymmetry is the design.** A completed listing
+that NAMES a session proves it exists, so `listing_proves_alive` returns True
+and the probe is skipped. A listing that does not name it proves much less - it
+covers only the socket the probe was bound to and it is one moment in time - so
+it returns False meaning "not established", and `_session_info_for` still runs
+`is_alive()` for exactly those rows. **Trusting the negative was tried and it
+was wrong**: it dropped every row whose backend the listing could not see,
+which four `tests/test_session_rename.py` cases caught immediately and which in
+production would delete a LIVE session off the sidebar. Costing the probe only
+for rows about to be dropped costs nothing in steady state, where all 13
+sessions are in the listing. `tests/test_listing_subprocess_cost.py` pins it
+against REAL tmux by COUNTING subprocesses rather than timing anything: the
+count is the defect exactly, and a wall clock on a loaded box would either flake
+or be too loose to prove anything.
+
+**THE SIBLING LISTING'S COST WAS NOT SUBPROCESSES, AND ASSUMING IT WAS WOULD
+HAVE MISSED IT.** `/sessions/attachable` was already down to TWO tmux calls in
+steady state - its per-row pane fingerprint is cached per instance triple - so a
+subprocess count would have passed before any fix and proved nothing. What grew
+with the row count was SQLITE CONNECTIONS: the title, the durable row id and the
+recorded launch are three columns of ONE row under ONE key, and each was fetched
+by its own function opening its own connection. Measured 2026-09-09 with 11
+rows: **33 connections, about 33 ms of a 55 ms pass**, roughly 60 percent of it.
+`src/core/session_instance_index.py` reads them in one `SELECT` and answers every
+row from memory; the pass now opens the datastore **3 times regardless of row
+count** (`owned_tmux_instances`, `reconcile_lifecycle`, and the index), measured
+at **52-61 ms to 24-35 ms warm**. The two SELECTION RULES differ and both are
+preserved: `label_for_instance` asks for `ORDER BY id DESC LIMIT 1` while the
+other two take an unordered `fetchone()`, so the index keeps the FIRST row for
+identity and launch and the LAST for the title. Collapsing them would be a silent
+change in the duplicate case nobody looks at. **Measure what is actually wrong,
+not what the last fix happened to be.**
+
+**THE PIPE READER WAKES ON THE APPEND NOW, AND THE 20ms IS A BACKSTOP.**
+`TmuxBackend._tail_loop` used to `asyncio.sleep(0.02)` on every empty read, which
+made that interval a FLOOR ON KEYSTROKE LATENCY - the echo lands at a uniformly
+random point in the window, so it was seen about half an interval late on every
+keystroke. `src/core/pipe_wakeup.py` registers the pipe fd with kqueue
+(`EVFILT_VNODE`, `NOTE_WRITE | NOTE_EXTEND`) and hands the KQUEUE DESCRIPTOR to
+asyncio's own selector via `loop.add_reader`, so no thread is spent per session
+and no dependency is added. Measured interleaved A/B in one process, so the same
+load hit both arms, 100 keystrokes each through a real tmux pane: **p50 26.10 ->
+12.31 ms, p90 60.20 -> 28.44, p99 141.32 -> 77.59**, with idle CPU across 11 idle
+panes **0.97% against 0.98% of one core** - indistinguishable, which is the only
+reason this was kept rather than reverted.
+
+Three things about it are load-bearing. **The backstop is the safety argument**:
+an event-driven reader that misses an event does not read late, it STOPS reading,
+so every wait is still bounded by the same 20ms and the worst case is exactly the
+behaviour it replaces. **The latch is not optional**: the loop reads, gets
+nothing, and only THEN waits, so an append landing in that gap was already
+notified - `_pending_data` catches it, or the unlucky keystrokes would each cost
+a full backstop. And **it is one Future plus one timer, never
+`asyncio.wait_for(event.wait(), timeout)`**, which reads better and costs an
+extra Task per idle cycle; that version measured idle CPU going the wrong way.
+Linux has no `select.kqueue`, so CI runs the plain-sleep fallback, and
+`tests/test_pipe_wakeup.py` covers both. Its wake tests hand `wait` a FIVE SECOND
+timeout and allow half a second, so a pass cannot have come from the timer.
+
+**A TEST THAT TIMES A SUBPROCESS STARTING IS NOT TIMING WHAT IT CLAIMS.** Those
+wake tests flaked once in a full run at load average 14 and passed the same suite
+minutes later. The cause was in the test: `Popen` returns when the fork succeeds,
+not when `sh` has exec'd `cat` and opened the file, so bytes written before that
+sit in a pipe buffer producing no append and no notification. The fixture now
+warms up and waits for the file to actually grow before anything is measured. If
+you write a latency test against a real process, prove the process is live first.
 
 **The ledger is keyed by the tmux INSTANCE, not by `session_id`, and that is not
 interchangeable with `SessionActivityTracker.hooks_seen`.** A confirmed live
@@ -534,6 +636,9 @@ per server process and no subprocess at all.
   worktree never has it. Copy one in before you measure anything, and do
   not attribute a failure to a code change until you have reproduced the
   same run on the base commit in the same directory.
+  TAKE YOUR OWN BASELINE ON A CLEAN TREE BEFORE YOU JUDGE YOUR OWN RUN -
+  this figure has been stale twice, and the population of environmental
+  failures moves.
   Your job is to add no NEW ones. Watch for a broken environment
   manufacturing a fake baseline: a `venv` symlink pointing at a
   `venv.nosync` directory that no longer exists lets the suite limp

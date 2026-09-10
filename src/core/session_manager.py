@@ -72,10 +72,15 @@ from src.core.session_activity import (
     SessionActivityTracker,
     map_tmux_fallback,
 )
+from src.core.session_status_map import (
+    StatusMap,
+    listing_proves_alive,
+)
 from src.core.session_startup_gate import (
     GATE_AWAITING,
     GATE_UNKNOWN,
     STARTUP_TOAST_KIND,
+    detect_startup_prompt,
     resolve_startup_gate,
     should_capture_tail,
     startup_toast_copy,
@@ -4411,7 +4416,7 @@ class SessionManager:
         if len(buf) > settings.log_buffer_size:
             del buf[: len(buf) - settings.log_buffer_size]
 
-    def _build_tmux_status_map(self) -> dict:
+    def _build_tmux_status_map(self) -> StatusMap:
         """One bulk tmux query, resolved into ``{tmux_session_name: row}``.
 
         Description: Single source of truth for activity-status lookups.
@@ -4431,10 +4436,20 @@ class SessionManager:
         Inputs: none (reads live tmux state via the probe backend).
 
         Output:
-            dict[str, dict]: tmux session name -> row from
+            StatusMap: tmux session name -> row from
                 ``TmuxBackend.list_pane_status_all()`` (has "status", "pid",
-                "pane_dead", "pane_current_command"). Empty dict on any
+                "pane_dead", "pane_current_command"). Empty on any
                 failure or when tmux isn't the active backend type.
+
+                It is a ``dict`` and every existing consumer reads it as
+                one. What it adds is ``complete``: True only when the
+                probe RAN, including a real answer of zero sessions. Only
+                that flag lets ``_session_info_for`` take a NAMED row as
+                proof the session is alive instead of paying a second
+                ``tmux has-session`` per session. An absent name proves
+                nothing and still costs the probe; see
+                ``src/core/session_status_map.py`` for why the negative
+                is not trusted.
 
         Example:
             >>> mgr._build_tmux_status_map()
@@ -4448,7 +4463,7 @@ class SessionManager:
                 on_output=None,
             )
             if not hasattr(probe, "list_pane_status_all"):
-                return {}
+                return StatusMap()
             listing = coerce_listing(probe.list_pane_status_all())
             if not listing.ok:
                 # An empty map is the RIGHT degradation here, and it is
@@ -4463,13 +4478,18 @@ class SessionManager:
                     detail=listing.detail,
                     note="every session status falls back to unknown",
                 )
-                return {}
-            return {
-                row["name"]: row for row in listing.sessions if row.get("name")
-            }
+                return StatusMap()
+            return StatusMap(
+                {
+                    row["name"]: row
+                    for row in listing.sessions
+                    if row.get("name")
+                },
+                complete=True,
+            )
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             logger.warning("tmux_status_map_build_failed", error=str(exc))
-            return {}
+            return StatusMap()
 
     def _startup_gate_for(
         self,
@@ -4535,21 +4555,44 @@ class SessionManager:
             except (TypeError, ValueError):
                 age_seconds = None
 
+        # THE ONE EXPENSIVE INPUT, AND THE THROTTLE IN FRONT OF IT. The
+        # capture is a ``tmux capture-pane`` subprocess, taken here on
+        # the synchronous listing path, so on a box with many live
+        # sessions it is paid once per session per poll while the event
+        # loop can do nothing else - which is how a listing cost became
+        # keystroke lag in the terminal. The ledger remembers what the
+        # last read found so a still-fresh reading stands instead of
+        # being re-taken, and so the gate keeps ANSWERING in between
+        # rather than flapping to ``unknown``. See
+        # ``STARTUP_TAIL_RECHECK_SECONDS`` for the measurement.
         tail: Optional[str] = None
+        took_tail = False
         if should_capture_tail(
             pane_alive=pane_alive,
             first_hook_at=first_hook_at,
             instance_age_seconds=age_seconds,
+            tail_age_seconds=self._startup_gate_ledger.tail_age_seconds(
+                tmux_name
+            ),
         ):
             socket_name = getattr(backend, "socket_name", None)
             if socket_name:
                 tail = capture_pane_tail(socket=socket_name, name=tmux_name)
+                took_tail = True
+
+        if took_tail:
+            self._startup_gate_ledger.record_tail_read(
+                tmux_name, matched=detect_startup_prompt(tail)
+            )
 
         gate = resolve_startup_gate(
             pane_alive=pane_alive,
             first_hook_at=first_hook_at,
             instance_age_seconds=age_seconds,
             tail=tail,
+            remembered_match=self._startup_gate_ledger.last_tail_match(
+                tmux_name
+            ),
         )
         if gate == GATE_AWAITING and self._startup_gate_ledger.claim_toast(
             tmux_name
@@ -4625,8 +4668,40 @@ class SessionManager:
         # whole time. The pane status resolved just above is the
         # measurement that separates the two, and it is free: it comes
         # from the bulk probe this function already fetched.
+        #
+        # AND EXISTENCE IS ALREADY IN THE BULK ROW. ``is_alive()`` is
+        # ``tmux has-session``: a SECOND subprocess, per session, per
+        # poll, answering the question the ``list-panes -a`` above has
+        # already answered by enumerating every live session by name.
+        # Measured 2026-09-09 with 13 live sessions, it was 377 ms of a
+        # 1008 ms pass that runs synchronously inside ``async def
+        # list_session_infos`` - for that whole second the event loop
+        # cannot read the tmux pipe carrying terminal output, cannot
+        # spawn the ``send-keys`` that delivers a keystroke, and cannot
+        # answer any other request, which is why a redundant call in a
+        # LISTING was felt by the user as lag in the TERMINAL.
+        #
+        # THE EVIDENCE IS ASYMMETRIC AND ONLY THE POSITIVE HALF IS TAKEN.
+        # A completed listing that NAMES this session proves it exists, so
+        # the probe is skipped. A listing that does not name it proves
+        # much less: it covers only the socket the probe was bound to and
+        # it is one moment in time, so an absent name is "not shown to be
+        # alive", never "shown to be dead". Dropping a row on that
+        # negative would delete a LIVE session off the sidebar, which is a
+        # far worse bug than the cost being removed - so the ``or`` below
+        # still runs ``is_alive()`` for exactly those rows.
+        #
+        # It costs nothing in practice: in steady state every registered
+        # session is in the listing (13 of 13 on the owner's box), so the
+        # probe is reached only for rows that are about to be dropped.
+        # ``listing_proves_alive`` also answers False for any caller
+        # passing a plain dict, so every pre-``StatusMap`` test double
+        # keeps the behaviour it had.
         liveness = resolve_listing_liveness(
-            exists=backend.is_alive(),
+            exists=(
+                listing_proves_alive(status_map, tmux_session_name)
+                or backend.is_alive()
+            ),
             pane_status=raw_tmux_status if tmux_session_name else None,
         )
         if liveness == LIVENESS_GONE:
@@ -6011,6 +6086,59 @@ class SessionManager:
                 except Exception:
                     pass
 
+    def _instance_index_for_listing(self, *, socket, names):
+        """Read every listed instance's stored row on ONE connection.
+
+        Description: the bulk replacement for three per-row lookups that
+          each opened their own SQLite connection. Opens one connection,
+          issues one query, closes it, and hands back an index the
+          listing loop answers from - see
+          ``src/core/session_instance_index.py`` for the measurement and
+          for why the two differing selection rules are both preserved.
+
+          NEVER RAISES, and an unopenable datastore yields an EMPTY
+          index. That is not a silent degradation: an empty index answers
+          ``None`` for the label and identity and ``NOT_KNOWN`` for the
+          launch, which is exactly what each per-row reader returned when
+          it could not open the database either.
+        Inputs: socket (str) - the tmux socket the listing came from.
+          names (iterable[str | None]) - the listed tmux names; falsy
+          entries are ignored.
+        Output: InstanceIndex - possibly empty, never None.
+        Example: self._instance_index_for_listing(
+            socket='cloude', names=['cloude_a'])
+        """
+        from src.core.session_instance_index import (
+            InstanceIndex,
+            build_instance_index,
+        )
+
+        wanted = [n for n in names if n]
+        if not wanted:
+            # THE COMMON PRODUCTION CASE, and worth the branch. Every
+            # session bound to a live backend is filtered out of this
+            # listing, so on a settled box it returns NO rows at all -
+            # measured 0 of 11 on the owner's machine. Opening the
+            # datastore to look up nothing would make this round's fix a
+            # small net COST in exactly the state the app spends most of
+            # its time in.
+            return InstanceIndex()
+        conn = None
+        try:
+            conn = self._writable_datastore_connection()
+            if conn is None:
+                return InstanceIndex()
+            return build_instance_index(conn, socket=socket, names=wanted)
+        except Exception as exc:  # noqa: BLE001 - a decoration read must not crash a listing
+            logger.debug("instance_index_for_listing_threw", error=str(exc))
+            return InstanceIndex()
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 - close failure is not the caller's problem
+                    pass
+
     def _identity_for_instance(self, tmux_name, epoch):
         """Read the stored ROW IDENTITY for one tmux INSTANCE, or None.
 
@@ -6317,6 +6445,23 @@ class SessionManager:
         # a single pass. Two rows resolving against two different reads
         # of config.json would be a listing that disagrees with itself.
         wrappers = _configured_wrappers()
+        # AND THE STORED ROW IS READ ONCE FOR THE WHOLE LISTING, for the
+        # same reason and with more at stake. The title, the durable row
+        # id and the recorded launch all live on the SAME ``sessions``
+        # row under the SAME instance triple, and each used to be fetched
+        # by its own function opening its own SQLite connection - three
+        # connections per row. Measured 2026-09-09 with 11 rows: 33
+        # connections costing about 33 ms of a 55 ms pass, roughly 60
+        # percent of it, and paid synchronously on the event loop where
+        # it is felt as terminal latency rather than as a slow list.
+        # ``session_instance_index`` is the same shape ``session_status_map``
+        # applies to tmux: fetch once, answer every row from it. An empty
+        # index answers exactly what the per-row reads answered when the
+        # datastore could not be opened.
+        instance_index = self._instance_index_for_listing(
+            socket=self._last_probe_socket or self._tmux_socket_name(),
+            names=[r.get("name") for r in rows],
+        )
         for row in rows:
             name = row.get("name")
             if name:
@@ -6328,7 +6473,7 @@ class SessionManager:
                 # carries its creation epoch - the exact key is free here,
                 # so there is no reason to accept the name-only read's
                 # weaker guarantee on a row a human reads as identity.
-                row["label"] = self._label_for_instance(
+                row["label"] = instance_index.label(
                     name, row.get("created_at_epoch")
                 )
                 # The durable row id the user can point at, plus its
@@ -6338,7 +6483,7 @@ class SessionManager:
                 # acceptable. An external session has no row and gets
                 # None, which the UI renders as nothing rather than an
                 # invented number.
-                identity = self._identity_for_instance(
+                identity = instance_index.identity(
                     name, row.get("created_at_epoch")
                 )
                 row["session_row_id"] = identity["id"] if identity else None
@@ -6391,10 +6536,8 @@ class SessionManager:
                 # the pill's dashed treatment tracks the actual
                 # provenance instead of the code path.
                 probe_socket = self._last_probe_socket or self._tmux_socket_name()
-                launch = self._stored_launch_for_listing(
-                    socket=probe_socket,
-                    name=name,
-                    epoch=row.get("created_at_epoch"),
+                launch = instance_index.stored_launch(
+                    name, row.get("created_at_epoch")
                 )
                 from_process = False
                 if launch.known:

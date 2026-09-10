@@ -52,6 +52,7 @@ import structlog
 from src.core import debug_trace
 
 from src.core.pane_locale import apply_pane_locale
+from src.core.pipe_wakeup import PipeWaiter
 from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
 from src.core.tmux_listing_parse import (
     LISTING_FORMAT,
@@ -150,6 +151,23 @@ DEFAULT_SOCKET_NAME: str = "cloude"
 #: ``AuthConfig.session.disable_alternate_screen``). An alternate-screen
 #: pane retains ZERO history whatever this says.
 HISTORY_LIMIT: int = 50000
+
+#: How long the pipe reader may wait before it looks at the file again.
+#:
+#: This used to be the ONLY thing standing between an appended byte and
+#: the reader seeing it, which made it a floor on keystroke latency: the
+#: echo lands at a uniformly random point in the window, so it was seen
+#: about half an interval late on EVERY keystroke. Measured end to end
+#: on a throwaway socket, the server-side round trip was p50 25.3ms with
+#: this as the largest component after the ``send-keys`` subprocess.
+#:
+#: It is now a BACKSTOP rather than the mechanism: ``PipeWaiter`` wakes
+#: the loop when the kernel reports an append (measured p50 0.186ms
+#: through a real event loop), and this bounds how late a MISSED
+#: notification can make it. Keeping the old value is deliberate - the
+#: worst case stays exactly what it was before the wakeup existed, and
+#: the idle wakeup rate does not rise.
+PIPE_IDLE_POLL_SECONDS: float = 0.02
 
 #: Session name prefix - ``cloude_<slug>``.
 SESSION_PREFIX: str = "cloude_"
@@ -2678,6 +2696,20 @@ class TmuxBackend(SessionBackend):
                 except OSError:
                     pass
 
+            # WAKE ON THE APPEND INSTEAD OF ASKING FOR IT. The fd is
+            # stable for the life of this loop, so the watch is set up
+            # once here. A platform without kqueue, or any failure to
+            # register, leaves the waiter in a plain-sleep fallback that
+            # behaves exactly as this loop did before - see
+            # src/core/pipe_wakeup.py for the measurements and for why
+            # every wait is still bounded.
+            waiter = PipeWaiter(fd)
+            logger.debug(
+                "tmux_tail_wakeup_mode",
+                session=self.tmux_session,
+                mode="kqueue" if waiter.watching else "poll",
+            )
+
             while self._running:
                 # Rotation check - once a second is plenty.
                 now = time.monotonic()
@@ -2695,7 +2727,10 @@ class TmuxBackend(SessionBackend):
                     continue
 
                 if not chunk:
-                    await asyncio.sleep(0.02)
+                    # Returns as soon as tmux appends, and otherwise
+                    # after the backstop - so a lost notification costs
+                    # the OLD latency and can never stall the terminal.
+                    await waiter.wait(PIPE_IDLE_POLL_SECONDS)
                     continue
 
                 if self.on_output is not None:
@@ -2711,6 +2746,12 @@ class TmuxBackend(SessionBackend):
         except Exception as exc:
             logger.error("tmux_tail_loop_crashed", error=str(exc))
         finally:
+            # Before the fd: the watch refers to it, and a leaked kqueue
+            # descriptor per session would outlive the pane it watched.
+            try:
+                waiter.close()
+            except (NameError, OSError, RuntimeError):
+                pass
             try:
                 os.close(fd)
             except OSError:
