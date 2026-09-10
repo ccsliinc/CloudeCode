@@ -76,11 +76,26 @@ def click_tolerant(page, selector: str, timeout_ms: int = 5000) -> None:
       bounding Playwright's retry loop, not the application's own work.
     Output: None. Never raises for a timeout, nor for the target simply
       not being visible yet at the moment this is called (a real, timing-
-      dependent gap measured against ``#settingsBtn``: it is unhidden by
-      ``App.showTerminal()``/``showLaunchpad()`` a beat after the screen
-      transition itself, so calling this the instant a previous step
-      returns can catch it still hidden - ``force=True`` bypasses hit-
-      testability but not "has no box at all yet"). Other errors propagate.
+      dependent gap: a control is unhidden by ``App.showTerminal()`` /
+      ``showLaunchpad()`` a beat after the screen transition itself, so
+      calling this the instant a previous step returns can catch it still
+      hidden - ``force=True`` bypasses hit-testability but not "has no box
+      at all yet"). Other errors propagate.
+
+      THE ``#settingsBtn`` CASE THIS USED TO CITE WAS NOT THAT, AND
+      SWALLOWING IT HERE IS WHAT MADE IT LOOK LIKE IT. Diagnosed
+      2026-09-10: that button is re-parented into the header overflow
+      dropdown by ``client/js/header-menu.js`` (``_fold()``, called
+      unconditionally at every width) and the panel is built with
+      ``hidden = true``, so it has no box until the kebab is opened - not
+      "not yet", but "not until someone opens the menu". No wait and no
+      force can reach it, which is why ``settings open`` read n/a in every
+      column of the 2026-09-10 baseline while looking like a flaky timing
+      gap. ``run_baseline.py`` opens ``#header-menu-toggle`` first now.
+      The lesson generalises: this function turning "I could not click
+      that" into a silent pass is exactly what let a WRONG SELECTOR
+      masquerade as a slow one for a whole baseline. When a step reports
+      no measurement at all, suspect the selector before the clock.
     """
     try:
         page.wait_for_selector(selector, timeout=timeout_ms, state="visible")
