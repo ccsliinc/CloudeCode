@@ -38,6 +38,16 @@ import { createI18n } from '../../../../client/js/i18n/runtime.js';
 import { isPseudo, pseudoCount, PSEUDO_LOCALE } from '../../../../client/js/i18n/pseudo.js';
 import enCatalog from '../../../../client/js/i18n/catalog.en.js';
 import { SUMMARY_KEYS } from '../../../../client/js/labels/session-summary.js';
+import {
+    forkFailureNotice,
+    loadFailedNotice,
+    RECENT_KEYS,
+    recentCountLabel,
+    recentCountUnavailableLabel,
+    restartNotice,
+    unavailableDetail,
+    unidentifiedRestartNotice,
+} from '../../../../client/js/labels/recent-session.js';
 import { summaryLabel } from '../session-summary-label';
 
 /** Repo root, three levels up from web/src/lib/i18n. */
@@ -54,6 +64,18 @@ const PORTED_FILES = [
     'client/js/labels/session-summary.js',
     'client/js/session-status-summary.js',
     'web/src/lib/session-summary-label.ts',
+    // Slice 2, the RECENT sessions section. The assembler first, then
+    // every file the section is built from - the component included,
+    // because a literal in a TEMPLATE is exactly as untranslated as one
+    // in a function and is the easier of the two to write by accident.
+    'client/js/labels/recent-session.js',
+    'web/src/lib/launchpad/recent.ts',
+    'web/src/lib/launchpad/recent-actions.ts',
+    'web/src/lib/launchpad/recent-chrome.ts',
+    'web/src/lib/launchpad/recent-visibility.ts',
+    'web/src/lib/launchpad/RecentSessions.svelte',
+    'web/src/lib/sessions/store.svelte.ts',
+    'web/src/lib/ui/prefs.svelte.ts',
 ];
 
 interface I18nLike {
@@ -230,7 +252,7 @@ describe('a ported file may not carry a hardcoded sentence', () => {
 
     test('the list of ported files is not empty and the files exist', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(3);
+        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(11);
         for (const rel of PORTED_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }
@@ -294,6 +316,115 @@ describe('the catalog itself stays honest', () => {
                     `${key} is a plural set with no \`other\``,
                 ).toBe(true);
             }
+        }
+    });
+});
+
+// ---- guard 1, applied to slice 2's surface ---------------------------
+
+describe('the RECENT surface really reads the catalog too', () => {
+    /**
+     * A pseudo-locale translator over the derived pseudo catalog.
+     *
+     * Inputs: none. Output: `(key, params) => string`.
+     */
+    function pseudoT(): (k: string, p?: Record<string, unknown> | null) => string {
+        const i18n = createI18n({ locale: PSEUDO_LOCALE }) as I18nLike;
+        return (k, p) => i18n.t(k, p);
+    }
+
+    /**
+     * Every sentence this section can say, with HOW MANY catalog
+     * messages each is built from.
+     *
+     * ONE MESSAGE EACH, AND THAT IS THE DESIGN RATHER THAN A WEAKNESS.
+     * The code this replaced glued a ` "title"` fragment into the middle
+     * of three restart sentences and built its count with a `+`. Every
+     * one of those is now a WHOLE message with a `{title}` or `{count}`
+     * hole, so the assembly a translator sees is the sentence, not the
+     * pieces. A count of 1 therefore asserts that nothing was
+     * re-fragmented: a sentence rebuilt from two messages would read 2,
+     * and one rebuilt from a message plus a literal would read 1 but
+     * fail `isPseudo` unless the literal went in through a parameter -
+     * which is the case the SOURCE guard below is the only thing that
+     * catches, and is why both guards exist.
+     */
+    const CASES: Array<[string, string, number]> = (() => {
+        const t = pseudoT();
+        return [
+            ['count one', recentCountLabel(1, t), 1],
+            ['count many', recentCountLabel(19, t), 1],
+            ['count unavailable', recentCountUnavailableLabel(t), 1],
+            ['unavailable title', t(RECENT_KEYS.unavailableTitle), 1],
+            ['unavailable detail fallback', unavailableDetail(null, t), 1],
+            ['load failed', loadFailedNotice(new Error('timeout'), t), 1],
+            ['load failed, no message', loadFailedNotice(new Error(''), t), 2],
+            ['empty with archived', t(RECENT_KEYS.emptyIncludingArchived), 1],
+            ['ended', t(RECENT_KEYS.lifecycleEnded), 1],
+            ['name fallback', t(RECENT_KEYS.nameFallback), 1],
+            ['archive action', t(RECENT_KEYS.archiveAction), 1],
+            ['archive title', t(RECENT_KEYS.archiveActionTitle), 1],
+            ['archive aria', t(RECENT_KEYS.archiveActionAria), 1],
+            ['archive badge', t(RECENT_KEYS.archiveBadge), 1],
+            ['archive badge title', t(RECENT_KEYS.archiveBadgeTitle), 1],
+            ['archive show', t(RECENT_KEYS.archiveShow), 1],
+            ['archive hide', t(RECENT_KEYS.archiveHide), 1],
+            ['archive no id', t(RECENT_KEYS.archiveFailedNoId), 1],
+            ['restart action', t(RECENT_KEYS.restartAction), 1],
+            ['restart, nothing said', restartNotice(null, t), 1],
+            ['restart none_recorded', restartNotice({ conversation: 'none_recorded' }, t), 1],
+            ['restart none_recorded named',
+                restartNotice({ conversation: 'none_recorded', title_carried: 'Media' }, t), 1],
+            ['restart unknown', restartNotice({ conversation: 'unknown' }, t), 1],
+            ['restart unknown named',
+                restartNotice({ conversation: 'zzz', title_carried: 'Media' }, t), 1],
+            ['restart row lost',
+                restartNotice({ conversation: 'resumed', row_reused: false }, t), 1],
+            ['restart row lost named',
+                restartNotice({ conversation: 'resumed', row_reused: false, title_carried: 'Media' }, t), 1],
+            ['restart unidentified', unidentifiedRestartNotice('', t), 1],
+            ['restart unidentified named', unidentifiedRestartNotice('Media', t), 1],
+            ['fork 409', forkFailureNotice({ status: 409 }, t), 1],
+            ['fork failed', forkFailureNotice({ message: 'boom' }, t), 1],
+            ['fork failed, no message', forkFailureNotice({}, t), 2],
+            ['fork lineage', t(RECENT_KEYS.forkLineageUnrecorded), 1],
+        ] as Array<[string, string, number]>;
+    })();
+
+    test.each(CASES)('%s is fully pseudo-localised', (_name, rendered) => {
+        expect(isPseudo(rendered), rendered).toBe(true);
+    });
+
+    test.each(CASES)('%s is built from exactly the expected message count',
+        (_name, rendered, expected) => {
+            expect(pseudoCount(rendered), rendered).toBe(expected);
+        });
+
+    test('a clean resume still says NOTHING, in any locale', () => {
+        // The one case that must NOT produce a sentence. A guard that
+        // required every path to render copy would push a message into
+        // the one place the design says stay quiet.
+        expect(restartNotice({ conversation: 'resumed', row_reused: true }, pseudoT()))
+            .toBeNull();
+    });
+
+    test('the counts still format inside the pseudo locale', () => {
+        const t = pseudoT();
+        expect(recentCountLabel(19, t)).toContain('19');
+        expect(recentCountLabel(1234, t)).toContain('1,234');
+    });
+
+    test("a user's own title is NOT pseudo-localised, because it is data", () => {
+        // The distinction the whole layer rests on: a catalog message is
+        // translated, the value interpolated into it is the user's own
+        // text and must survive verbatim.
+        expect(unidentifiedRestartNotice('Media Compression', pseudoT()))
+            .toContain('Media Compression');
+    });
+
+    test('every key this surface asks for exists in the catalog', () => {
+        for (const key of Object.values(RECENT_KEYS)) {
+            expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
         }
     });
 });

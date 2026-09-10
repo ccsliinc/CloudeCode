@@ -7151,3 +7151,124 @@ Open items, stated rather than discovered:
   plural ternaries (launchpad.js, toast.js, terminal-away-gap.js,
   session-sidebar-groups.js and the rest) are untouched by design; each is a
   slice's own step 1.
+
+## 2026-09-10 - svelte slice 2: the recent sessions section, ported into the string catalog
+
+Issue #67, PR #68 on `Adoom666/CloudeCodeDev` (the primary; also mirrored to
+`origin`). Branched off `feat/i18n-foundation` (`3cd61a4`), which is PR #62 and
+not merged, so #68 targets `master` ONLY because GitHub refuses to auto-link
+`Closes #N` on a pull request that does not target the default branch - and that
+link is what tells the other side the issue is taken. First attempt targeted
+`feat/i18n-foundation` and polled eight times for a linkage that could never
+appear; worth knowing before someone else loses four minutes to it.
+
+**What moved.** 792 legacy lines deleted. Out of `client/js/launchpad.js`:
+`loadRecentSessions`, `_renderRecentSessionRowHtml`, `renderRecentSessions`,
+`_bindRecentSessionClicks`, `_forkSession`, `_deleteSessionRecord`,
+`_restartPlan`, `_restartNotice`, `_restartRecentSession`,
+`initDeletedSessionsToggle`, `_applyDeletedSessionsToggleState`,
+`getDeletedSessionsVisiblePref`, `setDeletedSessionsVisiblePref` and the four
+fields behind them (-638, +35 for the rewired call sites).
+`client/js/session-recent-visibility.js` (-148) and its `<script>` tag in
+`client/index.html` (-6) are gone outright.
+
+**The store starts here, holding the recent slice only.**
+`web/src/lib/sessions/store.svelte.ts`: `recentPayload` and `recentInFlight` as
+runes, exported through accessors (a `$state` exported by value is read once at
+import and every consumer holds a dead snapshot), plus `refreshRecent(fetch,
+includeArchived, t)` and `reset()`. It owns no timer yet - slice 3 brings the 5s
+poll here WITH the `clearInterval` on teardown that `launchpad.js` has never had.
+
+**The three-outcome contract, and where it is held.** `recentView()` in
+`web/src/lib/launchpad/recent.ts` is a ladder returning one of four values:
+`unavailable` / `empty` / `hidden` / `rows`. `unavailable` carries the notice and
+HAS NO `rows` KEY AT ALL, so a caller cannot reach a row list from a state that
+did not confirm one. The store is the other half: a REJECTED fetch is recorded as
+`probe_unavailable` plus a notice naming the reason, never cleared - clearing
+would read as `never_probed` with no notice, which is a quieter version of the
+same lie. And `stateOf()` defaults an absent state to `never_probed`, never `ok`.
+
+**MUTATION PROOF, three of them.**
+1. Three-outcome gate: `if (state !== 'ok')` -> `if (false)` in `recentView`.
+   4 named tests failed, including "`probe_unavailable` renders the notice and
+   CANNOT render rows, even with sessions present". Reverted; recent.ts back to
+   sha256 `4247d030...`, 302 pass.
+2. i18n, a literal returned at the top level (`recentCountUnavailableLabel`
+   returning its string): source scan FAIL, balanced-span FAIL, bracket count
+   FAIL. All three, as `.claude/notes/i18n-design.md` predicts.
+3. i18n, a literal interpolated INTO another message (`pickNamed` defaulting the
+   title): source scan FAIL, balanced-span PASS, bracket count PASS. Row 2 of the
+   design's measured table reproduced exactly on this surface. Reverted;
+   recent-session.js back to sha256 `8a872a96...`.
+   NOTE the honest limit: on THIS surface every sentence is one whole message, so
+   the bracket count is 1 either way and cannot see mutation 3. The SOURCE SCAN
+   is the only guard that catches it here. It also fired unprompted during the
+   round, on a `warn()` wrapper in `prefs.svelte.ts` that hid two diagnostics
+   from the `console.*` stripper - correct behaviour, and the call sites are
+   literal `console.warn` again because of it.
+
+**33 catalog keys added** (25 -> 58), all `session.recent.*` / `session.archive.*`
+/ `session.restart.*` / `session.fork.*` / `session.name.*` / `error.*`, keyed by
+DOMAIN not by screen. Assembly in `client/js/labels/recent-session.js`, the
+design's step 3. Eight files added to `PORTED_FILES`. Pseudo-locale coverage over
+the ported surface: 32 sentences, every one `isPseudo` true, every count exactly
+as expected, plus a case asserting a user's own TITLE is NOT pseudo-localised
+because it is data, and one asserting a clean resume still says nothing.
+
+**ONE USER-VISIBLE WORDING CHANGE, flagged rather than slipped in.** The
+attention block's title read `CANNOT DETERMINE recent sessions`; the catalog's
+own voice guard refuses a leading capital, so it is now
+`recent sessions CANNOT BE DETERMINED` (shout kept, sentence starts lowercase)
+and the fallback detail became its own distinct message,
+`the last read of the stored session records did not answer`. Nothing else the
+user reads changed. `ENDED` and `ARCHIVED` are lowercase in the catalog and
+uppercased by `text-transform` in `.recent-session-lifecycle` /
+`.recent-session-deleted`, so those pixels are identical.
+
+**Tests: 147 -> 302 vitest (+155), 200 -> 196 node files, 0 failures.**
+Ported and node originals DELETED: `test_recent_sessions`,
+`test_recent_deleted_sessions`, `test_recent_deleted_visibility`,
+`test_no_delete_wording` (the vitest version is a strict SUPERSET - it also scans
+the catalog and `web/src/**`, which is where the copy actually went).
+TRIMMED, keeping everything not about this slice: `test_recent_section_collapse`
+(one repaint case out, four `initSectionDisclosures` cases stay),
+`test_session_restart_identity` (17 out, 3 tree cases stay),
+`test_ended_sessions_visibility` (2 out, 12 stay),
+`test_session_lists_are_disjoint` (7 out, 7 stay).
+NOT touched: `test_row_action_confirm_names_label`. It targets
+`_handleSessionRowAction`, which is slice 5 and has not moved, so deleting it
+would remove a guard for live code.
+
+**Browser proof**, scratch server on 127.0.0.1:5057 importing
+`src.security_headers` via `scripts/lib_csp_static_server.py`, real production
+CSP served (`default-src 'self'; script-src 'self' + the harness's own three
+inline hashes; frame-ancestors 'none'`). Never pointed at the live install and no
+real session touched. Measured: `ok` renders 3 rows with restart gated to the two
+`stopped` ones and `archive` (not delete) on all three; the show-archived toggle
+put `true` on the wire, persisted `1` under the legacy key
+`cloude.launchpad.deletedSessionsVisible`, and the archived row rendered AND
+survived sharing its tmux name `cloude_Mac` with a live session - the six-rows-
+one-shown regression, held in a browser; `probe_unavailable`, `never_probed` and
+a thrown fetch each rendered the notice with ZERO rows and `cannot determine` in
+the count; empty with the filter on kept the section up, empty with it off hid it.
+CSP violations: exactly ONE, the deliberate off-origin `<img>` negative control
+(`img-src`, `https://example.com/...`), which is also what proves the collector
+was live. Zero from the slice. Console: only the two expected warnings from the
+deliberate throw.
+
+Open items, stated rather than discovered:
+- [ ] The vitest suite still cannot MOUNT a component (node environment, and
+  jsdom would be a new dev dependency). The four-branch template is proven in the
+  real browser above and nowhere else. Slice 1's open item is therefore still
+  open, now with a browser measurement behind it rather than nothing.
+- [ ] Cross-surface agreement between RECENT and the project tree is UNGUARDED
+  until slice 4. The case that watched them name the same ended session lived in
+  `test_ended_sessions_visibility` and could not survive the two surfaces living
+  in two trees; each half is asserted separately now. Said out loud because that
+  is exactly how they drifted apart the first time.
+- [ ] The live-sessions list still comes from the legacy `window.Launchpad`
+  singleton, mirrored into component state on each refresh. Slice 3 moves it into
+  the store and that mirror goes.
+- [ ] `_deriveRunningSessionDisplayName` is still legacy (slice 5) and reached
+  through the host. When it is absent the name ladder falls to the working
+  directory rather than guessing at the mapping.

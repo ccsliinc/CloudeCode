@@ -935,12 +935,6 @@
          BEFORE launchpad.js, which calls window.ProjectCreateFolder
          .validateName / .choose during the create flow. -->
     <script src="/static/js/project-create-folder.js"></script>
-    <!-- Which stored RECENT rows survive the "already running" guard.
-         Must load BEFORE launchpad.js, whose renderRecentSessions() calls
-         window.SessionRecentVisibility.visibleRecentRows while painting.
-         Pure - two arrays in, one array out, no state and no events - so
-         this is its only ordering constraint. -->
-    <script src="/static/js/session-recent-visibility.js"></script>
     <!-- The launch-wrapper pill on a running-session row. Must load
          BEFORE launchpad.js, which calls window.LaunchpadWrapperPill.html
          while painting the row. Pure string rendering, no state, no

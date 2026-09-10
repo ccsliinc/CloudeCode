@@ -122,4 +122,102 @@ export default {
     // so a translation can move or replace them.
     'session.summary.line': '{bucket} - {sessions}',
     'session.summary.line_with_unread': '{bucket} - {sessions}, {unread}',
+
+    // ---- a session's own name ----------------------------------------
+    // What a row is called when nothing named it. Not "untitled", which
+    // reads as a state the user put it in; this one is just the noun.
+    'session.name.fallback': 'session',
+
+    // ---- the recent group --------------------------------------------
+    // Stored history, read from the sessions table rather than probed
+    // from tmux. Keys name the DOMAIN, so they survive the launchpad
+    // being rewritten around them.
+
+    // A PLURAL SET EVEN THOUGH BOTH FORMS ARE IDENTICAL IN ENGLISH. The
+    // code this replaced was `n === 1 ? '1 recent' : n + ' recent'`, and
+    // that ternary is a two-form plural in disguise: correct for English
+    // and wrong for every language with a `few` or a `many`. Written as
+    // a set, a translator can inflect it without touching code.
+    'session.recent.count': {
+        one: '{count} recent',
+        other: '{count} recent',
+    },
+    // The same slot when the group could not be determined at all. Not a
+    // number, so not part of the set above.
+    'session.recent.count.unavailable': 'cannot determine',
+
+    // THE THREE-OUTCOME BLOCK. `GET /sessions/recent` answers `ok`,
+    // `probe_unavailable` or `never_probed`, and anything but `ok` must
+    // say so rather than render an empty list, which is indistinguishable
+    // from "you have no history". The shout is kept because uncertainty
+    // is what it marks; the sentence starts lowercase because the voice
+    // rule applies to a catalog too.
+    'session.recent.unavailable.title': 'recent sessions CANNOT BE DETERMINED',
+    // The detail line's FALLBACK ONLY. The server sends its own `notice`
+    // for this state and that is preferred; this is what fills the slot
+    // when a body arrives without one, and it says what was not done
+    // rather than implying there is nothing there.
+    'session.recent.unavailable.detail': 'the last read of the stored session records did not answer',
+    // The client-side failure, where there is no server notice to use.
+    'session.recent.load_failed': 'recent sessions could not be loaded: {reason}',
+    // AN EMPTY RESULT WITH THE ARCHIVE FILTER ON IS A REAL ANSWER, and
+    // it needs saying: the section stays up so the toggle that turned it
+    // on is still reachable.
+    'session.recent.empty_including_archived': 'no recent or archived sessions',
+    // A lifecycle we can act on, as a word. `.recent-session-lifecycle`
+    // carries `text-transform: uppercase`, so CASING IS THE
+    // STYLESHEET'S JOB and this value is lowercase like every other.
+    'session.recent.lifecycle.ended': 'ended',
+
+    // ---- archiving a session ------------------------------------------
+    // A SOFT ARCHIVE, NEVER A DELETE. `DELETE /sessions/records/{uuid}`
+    // stamps `archived_at`; the row keeps every column and a restart is
+    // what brings it back. The class names and the localStorage key still
+    // say "deleted" on purpose (changing the key would silently reset the
+    // preference for everyone who set it) - only the copy says archive,
+    // and tests/test_no_delete_wording keeps it that way.
+    'session.archive.action': 'archive',
+    'session.archive.action.title': 'archive this session from your lists (the record is kept)',
+    'session.archive.action.aria': 'archive this session from your lists',
+    // Uppercased by `.recent-session-deleted` in the stylesheet.
+    'session.archive.badge': 'archived',
+    'session.archive.badge.title': 'you archived this from your lists; restart brings it back',
+    'session.archive.show': 'show archived sessions',
+    'session.archive.hide': 'hide archived sessions',
+    'session.archive.failed.no_id': 'cannot archive: this row carries no session id',
+    'session.archive.failed': 'failed to archive session: {reason}',
+
+    // ---- restarting a session -----------------------------------------
+    'session.restart.action': 'restart',
+    'session.restart.failed': 'failed to restart session: {reason}',
+    // TWO KEYS PER OUTCOME, NAMED AND UNNAMED, NEVER ONE WITH A GLUED-ON
+    // FRAGMENT. The code this replaces built ` "title"` in the caller and
+    // interpolated it, which is the exact shape the coverage guard's
+    // bracket count exists to catch: a fragment assembled by `+` outside
+    // a message cannot be translated, and where the name sits in the
+    // sentence is one of the things a translation moves.
+    'session.restart.unidentified': 'started a new session: this row carries no stored session id, so whether it had a conversation to continue CANNOT BE DETERMINED and none was resumed',
+    'session.restart.unidentified.named': 'started a new session called "{title}": this row carries no stored session id, so whether it had a conversation to continue CANNOT BE DETERMINED and none was resumed',
+    // The server answered, but said nothing about the conversation.
+    'session.restart.unsaid': 'restarted, but the server did not say what happened to the conversation: CANNOT DETERMINE whether it was resumed',
+    'session.restart.none_recorded': 'restarted, but this session never recorded a claude conversation, so a NEW conversation was started - nothing was resumed',
+    'session.restart.none_recorded.named': 'restarted "{title}", but this session never recorded a claude conversation, so a NEW conversation was started - nothing was resumed',
+    'session.restart.unknown': 'restarted, but whether the previous conversation was resumed CANNOT BE DETERMINED',
+    'session.restart.unknown.named': 'restarted "{title}", but whether the previous conversation was resumed CANNOT BE DETERMINED',
+    'session.restart.row_not_reused': 'restarted and resumed the conversation, but it could not keep its original record and may appear as a second entry',
+    'session.restart.row_not_reused.named': 'restarted "{title}" and resumed the conversation, but it could not keep its original record and may appear as a second entry',
+
+    // ---- forking a session --------------------------------------------
+    // The parent is not changed by a fork: it keeps running, stays
+    // listed and can be forked again.
+    'session.fork.failed.no_name': 'cannot fork: this row carries no session name',
+    'session.fork.failed.no_conversation': 'cannot fork: this session has no claude conversation yet, so there is nothing to branch from',
+    'session.fork.failed': 'failed to fork session: {reason}',
+    // NOT AN ERROR AND NOT A CLEAN SUCCESS. The fork exists and works,
+    // the link back to its parent did not land. Said out loud.
+    'session.fork.lineage_unrecorded': 'forked, but the link back to the parent was not recorded',
+
+    // ---- generic failure reasons --------------------------------------
+    // The `{reason}` slot's value when an error carried no message.
+    'error.server_unreachable': 'the server could not be reached',
 };

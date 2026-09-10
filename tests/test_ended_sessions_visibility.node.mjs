@@ -221,6 +221,32 @@ const PROJECT = { projects: [{ name: 'media', path: '/p', description: '' }],
 //    attributed to the same project: the tree must show BOTH.
 // ---------------------------------------------------------------------
 
+// =====================================================================
+// TRIMMED BY SVELTE SLICE 2. WHAT LEFT, AND WHERE IT WENT.
+//
+// The RECENT list moved into web/src/lib/launchpad/, so
+// `Launchpad.renderRecentSessions` and `_renderRecentSessionRowHtml` no
+// longer exist and the two cases that drove them cannot run here.
+// Neither was dropped:
+//
+//   'a RECENT row offers delete, keyed on the uuid not the tmux name'
+//       -> web/src/lib/launchpad/recent.test.ts, as the row's uuid and
+//          its archive control, plus the wording guard in
+//          web/src/lib/launchpad/no-delete-wording.test.ts.
+//   'RECENT and the project tree name the same ended session'
+//       -> SPLIT, and this is the honest statement of it. The two
+//          surfaces now live in two trees, so no single test can watch
+//          them agree until slice 4 brings the tree over too. RECENT's
+//          half (the title leads, then the derived tmux name, then the
+//          directory) is asserted in recent.test.ts; the tree's half is
+//          the cases below. THE AGREEMENT ITSELF IS UNGUARDED IN THE
+//          MEANTIME - said out loud rather than left for someone to
+//          discover, because a cross-surface invariant nobody is
+//          watching is exactly how the two drifted apart the first time.
+//
+// EVERYTHING BELOW IS THE PROJECT TREE, which is still launchpad.js.
+// =====================================================================
+
 await test('the project tree shows an ended session alongside the live one', async () => {
     const { projectList } = boot({
         ...PROJECT,
@@ -234,31 +260,6 @@ await test('the project tree shows an ended session alongside the live one', asy
     assert.ok(html.includes('data-name="cloude_live"'), 'the live session must still render');
     assert.ok(html.includes('data-name="cloude_media"'), 'the ENDED session must render too');
 });
-
-await test('RECENT and the project tree name the same ended session', async () => {
-    const { projectList, recentList, lp } = boot({
-        ...PROJECT,
-        runningSessions: [live({ name: 'cloude_live' })],
-        records: [
-            record({ session_uuid: 'u-live', tmux_name: 'cloude_live' }),
-            record({ session_uuid: 'u-end', tmux_name: 'cloude_media', lifecycle: 'stopped' }),
-        ],
-    });
-    lp.recentSessionsState = 'ok';
-    lp.recentSessions = [
-        record({ session_uuid: 'u-end', tmux_name: 'cloude_media', lifecycle: 'stopped' }),
-    ];
-    lp.renderRecentSessions();
-    assert.ok(recentList.innerHTML.includes('u-end'), 'RECENT must carry the ended row');
-    assert.ok(
-        projectList.innerHTML.includes('data-name="cloude_media"'),
-        'the tree must carry the SAME ended row - this is the contradiction'
-    );
-});
-
-// ---------------------------------------------------------------------
-// 2. DELETED IS HIDDEN - on every surface, including the tree.
-// ---------------------------------------------------------------------
 
 await test('a deleted session appears in NO tree group', async () => {
     const { projectList } = boot({
@@ -349,22 +350,6 @@ await test('an ended tree row offers restart and delete', async () => {
     assert.ok(row.includes('ended-session-delete'), 'and offer the delete control');
     assert.ok(row.includes('ended-session-restart'), 'and offer restart, as RECENT does');
 });
-
-await test('a RECENT row offers delete, keyed on the uuid not the tmux name', async () => {
-    const { lp } = boot({ ...PROJECT, runningSessions: [], records: [] });
-    const html = lp._renderRecentSessionRowHtml(
-        record({ session_uuid: 'u-r', tmux_name: 'cloude_r', lifecycle: 'stopped' })
-    );
-    assert.ok(html.includes('ended-session-delete'), 'RECENT must offer the delete too');
-    assert.ok(html.includes('data-uuid="u-r"'));
-    assert.ok(html.includes('status-dot--stopped'),
-        'and use the SAME ended signal as the tree, not a second vocabulary');
-});
-
-// ---------------------------------------------------------------------
-// 4. THE STATUS VOCABULARY. 'stopped' is a MEASURED answer, so it must
-//    not borrow the hollow ring that already means could-not-measure.
-// ---------------------------------------------------------------------
 
 await test('SessionStatusUI knows stopped, and it is not the unknown dot', async () => {
     const { StatusUI } = boot({ runningSessions: [], records: [] });

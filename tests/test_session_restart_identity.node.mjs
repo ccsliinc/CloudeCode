@@ -165,10 +165,14 @@ function loadLaunchpad(opts = {}) {
     // Capture every user-visible sentence instead of rendering a banner.
     lp.showError = (m) => { errors.push(String(m)); };
     lp.loadRunningSessions = async () => {};
-    lp.loadRecentSessions = async () => {};
     lp.loadSessionAttribution = async () => {};
     lp.renderProjectList = () => {};
-    return { lp, calls, errors, byId };
+    // The sandbox window is handed back so a test can install the
+    // `CloudeWeb` namespace the tree's ended rows now call into. It is
+    // deliberately NOT installed here: a test that forgets to stub it
+    // should fail on a missing namespace rather than silently exercise
+    // an empty one.
+    return { lp, calls, errors, byId, window: context.window };
 }
 
 function recentRow(overrides = {}) {
@@ -210,38 +214,32 @@ function treeRow(overrides = {}) {
 //    session uuid and the title, not just the launch context.
 // =====================================================================
 
-await test('RECENT restart button carries data-uuid AND data-title', async () => {
-    const { lp } = loadLaunchpad();
-    const html = lp._renderRecentSessionRowHtml(recentRow());
-    assert.ok(html.includes('recent-session-restart'), 'no restart control rendered');
-    assert.ok(html.includes('data-uuid="uuid-1"'),
-        `restart control must carry the session uuid, got: ${html}`);
-    assert.ok(html.includes('data-title="Media Pipeline"'),
-        `restart control must carry the title, got: ${html}`);
-    assert.ok(html.includes('data-working-dir="/home/x/proj"'));
-    assert.ok(html.includes('data-agent-type="claude"'));
-});
-
-await test('RECENT restart button escapes a title carrying markup', async () => {
-    const { lp } = loadLaunchpad();
-    const html = lp._renderRecentSessionRowHtml(
-        recentRow({ title: '<img src=x onerror=1>' }));
-    assert.ok(!html.includes('<img src=x'),
-        `a title must never reach the markup unescaped, got: ${html}`);
-    assert.ok(html.includes('data-title="&lt;img'));
-});
-
-await test('RECENT restart button renders an EMPTY data-title for a row with none', async () => {
-    const { lp } = loadLaunchpad();
-    const html = lp._renderRecentSessionRowHtml(recentRow({ title: null }));
-    assert.ok(html.includes('data-title=""'),
-        `the attribute must exist and be empty, never the string "null": ${html}`);
-    assert.ok(!html.includes('data-title="null"'));
-});
-
 // =====================================================================
-// 2. CALL SITE TWO - the project tree's ended rows. The SAME loss lived
-//    here, and a fix applied only to the RECENT list is how it returns.
+// TRIMMED BY SVELTE SLICE 2, AND WHAT WENT WHERE.
+//
+// `Launchpad._restartPlan`, `_restartNotice`, `_restartRecentSession`,
+// `_renderRecentSessionRowHtml` and `_bindRecentSessionClicks` no longer
+// exist: the RECENT section moved into web/src/lib/launchpad/ and those
+// methods were deleted in the same commit. Every case in this file that
+// drove one of them was PORTED, not dropped:
+//
+//   the plan, the three-outcome notice and the failure path
+//       -> web/src/lib/launchpad/recent-actions.test.ts
+//   the row's identity, its restart payload and the lifecycle gate
+//       -> web/src/lib/launchpad/recent.test.ts
+//   the RECENT row's click wiring
+//       -> the component's own onclick, proven in a real browser under
+//          the production CSP; there is no delegated listener left to
+//          assert against, because Svelte binds the handler to the row.
+//
+// WHAT SURVIVES HERE IS THE TREE, and only the tree. Its ended rows are
+// still built by launchpad.js (slice 4), still carry `data-uuid` and
+// `data-title` in their markup, and still route through a delegated
+// listener - which now calls the ONE moved implementation by name rather
+// than a second copy. That call is what these remaining cases still
+// protect: a tree row that stopped carrying its title would start
+// restarting sessions into unnamed blank consoles again, which is the
+// defect this whole file was written for.
 // =====================================================================
 
 await test('TREE ended restart button carries data-uuid AND data-title', async () => {
@@ -264,182 +262,19 @@ await test('TREE ended restart button escapes a title carrying markup', async ()
 });
 
 // =====================================================================
-// 3. THE PLAN. A known session_uuid routes to the restart endpoint and
-//    sends the uuid; the server owns everything else.
-// =====================================================================
-
-await test('a known session_uuid plans mode "restart" and carries the uuid', async () => {
-    const { lp } = loadLaunchpad();
-    const plan = lp._restartPlan({
-        sessionUuid: 'uuid-1', title: 'Media Pipeline',
-        workingDir: '/home/x/proj', agentType: 'claude',
-    });
-    assert.equal(plan.mode, 'restart');
-    assert.equal(plan.sessionUuid, 'uuid-1');
-    assert.equal(plan.notice, null, 'a resolvable restart needs no caveat');
-});
-
-await test('the restart call actually receives the uuid, not the working dir', async () => {
-    const { lp, calls } = loadLaunchpad();
-    await lp._restartRecentSession({
-        sessionUuid: 'uuid-1', title: 'Media Pipeline',
-        workingDir: '/home/x/proj', agentType: 'claude',
-    });
-    assert.equal(calls.restart.length, 1,
-        `expected exactly one restart call, got ${calls.restart.length}`);
-    assert.equal(calls.restart[0], 'uuid-1');
-    assert.equal(calls.create.length, 0,
-        'a resolvable restart must NOT fall through to a blank create');
-});
-
-// =====================================================================
-// 4. THREE-OUTCOME RULE, FIRST HALF. No session_uuid is a DIFFERENT case
-//    from one that resolved: the title still travels, and the user is
-//    told what could not be determined instead of getting a silent blank.
-// =====================================================================
-
-await test('no session_uuid plans "create_unidentified" and still carries the title', async () => {
-    const { lp } = loadLaunchpad();
-    const plan = lp._restartPlan({
-        sessionUuid: '', title: 'Media Pipeline',
-        workingDir: '/home/x/proj', agentType: 'codex',
-    });
-    assert.equal(plan.mode, 'create_unidentified');
-    assert.equal(plan.payload.project_name, 'Media Pipeline',
-        'the title is the one piece of identity this mode CAN carry');
-    assert.equal(plan.payload.working_dir, '/home/x/proj');
-    assert.equal(plan.payload.agent_type, 'codex');
-    assert.equal(Object.keys(plan.payload).length, 3,
-        `expected exactly three payload keys, got ${JSON.stringify(plan.payload)}`);
-});
-
-await test('no session_uuid produces a CANNOT BE DETERMINED notice, never silence', async () => {
-    const { lp, calls, errors } = loadLaunchpad();
-    await lp._restartRecentSession({
-        sessionUuid: null, title: 'Media Pipeline',
-        workingDir: '/home/x/proj', agentType: '',
-    });
-    assert.equal(calls.restart.length, 0);
-    assert.equal(calls.create.length, 1);
-    assert.equal(calls.create[0].project_name, 'Media Pipeline');
-    assert.equal(errors.length, 1,
-        `the user must be told; got ${errors.length} notices`);
-    assert.ok(/CANNOT BE DETERMINED/.test(errors[0]),
-        `the notice must name the unknown, got: ${errors[0]}`);
-    assert.ok(!/resumed the conversation/.test(errors[0]),
-        'it must never imply a resume happened');
-});
-
-await test('an empty payload stays an object with zero keys, not undefined', async () => {
-    const { lp } = loadLaunchpad();
-    const plan = lp._restartPlan({});
-    assert.equal(plan.mode, 'create_unidentified');
-    assert.equal(typeof plan.payload, 'object');
-    assert.equal(Object.keys(plan.payload).length, 0);
-    assert.ok(plan.notice, 'even a wholly unidentified restart says so');
-});
-
-// =====================================================================
-// 5. THREE-OUTCOME RULE, SECOND HALF. The three server verdicts must
-//    produce three DIFFERENT sentences. A blank session reported like a
-//    resumed one is the whole defect, one layer further in.
-// =====================================================================
-
-await test("conversation 'resumed' with lineage recorded says nothing at all", async () => {
-    const { lp } = loadLaunchpad();
-    assert.equal(lp._restartNotice({
-        conversation: 'resumed', lineage_recorded: true, title_carried: 'Media',
-    }), null);
-});
-
-await test("conversation 'none_recorded' says a NEW conversation was started", async () => {
-    const { lp, errors } = loadLaunchpad({
-        restartResult: {
-            success: true, conversation: 'none_recorded',
-            lineage_recorded: true, title_carried: 'Media',
-        },
-    });
-    await lp._restartRecentSession({ sessionUuid: 'uuid-1', title: 'Media' });
-    assert.equal(errors.length, 1, 'this case must never be silent');
-    assert.ok(/NEW conversation/.test(errors[0]), `got: ${errors[0]}`);
-    assert.ok(/nothing was resumed/.test(errors[0]), `got: ${errors[0]}`);
-});
-
-await test("conversation 'unknown' is its own sentence, not folded into either", async () => {
-    const { lp } = loadLaunchpad();
-    const unknown = lp._restartNotice({ conversation: 'unknown', title_carried: 'Media' });
-    const none = lp._restartNotice({ conversation: 'none_recorded', title_carried: 'Media' });
-    assert.ok(unknown, 'unknown must produce a sentence');
-    assert.ok(/CANNOT BE DETERMINED/.test(unknown), `got: ${unknown}`);
-    assert.notEqual(unknown, none,
-        'could-not-evaluate and definitely-none must not read identically');
-});
-
-await test('a missing response body is CANNOT DETERMINE, never a clean pass', async () => {
-    const { lp } = loadLaunchpad();
-    const notice = lp._restartNotice(null);
-    assert.ok(notice && /CANNOT DETERMINE/.test(notice), `got: ${notice}`);
-});
-
-// =====================================================================
-// 6. LINEAGE. A resumed restart whose parent link did NOT land is neither
-//    a failure nor a clean success, and gets said out loud.
-// =====================================================================
-
-await test('a resumed restart with row_reused false still reports the gap', async () => {
-    const { lp, errors } = loadLaunchpad({
-        restartResult: {
-            success: true, conversation: 'resumed',
-            row_reused: false, title_carried: 'Media', detail: null,
-        },
-    });
-    await lp._restartRecentSession({ sessionUuid: 'uuid-1' });
-    assert.equal(errors.length, 1);
-    assert.ok(/could not keep its original record/.test(errors[0]),
-        `got: ${errors[0]}`);
-});
-
-await test('a resumed restart that DID reuse its row says nothing at all', async () => {
-    // The normal outcome. A restart that kept its own record is an
-    // ordinary success and must not narrate anything at the user.
-    const { lp } = loadLaunchpad();
-    assert.equal(
-        lp._restartNotice({
-            conversation: 'resumed', row_reused: true, title_carried: 'Media',
-        }),
-        null);
-});
-
-await test("the server's own detail wins over the generic reuse sentence", async () => {
-    const { lp } = loadLaunchpad();
-    assert.equal(
-        lp._restartNotice({
-            conversation: 'resumed', row_reused: false,
-            detail: 'the datastore was unreadable',
-        }),
-        'the datastore was unreadable');
-});
-
-// =====================================================================
-// 7. FAILURE PATH. A rejected request must surface, not vanish.
-// =====================================================================
-
-await test('a failed restart request is reported to the user', async () => {
-    const { lp, errors } = loadLaunchpad({
-        restartResult: new Error('the server could not be reached'),
-    });
-    await lp._restartRecentSession({ sessionUuid: 'uuid-1' });
-    assert.equal(errors.length, 1);
-    assert.ok(/failed to restart session/.test(errors[0]), `got: ${errors[0]}`);
-});
-
-
-// =====================================================================
-// 8. THE WIRING, both call sites, end to end. Section 1 and 2 proved the
-//    attributes are RENDERED; these prove the delegated listeners
-//    actually READ them and hand them to the handler. That gap is
-//    literally where the original defect lived: the uuid WAS in the
-//    dataset and simply never reached the call.
+// 3. THE WIRING. The attributes being IN the markup is half of it; this
+//    is the other half - the listener must actually READ them and hand
+//    them to the handler. That gap is literally where the original
+//    defect lived: the uuid WAS in the dataset and simply never reached
+//    the call.
+//
+//    THE HANDLER IT REACHES MOVED. Slice 2 deleted
+//    `Launchpad._restartRecentSession` and the tree now calls
+//    `window.CloudeWeb.launchpad.restartRecentSession` - the one
+//    implementation, shared with the RECENT rows, rather than a second
+//    copy of it. So the stub goes on that namespace. Stubbing the old
+//    method name would now assert against a function nothing calls,
+//    which is the quietest way for a test to stop testing.
 // =====================================================================
 
 /**
@@ -456,42 +291,8 @@ function btnStub(attrs) {
     };
 }
 
-await test('the RECENT delegated listener hands uuid AND title to the handler', async () => {
-    const { lp, byId } = loadLaunchpad();
-    let listener = null;
-    byId['recent-sessions-list'].addEventListener = (type, fn) => {
-        if (type === 'click') listener = fn;
-    };
-    lp._bindRecentSessionClicks();
-    assert.ok(listener, 'no click listener was bound on the RECENT list');
-
-    const seen = [];
-    lp._restartRecentSession = async (opts) => { seen.push(opts); };
-    const btn = btnStub({
-        'data-uuid': 'uuid-1',
-        'data-title': 'Media Pipeline',
-        'data-working-dir': '/home/x/proj',
-        'data-agent-type': 'claude',
-    });
-    await listener({
-        target: {
-            closest(sel) {
-                return sel === '.recent-session-restart' ? btn : null;
-            },
-        },
-    });
-    assert.equal(seen.length, 1, 'the handler was not called');
-    assert.equal(typeof seen[0], 'object',
-        'the handler must receive an options object, not a bare working dir');
-    assert.equal(seen[0].sessionUuid, 'uuid-1');
-    assert.equal(seen[0].title, 'Media Pipeline');
-    assert.equal(seen[0].workingDir, '/home/x/proj');
-    assert.equal(seen[0].agentType, 'claude');
-});
-
-
 await test('the TREE delegated listener hands uuid AND title to the handler', async () => {
-    const { lp, byId } = loadLaunchpad();
+    const { lp, byId, window: win } = loadLaunchpad();
     let listener = null;
     byId['project-list'].addEventListener = (type, fn) => {
         if (type === 'click') listener = fn;
@@ -500,7 +301,9 @@ await test('the TREE delegated listener hands uuid AND title to the handler', as
     assert.ok(listener, 'no click listener was bound on the project tree');
 
     const seen = [];
-    lp._restartRecentSession = async (opts) => { seen.push(opts); };
+    win.CloudeWeb = {
+        launchpad: { restartRecentSession: async (opts) => { seen.push(opts); } },
+    };
     const row = {
         dataset: { ended: '1', name: 'cloude_media' },
         classList: { contains() { return false; } },

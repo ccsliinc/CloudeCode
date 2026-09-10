@@ -150,20 +150,16 @@ async function loadBoth({ attachable, recent }) {
         alert() {},
     };
     vm.createContext(context);
-    // SAME ORDER AS index.html. The exclusion rule lives in
-    // session-recent-visibility.js and launchpad.js delegates to it, so a
-    // sandbox that loaded only launchpad.js would exercise that file's
-    // fail-open branch and prove nothing about the rule.
-    for (const script of ['session-recent-visibility.js', 'launchpad.js']) {
-        vm.runInContext(
-            fs.readFileSync(path.join(ROOT, 'client', 'js', script), 'utf8'),
-            context,
-            { filename: script }
-        );
-    }
+    // ONE SCRIPT NOW. `session-recent-visibility.js` was deleted with
+    // slice 2 and its rule is imported into the bundle instead; see the
+    // note above the first test for where it is asserted.
+    vm.runInContext(
+        fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8'),
+        context,
+        { filename: 'launchpad.js' }
+    );
     const lp = context.window.Launchpad;
     await lp.loadRunningSessions();
-    await lp.loadRecentSessions();
     return { recentList, runningList, lp };
 }
 
@@ -241,103 +237,27 @@ function occurrences(el, name) {
 // 1. THE RULE: a session currently running is NOT in recent.
 // =====================================================================
 
-await test('a running session is absent from RECENT', async () => {
-    const { recentList } = await loadBoth({
-        attachable: [live('cloude_Media_Compression')],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_Media_Compression')],
-            notice: null,
-        },
-    });
-    assert.equal(
-        occurrences(recentList, 'cloude_Media_Compression'), 0,
-        `recent still lists the running session: ${recentList.innerHTML}`);
-});
-
-await test('a running session IS in RUNNING (the other half of the rule)', async () => {
-    // POSITIVE CONTROL for the test above. Without this, a renderer that
-    // drew nothing at all would pass the exclusion assertion, and the
-    // suite would report a clean list rule while showing the user an
-    // empty screen.
-    const { runningList } = await loadBoth({
-        attachable: [live('cloude_Media_Compression')],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_Media_Compression')],
-            notice: null,
-        },
-    });
-    assert.ok(
-        occurrences(runningList, 'cloude_Media_Compression') >= 1,
-        `running does not list the live session: ${runningList.innerHTML}`);
-});
-
 // =====================================================================
-// 2. EXACTLY ONE LIST, counted across both surfaces at once.
-// =====================================================================
-
-await test('each session appears in exactly one list', async () => {
-    const { recentList, runningList } = await loadBoth({
-        attachable: [live('cloude_Media'), live('cloude_Hockey')],
-        recent: {
-            state: 'ok',
-            sessions: [
-                // Both live rows whose reaper has not caught up yet, plus
-                // one genuinely finished session.
-                stored('cloude_Media'),
-                stored('cloude_Hockey'),
-                stored('cloude_Old_Thing'),
-            ],
-            notice: null,
-        },
-    });
-    for (const name of ['cloude_Media', 'cloude_Hockey', 'cloude_Old_Thing']) {
-        const inRunning = occurrences(runningList, name) > 0 ? 1 : 0;
-        const inRecent = occurrences(recentList, name) > 0 ? 1 : 0;
-        assert.equal(
-            inRunning + inRecent, 1,
-            `${name} is in ${inRunning + inRecent} list(s), expected exactly 1`
-            + ` (running=${inRunning} recent=${inRecent})`);
-    }
-});
-
-await test('a genuinely stopped session still renders in RECENT', async () => {
-    // The filter must exclude the RUNNING ones and nothing else. A filter
-    // that emptied recent entirely would satisfy every exclusion
-    // assertion above while deleting the section's whole purpose.
-    const { recentList } = await loadBoth({
-        attachable: [live('cloude_Media')],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_Old_Thing')],
-            notice: null,
-        },
-    });
-    assert.ok(
-        occurrences(recentList, 'cloude_Old_Thing') >= 1,
-        `recent dropped a genuinely stopped row: ${recentList.innerHTML}`);
-});
-
-await test('with NO running sessions, recent is untouched', async () => {
-    // The exclusion is driven by the live probe, so an empty probe must
-    // remove nothing. A `new Set([])` used carelessly as a filter is an
-    // easy way to accidentally drop everything.
-    const { recentList } = await loadBoth({
-        attachable: [],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_A'), stored('cloude_B')],
-            notice: null,
-        },
-    });
-    assert.ok(occurrences(recentList, 'cloude_A') >= 1, 'cloude_A vanished');
-    assert.ok(occurrences(recentList, 'cloude_B') >= 1, 'cloude_B vanished');
-});
-
-// =====================================================================
-// 3. A DEAD PANE IS NOT RUNNING - kept property, re-pinned here so all
-//    three list rules are asserted in one place.
+// TRIMMED BY SVELTE SLICE 2, AND THE RULE ITSELF DID NOT MOVE - THE
+// SURFACE DID.
+//
+// "A session appears in exactly one list" has two halves. The RECENT
+// half was `client/js/session-recent-visibility.js` plus
+// `Launchpad.renderRecentSessions`, and both were deleted when the
+// section moved into web/src/lib/launchpad/. That half is now:
+//
+//   web/src/lib/launchpad/recent-visibility.test.ts
+//       every exclusion case, including the archived row that survives a
+//       live session reusing its tmux name, and a NEGATIVE CONTROL
+//       proving the filter can exclude at all - which the version here
+//       did not have.
+//   web/src/lib/launchpad/recent.test.ts
+//       that the rendered count follows the exclusion, so a hidden row
+//       cannot still be counted.
+//
+// THE RUNNING half and the TREE half are still launchpad.js, and they
+// are what is left below. Slice 3 moves the running list and takes them
+// with it.
 // =====================================================================
 
 await test('a session whose pane is DEAD is absent from RUNNING', async () => {
@@ -394,60 +314,9 @@ await test('no "earlier session" disclosure exists anywhere in the client', asyn
         'client/js/session-supersede.js still exists');
 });
 
-await test('the recent filter excludes by LIVE IDENTITY, not by stored lifecycle', async () => {
-    // Pins the mechanism, not just the outcome. Reading `lifecycle` here
-    // instead of the live probe is the exact bug: every row in RECENT
-    // already says 'stopped', so a lifecycle test can never exclude
-    // anything and the duplicate comes straight back.
-    //
-    // THE KEY IS THE STORED ROW ID, NOT THE TMUX NAME. It used to be the
-    // name, and that hid rows the user had DELETED whenever an unrelated
-    // live session later reused their name - measured on the owner's box
-    // 2026-09-08, five of six deleted rows unreachable. See
-    // client/js/session-recent-visibility.js and
-    // tests/test_recent_deleted_visibility.node.mjs.
-    const body = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    const fn = body.slice(body.indexOf('renderRecentSessions()'));
-    const head = fn.slice(0, fn.indexOf("if (state !== 'ok')"));
-    assert.ok(/runningSessions/.test(head),
-        'renderRecentSessions no longer consults the live running set');
-    assert.ok(/SessionRecentVisibility\.visibleRecentRows/.test(head),
-        'renderRecentSessions no longer applies the exclusion rule');
-
-    const rule = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'session-recent-visibility.js'), 'utf8');
-    assert.ok(/session_row_id/.test(rule),
-        'the exclusion rule no longer keys on the stored row id');
-});
-
-await test('a DELETED row survives a live session that reused its name', async () => {
-    // The launcher-level statement of the toggle bug. `cloude_Mac` is
-    // live; the deleted row of the same name is an OLDER session with a
-    // different stored id, so it is not the row on screen under RUNNING
-    // and must still be reachable through "show deleted".
-    const { recentList } = await loadBoth({
-        attachable: [live('cloude_Mac')],
-        recent: {
-            state: 'ok',
-            sessions: [
-                stored('cloude_Mac', {
-                    id: 9,
-                    session_uuid: 'uuid-deleted-mac',
-                    archived_at: '2026-09-03T19:20:11.638508Z',
-                }),
-            ],
-            notice: null,
-        },
-    });
-    assert.ok(
-        occurrences(recentList, 'uuid-deleted-mac') >= 1,
-        `the deleted row was hidden by a live name collision: ${recentList.innerHTML}`);
-});
-
 // =====================================================================
-// 5. THE PROJECT TREE obeys the same one-list rule, including for the
-//    legacy rows a name comparison cannot catch.
+// THE PROJECT TREE obeys the same one-list rule, including for the
+// legacy rows a name comparison cannot catch. Still launchpad.js.
 // =====================================================================
 
 /**

@@ -196,47 +196,21 @@ await test('a second click on the recent-sessions toggle expands it again', asyn
 });
 
 // ---------------------------------------------------------------------
-// 2. Collapsed state persists across a simulated 5s-poller repaint: the
-//    poller calls loadRecentSessions() -> renderRecentSessions(), which
-//    only ever rewrites #recent-sessions-list's innerHTML (never its
-//    style.display), so a collapse must survive it exactly the way the
-//    running-sessions section's does.
+// 2. MOVED. The repaint case that used to sit here drove
+//    `lp.renderRecentSessions()`, which no longer exists: slice 2 of the
+//    Svelte migration moved the RECENT list, its count and its archive
+//    filter into web/src/lib/launchpad/, and deleted nine methods from
+//    launchpad.js in the same commit. The invariant did not go with it -
+//    it moved to web/src/lib/launchpad/recent-chrome.test.ts, restated
+//    for the new shape and STRONGER than it was: the section's chrome now
+//    never touches `#recent-sessions-list` AT ALL, which is asserted by
+//    recording every element it asks for, rather than by checking that
+//    one write did not happen.
+//
+//    Everything else in this file is about `initSectionDisclosures()` and
+//    the heading's own markup, both of which are still legacy, so it
+//    stays here and still runs.
 // ---------------------------------------------------------------------
-
-await test('a repaint tick (loadRecentSessions) does not re-expand a collapsed recent section', async () => {
-    const toggle = makeEl('recent-sessions-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    const content = makeEl('recent-sessions-list');
-    const count = makeEl('recent-sessions-count');
-    const section = makeEl('recent-sessions-section');
-    const byId = {
-        'recent-sessions-toggle': toggle,
-        'recent-sessions-list': content,
-        'recent-sessions-count': count,
-        'recent-sessions-section': section,
-    };
-    const { lp } = loadWired(byId, makeLocalStorage());
-
-    toggle.click();
-    assert.equal(content.style.display, 'none', 'collapsed before the repaint');
-
-    // Simulate the poller's repaint tick with rows actually present, so the
-    // renderer takes its non-trivial branch and rewrites innerHTML.
-    lp.recentSessionsState = 'ok';
-    lp.recentSessions = [{
-        session_uuid: 'u1', lifecycle: 'stopped', working_dir: '/tmp/p',
-        agent_type: 'claude', archived_at: null, title: 'a session',
-    }];
-    lp.runningSessions = [];
-    lp.renderRecentSessions();
-
-    assert.ok(content.innerHTML.includes('recent-session-row'),
-        'sanity: the repaint actually rewrote the row markup');
-    assert.equal(content.style.display, 'none',
-        'the repaint must not silently re-expand a section the user collapsed');
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false',
-        'the chevron must stay pointing at the collapsed state after a repaint');
-});
 
 // ---------------------------------------------------------------------
 // 3. Persistence: the recent section uses the SAME localStorage key and

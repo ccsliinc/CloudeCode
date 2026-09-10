@@ -28,6 +28,16 @@ import { ledHtmlForStatus, labelFor, labelWithSource, normalizeStatus } from './
 import type { StatusSignals } from './lib/status-dot';
 import { mountPanel, unmountPanel } from './lib/mount';
 import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
+import RecentSessions from './lib/launchpad/RecentSessions.svelte';
+import {
+    archiveSessionRecord,
+    browserHost as recentBrowserHost,
+    forkSession,
+    restartRecentSession,
+} from './lib/launchpad/recent-actions';
+import type { RestartOptions } from './lib/launchpad/recent';
+import { sessionStore } from './lib/sessions/store.svelte';
+import { uiPrefs } from './lib/ui/prefs.svelte';
 // Imported for its side effect: this is what registers the shipped
 // plugins on the surface registry. Nothing reads a binding from it.
 import './lib/plugins/builtin';
@@ -37,6 +47,28 @@ import { summaryLabel } from './lib/session-summary-label';
 
 /** The id of the container `renderLaunchpadUI()` writes for the card. */
 const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
+
+/** The id of the container `renderLaunchpadUI()` writes for RECENT. */
+const RECENT_SESSIONS_CONTAINER = 'recent-sessions-list';
+
+/**
+ * The host the three exported RECENT actions use when a legacy caller
+ * invokes one directly.
+ *
+ * Description: built ONCE at module load rather than per call, because
+ *   `browserHost` resolves `window.API` and `window.Launchpad` lazily
+ *   inside each method anyway - so one object is enough and a second
+ *   would only be a second `refreshRecent` closure over the same store.
+ *   The component builds its own by default, which is the same shape;
+ *   both end up calling this one store.
+ */
+const recentHost = recentBrowserHost(() =>
+    sessionStore.refreshRecent(
+        (includeArchived) => recentHost.fetchRecent(includeArchived),
+        uiPrefs.archivedSessionsVisible,
+        t,
+    ),
+);
 
 /**
  * Mount the Stage C attribution prompt into the launchpad's own slot.
@@ -57,6 +89,79 @@ const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
  */
 function mountAttributionPrompt(): void {
     mountPanel(ATTRIBUTION_PROMPT_CONTAINER, AttributionPrompt, {});
+}
+
+/**
+ * Mount the RECENT sessions section into the launchpad's own slot.
+ *
+ * Description: THE ONE LINE `client/js/launchpad.js` CALLS for slice 2.
+ *   It sits at the exact point `loadProjects()` used to call
+ *   `loadRecentSessions()`, which was deleted in the same commit along
+ *   with eight sibling methods and `session-recent-visibility.js`.
+ *
+ *   The component fetches `GET /sessions/recent` as it mounts, exactly
+ *   as `loadRecentSessions()` did, and also takes over the section's
+ *   count badge, its archive filter and its own visibility - all three
+ *   of which live in the heading OUTSIDE this container, and are written
+ *   rather than re-rendered so the legacy collapse binding survives.
+ *   Nothing is awaited: a failure inside it must not stop the projects
+ *   rendering, and a non-ok state is a thing it RENDERS rather than a
+ *   thing it throws.
+ * Inputs: none.
+ * Output: void.
+ * Example: window.CloudeWeb.launchpad.mountRecentSessions();
+ */
+function mountRecentSessions(): void {
+    mountPanel(RECENT_SESSIONS_CONTAINER, RecentSessions, {});
+}
+
+/**
+ * Archive one stored session record, for a legacy caller.
+ *
+ * Description: the project tree's ended rows still live in
+ *   `launchpad.js` (slice 4) and offer this control. Rather than leave a
+ *   second copy of the behaviour there, that row calls this. ONE
+ *   implementation, one greppable call site per surface.
+ *
+ *   IT IS A SOFT ARCHIVE. `archived_at` is stamped and the row keeps
+ *   every column; a restart is what brings it back. Never confuse it
+ *   with the X on a running row, which stops a process.
+ * Inputs: sessionUuid - the stored row's durable key.
+ * Output: Promise<void>. Failures are reported inline, never thrown.
+ * Example: await window.CloudeWeb.launchpad.archiveSessionRecord('a1b2');
+ */
+function archiveSessionRecordForLegacy(sessionUuid: string | null): Promise<void> {
+    return archiveSessionRecord(sessionUuid, recentHost, t);
+}
+
+/**
+ * Fork a running session, for a legacy caller.
+ *
+ * Description: the running-sessions row is slice 5 and still legacy, and
+ *   its fork control calls this. See ./lib/launchpad/recent-actions.ts
+ *   for why a 409 is a refusal that gets said out loud.
+ * Inputs: tmuxName - the PARENT session's tmux name.
+ * Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.forkSession('cloude_work');
+ */
+function forkSessionForLegacy(tmuxName: string | null): Promise<void> {
+    return forkSession(tmuxName, recentHost, t);
+}
+
+/**
+ * Restart a stopped session, for a legacy caller.
+ *
+ * Description: the project tree's ended rows call this, and so do the
+ *   RECENT rows through the component. Both reach the same plan and the
+ *   same three-outcome notice.
+ * Inputs: opts - {sessionUuid, title, workingDir, agentType}.
+ * Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.restartRecentSession({...});
+ */
+function restartRecentSessionForLegacy(
+    opts: Partial<RestartOptions> | null,
+): Promise<void> {
+    return restartRecentSession(opts, recentHost, t);
 }
 
 /**
@@ -129,6 +234,18 @@ const CloudeWeb = {
     /** Panels that belong to the launchpad screen, by name. */
     launchpad: {
         mountAttributionPrompt,
+        mountRecentSessions,
+        /**
+         * THE THREE RECENT ACTIONS, AS THE STILL-LEGACY ROWS SEE THEM.
+         * The project tree (slice 4) archives and restarts; the running
+         * row (slice 5) forks. Exported so those two surfaces call the
+         * one implementation instead of keeping a copy each, which is
+         * how the archive control and the restart notice drifted into
+         * meaning different things on different rows before.
+         */
+        archiveSessionRecord: archiveSessionRecordForLegacy,
+        forkSession: forkSessionForLegacy,
+        restartRecentSession: restartRecentSessionForLegacy,
     },
     /**
      * THE `session-card-action` SURFACE, as the legacy row menu sees it.

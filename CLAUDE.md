@@ -44,8 +44,12 @@ under `/static` exactly as it serves everything else.
 | The first ported component and its two pure modules | `web/src/lib/StatusLed.svelte`, `led.ts`, `status-dot.ts` |
 | THE ONE MOUNT PATH, used by every migration slice | `web/src/lib/mount.ts` |
 | Slice 1, the attribution prompt card | `web/src/lib/launchpad/AttributionPrompt.svelte`, `attribution.ts` |
+| Slice 2, the recent sessions section | `web/src/lib/launchpad/RecentSessions.svelte`, `recent.ts`, `recent-actions.ts`, `recent-chrome.ts`, `recent-visibility.ts` |
+| The shared session store, recent slice only | `web/src/lib/sessions/store.svelte.ts` |
+| Per-device UI preferences, on the legacy keys | `web/src/lib/ui/prefs.svelte.ts` |
 | Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.test.ts` |
 | Slice 1's tests | `web/src/lib/launchpad/attribution.test.ts` |
+| Slice 2's tests | `web/src/lib/launchpad/recent{,-actions,-chrome,-visibility}.test.ts`, `no-delete-wording.test.ts` |
 | The emitted bundle, COMMITTED | `client/dist/app.js`, `client/dist/app.css` |
 | Prove the committed bundle is current | `scripts/web-build-check.sh` |
 
@@ -164,10 +168,48 @@ compiled, never half of each.
   `client/js/launchpad.js`, `mountPanel` built, `loadProjects()` calls
   `window.CloudeWeb.launchpad.mountAttributionPrompt()` where its own render
   used to run. Proven in a real browser under the production CSP.
-- **Slices 2 to 7** - PAUSED pending the 1.2 merge with Adam. See the
+- **Slice 2, the recent sessions section** - DONE (issue #67, PR #68 on
+  `Adoom666/CloudeCodeDev`). 792 legacy lines gone: nine methods and the two
+  show-archived preference accessors out of `client/js/launchpad.js`, plus
+  `client/js/session-recent-visibility.js` and its script tag deleted outright.
+  The shared store starts here holding the recent slice only. Every user-visible
+  string goes through `client/js/i18n/catalog.en.js`; 33 keys added.
+  Proven in a real browser under the production CSP.
+- **Slices 3 to 7** - PAUSED pending the 1.2 merge with Adam. See the
   2026-09-09 release-plan entry in `.claude/TODO.md`: his work sits in the
   status, toast and sidebar cluster, which is slices 4 and 5, and porting it
   before the merge ports it twice.
+
+**THREE OF SLICE 2's MOVED METHODS HAVE CALLERS THE SLICE DOES NOT OWN, and
+they were not left behind as a second copy.** The project tree's ended rows
+archive and restart (slice 4); the running-sessions row forks (slice 5). Both
+still-legacy surfaces now call `window.CloudeWeb.launchpad.archiveSessionRecord`
+/ `.restartRecentSession` / `.forkSession` by name. One behaviour, one greppable
+call site per surface, no dual path. Note `tests/test_session_restart_identity.node.mjs`
+stubs that NAMESPACE now rather than `Launchpad._restartRecentSession`: stubbing
+the old method name would assert against a function nothing calls, which is the
+quietest way for a test to stop testing.
+
+**THE RECENT SECTION'S HEADING IS STILL LEGACY MARKUP, AND THAT IS DELIBERATE.**
+`mountPanel` puts the component inside `#recent-sessions-list`, while
+`#recent-sessions-count`, `#recent-show-deleted-toggle` and
+`#recent-sessions-section`'s own visibility are SIBLINGS of it that this section
+still owns. `initSectionDisclosures()` binds the collapse to that heading once at
+boot, so re-rendering it would drop the listener on the floor and the failure
+would be a chevron that stops working rather than an error anybody sees. The
+three writes therefore live in one module, `recent-chrome.ts`, injected as part
+of the component's host so it stays assertable with no document.
+`web/src/lib/launchpad/recent-chrome.test.ts` asserts the component's chrome
+never touches the list container AT ALL, by recording every element it asks for.
+
+**A `localStorage` READ AT IMPORT TIME BREAKS THE BUNDLE'S OWN CONTRACT, and it
+broke a test that had nothing to do with this slice.** `main.ts` promises that
+LOADING the bundle does no work. `prefs.svelte.ts` first read its preference at
+module scope, and `tests/test_session_row_menu_superset.node.mjs` started failing:
+it loads `client/dist/app.js` into a `vm` sandbox where `localStorage` is absent
+and `console` carries no `warn`, so the read threw, the catch reached for a
+method that did not exist, and the whole bundle failed to evaluate. The read is
+lazy now, on first ACCESS. Any new module in this tree owes the same check.
 
 **THE LEGACY CALL SITE IS GUARDED, AND THE GUARD IS LOUD.** `client/index.html`
 loads the bundle as a deferred module, so in a browser `window.CloudeWeb` is
