@@ -19,11 +19,21 @@
  * WHAT MOVED INTO THE MENU, and nothing was dropped or renamed. All
  * three of the row's old inline controls are now menu items built by THE
  * SAME BUILDERS that drew them: pin/unpin (SessionSidebarRows
- * .pinButtonHtml), mark unread (SessionStatusUI.markUnreadHtml) and
- * close/remove plus RESTART on a dead row (SessionRowActions.html, which
- * already emitted restart alongside remove). Each item therefore carries
- * the identical data attribute, aria state and glyph, and its LABEL is
- * that control's own `title` - no string is written twice.
+ * .pinButtonHtml) and close/remove plus RESTART on a dead row
+ * (SessionRowActions.html, which already emitted restart alongside
+ * remove). Each item therefore carries the identical data attribute,
+ * aria state and glyph, and its LABEL is that control's own `title` - no
+ * string is written twice.
+ *
+ * MARK UNREAD IS NO LONGER ONE OF THEM: IT IS A PLUGIN. It was hardcoded
+ * here as a call to SessionStatusUI.markUnreadHtml, with its click
+ * routed to SessionSidebarClicks.onMarkUnreadClick. Both of those are
+ * deleted. It is now the first contribution on the compiled tree's
+ * `session-card-action` surface (web/src/lib/plugins/mark-unread/), and
+ * this menu reaches it through exactly two calls into
+ * `window.CloudeWeb`: `sessionCardActions` to paint, and
+ * `runSessionCardAction` to run. The control it paints is the shipped
+ * one, attribute for attribute; only the list it comes from moved.
  *
  * THE GROUP CHIP FOLDED IN TOO, A ROUND LATER. "no i dont need to see the
  * group name in the item. its in the group i can see the group on the
@@ -138,6 +148,64 @@ console.log('[SessionRowMenu Module] Loading...');
     }
 
     /**
+     * Description: the context a plugin contribution is given - the
+     *   owner's UI flags, and how to repaint this sidebar once an action
+     *   has changed something server-side.
+     *
+     *   FLAGS DEFAULT ON. `UIFlags` answers its own default until its
+     *   probe lands and whenever it cannot run at all, so a failed read
+     *   never takes a control away; that rule is carried through here
+     *   rather than restated in the plugin.
+     * Inputs: none.
+     * Output: object - {flags, refresh}, as
+     *   web/src/lib/plugins/types.ts::PluginContext.
+     */
+    function pluginContext() {
+        var flags = {
+            show_mark_unread_control: window.UIFlags
+                ? window.UIFlags.showMarkUnreadControl()
+                : true,
+        };
+        return {
+            flags: flags,
+            refresh: function () {
+                var ctrl = window.SessionSidebar;
+                if (!ctrl || typeof ctrl._fetchAndRender !== 'function') return;
+                // Force a repaint past the poll signature guard, the way
+                // every other row action in this sidebar does.
+                ctrl._lastSig = null;
+                return ctrl._fetchAndRender();
+            },
+        };
+    }
+
+    /**
+     * Description: the enabled `session-card-action` contributions for
+     *   one row, rendered and ordered by the registry.
+     *
+     *   THE GUARD IS LOUD. client/index.html loads the compiled bundle as
+     *   a deferred module, so in a browser this is always there by the
+     *   time a menu opens; it is absent in every Node harness. A missing
+     *   bundle silently dropping a shipped control is the false green
+     *   this project keeps paying for, so it is reported.
+     * Inputs:
+     *   name (string) - the row's tmux name.
+     *   unread (boolean) - the row's current unread flag.
+     * Output: Array<{id: string, html: string}>.
+     */
+    function pluginActionsFor(name, unread) {
+        var web = window.CloudeWeb;
+        if (!web || typeof web.sessionCardActions !== 'function') {
+            console.error(
+                '[SessionRowMenu] window.CloudeWeb.sessionCardActions is '
+                + 'missing - every plugin-contributed row control is absent');
+            return [];
+        }
+        return web.sessionCardActions(
+            { name: name, unread: !!unread }, pluginContext());
+    }
+
+    /**
      * Description: the raw HTML of every control this row's menu offers,
      *   in order, FROM THE MODULES THAT ALREADY OWN THOSE CONTROLS. This
      *   is the single definition the kebab tap, the right click and the
@@ -159,9 +227,16 @@ console.log('[SessionRowMenu Module] Loading...');
         if (window.SessionSidebarRows) {
             out.push(window.SessionSidebarRows.pinButtonHtml(name, pinned));
         }
-        if (window.SessionStatusUI) {
-            out.push(window.SessionStatusUI.markUnreadHtml(name, unread));
-        }
+        // THE PLUGIN SURFACE, CONCATENATED - not a replacement for the
+        // list above and below. mark-unread used to be hardcoded here as
+        // a call to SessionStatusUI.markUnreadHtml; it is now the first
+        // `session-card-action` on the compiled tree's registry
+        // (web/src/lib/plugins/), and this is the ONE place this menu
+        // asks for them. It sits where mark-unread sat, so the painted
+        // order is unchanged.
+        pluginActionsFor(name, unread).forEach(function (a) {
+            out.push(a.html);
+        });
         if (window.SessionSidebarGroupActions) {
             out.push(window.SessionSidebarGroupActions.rowMenuItemHtml(name));
         }
@@ -345,11 +420,27 @@ console.log('[SessionRowMenu Module] Loading...');
             clicks.onRowActionClick(ctrl, actionEl);
             return;
         }
-        var unreadEl = target.closest('[data-mark-unread]');
-        if (unreadEl && clicks) {
+        // THE PLUGIN RETURN TRIP. `data-plugin-action` is written by the
+        // compiled renderer and carries the contribution id, so a click
+        // lands on the `run` that painted the control. It is tested
+        // BEFORE the older attribute routers so a plugin owns its own
+        // control outright; there is no second handler for these.
+        var pluginEl = target.closest('[data-plugin-action]');
+        if (pluginEl && window.CloudeWeb
+            && typeof window.CloudeWeb.runSessionCardAction === 'function') {
             e.preventDefault();
+            var pluginId = pluginEl.getAttribute('data-plugin-action');
+            // The ROW is read off the trigger, never off the clicked
+            // control: the kebab is the one node carrying this row's
+            // state, and a plugin's own attributes are its business.
+            var pluginRow = {
+                name: triggerEl ? (triggerEl.getAttribute(KEBAB_ATTR) || '') : '',
+                unread: !!(triggerEl
+                    && triggerEl.getAttribute('data-row-unread') === '1'),
+            };
+            var context = pluginContext();
             close();
-            clicks.onMarkUnreadClick(ctrl, unreadEl);
+            window.CloudeWeb.runSessionCardAction(pluginId, pluginRow, context);
             return;
         }
         var pinEl = target.closest('[data-pin-session]');

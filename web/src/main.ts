@@ -28,6 +28,10 @@ import { ledHtmlForStatus, labelFor, labelWithSource, normalizeStatus } from './
 import type { StatusSignals } from './lib/status-dot';
 import { mountPanel, unmountPanel } from './lib/mount';
 import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
+// Imported for its side effect: this is what registers the shipped
+// plugins on the surface registry. Nothing reads a binding from it.
+import './lib/plugins/builtin';
+import { sessionCardActions, runSessionCardAction } from './lib/plugins/session-card-actions';
 
 /** The id of the container `renderLaunchpadUI()` writes for the card. */
 const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
@@ -124,6 +128,18 @@ const CloudeWeb = {
     launchpad: {
         mountAttributionPrompt,
     },
+    /**
+     * THE `session-card-action` SURFACE, as a legacy row renderer sees
+     * it. `sessionCardActions` hands back the enabled contributions for
+     * one row, already rendered and in their one deterministic order, to
+     * be CONCATENATED onto whatever the caller builds itself;
+     * `runSessionCardAction` is the return trip, taking the
+     * `data-plugin-action` id off the clicked element. The only caller
+     * today is client/js/session-row-menu.js. See
+     * web/src/lib/plugins/types.ts for why plugins are build-time only.
+     */
+    sessionCardActions,
+    runSessionCardAction,
 } as const;
 
 declare global {

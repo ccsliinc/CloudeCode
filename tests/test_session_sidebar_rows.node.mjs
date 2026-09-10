@@ -78,6 +78,12 @@ function makeSandbox() {
     };
     const fakeWindow = { App: { showConfirmModal: () => Promise.resolve(true) } };
     fakeWindow.window = fakeWindow;
+    // THE FLAG THE MARK-UNREAD PLUGIN READS. Mutable, so a block below
+    // can switch the control off and read the menu again.
+    fakeWindow.UIFlags = {
+        _show: true,
+        showMarkUnreadControl() { return this._show; },
+    };
 
     const context = { window: fakeWindow, document: fakeDocument, console };
     vm.createContext(context);
@@ -90,16 +96,28 @@ function makeSandbox() {
     // invariants below can still be asserted over what a row OFFERS,
     // rather than quietly narrowing to what a row happens to draw inline.
     vm.runInContext(readClientJs('session-row-menu.js'), context);
+    // THE REAL COMPILED BUNDLE, not a stand-in. client/dist/app.js is
+    // emitted with no import or export statement, so it runs in this same
+    // sandbox and publishes the real `window.CloudeWeb` - which is what
+    // makes the plugin assertions below a test of the shipped path rather
+    // than of a fixture that agrees with whatever it was built to agree
+    // with. It is the committed artifact, and scripts/web-build-check.sh
+    // is what keeps that artifact current.
+    vm.runInContext(
+        fs.readFileSync(
+            path.join(__dirname, '..', 'client', 'dist', 'app.js'), 'utf8'),
+        context);
 
     return {
         Rows: fakeWindow.SessionSidebarRows,
         StatusUI: fakeWindow.SessionStatusUI,
         RowActions: fakeWindow.SessionRowActions,
         RowMenu: fakeWindow.SessionRowMenu,
+        Win: fakeWindow,
     };
 }
 
-const { Rows, RowActions, RowMenu } = makeSandbox();
+const { Rows, RowActions, RowMenu, Win } = makeSandbox();
 
 /**
  * Description: everything a row OFFERS the user - its own markup PLUS
@@ -282,6 +300,102 @@ test('an UNDETERMINED row is still offered no restart - the original rule, kept'
             0,
             `status ${String(status)} must offer no restart control`,
         );
+    }
+});
+
+test('MARK UNREAD IS STILL OFFERED, and it arrives from the plugin surface', () => {
+    // THE RE-SEAT, ASSERTED AS A FACT RATHER THAN AS AN ABSENCE. The
+    // control used to be hardcoded into session-row-menu.js as a call to
+    // SessionStatusUI.markUnreadHtml. It is now the first
+    // `session-card-action` on the compiled registry
+    // (web/src/lib/plugins/mark-unread/), reached through
+    // window.CloudeWeb.sessionCardActions. What the user sees must not
+    // have moved, so this checks the control itself - the class the
+    // stylesheets key on, the aria state, the label - and not merely
+    // that something appeared.
+    for (const unread of [false, true]) {
+        const html = offeredHtml(row({ unread }));
+        assert.equal(
+            (html.match(/data-plugin-action="mark-unread"/g) || []).length, 1,
+            `unread=${unread} must offer exactly one mark-unread, via the plugin`);
+        assert.ok(html.includes('data-mark-unread="cloude_api"'));
+        assert.ok(html.includes(`aria-pressed="${unread ? 'true' : 'false'}"`));
+        assert.ok(html.includes(unread
+            ? 'class="mark-unread-toggle mark-unread-toggle--active"'
+            : 'class="mark-unread-toggle"'));
+        assert.ok(html.includes(unread
+            ? 'title="clear unread flag"'
+            : 'title="mark unread for followup"'));
+    }
+});
+
+test('NEGATIVE CONTROL: the flag off removes it, and nothing else', () => {
+    // `ui.show_mark_unread_control` is still the one switch. It now
+    // reaches the control through the contribution's `enabled` instead of
+    // through an early return in the builder, and this proves the gate
+    // survived the move - in BOTH directions, so a surface that had
+    // silently stopped registering anything could not pass.
+    const before = offeredHtml(row());
+    assert.ok(before.includes('data-plugin-action="mark-unread"'));
+    const pinsBefore = (before.match(/data-pin-session=/g) || []).length;
+
+    Win.UIFlags._show = false;
+    try {
+        const after = offeredHtml(row());
+        assert.ok(!after.includes('data-plugin-action'),
+            'the flag off must remove the plugin-contributed control');
+        assert.ok(!after.includes('mark-unread-toggle'));
+        assert.equal(
+            (after.match(/data-pin-session=/g) || []).length, pinsBefore,
+            'the flag must take the mark-unread control and nothing else');
+    } finally {
+        Win.UIFlags._show = true;
+    }
+    assert.ok(offeredHtml(row()).includes('data-plugin-action="mark-unread"'),
+        'and it comes back when the flag does');
+});
+
+test('the hardcoded copy is GONE from the menu, not commented out', () => {
+    // No dual path. If the old builder call or the old click route came
+    // back beside the plugin, the control would render twice or be run
+    // by two handlers, and both are the kind of thing that reads fine in
+    // a diff.
+    //
+    // Matched on the CALL form, `name(`, not on the bare name: the
+    // module's docblock records what moved and where it went, and a
+    // check that forbade naming the deleted function would force that
+    // history to be deleted with it. A stale doc is worse than no doc;
+    // an accurate one is not a regression.
+    const src = readClientJs('session-row-menu.js');
+    assert.ok(!src.includes('markUnreadHtml('),
+        'session-row-menu.js must not still build the control itself');
+    assert.ok(!src.includes('onMarkUnreadClick('),
+        'session-row-menu.js must not still route the click to the old handler');
+    const clicks = readClientJs('session-sidebar-clicks.js');
+    assert.ok(!clicks.includes('onMarkUnreadClick'),
+        'the old handler must be deleted, not left unreachable');
+    const sidebar = readClientJs('session-sidebar.js');
+    assert.ok(!sidebar.includes('_onMarkUnreadClick'),
+        'the sidebar must not still carry a method reaching the old handler');
+});
+
+test('the plugin path is LOUD when the compiled bundle is missing', () => {
+    // A panel that silently drops a shipped control is the false green
+    // this project keeps paying for, so the guard reports rather than
+    // returning an empty list quietly.
+    const held = Win.CloudeWeb;
+    const errors = [];
+    const realError = console.error;
+    console.error = (...args) => { errors.push(args.join(' ')); };
+    try {
+        delete Win.CloudeWeb;
+        const html = offeredHtml(row());
+        assert.ok(!html.includes('data-plugin-action'));
+        assert.equal(errors.length, 1, 'exactly one report, not silence');
+        assert.ok(errors[0].includes('sessionCardActions'));
+    } finally {
+        console.error = realError;
+        Win.CloudeWeb = held;
     }
 });
 
