@@ -98,31 +98,52 @@ describe('the vocabularies', () => {
         expect(Led.OUTER_STATES.length).toBeGreaterThan(0);
     });
 
-    test('the inner vocabulary is exactly the seven documented states', () => {
+    test('the inner vocabulary is exactly the nine documented states', () => {
+        // `notice` and `disconnected` joined in the five-colour pass that
+        // release/1.2 carries: `notice` is the only state that is BOTH
+        // working and asking for the user, and `disconnected` is a
+        // TRANSPORT fact rather than a session fact.
         expect([...Led.INNER_STATES]).toEqual([
             'working',
             'waiting-permission',
             'waiting-input',
+            'notice',
             'idle',
             'done',
             'dead',
+            'disconnected',
             'unknown',
         ]);
     });
 
-    test('the outer vocabulary is exactly the four documented states', () => {
-        expect([...Led.OUTER_STATES]).toEqual(['active', 'steady', 'off', 'dim']);
+    test('the outer vocabulary is exactly the five documented states', () => {
+        expect([...Led.OUTER_STATES]).toEqual([
+            'active',
+            'steady',
+            'unread',
+            'off',
+            'dim',
+        ]);
     });
 
-    test('THE RETIRED `unread` OUTER STATE IS GONE FROM THE VOCABULARY', () => {
-        // A value left in the vocabulary is a value some caller can still
-        // pass, and it would render as an unstyled ring rather than fail
-        // loudly. The stylesheet half of this assertion stays in the node
-        // suite, which owns the stylesheet text.
-        expect([...Led.OUTER_STATES].indexOf('unread' as never)).toBe(-1);
+    test('THE RING CARRIES UNREAD - the owner ruled for it, 2026-09-09', () => {
+        // This assertion is INVERTED from the one this port shipped with,
+        // and the inversion is the point. Two lines of this project fixed
+        // one reported defect in opposite ways: one retired the outer
+        // `unread` state, the other kept the ring and stopped it
+        // breathing. The owner picked the second and it is what landed in
+        // release/1.2, so a port that hid `unread` from the vocabulary
+        // would be re-litigating a settled decision in code.
+        expect([...Led.OUTER_STATES].indexOf('unread')).toBeGreaterThanOrEqual(0);
     });
 
-    test('NO ACTIVITY_STATUS CAN PRODUCE AN unread RING, WHATEVER THE FLAG', () => {
+    test('EXACTLY THE FINISHED-TURN STATES PRODUCE AN unread RING', () => {
+        // The ring is a claim that a turn FINISHED here and nobody has
+        // looked. A session that is MOVING must not wear it (it would say
+        // two contradictory things at once), and neither may an unmeasured
+        // one - a green ring over `unknown` is the false green this
+        // project keeps paying for.
+        const withRing: string[] = [];
         const statuses = [
             'working',
             'working_subagent',
@@ -138,29 +159,34 @@ describe('the vocabularies', () => {
             'a-state-from-2030',
         ];
         for (const status of statuses) {
-            for (const unread of [true, false]) {
-                for (const gate of [undefined, 'awaiting_startup_prompt', 'unknown']) {
-                    const led = Led.ledStateFor({
-                        activity_status: status,
-                        unread,
-                        startup_gate: gate,
-                    });
-                    expect(
-                        led.outer,
-                        `${status}/unread=${unread}/gate=${gate} produced an unread ring`,
-                    ).not.toBe('unread');
-                    expect(
-                        [...Led.OUTER_STATES].indexOf(led.outer),
-                        `${status} produced an outer value outside the vocabulary`,
-                    ).toBeGreaterThanOrEqual(0);
-                }
+            for (const gate of [undefined, 'awaiting_startup_prompt', 'unknown']) {
+                const led = Led.ledStateFor({
+                    activity_status: status,
+                    unread: true,
+                    startup_gate: gate,
+                });
+                if (led.outer === 'unread') withRing.push(`${status}/${gate}`);
+                expect(
+                    [...Led.OUTER_STATES].indexOf(led.outer),
+                    `${status} produced an outer value outside the vocabulary`,
+                ).toBeGreaterThanOrEqual(0);
             }
         }
+        // `finished_unread` and the defensive `idle`+flag branch, and only
+        // those - each once per gate value that does not pre-empt them.
+        expect(withRing).toEqual([
+            'finished_unread/undefined',
+            'finished_unread/unknown',
+            'idle/undefined',
+            'idle/unknown',
+        ]);
     });
 
-    test('ONLY A RUNNING SESSION BREATHES', () => {
-        // `active` is the one animated ring, so the set of statuses that
-        // map to it is the set of things the user will see moving.
+    test('NOTHING AT REST BREATHES', () => {
+        // `active` is the one animated ring. Since release/1.2 it covers
+        // the stopped-but-live turns as well as the moving ones - a parked
+        // turn is not a resting session - so the assertion that matters is
+        // the negative one: no state that has genuinely STOPPED may move.
         const breathing: string[] = [];
         for (const status of [
             'working',
@@ -180,7 +206,19 @@ describe('the vocabularies', () => {
                 breathing.push(status);
             }
         }
-        expect(breathing).toEqual(['working', 'working_subagent', 'running']);
+        expect(breathing).toEqual([
+            'working',
+            'working_subagent',
+            'running',
+            'question',
+            'notice',
+        ]);
+        for (const atRest of ['finished_unread', 'idle', 'dead', 'unknown']) {
+            expect(
+                Led.ledStateFor({ activity_status: atRest, unread: true }).outer,
+                `${atRest} must not animate`,
+            ).not.toBe('active');
+        }
     });
 
     test('the exported vocabularies cannot be mutated by a caller', () => {
@@ -274,27 +312,33 @@ describe('the mapping from server signals', () => {
                 activity_status: 'idle',
                 startup_gate: 'awaiting_startup_prompt',
             }),
-        ).toEqual({ inner: 'waiting-input', outer: 'steady' });
+        ).toEqual({ inner: 'waiting-input', outer: 'active' });
     });
 
     test('a startup gate that could not be measured does not claim anything', () => {
         // Not having looked is not evidence of a prompt.
         expect(
             Led.ledStateFor({ activity_status: 'idle', startup_gate: 'unknown' }),
-        ).toEqual({ inner: 'idle', outer: 'off' });
+        ).toEqual({ inner: 'idle', outer: 'steady' });
     });
 
     test('question maps to waiting-permission - the agent is stopped', () => {
         expect(Led.ledStateFor({ activity_status: 'question' })).toEqual({
             inner: 'waiting-permission',
-            outer: 'steady',
+            outer: 'active',
         });
     });
 
-    test('notice maps to waiting-input - it wants you but is not blocked', () => {
+    test('notice has its OWN inner state - working, but wanting you', () => {
+        // It shared `waiting-input` before the five-colour pass. The
+        // owner's rule: "if the session is fully stopped waiting for a
+        // response, then yellow. if it's still working but needs something
+        // from me, make it light blue." `notice` is the only state on the
+        // second side of that sentence, so it cannot share a name with the
+        // stopped ones.
         expect(Led.ledStateFor({ activity_status: 'notice' })).toEqual({
-            inner: 'waiting-input',
-            outer: 'steady',
+            inner: 'notice',
+            outer: 'active',
         });
     });
 
@@ -304,19 +348,26 @@ describe('the mapping from server signals', () => {
         );
     });
 
-    test('a startup prompt and a notice share waiting-input', () => {
-        expect(
-            Led.ledStateFor({
-                activity_status: 'idle',
-                startup_gate: 'awaiting_startup_prompt',
-            }).inner,
-        ).toBe(Led.ledStateFor({ activity_status: 'notice' }).inner);
+    test('a startup prompt is STOPPED, and so is not a notice', () => {
+        // Both mean "come and look", which is why they shared an inner
+        // state before the five-colour pass. They no longer do: a pane on
+        // its trust dialog has not started, and `notice` is a claude that
+        // is still working. Yellow versus light blue, per the owner's rule.
+        const gated = Led.ledStateFor({
+            activity_status: 'idle',
+            startup_gate: 'awaiting_startup_prompt',
+        }).inner;
+        expect(gated).toBe('waiting-input');
+        expect(gated).not.toBe(Led.ledStateFor({ activity_status: 'notice' }).inner);
     });
 
     test('an unread flag never downgrades a blocking permission prompt', () => {
+        // The flag must not swap the loud stopped-on-a-yes/no light for
+        // the quiet finished-turn ring: the permission is the fact that
+        // will not resolve itself.
         expect(
             Led.ledStateFor({ activity_status: 'question', unread: true }),
-        ).toEqual({ inner: 'waiting-permission', outer: 'steady' });
+        ).toEqual({ inner: 'waiting-permission', outer: 'active' });
     });
 
     test('working and working_subagent share the inner dot', () => {
@@ -330,22 +381,29 @@ describe('the mapping from server signals', () => {
         expect(Led.ledStateFor({ activity_status: 'running' }).inner).toBe('working');
     });
 
-    test('UNREAD RIDES THE INNER DOT, and never the ring', () => {
+    test('UNREAD RIDES THE RING, and a working session never wears it', () => {
+        // A WORKING SESSION IS SOLID GREEN, flag or not: the finished-turn
+        // ring around a running session would say two contradictory things
+        // at once, and unread on something that is moving resolves itself
+        // the moment it stops.
         const busy = Led.ledStateFor({ activity_status: 'working', unread: true });
         expect(busy).toEqual({ inner: 'working', outer: 'active' });
 
         const rested = Led.ledStateFor({ activity_status: 'idle', unread: true });
-        expect(rested).toEqual({ inner: 'done', outer: 'off' });
+        expect(rested).toEqual({ inner: 'done', outer: 'unread' });
 
         const read = Led.ledStateFor({ activity_status: 'idle', unread: false });
-        expect(read).toEqual({ inner: 'idle', outer: 'off' });
-        expect(read.inner).not.toBe(rested.inner);
+        expect(read).toEqual({ inner: 'idle', outer: 'steady' });
+        expect(read.outer).not.toBe(rested.outer);
     });
 
-    test('idle and seen is its OWN gray dot, at rest with no ring at all', () => {
+    test('idle and seen is its own grey dot in a lit-but-still ring', () => {
+        // Lit and still rather than off: a session the user has looked at
+        // reads as visibly calmer than one they have not, and it does it
+        // without the LED changing size.
         expect(Led.ledStateFor({ activity_status: 'idle' })).toEqual({
             inner: 'idle',
-            outer: 'off',
+            outer: 'steady',
         });
     });
 
@@ -356,18 +414,39 @@ describe('the mapping from server signals', () => {
         expect(idle.inner).toBe('idle');
     });
 
-    test('finished_unread is the green dot ALONE - no ring at all', () => {
+    test('finished_unread is the green RING - the chat itself is at rest', () => {
+        // The inner state stays `done` because the CHAT has stopped; the
+        // RING is what says there is something here for the user.
         expect(Led.ledStateFor({ activity_status: 'finished_unread' })).toEqual({
             inner: 'done',
-            outer: 'off',
+            outer: 'unread',
         });
     });
 
-    test('finished_unread and idle differ in the dot, not the ring', () => {
+    test('finished_unread and idle differ in BOTH rings', () => {
+        // They are the two halves of rest - unread and read - and since
+        // release/1.2 each half moves both dimensions, so the difference
+        // is legible whichever ring the eye lands on first.
         const unread = Led.ledStateFor({ activity_status: 'finished_unread' });
         const read = Led.ledStateFor({ activity_status: 'idle' });
-        expect(unread.outer).toBe(read.outer);
+        expect(unread.outer).not.toBe(read.outer);
         expect(unread.inner).not.toBe(read.inner);
+    });
+
+    test('A DEAD TRANSPORT OUTRANKS EVERYTHING, including a working row', () => {
+        // Only the literal `disconnected` counts: this browser holds a
+        // socket to at most ONE session, so knowing nothing about the rest
+        // is the normal case, not a fault. A light we cannot refresh must
+        // not keep asserting the last status it happened to see.
+        expect(
+            Led.ledStateFor({ activity_status: 'working', transport: 'disconnected' }),
+        ).toEqual({ inner: 'disconnected', outer: 'off' });
+        for (const t of [undefined, 'connected', 'unknown', 'reconnecting']) {
+            expect(
+                Led.ledStateFor({ activity_status: 'working', transport: t }).inner,
+                `transport=${t} must fall through`,
+            ).toBe('working');
+        }
     });
 
     test('UNKNOWN IS NOT DONE - the false green this project keeps paying for', () => {
@@ -417,6 +496,14 @@ describe('byte-identical to the legacy renderer', () => {
     ];
     /** Every startup_gate value, plus absent. */
     const GATES = [undefined, 'ready', 'awaiting_startup_prompt', 'unknown'];
+    /**
+     * Every transport value, plus absent and one this client does not know.
+     * It is in the matrix because it is a signal the port PASSES THROUGH:
+     * an untested passthrough that silently dropped the field would leave
+     * every other cell green while disconnected sessions kept asserting a
+     * status nothing could refresh.
+     */
+    const TRANSPORTS = [undefined, 'connected', 'disconnected', 'reconnecting'];
 
     test('the legacy files load in a bare sandbox', () => {
         const api = legacy();
@@ -431,14 +518,21 @@ describe('byte-identical to the legacy renderer', () => {
             for (const unread of [true, false, undefined]) {
                 for (const startup_gate of GATES) {
                     for (const status_source of SOURCES) {
-                        const signals = { unread, startup_gate, status_source };
-                        const mine = ledHtmlForStatus(status, signals);
-                        const theirs = api.dotHtml(status, signals);
-                        expect(
-                            mine,
-                            `status=${status} unread=${unread} gate=${startup_gate} source=${status_source}`,
-                        ).toBe(theirs);
-                        compared++;
+                        for (const transport of TRANSPORTS) {
+                            const signals = {
+                                unread,
+                                startup_gate,
+                                status_source,
+                                transport,
+                            };
+                            const mine = ledHtmlForStatus(status, signals);
+                            const theirs = api.dotHtml(status, signals);
+                            expect(
+                                mine,
+                                `status=${status} unread=${unread} gate=${startup_gate} source=${status_source} transport=${transport}`,
+                            ).toBe(theirs);
+                            compared++;
+                        }
                     }
                 }
             }
@@ -447,7 +541,7 @@ describe('byte-identical to the legacy renderer', () => {
         // the count is asserted: a loop that silently ran zero times would
         // otherwise pass this test perfectly.
         expect(compared).toBe(
-            STATUSES.length * 3 * GATES.length * SOURCES.length,
+            STATUSES.length * 3 * GATES.length * SOURCES.length * TRANSPORTS.length,
         );
         expect(compared).toBeGreaterThan(1000);
     });
