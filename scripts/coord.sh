@@ -18,6 +18,7 @@
 #   claim   Open or refresh a claim over a set of path globs, with its APPROACH.
 #   log     Prepend a landed-work entry to your own log (reads stdin).
 #   note    Write a free-prose note addressed to the other party (reads stdin).
+#   wants   Replace your own kept/disliked behaviour list (reads stdin).
 #   settled Record a design decision that is already ruled on (reads stdin).
 #   sync    Fetch the coord branch from the shared remote, rebase, push.
 #
@@ -138,7 +139,7 @@ assert_own_file() {
   local rel="$1" base
   base="$(basename "$rel")"
   case "$rel" in
-    now/*|log/*|settled/*)
+    now/*|log/*|settled/*|wants/*)
       [ "$base" = "${PARTY}.md" ] || die "$EXIT_REFUSED" \
         "refusing to write $rel: party is '$PARTY', that file is not yours" ;;
     claims/*|notes/*)
@@ -159,6 +160,17 @@ read_stdin_body() {
     die "$EXIT_USAGE" "this subcommand reads its body from stdin; pipe it or use a heredoc"
   fi
   cat
+}
+
+# reject_extra_args: fail on any argument for a subcommand that takes none.
+# Silently ignoring an unknown flag is how a typo becomes a write nobody meant;
+# `now --titel x` would otherwise replace the whole file with the stdin body and
+# report success.
+# Inputs: $1 subcommand name, $2.. the arguments it received
+# Outputs: nothing. Exits 2 when anything was passed.
+reject_extra_args() {
+  local sub="$1"; shift
+  [ $# -eq 0 ] || die "$EXIT_USAGE" "$sub takes no arguments, got: $*"
 }
 
 # coord_commit: stage one path in the coordination checkout and commit it.
@@ -211,6 +223,23 @@ field_of() {
 approach_of() {
   sed -n '/^## approach$/,/^## /p' "$1" 2>/dev/null \
     | sed '1d;/^## /d;/^$/d'
+}
+
+# wants_kept_blocks: the KEPT behaviours in a party's wants file.
+# A kept behaviour is a `### <label>` heading followed by an optional
+# `paths: <globs>` line, and only the KEPT section is parsed. Dislikes are
+# preferences and deliberately carry no paths: a preference is not a claim over
+# a file and must never be able to warn anyone off one.
+# Inputs: $1 wants file path
+# Outputs: one `label<TAB>globs` line per kept behaviour that declares paths.
+wants_kept_blocks() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  sed -n '/^## kept$/,/^## /p' "$f" 2>/dev/null | awk '
+    /^### / { label = substr($0, 5); next }
+    /^paths:/ { if (label != "") { sub(/^paths:[ \t]*/, ""); print label "\t" $0; label = "" } }
+  '
+  return 0
 }
 
 # claim_is_live: true when a claim is `active` or `paused` and not past expiry.
@@ -279,6 +308,7 @@ all_parties() {
     ls "$d/now" 2>/dev/null | sed 's/\.md$//'
     ls "$d/log" 2>/dev/null | sed 's/\.md$//'
     ls "$d/settled" 2>/dev/null | sed 's/\.md$//'
+    ls "$d/wants" 2>/dev/null | sed 's/\.md$//'
   } | sed '/^$/d' | sort -u
 }
 
@@ -309,6 +339,7 @@ cmd_init() {
 }
 
 cmd_now() {
+  reject_extra_args now "$@"
   require_coord
   lock_acquire
   local d rel body; d="$(coord_dir)"; rel="now/${PARTY}.md"
@@ -467,6 +498,24 @@ cmd_settled() {
   coord_commit "$rel" "settled(${PARTY}): ${title}"
 }
 
+cmd_wants() {
+  reject_extra_args wants "$@"
+  require_coord
+  lock_acquire
+  local d rel body; d="$(coord_dir)"; rel="wants/${PARTY}.md"
+  assert_own_file "$rel"
+  body="$(read_stdin_body)"
+  mkdir -p "$d/wants"
+  {
+    printf '# what %s wants kept, and what it would rather see gone\n\n' "$PARTY"
+    printf 'updated: %s\n\n' "$(now_utc)"
+    printf 'THE RULE: never unilaterally remove something on the other party\n'
+    printf "party's kept list. add yours alongside. when in doubt, keep both.\n\n"
+    printf '%s\n' "$body"
+  } > "$d/$rel"
+  coord_commit "$rel" "wants(${PARTY}): update kept and disliked"
+}
+
 cmd_status() {
   require_coord
   local d today; d="$(coord_dir)"; today="$(today_utc)"
@@ -504,6 +553,19 @@ cmd_status() {
     approach_of "$f" | sed 's/^/      /'
   done
   [ "$any" = 1 ] || printf 'no claims filed.\n'
+  printf '\n'
+
+  printf -- '--- what each party wants kept ---\n'
+  local wp had_wants=0
+  for wp in $(all_parties); do
+    if [ -f "$d/wants/${wp}.md" ]; then
+      had_wants=1
+      printf '%s:\n' "$wp"
+      sed -n '/^## kept$/,/^## /p' "$d/wants/${wp}.md" | sed -n 's/^### /    keep: /p'
+      sed -n '/^## disliked$/,$p' "$d/wants/${wp}.md" | sed -n 's/^### /    dislikes: /p'
+    fi
+  done
+  [ "$had_wants" = 1 ] || printf 'none recorded.\n'
   printf '\n'
 
   printf -- '--- design decisions each party treats as settled ---\n'
@@ -550,6 +612,41 @@ cmd_status() {
   fi
   printf '\n'
 
+  # A CLAIM THAT TOUCHES A BEHAVIOUR THE OTHER SIDE RELIES ON. This is the
+  # cheapest possible place to catch a removal, because it fires BEFORE the work
+  # rather than in a merge review afterwards. It is a WARNING and never a
+  # refusal: touching a file is not removing a behaviour, and a rule that cried
+  # wolf on every edit would be switched off within a week.
+  printf -- '--- claims touching the OTHER party\047s kept behaviours ---\n'
+  local c wf wparty warned=0 label globs wexp shared2
+  for c in "$d"/claims/*.md; do
+    [ -e "$c" ] || continue
+    claim_is_live "$c" || continue
+    local cparty cexp
+    cparty="$(field_of "$c" party)"
+    cexp="$(expand_globs "$(field_of "$c" paths)" "$files")"
+    for wf in "$d"/wants/*.md; do
+      [ -e "$wf" ] || continue
+      wparty="$(basename "$wf" .md)"
+      [ "$wparty" != "$cparty" ] || continue
+      while IFS="$(printf '\t')" read -r label globs; do
+        [ -n "$globs" ] || continue
+        wexp="$(expand_globs "$globs" "$files")"
+        shared2="$(comm -12 <(printf '%s\n' "$cexp") <(printf '%s\n' "$wexp") | sed '/^$/d')"
+        if [ -n "$shared2" ]; then
+          warned=$((warned + 1))
+          printf 'WARNING  %s touches %s wants kept: %s\n' \
+            "$(field_of "$c" id)" "$wparty" "$label"
+          printf '%s\n' "$shared2" | sed 's/^/    /'
+          printf '    you may ADD alongside it. you may NOT remove it unilaterally.\n'
+          printf '    if yours and theirs cannot coexist, that is an overlap: stop and ask the humans.\n'
+        fi
+      done <<< "$(wants_kept_blocks "$wf")"
+    done
+  done
+  [ "$warned" = 0 ] && printf 'none.\n'
+  printf '\n'
+
   # A PATH OVERLAP IS THE CHEAP HALF AND A MACHINE CAN FIND IT. The expensive
   # half is a DESIGN overlap: two parties changing the same model in different
   # files, which git merges cleanly and silently. No script can decide that, so
@@ -560,6 +657,11 @@ cmd_status() {
   printf 'machine, a key, a rendering contract, a vocabulary), that is an\n'
   printf 'OVERLAP even when you share no file. stop and surface it to your\n'
   printf 'human exactly as you would a path overlap.\n'
+  printf '\n'
+  printf 'AND NEVER REMOVE A BEHAVIOUR ON THE OTHER PARTY\047S KEPT LIST. add\n'
+  printf 'yours alongside. if the two genuinely cannot coexist, it becomes a\n'
+  printf 'plugin or a setting, each side defaulting to its own preference.\n'
+  printf 'when in doubt, keep both.\n'
 }
 
 cmd_sync() {
@@ -615,6 +717,7 @@ main() {
     log)    cmd_log "$@" ;;
     note)   cmd_note "$@" ;;
     settled) cmd_settled "$@" ;;
+    wants)  cmd_wants "$@" ;;
     sync)   cmd_sync "$@" ;;
     help|-h|--help) usage ;;
     *) die "$EXIT_USAGE" "unknown subcommand '$sub'. try: scripts/coord.sh help" ;;

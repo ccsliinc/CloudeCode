@@ -5832,3 +5832,77 @@ the kind of prose someone pastes a token into.
   fine at 1,478 files and about 10 claims and will not stay fine forever.
 - There is no periodic reminder. An agent that does not run `coord.sh status`
   at session start gets nothing, and only the CLAUDE.md section pushes it to.
+
+## 2026-09-10 - wants lists, and the rule against unilateral removal
+
+Amendment to the coordination protocol, on top of the published `coord` branch.
+Owner's words: "we should note for each of us things we dont like or need but
+not take it upon ourselves to remove the others wants. we can sort to plugins
+afterwards."
+
+**New file, `wants/<party>.md`**, same naming discipline as the rest: each party
+writes only its own. Two sections. `kept` is behaviours that party relies on and
+would notice losing; `disliked` is that party's own preferences, stated as
+preferences rather than as instructions to the other side.
+
+**THE RULE, carrying the same weight as the merge-safety rule.** Never
+unilaterally remove something on the other party's kept list. If your change
+would delete one, you ADD YOURS ALONGSIDE. If the two genuinely cannot coexist,
+that is an overlap: stop and surface it to the humans, exactly like a path or
+approach overlap. The default is stated plainly: WHEN IN DOUBT, KEEP BOTH.
+
+**The resolution path is what makes the rule affordable.** A genuine preference
+conflict is not argued, it is turned into a choice: a plugin contribution or a
+setting, with each party defaulting to its own preference. The mechanism already
+exists (`web/src/lib/plugins/`, four build-time surfaces `session-card-action` /
+`launchpad-panel` / `sidebar-item` / `status-source`, only the first with a real
+contribution), and the precedent is the mark-unread control shipping behind
+`ui.show_mark_unread_control`, default on. This is the intended destination for
+the row-menu disagreement rather than a winner-takes-all merge.
+
+**THE EVIDENCE, both from this week and both real, one in each direction.**
+Their session row rewrite deleted the kebab and put pin and close back inline:
+that removed the manual mark-unread control from the ENTIRE UI (`unreadToggleHtml`
+and every caller gone; `git grep setSessionUnread` at that rev returns `api.js`
+alone), deleted `rowMenuItemHtml` which was the last POINTER route to the group
+picker (leaving drag-onto-a-header as the only touch route on a phone), and
+moved the restart picker's status read off the kebab that stamped
+`data-row-status`, so a merge resolving the two files separately compiles and
+makes every restart report `unknown`. The mark-unread removal contradicts the
+owner's rule stated the day before. AND ON OUR OWN SIDE, the same merge nearly
+deleted the owner's double-click rename purely because the incoming commit
+intended to, until the owner caught it: "i said merge not take everything". Both
+are the same failure, treating the other side's commit intent as authority over
+your own side's wants.
+
+**`wants/ccsliinc.md` filed, sourced not invented** (compare notes,
+`settled/ccsliinc.md`, TODO). Eight kept: restart on a live row, the manual
+mark-unread control, group filing from the row itself, double-click rename as
+well as menu rename, dead rows go to Recent, the concentric single-element LED,
+the outer ring means activity and nothing else, and the strict CSP with no
+third-party origin. Three dislikes: files over 500 lines, per-row queries and
+per-row subprocesses on the listing path, and a behaviour removed without a
+replacement.
+
+**`coord.sh wants`** replaces your own file from stdin, refuses `--party` with
+exit 4, and rejects unknown arguments with exit 2. `coord.sh status` now renders
+both sections and WARNS when a live claim's paths intersect a kept behaviour on
+the OTHER party's list. Only the kept section declares paths: a dislike is a
+preference and must never be able to warn anyone off a file.
+
+**MEASURED.** Against a claim built from the real session action menu plan, the
+warning named six kept behaviours including the exact four that rewrite actually
+removed or broke (restart, mark-unread, group filing, double-click rename). With
+no other-party claim on file it prints `none`, so it is not a matcher that
+always finds something. It is a WARNING and never a refusal: touching a file is
+not removing a behaviour, and a check that cried wolf on every edit would be
+switched off within a week.
+
+**One defect found by testing.** `now` and `wants` take no arguments and were
+silently IGNORING unknown ones, so `now --titel x` would replace the whole file
+from stdin and report success. `reject_extra_args` now exits 2 on both.
+
+**Still open.** The wants lists are one-sided: only `wants/ccsliinc.md` exists,
+so the removal rule has never yet protected anything of adoom666's, and the
+plugin resolution path has exactly one contribution on one of its four surfaces.
+Adam has still not agreed to any of this.

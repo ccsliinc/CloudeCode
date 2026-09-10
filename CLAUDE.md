@@ -1841,6 +1841,43 @@ and the port was wrong. Only a parity suite caught it. **File level claims
 prevent merge conflicts, which turned out to be the cheap problem. Approach
 prevents design divergence, which was the expensive one.**
 
+**Read the other party's `wants/<party>.md` at session start too, and keep your
+own current.** It has two sections: `kept` is behaviours that party relies on
+and would notice losing, `disliked` is its own preferences stated as preferences
+rather than as instructions to anyone else.
+
+**NEVER REMOVE A BEHAVIOUR ON THE OTHER PARTY'S KEPT LIST. Add yours
+alongside.** This carries the same weight as the merge-safety rule, and it has
+already gone wrong twice in one week, once in each direction. Their session row
+rewrite took the manual mark-unread control out of the entire UI, deleted the
+last pointer route to the group picker (leaving drag as the only touch route on
+a phone), and moved the restart picker's status read off the element that
+stamped it, so a separately resolved merge compiled and made every restart
+report `unknown`. The mark-unread removal contradicted a rule the owner had
+stated the day before. And on OUR side, the same merge nearly deleted the
+owner's double-click rename purely because the incoming commit intended to,
+until the owner caught it: "i said merge not take everything". Both are the same
+failure, treating the other side's commit intent as authority over your own
+side's wants. **When in doubt, keep both.** If the two genuinely cannot coexist,
+that is an overlap: stop and surface it, do not settle it yourself.
+
+**A genuine preference conflict is turned into a choice, not argued.** It
+becomes a plugin contribution or a setting, with each party defaulting to its
+own preference. The mechanism exists: `web/src/lib/plugins/` is a typed
+build-time surface registry with four surfaces (`session-card-action`,
+`launchpad-panel`, `sidebar-item`, `status-source`, only the first with a real
+contribution so far), and the mark-unread control is the worked precedent,
+shipping as a plugin behind `ui.show_mark_unread_control`, default on. That is
+the intended destination for the row-menu disagreement rather than a
+winner-takes-all merge. Sort it to plugins afterwards; do not resolve it by
+deletion first.
+
+**`coord.sh status` warns when a live claim's paths intersect a behaviour on the
+OTHER party's kept list**, which is the cheapest place to catch a removal because
+it fires before the work rather than in a merge review after it. It is a WARNING
+and never a refusal: touching a file is not removing a behaviour, and a check
+that cried wolf on every edit would be switched off within a week.
+
 **Log what LANDED once it lands**, into your own log file. Shas, what shipped,
 what is still in flight.
 
@@ -1870,9 +1907,12 @@ Never rewrite history on a shared branch, and never force push anything.
 NEVER `upstream`.** `coord.sh sync` refuses to run if the `upstream` push URL is
 not still the disabled sentinel.
 
-**What is unproven.** As of 2026-09-10 adoom666 has not agreed to any of this;
-the owner has not raised it yet, and nothing has been pushed to any remote. The
-branch exists locally only. The protocol is built to be useful with one-sided
+**What is unproven.** The wants lists are one-sided: only `wants/ccsliinc.md`
+exists, so the removal rule has never yet protected anything of adoom666's, and
+the plugin resolution path has one contribution on one of its four surfaces. As
+of 2026-09-10 adoom666 has not agreed to any of this;
+the owner has not raised it yet. The `coord` branch is published to `origin`
+and `adamdev`. The protocol is built to be useful with one-sided
 participation - our claims still say what we are on and our log still records
 what shipped - but the two-sided half has never been exercised. The merge-safety
 property was simulated in a throwaway repo, both directions, rather than
