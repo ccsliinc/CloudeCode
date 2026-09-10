@@ -6853,3 +6853,82 @@ out of `wants/ccsliinc.md`, and is corrected in place with a note saying so.
 `wants/` and `settled/` on `coord` are FROZEN at the moment the work protocol
 superseded them, so anything else ported out of them needs re-verifying against
 code before it reaches a file that binds both teams.
+
+---
+
+## 2026-09-10 - the plugin policy, and a mechanism that can actually catch a removal
+
+**DONE. The owner's direction, verbatim:** "then we can tell the other agent we
+dont want things removed that he or i design that we both dont agree upon into
+plugins. this way we can use the 2 of our wants to see whats resonable for main
+app and whats reasonable for plugins."
+
+Landed on `docs/plugin-policy`, cut from `feat/work-protocol`.
+
+**The policy.** `docs/DECISIONS.md` gains a dated entry, "Neither party deletes
+the other's design; a contested one ships as a plugin". Four rules. A kept
+behaviour is anything a party relies on and would notice losing; only that party
+adds to, edits or retires its own file. Removing one on the other party's list
+needs their agreement or the owner's ruling, otherwise stop and ask - the other
+side's COMMIT INTENT IS NOT AUTHORITY over your kept behaviours, which is the
+one mistake behind both of this week's incidents, ours included. When two
+designs conflict the default is BOTH SHIP, one as a plugin contribution on
+`web/src/lib/plugins/` or behind a setting, each party defaulting to its own
+preference, with `ui.show_mark_unread_control` as the worked example. And it has
+an exit in both directions, because a policy with no exit is a ratchet:
+promotion needs only the party defaulting it off, demotion needs a removal's
+agreement, and a party may retire its OWN entry alone at any time. The full
+version, the format and the reasoning are in `docs/KEPT-BEHAVIOURS.md`. Themes
+are named as ALREADY extensible and out of scope, so nobody rebuilds them.
+
+**The mechanism, and why this one.** CODEOWNERS and an issue-template line were
+both weighed and both MISS BOTH INCIDENTS: CODEOWNERS only requests a review on
+an unprotected main and cannot fire on a commit authored in the other clone,
+which is how incident one arrived; a template line only fires when the change
+was filed as an issue, and incident two was a merge. Only a check against the
+resulting TREE sees either. So `scripts/check_kept_behaviours.py` plus
+`tests/test_kept_behaviours_guard.py`: each kept entry declares ANCHORS, short
+literals the behaviour rests on, and the guard fails when one is gone from every
+declared path that still exists. Same machinery as
+`tests/test_no_remote_assets.py`, run in the other direction. The template line
+was added anyway as a prompt, stated as a prompt and not the mechanism.
+
+**Measured both ways.** Quiet: this branch, 8 behaviours, 0 fatal, exit 0.
+Firing: replayed against the tree of `8898f07` itself, the guard names all FOUR
+behaviours the two incidents removed - restart on a live row, the manual
+mark-unread control, group filing, double-click rename - and says nothing about
+the other four entries in the same file. 11 new tests pass, and the mutation
+tests are the load-bearing ones: a guard that can never fire passes "the tree is
+clean" for ever.
+
+**IT CAUGHT ITS OWN FIRST ANCHORS BEING WRONG, and this is the lesson worth
+keeping.** The first anchors for double-click rename were `dblclick` and
+`beginEdit`, and replayed against `8898f07` NEITHER FIRED: the commit deleted the
+gesture but left prose about it in the module header, and kept `beginEdit`
+because F2 still calls it. An anchor that can match a comment reports a
+behaviour as alive because someone wrote its name down. The anchors that work
+are the exported handler `onDblClick` and the registration
+`addEventListener('dblclick'`. AN ANCHOR NAMES A CALL SITE, NOT A WORD. Had the
+control been a hand-made mutation instead of the real commit, this would have
+shipped looking correct.
+
+**One kept behaviour has no test and the file now says so.** Double-click rename
+- the one that nearly died - has `tests: none`. The rename tests call
+`SessionSidebarRename.beginEdit` directly, which proves the editor works and
+proves nothing about whether a double-click still reaches it, which is exactly
+the half that was removed. `--strict` deliberately does NOT fail on a stated
+gap: forcing it would buy a test that names the behaviour without covering it,
+which is worse than the gap. Writing a real gesture test is OPEN WORK.
+The other seven entries all name a test that exists, and a named test that has
+been deleted IS fatal, because a stale reference is a false sense of coverage.
+
+**`data-row-status` in our own kept file was stale** and is corrected to
+`data-row-menu-status`: the 2026-09-10 reconcile moved us onto adam's trigger
+spelling. Found by writing the anchor, which is the second thing the mechanism
+caught about the document it was built to guard.
+
+**OPEN.** adoom666 has no `docs/kept-behaviours/` file, and the policy is
+symmetric and useless with one side filled in. Issue filed asking for one; #15
+was commented on rather than claimed, because opening a draft PR against it
+would mean pushing to `adamdev` and this session is origin-only, and because #15
+was deliberately left FREE so he could decline it.
