@@ -788,6 +788,13 @@
          wiring their listeners. See that file for the two shipped bugs it
          exists to retire. -->
     <script src="/static/js/dismiss-guard.js"></script>
+    <!-- The one answer to "is the navigation I started still the one on
+         screen?". Zero dependencies, and loaded here because every
+         surface that navigates - the conversation sidebar, the launcher,
+         the router, the restart return, the toast stack and the terminal
+         itself - reads it, and the earliest load order is the only one
+         that cannot be got wrong by a later insertion. -->
+    <script src="/static/js/navigation-generation.js"></script>
     <!-- The vertical three-dot mark. Its one consumer is the header
          overflow (header-menu.js), so it must load before that. It was
          shared with the conversation rows until their overflow menu was
@@ -1052,6 +1059,28 @@
     <!-- Must load BEFORE terminal.js: it is the gate that keeps one
          session's bytes out of another session's terminal. -->
     <script src="/static/js/terminal-frame-guard.js"></script>
+    <!-- The input direction of that same gate: the one predicate every
+         path with an await between the gesture and the write asks before
+         it puts bytes into a session. The frame guard above keeps one
+         session's OUTPUT out of another's terminal; this keeps the
+         user's INPUT out, which is worse - output in the wrong pane is
+         confusing, input in the wrong pane runs a command. Must load
+         BEFORE terminal.js and before clipboard.js. -->
+    <script src="/static/js/terminal-input-ownership.js"></script>
+    <!-- The admission policy for bytes on their way into xterm: a byte
+         budget, drop from the FRONT, and one announced marker in place
+         of what went. PURE - measurements in, a number out - so
+         terminal.js keeps the queue and this keeps the rule. Must load
+         BEFORE terminal.js, whose enqueue() reads it on every frame; if
+         it is missing the queue is unbounded, which is the behaviour
+         that shipped. -->
+    <script src="/static/js/terminal-write-queue.js"></script>
+    <!-- What a reconnect attempt MEASURED, what that costs the retry
+         budget, and which named recovery a close code asks for. PURE.
+         Must load BEFORE terminal.js; if it is missing every close falls
+         back to the plain same-id retry, which is what every close
+         reached before the named branches existed. -->
+    <script src="/static/js/terminal-reconnect-policy.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Punchlist item 1: after a measured absence, OFFER full history, a
          summary of what happened, or just carry on, instead of the app

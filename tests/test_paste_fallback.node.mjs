@@ -313,9 +313,15 @@ test('ONE INJECTION PATH: the fallback never writes to the socket itself', () =>
         assert.ok(!src.includes(forbidden),
             `paste-fallback.js must delegate injection, found ${forbidden}`);
     }
-    // And clipboard.js must actually hand its own injector over.
+    // And clipboard.js must actually hand its own injector over. The
+    // third argument is the input-ownership ticket claimed at the tap
+    // that opened this sheet: the sheet stands on screen while the user
+    // goes and finds their clipboard, which is ample time to change
+    // sessions, and injecting into the session they left would run a
+    // command in the wrong pane. See
+    // client/js/terminal-input-ownership.js.
     assert.ok(clientFile('js', 'clipboard.js')
-        .includes('window.PasteFallback.open(term, injectText)'));
+        .includes('window.PasteFallback.open(term, injectText, ticket)'));
 });
 
 test('insert injects through clipboard.js, preserving newlines as one payload', async () => {

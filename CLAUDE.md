@@ -984,7 +984,13 @@ per server process and no subprocess at all.
   hide a real hang. See `docs/ci.md`. Node: **197 tracked suites, all 197 passing** (re-counted
   2026-09-09 at the 1.2 merge; v1.1 alone had 193, of which 2 failed).
   `test_archive_full_page_mode.node.mjs`, the one long-standing node
-  failure this file used to name, is FIXED and now passes. The piped-stdin CLI helper for
+  failure this file used to name, is FIXED and now passes. Re-measured
+  2026-09-10 on the navigation-token branch: **206 tracked suites, all
+  206 passing**, against 202 on its base commit in the same worktree -
+  four added, no new failures. Note `test_terminal_layout.node.mjs`
+  flaked ONCE in that base run and passed in isolation seconds later on
+  the same tree, so a lone failure there without a code change is not a
+  regression; re-run before chasing it. The piped-stdin CLI helper for
   the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
   exits non-zero when run with no input - which is what it used to be
@@ -2370,6 +2376,223 @@ same style `tests/test_terminal_tools_menu.node.mjs` already uses for the
 tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
+
+## One navigation generation, and what a completion is allowed to write
+
+**A COMPLETION MAY ONLY WRITE TO SHARED UI STATE WHILE ITS NAVIGATION IS
+CURRENT.** `client/js/navigation-generation.js` is the whole mechanism: a
+monotonic counter, `begin(target)` / `current()` / `isCurrent(token)` /
+`keep(token, what)`, no dependencies, loaded first in `index.html`. Every
+entry path captures a token SYNCHRONOUSLY at the user gesture, before its
+first await, and checks it immediately before the write it cannot take
+back. A stale token DISCARDS, silently, with a debug log - never a retry,
+never an error, and never `Router.rejectTarget()`'s banner, which means
+"this URL names nothing" and not "you went somewhere else".
+
+**A COUNTER, NOT A TARGET IDENTITY.** Click a session, click away, click
+back: comparing session ids lets the FIRST click's in-flight work satisfy
+the third, and the screen it would paint into was torn down in between.
+`tests/test_navigation_generation.node.mjs` drives that exact sequence
+against the shipped sidebar module.
+
+**THE ENTRY PATHS ARE PROVABLY ALL OF THEM, because two functions are the
+choke point.** `TerminalController.connectToSession` and
+`reconnectToExistingSession` have EXACTLY ONE caller each -
+`App.showTerminal` and `App.returnToExistingTerminal` - so the complete
+set of ways into a session is the callers of those two plus the screen
+changes that leave one. Six declare an intent: the conversation sidebar's
+`activateRow`, the launcher's `_returnToActiveRunningSession`, the five
+launchpad gestures that dispatch `session-created`
+(`_handleAttachRunningSession`, `createConsoleSession`,
+`_createNewSessionInner`, `connectToExistingSession`, `selectProject`),
+`SessionRestartReturn.reopen`, `ToastNavigate.go`, and the router's
+`deliverTargetToLaunchpad`. `App.showLaunchpad` and `App.showAuth` begin
+one too, because LEAVING a session is a navigation and is the half that
+is easy to forget - but ONLY when `currentScreen` is already set. A BOOT
+PAINT IS NOT A NAVIGATION: `Router.init()` runs while `App.init()` is
+still awaiting `verifyToken()`, so on a cold load of `/session/<name>`
+the router has already declared the deep link's intent and
+`openProjectByName` is already resolving it by the time App paints the
+launcher, and an unconditional bump there would supersede the very target
+the user typed.
+
+**THE TWO `App` ENTRIES READ THE GENERATION AND NEVER BEGIN ONE, and the
+asymmetry is the design.** Bumping the counter inside `showTerminal`
+would let a caller that ALREADY lost the race mint itself a fresh win a
+few awaits later. The five `session-created` dispatchers carry their
+token in `detail.nav` and `app.js`'s ONE listener is the only thing that
+checks it, so a seventh dispatcher cannot invent a different rule; a
+dispatcher carrying no token falls through to `showTerminal`'s own read,
+which is exactly the pre-existing behaviour.
+
+**NOT ON A SYNCHRONOUS PATH.** A check between a gesture and a write with
+no await between them costs a comparison, buys nothing, and tells the next
+reader there was a race where there was none. That is why
+`ThemeNavigation.applyForTarget()` takes no token: it is synchronous, and
+the staleness it could suffer is its CALLER's, guarded at the top of
+`showTerminal` / `returnToExistingTerminal`. The themes registry's own
+replay gate (`6f79e90`) is untouched and deliberately re-resolves on drain
+rather than replaying a captured id.
+
+**THE TERMINAL RECORDS THE TOKEN IT BOUND UNDER**, as `_navToken`, and
+`_navCurrent(what)` is the one predicate every deferred action in that
+file asks. It gates the 500ms scheduled connect on both entry paths - that
+delay is a window a session switch lands in, and a connect fired inside it
+used to open a socket the next connect had to abandon mid-handshake - and
+it is the definition of "old" for the write queue and the reconnect
+scheduler below. A missing module answers TRUE: the token is a correctness
+guard, never a dependency, and a load-order accident must not stop the
+terminal working.
+
+**AND THE INPUT DIRECTION IS THE SAME RULE, ONE LAYER DOWN.**
+`bd9a2b2` and `terminal-frame-guard.js` keep one session's OUTPUT out of
+another's terminal. `client/js/terminal-input-ownership.js` is the INPUT
+half, which is worse: output in the wrong pane is confusing, input in the
+wrong pane RUNS A COMMAND. The unambiguous case was the file paste -
+`terminal.js` intercepts it, uploads the blob and inserts the returned
+absolute path, and nothing between those two checked the user was still
+where they started, so an upload finishing after a switch inserted a path
+into a DIFFERENT agent's prompt.
+
+**CLAIM AT THE GESTURE, CHECK AT THE WRITE**, and that is the half that
+is easy to get backwards. `claim()` taken at COMPLETION time reads
+exactly like a check and is a no-op, because by then the session HAS
+changed and the value compared is itself - the same shape as the
+`ensure_pipe_pane` guard whose only exercised caller set the flag it
+checked. Five paths take a ticket, and every one has an await, a network
+round trip, or an open panel between the gesture and the write: the
+desktop paste interceptor, the attach-file picker's `change` handler,
+`pasteFromClipboard`, the paste fallback SHEET (it stands on screen while
+the user finds their clipboard) and the slash commands MODAL (nothing
+closes it on a session switch, so a pick made after one used to run in the
+pane the user left).
+
+**THE KEYBOARD, THE SHIFT+ENTER CHORD, THE D-PAD AND `_writeSynthetic`
+TAKE NONE, deliberately.** There is no await between the key and
+`ws.send`, and the socket is swapped synchronously by the session entry
+paths, so the socket held at the write IS the session's. The copy sheet
+takes none either and that was MEASURED rather than assumed: `CopyOutput`
+reads the xterm buffer and writes the SYSTEM clipboard, and never writes
+into the terminal at all. `tests/test_input_ownership.node.mjs` pins both
+absences, so a later decorative check has to argue with a test.
+
+**A STALE TICKET DROPS AND SAYS SO.** It never queues and never replays -
+the user meant that paste for the session they were in, and delivering it
+later out of context is not better than dropping it. The report goes
+through `Terminal#_showStatusPill`, which routes to `FabMenu.notify`, the
+app's single status-pill path; a seventh toast shape would be the bug.
+`Terminal#insertText(text, ticket)` is the ONE write point for every
+text-shaped path and is the last line of defence, and `injectText` checks
+the ticket BEFORE its "clipboard is empty" and "terminal not connected"
+reports, because those would be misleading answers to "why did my paste
+vanish". A dropped upload also raises no attachment card.
+
+**AND THE WRITE QUEUE IS BOUNDED AND IS RELEASED ON A SWITCH.**
+`Terminal#enqueue` pushed every incoming chunk with no size or count
+limit, and `flush()` re-scheduled itself while the queue had anything in
+it - so bytes that arrived for the OLD session were still being written
+after navigation began, and the `term.reset()` that followed raced a write
+xterm had already accepted. That is the half-cleared screen showing the
+previous session's tail. `client/js/terminal-write-queue.js` is the
+policy; terminal.js keeps the queue.
+
+**THE TWO HALVES OF THE QUEUE ARE DIFFERENT THINGS, and the teardown turns
+on that.** Bytes still in `this.queue` are OURS - nobody has seen them and
+they belong to the outgoing session - so they are discardable. Bytes
+already handed to `term.write()` belong to XTERM, and resetting under an
+accepted write is undefined. So `_releaseQueueForSwitch()` is two steps in
+one order: discard what is ours, then AWAIT the in-flight write's own
+callback, and only then reset. NO TIMER - guessing when a write finished
+is how you reset under one anyway, and if the callback never arrives the
+terminal is being torn down regardless. It runs only when the reconnect
+buffer's plan is not `keep`, because a `keep` is the SAME session and its
+bytes are still its own. `_writeInFlight` is cleared in exactly ONE place,
+inside that callback, and a test counts it: a second clear would let a
+switch wait forever on a resolver nobody calls.
+
+**A BYTE BUDGET, NOT A CHUNK COUNT**, because chunk sizes vary by four
+orders of magnitude between a keystroke echo and a `cat` of a large file.
+`MAX_QUEUED_BYTES` is 4 MiB, the SAME number the server-side viewer queues
+use - one number in the system beats two separately tuned ones - and the
+point of the bound is to make the worst case FINITE, not fast.
+`MARKER_RESERVE` (128 bytes) is held back so the drop marker itself fits
+INSIDE the ceiling; without it the queue lands a marker's worth over on
+every shed, and a bound that does not hold is a number nobody can reason
+from.
+
+**DROP FROM THE FRONT, WHOLE CHUNKS, AND SAY SO.** The newest output is
+what the user is looking at, so shedding the tail would throw away the
+very thing the pressure is producing. Whole chunks because slicing to hit
+the budget exactly would cut an escape sequence in half, which does not
+corrupt one cell - it puts the VT parser into a state that garbles
+everything after. Whole chunks are not a guarantee of alignment either
+(one sequence can straddle two frames), which is exactly why the drop is
+ANNOUNCED: a terminal that silently loses ANSI bytes lies, and that is
+worse than a slow one. `_queuedBytes` is a running total rather than a
+re-sum, so admission is O(1) per chunk instead of growing precisely when
+the queue is longest. The scrollback follow decision is still sampled
+BEFORE the write, where `terminal-scroll.js` put it, and a test pins that
+it did not move.
+
+**AND THE AUTO-RECONNECT LADDER NEVER RECONNECTED, WHICH WAS MEASURED
+BEFORE ANYTHING WAS CHANGED.** `attemptReconnect()` set
+`isReconnecting = true`, charged the budget and scheduled
+`connectWebSocket()`, whose first line was
+`if (this.isReconnecting) { this.stopReconnecting(); return; }` - so the
+retry it had just fired hit that guard, RETURNED without opening a socket,
+and `stopReconnecting()` put the budget back to zero on its way out.
+Driven against the shipped class: one timer, ZERO sockets, budget 0, and
+the user saw `reconnecting, attempt 1 of 5` then silence, not even the
+failure message, because `attemptReconnect()` was never re-entered.
+Present since the initial commit (`a82cb57`). It is why the 4404 and
+outage recoveries were bolted on beside the general mechanism: they call
+`reconnectToExistingSession` directly and never went through it. Full
+model in `docs/reconnect.md`; the rules are in
+`client/js/terminal-reconnect-policy.js`.
+
+**TWO QUESTIONS, TWO COUNTERS, ONE WRITER EACH.** `reconnectAttempts` was
+zeroed in five places and compared in one, and any reset on a path that
+also schedules a retry makes the ceiling unreachable - `stopReconnecting()`
+is called from the exhaustion branch ITSELF, so five failures printed the
+message and handed out five more attempts, forever. It is the BUDGET now
+and `_resetRetryBudget()` is the only thing that zeroes it, for two named
+reasons: initialization success, and a different session being bound
+(which is not a reset of one counter but the start of another's - a fresh
+session must not inherit an exhausted budget). `_attemptsSinceProgress` is
+the BACKOFF and every attempt moves it; one counter for both forced a
+choice between a budget that never fills and a delay that never grows.
+
+**THE BUDGET IS SPENT ONLY BY A MEASURED FAILURE**, the socket never
+opening. An UNKNOWN outcome costs nothing and neither does a pane measured
+`awaiting_startup_prompt`: not having measured a success is not evidence
+of failure, and charging for one gets a healthy session on a slow machine
+declared unreachable. Same asymmetry as `resolve_startup_gate` rung 5
+versus rung 7. The cost, stated rather than hidden: a server that accepts
+and immediately closes is retried forever - but the backoff still reaches
+its 16s ceiling, so it is a slow poll and not a spin, and declaring a
+healthy session dead is the worse failure.
+
+**INITIALIZATION SUCCESS IS THE FIRST BYTES.** The socket opening, the
+dimension handshake completing and the pane sending something are three
+different facts and only the third proves the session is talking - a pane
+on its folder-trust dialog opens a perfectly good socket and says nothing.
+The outcome reuses the server's `ready` / `awaiting_startup_prompt` /
+`unknown` vocabulary rather than inventing a fourth spelling, and `ready`
+still claims only "not blocked on a startup prompt", never "healthy". The
+unreachable message is said ONCE and stays said; `_unreachableReported`
+clears on the same evidence that refills the budget.
+
+**FOUR NAMED BRANCHES, ONE SCHEDULER.** `_scheduleRecovery(closeCode)`
+replaces three guard clauses that sat in front of a mechanism none of them
+ever reached: `refresh_auth` (4401), `re_resolve_by_name` (4404, once per
+episode), `wait_for_server` (an abnormal close `ServerRestartWatch`
+recognises) and `retry_same_id`. And a reconnect carries the navigation
+token: sixteen seconds is ample time to move to another session, so a
+retry stands down rather than opening a socket nobody is looking at.
+`terminal-reconnect-policy.js` is a REAL DEPENDENCY of terminal.js - a
+sandbox without it takes the plain retry for every close, which is how
+`tests/test_restart_reconnect.node.mjs` started failing on a harness gap
+rather than a code change.
 
 ## Gotchas that have cost real time
 

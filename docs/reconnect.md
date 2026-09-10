@@ -131,6 +131,71 @@ already; see `.local-servers` in `client/css/styles.css`.
 The bar's own stylesheet is `client/css/terminal-away-bar.css`, absolutely
 positioned inside that container.
 
+## The retry ladder, and what an attempt is allowed to claim
+
+**IT NEVER RECONNECTED, and that was measured before anything was
+changed.** `attemptReconnect()` set `isReconnecting = true`, charged the
+budget and scheduled `connectWebSocket()`, whose first line was
+`if (this.isReconnecting) { this.stopReconnecting(); return; }`. So the
+retry the scheduler had just fired hit that guard, RETURNED without
+opening a socket, and `stopReconnecting()` put the budget back to zero on
+its way out. Driven against the shipped class: one timer, ZERO sockets,
+budget 0, and the only thing the user saw was `reconnecting, attempt 1 of
+5` and then silence - not even the failure message, because
+`attemptReconnect()` was never re-entered. Present since the initial
+commit. It is why the 4404 and outage recoveries were bolted on beside the
+general mechanism: they call `reconnectToExistingSession` directly and
+never went through it.
+
+**TWO QUESTIONS, TWO COUNTERS, ONE WRITER EACH.** `reconnectAttempts` is
+the BUDGET - have we told the user this session is unreachable yet - and
+only `_resetRetryBudget()` ever zeroes it. `_attemptsSinceProgress` is the
+BACKOFF and every attempt moves it. One counter for both forced a choice
+between a budget that never fills and a delay that never grows. The
+backoff is exponential from 1s to a 16s ceiling; the 500 ms before the
+FIRST connect is a screen-settle delay and is unrelated.
+
+**THE BUDGET IS SPENT ONLY BY A MEASURED FAILURE**, which is the socket
+never opening: the server did not answer. An attempt whose outcome is
+UNKNOWN costs nothing, and neither does a pane measured to be sitting on
+its startup prompt. Not having measured a success is not evidence of
+failure, and charging for one is how a slow machine or an untrusted folder
+gets a healthy session declared unreachable - the same asymmetry
+`resolve_startup_gate` uses at rung 5 versus rung 7. The cost of that
+choice, stated rather than hidden: a server that accepts a socket and
+closes it immediately, forever, is retried forever. The backoff still
+reaches its ceiling, so it is a slow poll and not a spin, and declaring a
+healthy session dead is the worse failure.
+
+**INITIALIZATION SUCCESS IS THE FIRST BYTES, NOT THE SOCKET OPENING.**
+Three different facts are in play - the socket opening, the dimension
+handshake completing, and the pane sending something - and only the third
+proves the session is talking. A pane parked on its folder-trust dialog
+opens a perfectly good socket and says nothing. The outcome is named with
+the server's own three-value vocabulary, `ready` /
+`awaiting_startup_prompt` / `unknown`
+(`src/core/session_startup_gate.py`), reused rather than given a fourth
+spelling, and `ready` claims only "not blocked on a startup prompt", never
+"healthy".
+
+**THE UNREACHABLE MESSAGE IS SAID ONCE AND STAYS SAID.** Silence on an
+unreachable session is worse than a message; a message that repeats on
+every further close is worse than either. `_unreachableReported` keeps it
+to one and is cleared by the same thing that refills the budget.
+
+**FOUR NAMED BRANCHES, ONE SCHEDULER.** `_scheduleRecovery(closeCode)`
+replaces three guard clauses that sat in front of a general mechanism none
+of them ever reached. `refresh_auth` on 4401, `re_resolve_by_name` on 4404
+at most once per disconnect episode, `wait_for_server` on an ordinary
+abnormal close that `ServerRestartWatch` recognises, and `retry_same_id`
+for everything else. A missing `ServerRestartWatch` degrades to the plain
+retry rather than throwing inside `onclose`.
+
+**A RECONNECT CARRIES THE NAVIGATION IT WAS SCHEDULED FOR.** The delay
+reaches sixteen seconds, which is ample time to move to another session,
+so a retry checks the navigation token before it connects and stands down
+if the user has gone elsewhere. See `client/js/navigation-generation.js`.
+
 ## Known gaps
 
 - A websocket drop with the user present raises no bar, by design (above).
@@ -152,4 +217,6 @@ positioned inside that container.
 | The facts behind the summary | `src/core/session_away_report.py` |
 | `GET /sessions/away/summary` | `src/api/away_routes.py` |
 | What a reconnect may do to the buffer | `client/js/terminal-reconnect-buffer.js` |
-| Tests | `tests/test_terminal_away_gap.node.mjs`, `tests/test_session_away_report.py` |
+| What an attempt measured, what it costs, and which recovery a close asks for | `client/js/terminal-reconnect-policy.js` |
+| The budget, the backoff, the scheduler and the four branches | `client/js/terminal.js` |
+| Tests | `tests/test_terminal_away_gap.node.mjs`, `tests/test_session_away_report.py`, `tests/test_reconnect_scheduling.node.mjs` |

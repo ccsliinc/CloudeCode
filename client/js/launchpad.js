@@ -2657,6 +2657,12 @@ class Launchpad {
      * Output: Promise<void>. Shows a launchpad error on failure.
      */
     async _returnToActiveRunningSession(rowSessionId) {
+        // THE INTENT, DECLARED BEFORE ANY AWAIT. This path awaits four
+        // times - xterm's first-time init, a frame yield, the fit, and the
+        // session fetch - and a card click landing in any of them must
+        // win. See client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('session:' + rowSessionId) : null;
         try {
             // 1. Pre-show terminal screen so xterm can measure layout.
             //    hideAllScreens lives on window.App; the optional
@@ -2717,6 +2723,8 @@ class Launchpad {
                 cols,
                 rows,
             });
+            if (window.NavigationGeneration
+                && !window.NavigationGeneration.keep(nav, 'launcher rejoin')) return;
             if (info) {
                 window.App.returnToExistingTerminal(info);
             }
@@ -3244,6 +3252,13 @@ class Launchpad {
      * App.showTerminal() can plumb scrollback into the terminal controller.
      */
     async _handleAttachRunningSession(tmuxName) {
+        // THE INTENT, DECLARED BEFORE THE POST. Every session-created
+        // dispatcher declares its navigation here so a row clicked while
+        // this request is in flight wins; app.js's session-created listener
+        // is the one place that checks it. See
+        // client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('attach:' + tmuxName) : null;
         try {
             const response = await window.API.adoptSession(tmuxName, true);
             const session = response.session || response;
@@ -3312,7 +3327,7 @@ class Launchpad {
             }
 
             window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true }
+                detail: { session, initialScrollbackB64, fifoStartOffset, adopted: true, nav }
             }));
         } catch (err) {
             this.showError(`attach failed: ${err.message || err}`);
@@ -5337,6 +5352,13 @@ class Launchpad {
      *   src/core/terminal_commands.py.
      */
     async createConsoleSession(options = {}) {
+        // THE INTENT, DECLARED BEFORE THE POST. Every session-created
+        // dispatcher declares its navigation here so a row clicked while
+        // this request is in flight wins; app.js's session-created listener
+        // is the one place that checks it. See
+        // client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('console') : null;
         const terminalCommandId = options.terminalCommandId || null;
         console.log('Launchpad: Creating new console session', terminalCommandId || '');
 
@@ -5385,7 +5407,7 @@ class Launchpad {
             }
 
             window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session }
+                detail: { session, nav }
             }));
 
         } catch (error) {
@@ -5406,6 +5428,13 @@ class Launchpad {
      *   fallback behavior for the default "+ new project" FAB action).
      */
     async _createNewSessionInner(agentType = null) {
+        // THE INTENT, DECLARED BEFORE THE POST. Every session-created
+        // dispatcher declares its navigation here so a row clicked while
+        // this request is in flight wins; app.js's session-created listener
+        // is the one place that checks it. See
+        // client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('create') : null;
         console.log('Launchpad: Creating new project', agentType ? `(agent: ${agentType})` : '');
 
         try {
@@ -5551,7 +5580,7 @@ class Launchpad {
 
             // Trigger session-created event
             window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session }
+                detail: { session, nav }
             }));
 
         } catch (error) {
@@ -5945,6 +5974,13 @@ class Launchpad {
      * Connect to existing session
      */
     async connectToExistingSession() {
+        // THE INTENT, DECLARED BEFORE THE POST. Every session-created
+        // dispatcher declares its navigation here so a row clicked while
+        // this request is in flight wins; app.js's session-created listener
+        // is the one place that checks it. See
+        // client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('existing') : null;
         try {
             this.updateStatus('connecting to existing session...');
             const data = await window.API.getSession();
@@ -5954,7 +5990,7 @@ class Launchpad {
 
             // Trigger session-created event
             window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session }
+                detail: { session, nav }
             }));
         } catch (error) {
             console.error('Launchpad: Failed to get existing session:', error);
@@ -6091,6 +6127,15 @@ class Launchpad {
         console.log('Launchpad: openProjectByName:', name);
 
         this._resolvingDeepLink = true;
+        // READS the generation the router declared for this deep link,
+        // never begins one. The retry loop below can spend well over a
+        // second, and a conversation row clicked inside that window must
+        // win. The two handlers it dispatches to declare their own
+        // generation once this check passes, which is correct: the check
+        // is what proves this deep link is still the navigation on
+        // screen. See client/js/navigation-generation.js.
+        const deepLinkNav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
         try {
             // Refresh the running-sessions list so we aren't racing the 5s
             // poller - a deep link can arrive well before the first poll
@@ -6134,6 +6179,10 @@ class Launchpad {
                 await new Promise(r => setTimeout(r, 300));
             }
 
+            if (window.NavigationGeneration
+                && !window.NavigationGeneration.keep(deepLinkNav, 'deep-link resolve')) {
+                return;
+            }
             if (session) {
                 console.log('Launchpad: deep-link resolved to running session:', session.name);
                 if (session.is_active) {
@@ -6279,6 +6328,13 @@ class Launchpad {
      */
     async selectProject(project, providerChoice = undefined) {
         console.log('Launchpad: Selecting project:', project.name);
+        // THE INTENT, DECLARED BEFORE THE POST. Every session-created
+        // dispatcher declares its navigation here so a row clicked while
+        // this request is in flight wins; app.js's session-created listener
+        // is the one place that checks it. See
+        // client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('project:' + project.name) : null;
 
         // GUARD: never create a session while resolving a deep link (see
         // the `_resolvingDeepLink` docstring in the constructor and
@@ -6349,7 +6405,7 @@ class Launchpad {
 
             // Trigger session-created event
             window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session, project }
+                detail: { session, project, nav }
             }));
 
         } catch (error) {

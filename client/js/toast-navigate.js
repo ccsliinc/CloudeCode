@@ -136,6 +136,12 @@
     function go(toast) {
         var sessionId = toast && toast.session_id;
         if (!sessionId || !window.API || !window.App) return Promise.resolve(false);
+        // THE INTENT, DECLARED BEFORE THE LISTING. A toast card is a
+        // navigation control, and the listing it waits on is exactly the
+        // window in which the user can click a conversation row instead.
+        // See client/js/navigation-generation.js.
+        var nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('toast:' + sessionId) : null;
         return window.API.listSessions()
             .then(function (sessions) {
                 var info = findSession(sessions, sessionId);
@@ -158,6 +164,14 @@
                         // failing a navigation over.
                         console.debug('[ToastNavigate] settings close skipped', err);
                     }
+                }
+                if (window.NavigationGeneration
+                    && !window.NavigationGeneration.keep(nav, 'toast jump')) {
+                    // NOT a failure: the user chose a different session
+                    // while this listing was in flight, and they are in a
+                    // session now. False is reserved for "we could not get
+                    // you there", which is not what happened.
+                    return true;
                 }
                 window.App.returnToExistingTerminal(info);
                 return true;

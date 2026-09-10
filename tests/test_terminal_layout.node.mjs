@@ -704,8 +704,59 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // page), lives in client/js/terminal-socket-abandon.js. What is left
     // here is the call and the reference it drops: ten lines, of which
     // five are the pointer at that file.
+    // RAISED 2436 -> 2470, with the stated reason this comment demands.
+    // The controller now knows WHICH NAVIGATION it is bound to, so the
+    // three things it defers - the 500ms scheduled connect, a scheduled
+    // reconnect, and the queue of bytes waiting on an animation frame -
+    // can each ask whether the session they were started for is still on
+    // screen. What is left here is the field, one three-line predicate,
+    // and the call at each of those sites; the whole rule, why a counter
+    // rather than a session id and why a stale token discards rather than
+    // retries, lives in client/js/navigation-generation.js.
+    // RAISED 2470 -> 2492, with the stated reason this comment demands.
+    // Input ownership: the file-paste interceptor now claims the
+    // navigation at the GESTURE and insertText() refuses a stale claim,
+    // so an upload finishing after a session switch can no longer insert
+    // a path into a different agent's prompt. What is here is the claim,
+    // one guard clause, and one extra parameter threaded through
+    // _uploadAndInjectFile; the whole rule - which paths take a ticket,
+    // why the keyboard and the D-pad deliberately do not, and why a
+    // stale claim drops rather than queues - lives in
+    // client/js/terminal-input-ownership.js.
+    // RAISED 2492 -> 2570, with the stated reason this comment demands.
+    // The xterm write queue is bounded and is released on a session
+    // switch. enqueue() now admits under a byte budget and sheds the
+    // OLDEST chunks with one announced marker in their place; flush()
+    // tracks the single in-flight write; and both entry paths discard the
+    // outgoing session's queue and then WAIT for that write before
+    // term.reset(), because resetting under a write xterm has already
+    // accepted is undefined and is what produced a half-cleared screen
+    // showing the previous session's tail. The budget, the shed rule and
+    // the marker's wording are all in client/js/terminal-write-queue.js;
+    // what is here is the queue itself and the two-step teardown, which
+    // cannot live anywhere else because they are this object's state.
+    // RAISED 2570 -> 2745, with the stated reason this comment demands,
+    // and this is the round that MOST needed a raise rather than a
+    // squeeze. The auto-reconnect ladder never reconnected: the retry it
+    // scheduled hit connectWebSocket()'s isReconnecting guard, returned
+    // without opening a socket, and had its budget zeroed on the way out
+    // - measured against this very class, present since the initial
+    // commit. Fixing it needed the retry to be able to reach the socket,
+    // the budget to have ONE writer instead of four, initialization
+    // success to be a measured fact (the first BYTES, not the socket
+    // opening), and the 4401 / 4404 / outage guard clauses to become
+    // named branches of one scheduler. The rules - what an attempt
+    // measured, what it costs, how long to wait, and which recovery a
+    // close asks for - are all in
+    // client/js/terminal-reconnect-policy.js. What is here is the state
+    // those rules read and the four call sites that act on them.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2436, `terminal.js must not grow, is ${lines} lines`);
+    // RAISED 2745 -> 2760 for two fixes found reviewing the above: a
+    // second session switch used to overwrite the first one's drain
+    // resolver, parking that teardown on a promise nobody could settle,
+    // and connectWebSocket() cleared what the LIVE connection had
+    // measured about itself before deciding it had nothing to do.
+    assert.ok(lines < 2760, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {
