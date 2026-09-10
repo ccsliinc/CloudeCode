@@ -52,19 +52,27 @@ that drag is never the only way to do anything. Phones have no keyboard.
 ### double-click rename, as well as menu rename
 paths: client/js/session-sidebar-rename.js client/js/session-sidebar-clicks.js client/js/session-sidebar.js
 anchors: onDblClick | addEventListener('dblclick'
-tests: none
+tests: tests/test_session_sidebar_rename_gesture.node.mjs
 The owner uses it. A menu rename is a fine ADDITION and a poor replacement. This
 one nearly went on our own side, not theirs: the merge was about to drop it
 purely because an incoming commit intended to.
 
-NOTHING TESTS THE GESTURE, stated rather than papered over. The rename tests
-call `SessionSidebarRename.beginEdit` directly, which proves the editor works
-and proves nothing about whether a double-click still reaches it, which is
-exactly the half that was removed. Writing a test for it is open work. Until
-then the two anchors are the whole guard: `onDblClick` (the exported handler)
-and `addEventListener('dblclick'` (the registration in `session-sidebar.js`).
-Both were measured absent from `8898f07`, the commit that deleted the gesture,
-while the words "double-click" and "dblclick" both survived in its prose.
+THE GESTURE IS NOW TESTED, not only anchored. Every other rename test - the
+edits-label suite, and even the dispatch suite's own double-click case - calls
+`SessionSidebarRename.beginEdit` or `onDblClick` directly, which proves the
+editor works and proves nothing about whether a double-click still reaches it,
+which is exactly the half that was removed. `test_session_sidebar_rename_gesture.node.mjs`
+drives the real `listEl.addEventListener('dblclick', ...)` registered by
+`SessionSidebar.init()` - a genuine bubbling event, not a direct call - and
+asserts it reaches `beginEdit` for the right session, lands on the same
+observable state as F2 and the row menu's rename item, and opens nothing for a
+row that cannot be renamed. Mutation-checked: deleting the listener registration,
+and separately repointing it at a different function than the other two doors
+use, each fail this file's own named tests. The two anchors below are still the
+whole STATIC guard: `onDblClick` (the exported handler) and
+`addEventListener('dblclick'` (the registration in `session-sidebar.js`). Both
+were measured absent from `8898f07`, the commit that deleted the gesture, while
+the words "double-click" and "dblclick" both survived in its prose.
 
 ### dead rows go to Recent
 paths: src/core/session_lifecycle.py src/core/session_manager.py

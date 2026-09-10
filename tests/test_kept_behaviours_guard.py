@@ -173,21 +173,32 @@ def test_our_own_file_declares_paths_anchors_and_tests_for_every_entry():
     assert incomplete == [], f"entries missing a declared field: {incomplete}"
 
 
-def test_the_no_test_gap_is_recorded_rather_than_hidden():
-    """A behaviour nothing holds says so, and the guard counts it.
+def test_the_no_test_gap_is_recorded_rather_than_hidden(tmp_path):
+    """A behaviour nothing holds says so, and the guard counts it - never
+    fatally.
 
-    Double-click rename is that behaviour: it is the one the merge nearly
-    deleted and the one whose GESTURE no test exercises (the rename tests call
-    `beginEdit` directly). Recording `tests: none` is the honest answer;
-    inventing a test that does not cover the gesture would be worse than the
-    gap, so `--strict` deliberately does not fail on it.
+    Double-click rename USED TO be the running example here (it was the
+    behaviour the merge nearly deleted and the one whose GESTURE no test
+    exercised, since the rename tests called `beginEdit` directly). It no
+    longer is: `tests/test_session_sidebar_rename_gesture.node.mjs` drives the
+    real `addEventListener('dblclick', ...)` registration and its entry in
+    `ccsliinc.md` now names that file. So this test uses the synthetic fixture
+    instead - `_FIXTURE_DOC`'s "second behaviour" declares `tests: none` on
+    purpose - to keep proving the general rule: recording `tests: none` is the
+    honest answer for a behaviour nothing holds, inventing a test that does
+    not cover the real gesture would be worse than the gap, and `--strict`
+    deliberately does not fail a build over an honestly stated one.
     """
-    findings, _ = CHECK.run(root=REPO_ROOT)
+    _write_tree(tmp_path, _fixture_files())
+    findings, _ = CHECK.run(root=tmp_path)
     gaps = [f for f in findings if f.kind == "NO_TEST"]
+    assert [f.title for f in gaps] == ["the second behaviour"]
     assert all(not f.fatal for f in gaps), "a stated gap must never fail a build"
+
     entries = {e.title: e for e in CHECK.parse_party_file(OURS)}
     rename = next(t for t in entries if t.startswith("double-click rename"))
-    assert entries[rename].tests == [], "the rename entry no longer states its gap"
+    assert entries[rename].tests == ["tests/test_session_sidebar_rename_gesture.node.mjs"], \
+        "the rename entry must name the gesture test that closed its gap"
 
 
 # =====================================================================
