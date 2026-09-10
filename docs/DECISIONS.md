@@ -97,3 +97,30 @@ General rule this implies: when filed-but-unstarted work collides with
 written-but-unmerged work, the written work has precedence. The filed spec
 gets re-scoped onto the shape that results after the written work merges,
 rather than the written work being rebased onto the spec.
+
+## Issues are grouped by label, never by a parent issue
+**2026-09-10, scope: CloudeCodeDev, ruled by Adam as code owner and sole
+tie-breaker**
+
+Verbatim: "converting them to phase:1 through phase 7 labels and update the
+skill to make sure stuff like that aren't made again"
+
+Seven issues were titled as phases (#7, #17, #29, #33, #41, #47, #54). Six of
+them were pure containers holding child tasks and nothing else, and they are
+closed as not planned, each carrying a comment naming the label that replaces
+it. Their 32 children are untouched apart from the added label and every one
+of them is still open. #54 is titled as a phase but is a fully specified
+experiment with its own approach, verification and definition of done, so it
+took `phase:7` and stays open rather than being closed with the containers.
+
+The `Part of #N` lines in the child bodies are left in place. They are history
+and they resolve to a closed issue carrying the explanation.
+
+General rule this implies: an issue must be independently workable. One agent
+picks it up, claims it with a draft PR, and closes it on its own. Group
+related work with a label, never with a parent issue. A container inflates the
+backlog with an item nobody can action, it cannot close until every child
+closes, and `gh issue list --json` has no parent field in gh 2.90, so the
+grouping it promised was never queryable from the command line anyway.
+`.claude/skills/work/` carries this under "Filing an issue", so it binds both
+parties and both sides need to pull it.

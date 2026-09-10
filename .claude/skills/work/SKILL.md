@@ -95,10 +95,30 @@ Use `.github/ISSUE_TEMPLATE/task.yml`. Sections, all of them:
 - **Definition of done**
 - **Open questions**
 
-Planning many at once: file a parent Feature issue, then child Tasks. Each
-child body carries a literal `Part of #N` line, because that text is what
-search finds. `gh issue list --json` has no parent field in gh 2.90, so you
-cannot filter by parent. Milestones are for releases only.
+**Every issue is a thing ONE agent can pick up, claim with a draft PR, and
+close on its own. If it cannot be worked, it is not an issue.** That is the
+whole test, and a parent whose only content is a list of children fails it.
+
+**Planning many at once: group them with a LABEL, never with a parent issue.**
+A `phase:N` label, or an equivalent one named after whatever the grouping
+actually is. Every issue in the group still stands alone. Milestones are for
+releases only.
+
+State the reason when you pass this on, because a rule without its reason gets
+reverted by the next person who thinks they are being organised. A container
+issue costs three ways: it inflates the backlog with an item nobody can
+action, it cannot close until every one of its children closes, and the
+grouping it promises is not actually queryable, because `gh issue list --json`
+has no parent field in gh 2.90. A label is queryable in one command:
+
+```bash
+gh issue list -R $R --label "phase:4"
+```
+
+GitHub's sub-issue API still exists and may be used to LINK related issues
+where the linkage genuinely helps a reader. Linkage is not a substitute for
+the label, and it must never be the reason an issue exists that is only a
+container.
 
 ## Claiming: the draft PR opens FIRST, before any code
 
