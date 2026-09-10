@@ -5906,3 +5906,109 @@ from stdin and report success. `reject_extra_args` now exits 2 on both.
 so the removal rule has never yet protected anything of adoom666's, and the
 plugin resolution path has exactly one contribution on one of its four surfaces.
 Adam has still not agreed to any of this.
+
+## 2026-09-10 adopted adoom666's coord SKILL, retired our coord.sh
+
+Adam's agent adopted the coordination protocol we published on the `coord`
+branch within hours and went further: he built a real Claude Code SKILL for it
+and pushed it to `adamdev/master:.claude/skills/coord/` (SKILL.md 272 lines,
+coord.py 500 lines, "feat(coord): a skill both parties can run for the
+coordination branch"). Evaluated both on merit and adopted his.
+
+**VERDICT, OVERALL: his is better, and it is not close.** The deciding fact is
+not a feature. His is a SKILL, with a frontmatter description naming "at the
+START of any work session" and "BEFORE starting any new feature, fix, refactor
+or plan" plus trigger phrases, so it FIRES. Ours was a 727 line bash script that
+nothing invoked and nobody remembered, which is the same defect as
+`lessons/adoom666-written-down-is-not-read.md`: a safeguard that is not on the
+read path is decorative.
+
+**PER CAPABILITY.** His wins on four:
+
+- `check <paths>` takes the paths you are ABOUT to touch on argv and exits **2**
+  on an overlap, so it gates, and it needs no claim to exist yet. Our `status`
+  only intersected claims that were already filed, and returned 0 on an overlap,
+  so nothing could gate on it. His answers the question at the moment an agent
+  has it.
+- Expiry FAILS TOWARD BEING SEEN. He computes it from `refreshed` + 3 days at
+  read time and treats an UNREADABLE date as LIVE. Ours required an `expires:`
+  field and answered NOT-live when it was missing, so a claim with a typo'd
+  header was silently invisible to the one function whose job is catching
+  collisions. Ours was wrong and his is right.
+- `sync` on a rejected push rebases so the work is not stranded and then STOPS,
+  printing what the other party landed. Ours rebased and pushed through, which
+  throws away the information the rejection carries.
+- `lessons`, which we had nothing for, printed unfiltered at the end of `read`.
+
+Ours won on four, and all four were PORTED rather than lost:
+
+- the wants-versus-claim kept-behaviour warning. He had no `wants` concept, and
+  `wants/ccsliinc.md` was already on the branch with no tool able to read it.
+- a refusal to touch the forbidden `upstream` remote. His `remote_with_branch`
+  returns the FIRST remote whose ls-remote finds the branch, and `upstream` is a
+  real fetchable repo here. Alphabetical order is not a guard.
+- the explicit secret scan. The pre-commit hook resolves its scanner relative to
+  the worktree and `coord` is an orphan branch with no `scripts/`, so without
+  this a claim is the one file in this repo reaching a remote unscanned.
+- the atomic worktree lock. That checkout lives in the COMMON git dir and this
+  clone has seven linked worktrees.
+
+**Three defects found in his code while porting, all fixed and marked.**
+`cmd_write`'s `if me not in rel` could never fail, because `rel` is built from
+`me`: it read as a fence and was decorative, with the real fence one rung later
+in `cmd_sync`. `root / ".git" / ...` names a path that cannot exist in a LINKED
+worktree, where `.git` is a FILE. And `$COORD_PARTY` outranked the on-disk
+marker, so one environment variable asserted the other party's identity for an
+invocation; `--party NAME` replaces that as a READ-ONLY lens, refused with exit
+4 on `write` and `sync`.
+
+**WHERE IT LIVES.** `.claude/skills/coord/`, four files: his `SKILL.md` and
+`coord.py`, our `coord_ccsliinc.py` holding every addition, and `UPSTREAM.md`
+recording the fork point. The additions are a separate module on purpose, so
+re-forking when his copy moves is taking his new file and re-applying marked
+call sites rather than untangling two authors from one long source.
+**FORCE-ADDED**: `.gitignore:190` ignores `.claude/*`, which is why every design
+note in this repo stayed untracked until today. `git ls-files .claude/skills/`
+lists all four.
+
+**RETIRED.** `scripts/coord.sh` went from 727 lines to a 50 line inert signpost
+that prints the old-to-new subcommand map and exits 3. Not a forwarder: a
+forwarder would map nine old subcommands onto five new ones, which is a third
+thing to maintain and a third thing to go stale. Two tools for one protocol is
+the dual-path problem this project keeps paying for.
+
+**KEEPING UP WITH IT, STRUCTURALLY.** Two pieces, neither depending on anyone
+remembering. `CLAUDE.md` now carries the rule that the skill is invoked at
+session start and before any distinct piece of work, cross-referenced to the
+never-push-to-`upstream` rule as the same class of standing instruction. And
+`tests/test_coord_skill_upstream_sync.py` compares the fork-point blob shas in
+`UPSTREAM.md` against `adamdev/master`. It detects HIS copy MOVING, not our
+copy DIVERGING: our copy is deliberately different, and a guard asserting
+byte-equality would have been red the moment it shipped and deleted a week
+later. It reads the local remote-tracking ref, needs no network, and therefore
+proves only that we are current with the LAST FETCH, which its own failure text
+says rather than glossing. An absent ref SKIPS with a reason naming what went
+unmeasured; not having looked is not a pass.
+
+**MEASURED, against the real branch, not a fixture.** The detector fires and
+stays quiet, both ways. `check client/js/app.js client/js/terminal.js` exits 2
+on `claims/adoom666-webui-perf-waves.md`; `check src/core/db_integrity.py`
+exits 0. Through the read-only lens, `check --party adoom666
+client/js/session-row-menu.js client/js/status-led.js` raises five kept-behaviour
+warnings against `wants/ccsliinc.md`; the same command on
+`src/core/db_integrity.py` raises none. `--party` on `write` and on `sync` both
+exit 4. `read` exits 0 and prints their now, their live claims with approach
+paragraphs, their settled decisions and all four lessons.
+
+The guard's own negative control is a test, not a claim: `drifted()` is fed a
+deliberately wrong sha and must return True. Simulating a real upstream move by
+corrupting the recorded sha turns `test_upstream_copy_has_not_moved` red with
+the full procedure in the failure text.
+
+**STILL OPEN.** The wants lists remain one-sided: only `wants/ccsliinc.md`
+exists, so from our own seat the `check`-direction warning can only be
+demonstrated through the read-only lens, and the removal rule has still never
+protected anything of adoom666's. There is no re-fetch on the guard, by design,
+so a clone that never fetches `adamdev/master` reports a skip rather than drift.
+And `SKILL.md` is human-edited on both sides on purpose, so a rule he adds there
+reaches us only when the guard fires and somebody reads the diff.
