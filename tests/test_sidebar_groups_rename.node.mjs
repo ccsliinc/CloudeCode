@@ -526,7 +526,7 @@ await test('the header LED reads the ROWS, and says what a group holds', () => {
         row({ name: 'a', status: 'working' }),
     ];
     const html = G.bodyHtml(rows, 'cozy', null, {});
-    assert.deepEqual(headerLed(html, 'pinned'), { inner: 'idle', outer: 'off' },
+    assert.deepEqual(headerLed(html, 'pinned'), { inner: 'idle', outer: 'steady' },
         'an all-idle section is idle, not unknown');
     assert.deepEqual(headerLed(html, 'other'), { inner: 'working', outer: 'active' },
         'and a section holding a working session says so');
@@ -544,7 +544,7 @@ await test('a COLLAPSED group is still summarised, from rows it does not render'
     const html = G.bodyHtml(rows, 'cozy', { collapsed: ['pinned'] }, {});
     assert.ok(!html.includes('data-name="p"'), 'its row really is absent from the markup');
     assert.deepEqual(headerLed(html, 'pinned'),
-        { inner: 'waiting-permission', outer: 'steady' },
+        { inner: 'waiting-permission', outer: 'active' },
         'and the header still reports the parked session inside it');
 });
 

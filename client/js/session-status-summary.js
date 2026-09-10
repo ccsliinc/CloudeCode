@@ -1,6 +1,12 @@
 /**
  * Session status summary - roll a set of sessions up into ONE LED.
  *
+ * ONE COMPONENT, TWO PLACES. The roll-up is not a header-shaped dot: it
+ * is `StatusLed.ledHtml` with an (inner, outer) pair this module folds
+ * out of the children, so a group header and a row cannot draw two
+ * different vocabularies. The finished-turn ring in particular is the
+ * SAME ring on both.
+ *
  * A group header (and the launchpad's top bar, which is the same question
  * asked of every session at once) has to answer "is there anything in
  * here I need to deal with" without the user opening the group. That is a
@@ -10,7 +16,7 @@
  * THE PRIORITY IS THE PRODUCT DECISION, so it is written down once, as
  * data, in SUMMARY_PRIORITY:
  *
- *   permission > input > working > unread > idle > dead > unknown
+ *   permission > input > working > unread > done > dead > unknown
  *
  * Read it as "what is the most interesting thing in this group".
  * `permission` is a session STOPPED on a yes/no; `input` is one that
@@ -23,31 +29,36 @@
  *
  * Both outrank working because they are about the USER and will stay
  * that way until they act; working will resolve on its own. Unread
- * outranks the two quiet states for the same reason. `idle` (the gray
- * read/at-rest dot) sits below `unread` and above `dead`: a group with
- * one unread and ten idle still bubbles unread, and a group of nothing
- * but idle sessions reads idle rather than falling all the way to
- * unknown. Dead sits BELOW both deliberately: a dead pane in a group of
- * live ones is not the headline, and hoisting it would make a group with
- * one corpse and nine busy sessions read as dead. Unknown is last
- * because it is the absence of a measurement, and any measured state is
- * more informative than no measurement.
+ * outranks the two quiet states for the same reason. `done` means
+ * "finished, and already read" and sits below `unread` and above `dead`:
+ * a group with one unread and ten read still bubbles unread, and a group
+ * of nothing but read sessions reads done rather than falling all the
+ * way to unknown. It renders the grey `idle` dot, which is what a read
+ * session looks like on a row. Dead sits BELOW both deliberately: a dead
+ * pane in a group of live ones is not the headline, and hoisting it
+ * would make a group with one corpse and nine busy sessions read as
+ * dead. Unknown is last because it is the absence of a measurement, and
+ * any measured state is more informative than no measurement.
  *
- * THE `done` BUCKET IS GONE, 2026-09-09, and it did not lose a meaning.
- * It used to mean "finished and already read" while `unread` meant
- * "finished and not"; the inner dot now spells that difference itself
- * (`idle` grey versus `done` green), so `done`-as-read IS `idle` and a
- * separate bucket for it could never be reached.
+ * AND THE HEADER'S RING IS FOLDED ACROSS THE WHOLE GROUP, not looked up
+ * on the winning bucket. The inner dot is the highest-priority state in
+ * the group; the ring answers "what is the most interesting thing
+ * HAPPENING in here", over every member. So a group holding one working
+ * session and one parked one paints the parked dot inside a breathing
+ * ring, which is both facts at once and is the whole point of having two
+ * rings. Reading the ring off the winner's row instead would have hidden
+ * the work behind the more urgent dot.
  *
- * AND THE HEADER'S RING IS ITS OWN QUESTION. The inner dot is the
- * highest-priority state in the group; the outer ring is ACTIVITY across
- * the group, computed independently by `outerFor` - active if anything
- * in there is moving, steady if anything is a live turn waiting on the
- * user, off otherwise. So a group holding one working session and one
- * parked one paints the parked dot inside a breathing ring, which is
- * both facts at once and is the whole point of having two rings. Taking
- * the ring off the winning bucket's row instead would have hidden the
- * work behind the more urgent dot.
+ * ACTIVITY OUTRANKS UNREAD ON THAT RING, and it has to, because since
+ * 2026-09-09 the ring carries both. A breathing ring is a claim that
+ * something is running right now and it expires on its own; a green
+ * unread ring is a claim that will still be true in an hour. When a
+ * group holds both, the ring shows the activity and the unread count
+ * still reaches the user through the LED's own title. A single-child
+ * group always paints exactly what that child's row paints - that
+ * agreement is asserted case by case in tests/test_status_summary.node.mjs
+ * and it is the property that keeps a header from contradicting the one
+ * row under it.
  *
  * THE STATUS FIELD HAS TWO NAMES IN THIS APP, AND THE FOLD HAS TO KNOW
  * BOTH. A `/sessions/list` row calls it `activity_status`; the merged
@@ -85,24 +96,25 @@ console.log('[SessionStatusSummary Module] Loading...');
         { key: 'input', inner: 'waiting-input' },
         { key: 'working', inner: 'working' },
         { key: 'unread', inner: 'done' },
-        { key: 'idle', inner: 'idle' },
+        // FINISHED AND ALREADY READ. The bucket keeps the name `done`
+        // because that is what it means; the DOT it renders is the grey
+        // `idle` one, because that is what a read session looks like on
+        // a row and the header may not disagree with its own children.
+        { key: 'done', inner: 'idle' },
         { key: 'dead', inner: 'dead' },
         { key: 'unknown', inner: 'unknown' },
     ];
 
     /**
-     * Buckets that mean "something is RUNNING in this group right now".
+     * Buckets that mean "a turn is OPEN in this group right now" - it is
+     * either moving or stopped mid-turn waiting on the user. All three
+     * take the breathing ring, because all three are what the ROW paints
+     * for the same session (see ledStateFor: `question`, `notice` and an
+     * unanswered startup prompt all resolve to outer `active`). A header
+     * that chose a different ring from its only child would be a bug.
      * @type {string[]}
      */
-    const ACTIVE_BUCKETS = ['working'];
-
-    /**
-     * Buckets that mean "a live turn in this group is stopped, waiting on
-     * the user". Lit, but not moving - the same claim the row-level ring
-     * makes for `question`, `notice` and an unanswered startup prompt.
-     * @type {string[]}
-     */
-    const STEADY_BUCKETS = ['permission', 'input'];
+    const ACTIVE_BUCKETS = ['working', 'permission', 'input'];
 
     /**
      * The three signals StatusLed needs, from a row of EITHER shape.
@@ -153,31 +165,49 @@ console.log('[SessionStatusSummary Module] Loading...');
      *   deliberate: the header then cannot disagree with the rows under
      *   it, because both are reading the same value - and it is why the
      *   startup gate lands in `input` for free, without this function
-     *   knowing the gate exists. It reads the INNER dot only: the ring
-     *   carries activity, folded separately by `outerFor`, so a working
-     *   session with an unread Stop still buckets as `working` (it is
-     *   moving) while a resting one with the same flag buckets as
-     *   unread.
+     *   knowing the gate exists. Note the RING is checked before the two
+     *   rest dots for `unread` - a working session with an unread Stop
+     *   counts as working (it is moving), but a resting one with the same
+     *   flag counts as unread.
      * Inputs:
      *   led (Object|null) - `{inner, outer}` from StatusLed.ledStateFor.
      * Output:
      *   string - one of the SUMMARY_PRIORITY keys.
      * Example:
-     *   bucketFor({inner: 'done', outer: 'off'}) -> 'unread'
+     *   bucketFor({inner: 'done', outer: 'unread'}) -> 'unread'
      * Example:
-     *   bucketFor({inner: 'idle', outer: 'off'}) -> 'idle'
+     *   bucketFor({inner: 'idle', outer: 'steady'}) -> 'done'
      */
     function bucketFor(led) {
         const l = led || {};
         if (l.inner === 'waiting-permission') return 'permission';
-        if (l.inner === 'waiting-input') return 'input';
+        // `notice` joins `waiting-input` in the SAME bucket even though
+        // the five-colour pass gave it its own hue. The bucket answers
+        // "what is the most interesting thing in this group", and both
+        // of these are one answer: a session that wants the user without
+        // being stopped by a yes/no. The colour split is a rendering
+        // decision on the ROW; hoisting it into the fold would change the
+        // documented priority, which it must not - see the header, and
+        // `inputIsStopped` in summarizeStates for how the hue is kept.
+        if (l.inner === 'waiting-input' || l.inner === 'notice') return 'input';
         if (l.inner === 'working') return 'working';
-        // `done` IS unread. The ring used to be what said so, and reading
-        // it here is what tied this fold to a ring that has since stopped
-        // talking about unread at all - see the module header.
-        if (l.inner === 'done') return 'unread';
-        if (l.inner === 'idle') return 'idle';
-        if (l.inner === 'dead') return 'dead';
+        // THE RING IS WHAT SAYS UNREAD, so the fold reads the RING for
+        // it, not the dot. That is the model the owner chose on
+        // 2026-09-09 and it is checked before the two rest states below,
+        // so a resting session with an unread turn bubbles above one
+        // without.
+        if (l.outer === 'unread') return 'unread';
+        // BOTH REST DOTS FALL HERE. `idle` is the one a live row paints
+        // once the unread ring has gone; `done` without that ring is
+        // only reachable from a matrix gallery, and it means the same
+        // thing, so it may not get a bucket of its own to disagree from.
+        if (l.inner === 'idle' || l.inner === 'done') return 'done';
+        // `disconnected` is a transport fact and no group feeds one in
+        // today - children come from a REST listing, which has no socket.
+        // It buckets with `dead` rather than adding an eighth bucket
+        // because they paint the same red and rank the same way: neither
+        // is the headline for a group that also holds live sessions.
+        if (l.inner === 'dead' || l.inner === 'disconnected') return 'dead';
         return 'unknown';
     }
 
@@ -191,6 +221,10 @@ console.log('[SessionStatusSummary Module] Loading...');
      *   AND the breathing ring, or one of the two facts is lost.
      *   `dim` is reserved for a group where nothing was measured at all,
      *   so an all-unknown group renders exactly like an unknown row.
+     *
+     *   ACTIVITY OUTRANKS UNREAD here, because the ring carries both
+     *   since 2026-09-09 and only one of them can be painted. A
+     *   breathing ring expires on its own; a green unread ring does not.
      * Inputs:
      *   present (Object) - a set of bucket keys seen, as a map to true.
      *   winner (string) - the bucket the fold selected.
@@ -198,15 +232,21 @@ console.log('[SessionStatusSummary Module] Loading...');
      *   string - a member of StatusLed.OUTER_STATES.
      * Example:
      *   outerFor({working: true, permission: true}, 'permission') -> 'active'
+     * Example:
+     *   outerFor({unread: true, done: true}, 'unread') -> 'unread'
      */
     function outerFor(present, winner) {
         for (let i = 0; i < ACTIVE_BUCKETS.length; i++) {
             if (present[ACTIVE_BUCKETS[i]]) return 'active';
         }
-        for (let i = 0; i < STEADY_BUCKETS.length; i++) {
-            if (present[STEADY_BUCKETS[i]]) return 'steady';
-        }
-        return winner === 'unknown' ? 'dim' : 'off';
+        // Nothing is running, but a turn finished in here and nobody has
+        // looked. Below activity on purpose - see the module header.
+        if (present.unread) return 'unread';
+        if (winner === 'unknown') return 'dim';
+        // Read and at rest, which the row paints as a still ring in the
+        // dot's own grey rather than as no ring at all.
+        if (winner === 'done') return 'steady';
+        return 'off';
     }
 
     /**
@@ -249,6 +289,8 @@ console.log('[SessionStatusSummary Module] Loading...');
         const present = Object.create(null);
         let unreadCount = 0;
         let total = 0;
+        // See the `input` bucket note in the loop below.
+        let inputIsStopped = false;
 
         for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
@@ -257,6 +299,18 @@ console.log('[SessionStatusSummary Module] Loading...');
             const led = globalThis.StatusLed.ledStateFor(signalsFor(row));
             const bucket = bucketFor(led);
             present[bucket] = true;
+            // ONE BUCKET, TWO HUES. The `input` bucket holds both
+            // `waiting-input` (stopped on a startup prompt, yellow) and
+            // `notice` (still working, wants a look, light blue). The
+            // bucket's RANK is the same for both - that is the product
+            // decision and it does not move - but the header still has
+            // to paint one of them, and a header that disagrees with its
+            // only child is a bug this suite already guards. Yellow wins
+            // inside the bucket, because a stopped session is the one
+            // that will not move until someone goes to it.
+            if (bucket === 'input' && led.inner === 'waiting-input') {
+                inputIsStopped = true;
+            }
             // Counted off the ROW's flag, not off the light: a working
             // session with an unread Stop buckets as `working` but is
             // still one unread thing waiting for the user, and the badge
@@ -277,8 +331,12 @@ console.log('[SessionStatusSummary Module] Loading...');
         for (let i = 0; i < SUMMARY_PRIORITY.length; i++) {
             const entry = SUMMARY_PRIORITY[i];
             if (present[entry.key]) {
+                const inner =
+                    entry.key === 'input' && !inputIsStopped
+                        ? 'notice'
+                        : entry.inner;
                 return {
-                    inner: entry.inner,
+                    inner: inner,
                     outer: outerFor(present, entry.key),
                     bucket: entry.key,
                     unreadCount: unreadCount,
@@ -316,7 +374,8 @@ console.log('[SessionStatusSummary Module] Loading...');
      *   string - HTML: one `.status-led`.
      * Example:
      *   summaryHtml([{activity_status: 'idle', unread: true}])
-     *   // '<span class="status-led" title="unread - 1 session, 1 unread" ...></span>'
+     *   // '<span class="status-led" data-inner="done" data-outer="unread"
+     *   //   title="unread - 1 session, 1 unread" ...></span>'
      */
     function summaryHtml(children, opts) {
         const o = opts || {};

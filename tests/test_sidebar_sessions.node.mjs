@@ -667,12 +667,16 @@ await test('a healthy arrangement renders NO notice - a check that never clears 
 });
 
 await test('held slots for gone sessions are counted on screen, and only when there are any', () => {
-    const Rows = loadRows();
-    assert.equal(Rows.missingNoteHtml([]), '');
-    const one = Rows.missingNoteHtml(['ghost']);
+    // The builder moved to session-sidebar-footer.js with the rest of
+    // the list's foot, so session-sidebar-rows.js could stay under the
+    // 500-line budget this same file asserts. Same markup, same rule.
+    const { window } = loadModules(['session-sidebar-footer.js']);
+    const Foot = window.SessionSidebarFooter;
+    assert.equal(Foot.missingNoteHtml([]), '');
+    const one = Foot.missingNoteHtml(['ghost']);
     assert.ok(one.includes('data-order-missing="1"'));
     assert.ok(one.includes('remembered position is held'));
-    assert.ok(Rows.missingNoteHtml(['a', 'b']).includes('data-order-missing="2"'));
+    assert.ok(Foot.missingNoteHtml(['a', 'b']).includes('data-order-missing="2"'));
 });
 
 // =====================================================================

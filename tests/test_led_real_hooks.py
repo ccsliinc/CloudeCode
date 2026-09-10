@@ -185,8 +185,10 @@ def test_a_real_turn_with_tool_calls_paints_working(live: RealHookApp) -> None:
         "UserPromptSubmit+tools",
         want_status=("working", "working_subagent"),
         want_inner=("working",),
-        # The ONLY breathing ring in the app, and it no longer varies
-        # with the unread flag: a working session is working.
+        # `active` ONLY, and it no longer varies with the unread flag: a
+        # working session is working. The unread ring is the green
+        # finished-turn one, and a ring saying a turn ENDED around a
+        # session that is mid-turn is two contradictory claims.
         want_outer=("active",),
         timeout=60.0,
     )
@@ -294,8 +296,11 @@ def test_a_trailing_subagent_stop_does_not_re_arm_the_heartbeat(
 def test_binding_a_terminal_clears_the_unread_light(live: RealHookApp) -> None:
     """A WS terminal binding is the ONLY thing that clears auto-unread.
 
-    The assertion is about the DOT, which since 2026-09-09 is where unread
-    lives: green ``done`` while unread, grey ``idle`` once read. It also
+    The assertion is about BOTH RINGS, which is what the owner's
+    2026-09-09 ruling makes observable: unread is the green ``unread``
+    ring around a ``done`` centre, read is the grey ``idle`` dot under a
+    ``steady`` ring. Both change, so a half-applied clear cannot pass. It
+    also
     asserts the status itself lands on ``idle``, because that is the state
     punchlist item 4 made UNREACHABLE: with the trailing ``SubagentStop``
     re-arming the heartbeat, clearing the flag revealed ``working``
@@ -331,9 +336,10 @@ def test_binding_a_terminal_clears_the_unread_light(live: RealHookApp) -> None:
         f"  last led:     {led}\n"
         f"  hooks seen:   {live.ledger.describe()}"
     )
-    assert led["inner"] == "idle" and led["outer"] == "off", (
-        # 2026-09-09: idle is its own grey inner state, paired with outer
-        # `off` - see docs/session-status.md and client/js/status-led.js.
+    assert led["inner"] == "idle" and led["outer"] == "steady", (
+        # 2026-09-09: `idle` is its own grey inner state and the ring goes
+        # from green to that same grey, still and lit. See
+        # docs/session-status.md and client/js/status-led.js.
         f"the light disagrees with the status it was given: {led} from "
         f"{observed}"
     )
@@ -371,9 +377,14 @@ def test_a_real_permission_request_paints_the_waiting_state(
         live,
         "PermissionRequest",
         want_status=("question", "notice"),
-        want_inner=("waiting-permission", "waiting-input"),
-        # Lit and STILL: the agent is stopped, so nothing is running.
-        want_outer=("steady",),
+        # THREE inner states, because either hook may be the one that
+        # arrives. `question` is yellow (the agent is stopped), `notice`
+        # is light blue (it is not), and a startup prompt landing here
+        # would be `waiting-input`. See client/js/status-led.js.
+        want_inner=("waiting-permission", "waiting-input", "notice"),
+        # The turn is still OPEN, so the ring breathes. Only a resting
+        # session stops moving.
+        want_outer=("active",),
     )
 
 

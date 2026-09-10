@@ -283,6 +283,10 @@ console.log('[SessionSidebarRows Module] Loading...');
                 startup: window.SessionStartupGate
                     ? window.SessionStartupGate.normalize(r.startup_gate)
                     : 'unknown',
+                // Same trap as `startup`: a dropped socket moves nothing
+                // else the server reports, so the row would never repaint.
+                transport: window.SessionTransport
+                    ? window.SessionTransport.stateFor(r.name) : 'unknown',
             })),
         });
     }
@@ -301,24 +305,6 @@ console.log('[SessionSidebarRows Module] Loading...');
         if (secs < 3600) return `${Math.floor(secs / 60)}m`;
         if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
         return `${Math.floor(secs / 86400)}d`;
-    }
-
-    /**
-     * Description: the note naming remembered positions whose sessions are
-     *   not currently running. It is deliberately not an error and not a
-     *   silent drop: the slots are kept, and the count says so out loud.
-     * Inputs: missing (Array<string>). Output: string - HTML, or ''.
-     */
-    function missingNoteHtml(missing) {
-        if (!missing || !missing.length) return '';
-        const n = missing.length;
-        const names = esc(missing.join(', '));
-        return (
-            `<div class="session-sidebar-note" data-order-missing="${n}" title="${names}">` +
-            `${n} remembered ${n === 1 ? 'position is' : 'positions are'} held for ` +
-            `${n === 1 ? 'a session' : 'sessions'} not currently listed` +
-            '</div>'
-        );
     }
 
     /**
@@ -364,15 +350,24 @@ console.log('[SessionSidebarRows Module] Loading...');
             ? window.SessionListingState.attentionHtml(listing)
             : '';
         const notice = arrangementNoticeHtml(arrangement);
+        // EVERYTHING BELOW THE ROWS lives in one module. The key and the
+        // version ride EVERY branch, including the two that draw no rows;
+        // the remembered-slots note rides the row branch alone, because
+        // it is about rows that are missing FROM IT.
+        const foot = window.SessionSidebarFooter;
+        const footer = foot ? foot.html() : '';
         if (!rows || rows.length === 0) {
-            if (listing && !listing.ok) return notice + attention;
-            return notice + '<div class="session-sidebar-empty">no other conversations</div>';
+            if (listing && !listing.ok) return notice + attention + footer;
+            const empty = '<div class="session-sidebar-empty">no other conversations</div>';
+            return notice + empty + footer;
         }
         const body = window.SessionSidebarGroups
             ? window.SessionSidebarGroups.bodyHtml(rows, density, arrangement, opts)
             : rows.map((r) => rowHtml(r, density)).join('');
-        return notice + attention + body + missingNoteHtml(missing);
+        return notice + attention + body
+            + (foot ? foot.missingNoteHtml(missing) : '') + footer;
     }
+
 
     /**
      * Description: build one row at the given density. The dot, the theme
@@ -399,7 +394,11 @@ console.log('[SessionSidebarRows Module] Loading...');
             ? window.SessionStatusUI.dotHtml(r.status, {
                 unread: !!r.unread,
                 startup_gate: r.startup_gate,
-                status_source: r.status_source })
+                status_source: r.status_source,
+                // A fact about THIS BROWSER that no server response can
+                // report. See client/js/session-transport.js.
+                transport: window.SessionTransport
+                    ? window.SessionTransport.stateFor(r.name) : 'unknown' })
             : '';
         // punchlist 19 - "needs a keypress". Empty string for both 'ready'
         // and 'unknown', so this adds nothing to a normal row. It rides
@@ -493,7 +492,7 @@ console.log('[SessionSidebarRows Module] Loading...');
 
     window.SessionSidebarRows = {
         listHtml, rowHtml, signature, esc, gripHtml, renameState,
-        pinButtonHtml, ageLabel, missingNoteHtml, arrangementNoticeHtml,
+        pinButtonHtml, ageLabel, arrangementNoticeHtml,
     };
     console.log('[SessionSidebarRows Module] Exported as window.SessionSidebarRows');
 })();

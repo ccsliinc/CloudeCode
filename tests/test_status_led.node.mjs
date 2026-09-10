@@ -15,15 +15,6 @@
 //      `unknown`/`dim` rather than on a state that claims a measurement.
 //   3. `unknown` IS NOT `done`. The single most repeated defect class in
 //      this project is a not-measured value rendering as a measured one.
-//   4. THE RING MEANS ACTIVITY AND NOTHING ELSE (2026-09-09). Only a
-//      session with something RUNNING in it may breathe. The outer
-//      `unread` state was retired because a finished, idle conversation
-//      was painting the loudest ring on the screen - the owner's report:
-//      "the ring around some of the leds are not gray, which means there
-//      should be background tasks. i dont think those few have any
-//      background tasks." Unread lives on the inner dot now, green
-//      against grey, and several assertions below are negative controls
-//      that no `unread` outer value can come back.
 //
 // The stylesheet assertions are deliberately here rather than in a manual
 // harness: `prefers-reduced-motion` support and the existence of a colour
@@ -93,19 +84,67 @@ const CSS = fs.readFileSync(
 );
 
 /**
- * The stylesheet with every `/* ... *\/` comment removed.
+ * The body of the one rule whose WHOLE selector list is `selector`.
  *
- * This file is heavily commented and several of those comments name the
- * very properties the structural assertions below forbid - the block
+ * Description: most assertions in this file reach a rule with
+ *   `CSS.split("<fragment> {")[1]`, which is fine while every selector
+ *   fragment appears once. It stopped being fine on 2026-09-09: the
+ *   cleared centre is now declared in a rule naming TWO states, so
+ *   `[data-outer='unread'] {` matches that shared rule as well as the
+ *   unread block, and `[data-inner='unknown'] {` is additionally a
+ *   substring of the legacy `.status-dot.status-led[...]` selector. A
+ *   split then reads the wrong body and the assertion fails while the
+ *   stylesheet is correct. This matches on the ENTIRE selector list
+ *   instead, with comments stripped first so a comment above a rule
+ *   cannot end up inside it, and asserts the match is unique.
+ * Inputs: selector (string) - the full selector list, comma and newline
+ *   normalised to ', ' (e.g. "a, b").
+ * Output: string - the declarations between the braces.
+ * Example: ruleBody(".status-led[data-outer='off']")
+ */
+function ruleBody(selector) {
+    const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    const hits = [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
+        (m) => m[1].trim().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ') === selector,
+    );
+    assert.equal(hits.length, 1, `expected exactly one "${selector}" rule`);
+    return hits[0][2];
+}
+
+/**
+ * The stylesheet with every CSS comment removed.
+ *
+ * status-led.css is heavily commented and several of those comments name
+ * the very properties the structural assertions below forbid - the block
  * explaining WHY the referee may not reset `box-shadow` contains the
  * string `box-shadow`, and the one explaining why nothing may move the
  * element contains `inset:`. Matching against the raw text makes those
- * explanations fail their own tests, so anything asserting "this
- * property does not appear" reads RULES instead. Assertions about a
- * specific declaration's text may use either.
+ * explanations fail their own tests, so anything asserting "this property
+ * does not appear" reads RULES instead. Assertions about a specific
+ * declaration's text may use either.
  * @type {string}
  */
 const RULES = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+
+/**
+ * Every body of a rule whose selector list matches, in source order.
+ *
+ * Description: `ruleBody` insists on exactly one match, which is right
+ *   for a state rule and wrong for `.status-led` itself - the base rule
+ *   and the reduced-motion override share that selector, deliberately.
+ *   Splitting the file on the selector TEXT is not an option either: the
+ *   file's own header comment quotes these selectors, so a text split
+ *   lands inside the prose. That has already cost one false pass.
+ * Inputs: selector (string) - normalized selector list.
+ * Output: string[] - one body per matching rule, in source order.
+ * Example: ruleBodies('.status-led')[0] // the base rule
+ */
+function ruleBodies(selector) {
+    const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    return [...stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter((m) => m[1].trim().replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ') === selector)
+        .map((m) => m[2]);
+}
 
 /**
  * Re-create a value in THIS realm.
@@ -142,95 +181,32 @@ test('both vocabularies are exported and non-empty', () => {
     assert.ok(Array.isArray(Led.OUTER_STATES) && Led.OUTER_STATES.length > 0);
 });
 
-test('the inner vocabulary is exactly the seven documented states', () => {
+test('the inner vocabulary is exactly the nine documented states', () => {
+    // `idle` joined on 2026-09-09: the READ half of rest, a solid grey
+    // dot, distinct from `done` (which is what sits inside the green
+    // unread ring) and from `unknown` (which is hollow). See
+    // docs/session-status.md.
     assert.deepEqual(plain(Led.INNER_STATES), [
         'working',
         'waiting-permission',
         'waiting-input',
+        'notice',
         'idle',
         'done',
         'dead',
+        'disconnected',
         'unknown',
     ]);
 });
 
-test('the outer vocabulary is exactly the four documented states', () => {
-    assert.deepEqual(plain(Led.OUTER_STATES), ['active', 'steady', 'off', 'dim']);
-});
-
-test('THE RETIRED `unread` OUTER STATE IS GONE FROM THE VOCABULARY', () => {
-    // The negative control for the whole 2026-09-09 change. A value left
-    // in the vocabulary is a value some caller can still pass, and it
-    // would render as an unstyled ring rather than fail loudly.
-    assert.equal(plain(Led.OUTER_STATES).indexOf('unread'), -1);
-    assert.ok(!CSS.includes("[data-outer='unread']"), 'and no rule paints it');
-    assert.ok(
-        !CSS.includes('--led-color-unread:'),
-        'and its colour token is retired with it',
-    );
-});
-
-test('NO ACTIVITY_STATUS CAN PRODUCE AN unread RING, WHATEVER THE FLAG', () => {
-    // The exhaustive sweep. This is the assertion that would have caught
-    // the defect: `finished_unread` used to answer `unread` here.
-    const statuses = [
-        'working',
-        'working_subagent',
-        'running',
-        'question',
-        'notice',
-        'finished_unread',
-        'idle',
-        'dead',
-        'stopped',
-        'unknown',
-        undefined,
-        'a-state-from-2030',
-    ];
-    for (const status of statuses) {
-        for (const unread of [true, false]) {
-            for (const gate of [undefined, 'awaiting_startup_prompt', 'unknown']) {
-                const led = Led.ledStateFor({
-                    activity_status: status,
-                    unread,
-                    startup_gate: gate,
-                });
-                assert.notEqual(
-                    led.outer,
-                    'unread',
-                    `${status}/unread=${unread}/gate=${gate} produced an unread ring`,
-                );
-                assert.ok(
-                    plain(Led.OUTER_STATES).indexOf(led.outer) >= 0,
-                    `${status} produced an outer value outside the vocabulary`,
-                );
-            }
-        }
-    }
-});
-
-test('ONLY A RUNNING SESSION BREATHES', () => {
-    // `active` is the one animated ring, so the set of statuses that map
-    // to it is the set of things the user will see moving. It must be
-    // exactly "work is happening", which after the 2026-09-09 change
-    // means the working family and nothing else.
-    const breathing = [];
-    for (const status of [
-        'working',
-        'working_subagent',
-        'running',
-        'question',
-        'notice',
-        'finished_unread',
-        'idle',
-        'dead',
-        'unknown',
-    ]) {
-        if (Led.ledStateFor({ activity_status: status, unread: true }).outer === 'active') {
-            breathing.push(status);
-        }
-    }
-    assert.deepEqual(breathing, ['working', 'working_subagent', 'running']);
+test('the outer vocabulary is exactly the five documented states', () => {
+    assert.deepEqual(plain(Led.OUTER_STATES), [
+        'active',
+        'steady',
+        'unread',
+        'off',
+        'dim',
+    ]);
 });
 
 test('the exported vocabularies are copies, so a caller cannot mutate them', () => {
@@ -315,10 +291,7 @@ test('a startup prompt is waiting-input even when the status says nothing', () =
             activity_status: 'idle',
             startup_gate: 'awaiting_startup_prompt',
         })),
-        // STEADY, not breathing: a session parked on its startup prompt
-        // is a live turn that is not moving, and a pulsing ring would
-        // claim work nobody measured.
-        { inner: 'waiting-input', outer: 'steady' },
+        { inner: 'waiting-input', outer: 'active' },
     );
 });
 
@@ -327,21 +300,24 @@ test('a startup gate that could not be measured does not claim anything', () => 
     // `awaiting`. Not having looked is not evidence of a prompt.
     assert.deepEqual(
         plain(Led.ledStateFor({ activity_status: 'idle', startup_gate: 'unknown' })),
-        { inner: 'idle', outer: 'off' },
+        { inner: 'idle', outer: 'steady' },
     );
 });
 
 test('question maps to waiting-permission - the agent is stopped', () => {
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'question' })), {
         inner: 'waiting-permission',
-        outer: 'steady',
+        outer: 'active',
     });
 });
 
-test('notice maps to waiting-input - it wants you but is not blocked', () => {
+test('notice has its own inner state - working, and wanting you', () => {
+    // The five-colour pass: "if it's still working but needs something
+    // from me, make it light blue". It is the only state on that side of
+    // the sentence, so it cannot share a name with the yellow ones.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'notice' })), {
-        inner: 'waiting-input',
-        outer: 'steady',
+        inner: 'notice',
+        outer: 'active',
     });
 });
 
@@ -355,23 +331,129 @@ test('question and notice do not paint the same inner dot', () => {
     );
 });
 
-test('a startup prompt and a notice share waiting-input', () => {
-    // Both mean "come and look"; neither means "approve this".
+test('a startup prompt is STOPPED, so it paints the permission yellow', () => {
+    // A pane parked on the folder-trust dialog is "fully stopped waiting
+    // for a response" - the same thing a permission prompt is, and the
+    // opposite of a notice, which is still working.
+    const gated = Led.ledStateFor({
+        activity_status: 'idle',
+        startup_gate: 'awaiting_startup_prompt',
+    });
+    assert.equal(gated.inner, 'waiting-input');
+    assert.notEqual(gated.inner, Led.ledStateFor({ activity_status: 'notice' }).inner);
+});
+
+test('the two yellows resolve to the same colour token', () => {
+    // Separate names, separate labels, ONE hue: the user's answer to a
+    // permission prompt and to a startup prompt is the same - go there
+    // and respond.
+    assert.ok(CSS.includes('--led-color-waiting: var(--color-warning'));
+    assert.ok(CSS.includes('--led-color-permission: var(--color-warning'));
+});
+
+test('light blue is not the green, and is not derived from it', () => {
+    // Red-green colourblindness is the case this pair has to survive, so
+    // the notice hue must come from a different family entirely rather
+    // than being a lighter green.
+    assert.ok(CSS.includes('--led-color-notice: var(--color-info'));
+    assert.ok(CSS.includes('--led-color-working: var(--color-success'));
+});
+
+test('BOTH a permission and a notice open still answers yellow', () => {
+    // `permission_open` and `notice_open` are two independent booleans
+    // server-side and permission is read first, so a session holding both
+    // arrives here as `question`. The client must not second-guess that.
+    const both = Led.ledStateFor({
+        activity_status: 'question',
+        notice_open: true,
+        permission_open: true,
+    });
+    assert.equal(both.inner, 'waiting-permission');
+    assert.notEqual(both.inner, 'notice');
+});
+
+test('a dropped socket is red, and outranks every session-side status', () => {
+    // Nothing we are showing is fresh once the transport is down, so the
+    // light may not keep asserting the last status it happened to see.
+    for (const status of [
+        'working', 'working_subagent', 'question', 'notice',
+        'finished_unread', 'idle', 'unknown', undefined,
+    ]) {
+        assert.deepEqual(
+            plain(Led.ledStateFor({ activity_status: status, transport: 'disconnected' })),
+            { inner: 'disconnected', outer: 'off' },
+            `transport must win over ${status}`,
+        );
+    }
+    assert.ok(CSS.includes('--led-color-disconnected: var(--color-danger'));
+    assert.ok(CSS.includes('--led-color-dead: var(--color-danger'));
+});
+
+test('DEAD AND DISCONNECTED SHARE A COLOUR AND MUST NOT SHARE WORDS', () => {
+    // One red was asked for, so the label is the only thing left that can
+    // tell a corpse from a lost connection.
+    const dead = Led.INNER_LABELS.dead;
+    const gone = Led.INNER_LABELS.disconnected;
+    assert.ok(dead && gone && dead !== gone);
+    assert.ok(/process/.test(dead), 'dead must say the process exited');
+    assert.ok(/connection/.test(gone), 'disconnected must say the connection is gone');
+});
+
+test('AND SO DO THE TWO YELLOWS - permission is not a startup prompt', () => {
+    // The mirror of the test above, and it became load-bearing on
+    // 2026-09-09 when the KEY collapsed to one row per colour. The legend
+    // now shows one yellow light and one sentence, so the only place a
+    // user can still learn which of the two a particular dot is, is the
+    // dot's own tooltip and accessible name. A paraphrase in both would
+    // retire that distinction without deleting anything.
+    const perm = Led.INNER_LABELS['waiting-permission'];
+    const input = Led.INNER_LABELS['waiting-input'];
+    assert.ok(perm && input && perm !== input);
+    assert.ok(/permission/.test(perm), `permission must say so, got "${perm}"`);
+    // Both are "stopped", which is the fact they genuinely share and the
+    // reason they paint one hue. It is the rest of the sentence that has
+    // to differ.
+    for (const label of [perm, input]) {
+        assert.ok(/stopped/.test(label), `got "${label}"`);
+    }
+    // And the pair really does resolve to ONE colour, or collapsing the
+    // key's two yellow rows into one would have hidden a real difference.
+    const inkFor = (state) => {
+        const block = CSS.split(`[data-inner='${state}'] {`)[1].split('}')[0];
+        return block.match(/--led-ink:\s*var\((--led-color-[a-z-]+)\)/)[1];
+    };
+    const hueOf = (token) => CSS.match(
+        new RegExp(`${token}:\\s*([^;]+);`),
+    )[1].trim();
     assert.equal(
-        Led.ledStateFor({
-            activity_status: 'idle',
-            startup_gate: 'awaiting_startup_prompt',
-        }).inner,
-        Led.ledStateFor({ activity_status: 'notice' }).inner,
+        hueOf(inkFor('waiting-permission')),
+        hueOf(inkFor('waiting-input')),
+        'the two yellow states must really paint the same hue',
+    );
+    assert.equal(
+        hueOf(inkFor('dead')),
+        hueOf(inkFor('disconnected')),
+        'and so must the two red ones',
     );
 });
 
+test('connected and unknown transports change nothing', () => {
+    // This browser holds a socket to at most ONE session; knowing nothing
+    // about the rest is the normal case, not a fault.
+    for (const t of ['connected', 'unknown', undefined, null, '']) {
+        assert.equal(
+            Led.ledStateFor({ activity_status: 'working', transport: t }).inner,
+            'working',
+        );
+    }
+});
+
 test('an unread flag never downgrades a blocking permission prompt', () => {
-    // The flag may not overwrite the dot that says the agent is stopped,
-    // and since 2026-09-09 it may not touch the ring either.
+    // The halo is where unread lives; it may not overwrite the dot that
+    // says the agent is stopped.
     assert.deepEqual(
         plain(Led.ledStateFor({ activity_status: 'question', unread: true })),
-        { inner: 'waiting-permission', outer: 'steady' },
+        { inner: 'waiting-permission', outer: 'active' },
     );
 });
 
@@ -389,59 +471,55 @@ test('the legacy `running` spelling still maps to working', () => {
     assert.equal(Led.ledStateFor({ activity_status: 'running' }).inner, 'working');
 });
 
-test('UNREAD RIDES THE INNER DOT, and never the ring', () => {
-    // The 2026-09-09 correction. A working session is working whether or
-    // not an earlier turn is unread - the ring says what is RUNNING, and
-    // the fact that something is unread is carried by the green dot on
-    // the resting states, where it is the only thing being said.
+test('A WORKING SESSION IS SOLID GREEN, unread flag or not', () => {
+    // It used to take the unread halo. After the five-colour pass that
+    // would paint the finished-turn ring around a session that has not
+    // finished, which is two contradictory claims on one light.
     const busy = Led.ledStateFor({ activity_status: 'working', unread: true });
     assert.deepEqual(plain(busy), { inner: 'working', outer: 'active' });
 
     const rested = Led.ledStateFor({ activity_status: 'idle', unread: true });
-    assert.deepEqual(plain(rested), { inner: 'done', outer: 'off' });
-
-    // And the read version of the same resting session differs in the
-    // DOT, which is what makes opening a tab visible at a glance.
-    const read = Led.ledStateFor({ activity_status: 'idle', unread: false });
-    assert.deepEqual(plain(read), { inner: 'idle', outer: 'off' });
-    assert.notEqual(read.inner, rested.inner);
+    assert.deepEqual(plain(rested), { inner: 'done', outer: 'unread' });
 });
 
-test('idle and seen is its OWN gray dot, at rest with no ring at all', () => {
-    // 2026-09-09: idle used to share `done`'s green fill and only the
-    // outer ring moved when a session was read - too subtle to register.
-    // It now gets a distinct inner state, and pairs with outer `off` so
-    // opening a tab reads as visibly calmer, not just differently haloed.
+test('idle and seen is a steady IDLE - the grey read dot, not the green one', () => {
+    // The owner's 2026-09-09 report: "i need the lights to go idle, (i
+    // think thats gray) when i click on a tab. there needs to be a
+    // read/idle color." Opening a tab therefore changes TWO things - the
+    // ring goes from green to the dot's own grey, and the recessed
+    // centre becomes a solid grey dot - rather than only the ring, which
+    // was too small a change to register at a glance.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'idle' })), {
         inner: 'idle',
-        outer: 'off',
+        outer: 'steady',
     });
 });
 
-test('idle is not done, and not unknown either', () => {
-    // The whole point of the split: a MEASURED at-rest session must not
-    // collapse onto the "finished, unread" green or the "never measured"
-    // grey - it is its own answer.
-    const idle = Led.ledStateFor({ activity_status: 'idle' });
-    assert.notEqual(idle.inner, 'done');
-    assert.notEqual(idle.inner, 'unknown');
-    assert.equal(idle.inner, 'idle');
+test('READ AND UNREAD DIFFER IN BOTH RINGS, which is what makes it visible', () => {
+    const read = plain(Led.ledStateFor({ activity_status: 'idle' }));
+    const unread = plain(Led.ledStateFor({ activity_status: 'finished_unread' }));
+    assert.notEqual(read.inner, unread.inner, 'the dot must change');
+    assert.notEqual(read.outer, unread.outer, 'the ring must change');
 });
 
-test('finished_unread is the green dot ALONE - no ring at all', () => {
-    // It used to breathe an amber ring, which read as background work on
-    // the one state that means the opposite of work.
+test('an idle row carrying the flag renders as finished_unread, not as idle', () => {
+    // DEFENSIVE, not normally reachable: the server derives this pair
+    // from the flag on every path (session_status.derive_read_state), so
+    // a well-formed row never carries both. If one ever arrives
+    // contradictory the FLAG wins, because session-status-summary.js
+    // buckets inner `done` as unread and a row that disagreed would make
+    // the group header lie about its own child.
+    assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'idle', unread: true })), {
+        inner: 'done',
+        outer: 'unread',
+    });
+});
+
+test('finished_unread is done plus an unread halo', () => {
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'finished_unread' })), {
         inner: 'done',
-        outer: 'off',
+        outer: 'unread',
     });
-});
-
-test('finished_unread and idle differ in the dot, not the ring', () => {
-    const unread = Led.ledStateFor({ activity_status: 'finished_unread' });
-    const read = Led.ledStateFor({ activity_status: 'idle' });
-    assert.equal(unread.outer, read.outer, 'both are at rest, so both rings are off');
-    assert.notEqual(unread.inner, read.inner, 'and the dot is the whole signal');
 });
 
 test('UNKNOWN IS NOT DONE - the false green this project keeps paying for', () => {
@@ -451,43 +529,231 @@ test('UNKNOWN IS NOT DONE - the false green this project keeps paying for', () =
     assert.equal(Led.ledStateFor({ activity_status: 'a-state-from-2030' }).inner, 'unknown');
 });
 
-test('an unmeasured session stays unmeasured even with the flag set', () => {
-    // A flag is not a measurement of what the session is DOING, and the
-    // ring may only speak about activity that was measured. `unknown`
-    // plus a set flag is not reachable from a well-formed row anyway -
-    // the server derives the resting pair from the flag on every path
-    // (src/core/session_status.derive_read_state) and never promotes an
-    // unmeasured session into one of them.
+test('UNKNOWN STAYS GREY even with an unread flag on it', () => {
+    // The green ring is a claim that a turn FINISHED here. Nothing was
+    // measured, so nothing may claim that - not having looked is not
+    // evidence of anything, which is the rule this whole component is
+    // built around.
     assert.deepEqual(plain(Led.ledStateFor({ activity_status: 'unknown', unread: true })), {
         inner: 'unknown',
         outer: 'dim',
     });
 });
 
+test('THE WHOLE MAPPING, one row per state, is what the user asked for', () => {
+    // Five colours: yellow stopped-and-waiting, light blue
+    // working-and-wanting-you, green working, grey at rest or not
+    // measured, red unusable. Plus the one two-part treatment: a
+    // finished turn nobody has looked at is a grey dot in a green ring.
+    const cases = [
+        [{ activity_status: 'question' }, 'waiting-permission', 'active'],
+        [{ activity_status: 'idle', startup_gate: 'awaiting_startup_prompt' },
+            'waiting-input', 'active'],
+        [{ activity_status: 'notice' }, 'notice', 'active'],
+        [{ activity_status: 'finished_unread' }, 'done', 'unread'],
+        [{ activity_status: 'working' }, 'working', 'active'],
+        [{ activity_status: 'working_subagent' }, 'working', 'active'],
+        [{ activity_status: 'idle' }, 'idle', 'steady'],
+        [{ activity_status: 'idle', unread: true }, 'done', 'unread'],
+        [{ activity_status: 'unknown' }, 'unknown', 'dim'],
+        [{ activity_status: 'dead' }, 'dead', 'off'],
+        [{ activity_status: 'stopped' }, 'dead', 'off'],
+        [{ transport: 'disconnected' }, 'disconnected', 'off'],
+    ];
+    for (const [signals, inner, outer] of cases) {
+        assert.deepEqual(
+            plain(Led.ledStateFor(signals)),
+            { inner, outer },
+            `wrong LED for ${JSON.stringify(signals)}`,
+        );
+    }
+});
 
-// ---- ONE ELEMENT, and why -----------------------------------------------
+test('the finished-turn ring is a GREEN RIM around the SAME recessed centre unknown shows', () => {
+    // The owner's 2026-09-09 correction, verbatim: "it should look like
+    // the 'status not measured' dot, but the outline should be green
+    // instead of light grey with the dark grey center". The first version
+    // filled the middle with the grey `done` dot, which read as two
+    // lights stacked. This is the treatment that replaced the unread
+    // envelope ICON, so it is the only thing left saying "there is
+    // something here for you".
+    const led = Led.ledStateFor({ activity_status: 'finished_unread' });
+    // THE STATE MACHINE DID NOT MOVE. Only the paint of the centre did,
+    // so the inner state is still `done` and still resolves to the grey
+    // ink every other resting light uses.
+    assert.equal(led.inner, 'done');
+    assert.equal(led.outer, 'unread');
+    assert.ok(CSS.includes('--led-color-idle: var(--color-fg-muted'));
+    assert.ok(/--led-ink:\s*var\(--led-color-idle\)/.test(
+        ruleBody(".status-led[data-inner='done']")));
+    // green rim
+    assert.ok(CSS.includes('--led-color-unread: var(--color-success'));
+    const block = ruleBody(".status-led[data-outer='unread']");
+    // The SAME inset rim `unknown` draws, green instead of grey, and it
+    // goes in through --led-inset-ring rather than as its own
+    // `box-shadow` declaration - there is one box-shadow property on
+    // this element and the outer ring needs it.
+    assert.ok(
+        /--led-inset-ring:\s*inset 0 0 0 var\(--led-hollow-width\) var\(--led-color-unread\)/
+            .test(block),
+        "unread reuses unknown's inset rim in green, as a shadow LAYER",
+    );
+    // AND IT MUST NOT RESIZE ITSELF. This block used to carry its own
+    // halo scale, which is precisely how `unread` and `active` came to
+    // paint two different diameters in one list. The size now lives
+    // once, on `.status-led`, and every state inherits it.
+    for (const geom of ['--led-size', '--led-ring-width', '--led-ring-feather-blur',
+                        '--led-glow-blur', '--led-glow-spread', '--led-lit-scale',
+                        '--led-halo-scale']) {
+        assert.ok(!new RegExp(geom + ':').test(block),
+            `no state may set ${geom} - see the geometry block`);
+    }
+});
+
+test("unread's centre matches unknown's centre - same recipe, one different hue", () => {
+    // This is the assertion the 2026-09-09 overshoot would have caught.
+    // Both hollow states clear the fill and draw a 2px inset rim of the
+    // SAME width from the SAME token; only the rim's colour differs. If
+    // one of them ever grows its own width or its own clear, the two
+    // stop being the same dot and the owner's requirement quietly stops
+    // holding.
+    const unknownBlock = ruleBody(".status-led[data-inner='unknown']");
+    const unreadBlock = ruleBody(".status-led[data-outer='unread']");
+    for (const block of [unknownBlock, unreadBlock]) {
+        assert.ok(
+            /--led-inset-ring:\s*inset 0 0 0 var\(--led-hollow-width\)/.test(block),
+            'both rims are the same width, read from one token',
+        );
+    }
+    assert.ok(/var\(--led-color-unknown\)/.test(unknownBlock), "unknown's rim is grey");
+    assert.ok(/var\(--led-color-unread\)/.test(unreadBlock), "unread's rim is green");
+    // The surround is the same faint grey in both, so the only thing the
+    // eye can tell apart is the rim.
+    assert.ok(/--led-ring-ink:\s*var\(--led-color-unknown\)/.test(unreadBlock));
+    assert.ok(/--led-glow-alpha:\s*0%/.test(unreadBlock), 'the ring does not glow');
+});
+
+test('THE CLEARED CENTRE IS ONE RECIPE SHARED BY BOTH HOLLOW STATES', () => {
+    // The unread ring and the `unknown` dot are the same construction in
+    // two hues, which is precisely what the owner asked for. Two copies
+    // of "clear the middle" would be free to drift into one state showing
+    // the real background and the other showing a grey somebody picked,
+    // and at nine pixels nobody would notice for weeks.
+    //
+    // So the clear is a TOKEN, set in exactly one rule that names both
+    // states. Asserting the count is the whole point: a second
+    // declaration is the drift.
+    const clears = CSS.match(/--led-fill:\s*transparent;/g) || [];
+    assert.equal(
+        clears.length, 1,
+        'the cleared centre must be declared in exactly one place',
+    );
+    assert.ok(
+        /--led-fill:\s*transparent;/.test(ruleBody(
+            ".status-led[data-inner='unknown'], .status-led[data-outer='unread']",
+        )),
+        'the one clear must name both hollow states',
+    );
+    // AND THE DOT MUST ACTUALLY READ THE TOKEN. `background-color:
+    // var(--led-ink)` here would refill both of them and every assertion
+    // above would still pass.
+    // ruleBody, not a naive split: the file's own header comment quotes
+    // these selectors, so a text split lands inside the prose.
+    const base = ruleBodies('.status-led')[0];
+    assert.ok(
+        /background-color:\s*var\(--led-fill\);/.test(base),
+        'the dot is painted with the fill token, not the ink',
+    );
+    assert.ok(
+        /--led-fill:\s*var\(--led-ink\);/.test(base),
+        'and it defaults to the ink, so a solid state stays solid',
+    );
+    // THE LEGACY COMPAT BLOCK IS THE TRAP. `.status-dot.status-led`
+    // outranks `.status-led[data-outer='unread']` and sits later in the
+    // file, so a `var(--led-ink)` there would silently put the grey blob
+    // back on every surface that emits the legacy class - which is all of
+    // them, via session-status-ui.js's dotHtml.
+    const legacy = ruleBody('.status-dot.status-led');
+    assert.ok(
+        /background-color:\s*var\(--led-fill\);/.test(legacy),
+        'the legacy compat block must not refill the hollow states',
+    );
+});
+
+test('grey at rest and grey unmeasured are told apart by SHAPE', () => {
+    // Same hue on purpose, which is how "we did not look" stays
+    // distinguishable from "we looked and it is quiet" without ranking
+    // one above the other with a louder colour. `unknown` keeps its 2px
+    // rim on the 9px dot and a cleared middle; `idle` is a SOLID dot,
+    // because it is a measurement and the other is the absence of one.
+    assert.ok(CSS.includes('--led-color-unknown: var(--color-fg-muted'));
+    assert.ok(CSS.includes('--led-color-idle: var(--color-fg-muted'));
+    const hollow = ruleBody(".status-led[data-inner='unknown']");
+    assert.ok(/--led-inset-ring:\s*inset/.test(hollow), 'the rim is an inset shadow layer');
+    assert.ok(/var\(--led-color-unknown\)/.test(hollow), 'the rim is grey');
+    const idle = ruleBody(".status-led[data-inner='idle']");
+    assert.ok(!/--led-inset-ring:/.test(idle), 'idle is not hollow');
+    assert.ok(!/--led-fill:\s*transparent/.test(idle), 'idle keeps its fill');
+    // AND THE TWO HOLLOW STATES ARE NOT THE SAME LIGHT. They share a
+    // construction and must not share a hue, or the legend's last two
+    // rows would be describing one dot.
+    const ring = ruleBody(".status-led[data-outer='unread']");
+    assert.ok(/var\(--led-color-unread\)/.test(ring), 'the ring is green');
+});
+
+// ---- the stylesheet ---------------------------------------------------
+
+test('every inner state has a colour rule', () => {
+    for (const inner of plain(Led.INNER_STATES)) {
+        assert.ok(
+            CSS.includes(`[data-inner='${inner}']`),
+            `no rule for inner state ${inner}`,
+        );
+    }
+});
+
+test('every outer state has a rule', () => {
+    for (const outer of plain(Led.OUTER_STATES)) {
+        assert.ok(
+            CSS.includes(`[data-outer='${outer}']`),
+            `no rule for outer state ${outer}`,
+        );
+    }
+});
+
+test('every state colour is a named token declared in one place', () => {
+    for (const token of [
+        '--led-color-working',
+        '--led-color-waiting',
+        '--led-color-permission',
+        '--led-color-notice',
+        '--led-color-idle',
+        '--led-color-dead',
+        '--led-color-disconnected',
+        '--led-color-unknown',
+        '--led-color-unread',
+    ]) {
+        const declarations = CSS.split(`${token}:`).length - 1;
+        assert.equal(declarations, 1, `${token} must be declared exactly once`);
+    }
+});
+
+
+
+
+
+
+// ---- compact-size geometry ---------------------------------------------
 //
-// The owner's report, twice. First: "the leds are not lined up directly
-// centered so there is a weird offset." That was traced to the halo's own
-// internal asymmetry - a `top`/`left` percentage plus a negative margin
-// plus a separate width calc, three independently-rounded quantities that
-// all had to agree - and fixed by giving the halo a single symmetric
-// `inset`. Then, after that shipped: "the circles are still not lining up
-// properly. can we do the same with only one icon?"
-//
-// The remaining drift was never inside the halo. It was BETWEEN TWO
-// BOXES. The layout engine snaps a box's position and size to the device
-// pixel grid, and it does that for the halo's box independently of the
-// dot's, so whenever the dot landed on a fractional x/y - routine inside
-// a flex row, or wherever a text baseline puts an inline box on a half
-// pixel - the two rounded different ways and came apart. No arrangement
-// of a second box can fix that, because the second box is the defect.
-//
-// A box-shadow is not a box. It is painted from the element's own border
-// box at that box's own subpixel position, so it cannot be snapped to a
-// different grid than the fill it surrounds. These tests pin the shape of
-// that fix: no pseudo-element, one box-shadow, and nothing in the
-// animation that can move the element.
+// The owner's report ("on the compact view the breathing is way too big.
+// also in the homepage") traced to a halo that grew to about 35px across
+// at the breathing peak while the dot itself renders at the CSS default
+// of 9px everywhere - the sidebar row and the launchpad card both call
+// `dotHtml()` with no `size`, so both got that oversized halo. These pin
+// the tuned-down geometry so a future edit cannot silently regrow it.
+
+
+
 
 test('the halo pseudo-element is gone entirely', () => {
     // The whole point of the rewrite. A ::after on this component is a
@@ -680,42 +946,33 @@ test('the referee animation reset excludes the breathing state', () => {
     );
 });
 
-// ---- the stylesheet ---------------------------------------------------
-
-test('every inner state has a colour rule', () => {
-    for (const inner of plain(Led.INNER_STATES)) {
-        assert.ok(
-            CSS.includes(`[data-inner='${inner}']`),
-            `no rule for inner state ${inner}`,
-        );
-    }
-});
-
-test('idle has its own fill token, distinct from both unknown and done', () => {
-    const idleBlock = RULES.split(".status-led[data-inner='idle'] {")[1].split(
-        '\n}',
-    )[0];
+test('idle has its own NAMED token, and is told apart by shape not hue', () => {
+    // `idle` and `unknown` resolve to the same grey ON PURPOSE - neither
+    // is interesting to look at and neither may be dressed up as a
+    // measured healthy state - so what separates them is SHAPE: `idle`
+    // is a solid dot, `unknown` is hollow. See the "told apart by SHAPE"
+    // case above, which is the other half of this pair.
+    //
+    // The token is still its OWN name rather than an alias, because a
+    // theme has to be able to pull the two apart without editing this
+    // file, and because the two answer different questions: measured and
+    // at rest, versus not measured at all.
+    const idleBlock = RULES.split(".status-led[data-inner='idle'] {")[1].split('\n}')[0];
     assert.ok(
         idleBlock.includes('--led-ink: var(--led-color-idle)'),
-        'idle must resolve to its own colour token, not reuse done or unknown',
-    );
-    assert.ok(
-        !idleBlock.includes('var(--led-color-done)'),
-        'idle must not fall back to the done colour',
+        'idle must resolve through its own colour token',
     );
     assert.ok(
         !idleBlock.includes('var(--led-color-unknown)'),
-        'idle must not fall back to the unknown colour',
+        'idle must not reach for the unknown token directly',
     );
-    // The two greys must actually be different values, or the "own
-    // colour token" is cosmetic. Compared as the literal fallback behind
-    // each var(), since that is what a themeless context resolves to.
-    const idleFallback = CSS.match(/--led-color-idle:\s*var\([^,]+,\s*([^)]+)\)/)[1].trim();
-    const unknownFallback = CSS.match(/--led-color-unknown:\s*var\([^,]+,\s*([^)]+)\)/)[1].trim();
-    assert.notEqual(
-        idleFallback,
-        unknownFallback,
-        'idle and unknown must not resolve to the same literal grey',
+    // Both tokens exist and are declared separately, so redefining one
+    // in a theme cannot move the other.
+    assert.ok(/--led-color-idle:\s*var\(/.test(CSS));
+    assert.ok(/--led-color-unknown:\s*var\(/.test(CSS));
+    assert.equal(
+        (CSS.match(/--led-color-idle:/g) || []).length, 1,
+        'declared exactly once',
     );
 });
 
@@ -733,68 +990,6 @@ test('idle stays a SOLID dot - unknown is the only hollow one', () => {
     );
 });
 
-test('idle renders through ledHtml with outer off and shows no lit ring', () => {
-    // The owner's ask: clicking a tab should read as calm, at-rest grey -
-    // no ring, no glow. Rendered through the real ledStateFor -> ledHtml
-    // chain, not asserted as a fact about the mapping alone.
-    const state = Led.ledStateFor({ activity_status: 'idle' });
-    assert.deepEqual(plain(state), { inner: 'idle', outer: 'off' });
-    const offBlock = RULES.split(".status-led[data-outer='off'] {")[1].split(
-        '\n}',
-    )[0];
-    assert.ok(offBlock.includes('--led-ring-alpha: 0%'), 'idle\'s outer ring must be fully off');
-    assert.ok(offBlock.includes('--led-glow-alpha: 0%'), 'idle\'s glow must be fully off');
-});
-
-test('every outer state has a rule, and every one of them sets the ring', () => {
-    for (const outer of plain(Led.OUTER_STATES)) {
-        assert.ok(
-            CSS.includes(`[data-outer='${outer}']`),
-            `no rule for outer state ${outer}`,
-        );
-        const block = RULES.split(`.status-led[data-outer='${outer}'] {`)[1].split(
-            '\n}',
-        )[0];
-        assert.ok(
-            block.includes('--led-ring-alpha:'),
-            `outer state ${outer} must say how solid its ring reads`,
-        );
-        assert.ok(
-            block.includes('--led-glow-alpha:'),
-            `outer state ${outer} must say how strong its glow reads`,
-        );
-    }
-});
-
-test('the state colours are named tokens in one place', () => {
-    for (const token of [
-        '--led-color-working',
-        '--led-color-waiting',
-        '--led-color-permission',
-        '--led-color-done',
-        '--led-color-idle',
-        '--led-color-dead',
-        '--led-color-unknown',
-    ]) {
-        const declarations = CSS.split(`${token}:`).length - 1;
-        assert.equal(declarations, 1, `${token} must be declared exactly once`);
-    }
-});
-
-test('the retired halo tokens are gone, not left behind as dead weight', () => {
-    // --led-halo-scale sized a box that no longer exists, and
-    // --led-halo-inset positioned it. A token nothing reads is a false
-    // lead for the next person tuning this component.
-    for (const token of [
-        '--led-halo-scale',
-        '--led-halo-inset',
-        '--led-halo-ink',
-        '--led-halo-opacity',
-    ]) {
-        assert.ok(!RULES.includes(token), `${token} must be retired with the halo box`);
-    }
-});
-
 test('EXACTLY ONE outer state animates, and the animation is on the element', () => {
     assert.ok(CSS.includes(".status-led[data-outer='active'] {"));
     assert.equal(
@@ -808,11 +1003,6 @@ test('EXACTLY ONE outer state animates, and the animation is on the element', ()
         !/^\.status-led\s*\{[^}]*animation:\s*(?!none)/m.test(RULES),
         'the base rule must not carry a running animation',
     );
-});
-
-test('done is steady - it has no animation', () => {
-    const block = RULES.split(".status-led[data-outer='steady'] {")[1].split('\n}')[0];
-    assert.ok(!block.includes('animation'), 'steady must not pulse');
 });
 
 test('dead has no ring and no glow at all, rather than dim ones', () => {

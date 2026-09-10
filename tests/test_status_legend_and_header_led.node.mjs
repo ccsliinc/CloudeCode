@@ -141,8 +141,11 @@ test('C: every state reads the way the owner asked for', () => {
 
     assert.equal(UI.labelFor('idle'), 'idle - read, nothing running');
     assert.equal(UI.labelFor('finished_unread'), 'done - unread');
-    assert.equal(UI.labelFor('notice'), 'wants your attention');
-    assert.equal(UI.labelFor('question'), 'waiting for permission');
+    // The two attention states name WHO is waiting on whom, because at a
+    // glance a bare "waiting for permission" reads as the app waiting on
+    // something rather than claude waiting on the user.
+    assert.equal(UI.labelFor('notice'), 'your turn - claude wants your attention');
+    assert.equal(UI.labelFor('question'), 'your turn - claude needs your permission');
     assert.equal(UI.labelFor('working'), 'working');
     assert.equal(UI.labelFor('unknown'), 'not measured');
     assert.equal(UI.labelFor('dead'), 'dead - process exited');

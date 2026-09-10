@@ -36,6 +36,7 @@ here and are not expected to still run.
 | `verify_status_dot_shape.py` | `unknown` renders as a different shape from every definite status | `ade0def3` | `tests/test_status_led.node.mjs` |
 | `verify_toast_dismiss.py` | toasts leave on user action, stay otherwise, scoped correctly | `a945771` | `tests/test_toast_dismiss.node.mjs` |
 | `verify_toast_stacking.py` | a burst of toasts stays legible, the cap/overflow row is a real measured box | `649ddb92` | `tests/test_toast_stacking.node.mjs` |
+| `verify_status_led_geometry.py` | that every (inner, outer) LED pair paints one lit diameter, measured in a real Chromium under the app's CSP | the 1.2 merge, 2026-09-09 | `tests/test_status_led.node.mjs` |
 | `verify-adopt-resize.py` | an adopted tmux session resizes like any other | `ea98931b` | `tests/test_adopt_resize.py` |
 
 ## Kept in place, not archived
@@ -76,3 +77,13 @@ reasons below. They still live in `scripts/`.
   itself), last touched 2026-09-07, in a sidebar-groups area of the
   codebase under active edit as of this archiving pass. Kept rather than
   archived mid-development.
+
+- `verify_status_led_geometry.py` - arrived from the other line of
+  development at the 1.2 merge and was archived on the way in rather than
+  landing top-level, per the convention this directory records. IT WAS
+  WRITTEN AGAINST A CONSTRUCTION THAT DID NOT SHIP: it measures the
+  `::after` halo plus `--led-lit-scale` composition, and the LED that
+  shipped draws both rings as layers of ONE box-shadow with no
+  pseudo-element at all. Re-read it before trusting a run. The rule it was
+  proving - one lit diameter for every state - did ship, and is asserted
+  statically in `tests/test_status_led.node.mjs`.

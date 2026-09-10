@@ -2,41 +2,39 @@
  * Status LED - the two-ring session indicator.
  *
  * WHY TWO RINGS AND NOT ONE DOT. The old `.status-dot` collapsed two
- * genuinely independent questions into one colour: WHAT STATE the chat is
- * in (working, blocked on me, finished, dead) and WHETHER ANYTHING IS
- * RUNNING in it right now. Those are not the same question - an agent
- * stopped on a permission prompt is a live turn making no progress, and a
- * session that finished an hour ago and one still mid-tool-call are both
- * "not blocked". Two rings say both at once.
+ * genuinely independent questions into one colour: WHAT is the chat doing
+ * (is it working, is it blocked on me, is it dead) and WHETHER it wants my
+ * attention (is there something unread here). One dot cannot answer both -
+ * `finished_unread` had to exist as a whole extra state just to say "done,
+ * and also unread", and there was no way at all to say "working, and also
+ * unread". Two rings say both at once and need no combined state.
  *
  * So this module models the LED as TWO INDEPENDENT DIMENSIONS:
  *
- *   inner dot  - the chat's own status, INCLUDING read versus unread.
- *                One of INNER_STATES.
- *   outer ring - ACTIVITY ONLY. One of OUTER_STATES.
+ *   inner dot  - the chat's own status. One of INNER_STATES.
+ *   outer halo - activity and attention. One of OUTER_STATES.
  *
- * THE RING MEANS ACTIVITY AND NOTHING ELSE (2026-09-09). The owner's
- * original spec, verbatim: "behind this is a larger glowing circle is
- * colored and pulsing on activity and steady on done". It had drifted:
- * `finished_unread` painted an amber breathing ring, so a session that
- * had merely finished a turn looked exactly like one with work running
- * in it. The owner's report: "the ring around some of the leds are not
- * gray, which means there should be background tasks. i dont think those
- * few have any background tasks." A pulsing ring is the loudest thing on
- * the screen and it was firing for the quietest state there is.
+ * THE RING CARRIES UNREAD, and the owner settled that on 2026-09-09.
+ * Two lines of this project fixed the same reported defect - a ring
+ * pulsing on sessions with nothing running - in opposite ways. One
+ * retired the outer `unread` state and moved unread onto the inner dot;
+ * this one kept the ring, stopped it breathing, and made it a crisp
+ * still green. The owner picked THIS one. So `unread` is an outer state,
+ * a finished turn nobody has read paints a green ring, and motion is
+ * reserved for `active` - a light that MOVES is a session that is
+ * moving, which is the whole of the original complaint. Do not
+ * reintroduce the inner-dot-unread model; it was decided against, not
+ * forgotten.
  *
- * So the outer `unread` state is RETIRED, and unread now lives entirely
- * on the inner dot: green `done` is finished-and-unread, grey `idle` is
- * finished-and-read. One dimension, one meaning - which is what the two
- * rings were for in the first place.
- *
- * BOTH ARE DRAWN ON ONE ELEMENT. The inner dot is the span's fill and
- * the outer ring is a box-shadow on that same span - there is no
- * pseudo-element and no second box. A box gets pixel-snapped
- * independently of its parent's box, so a halo drawn as its own box came
- * apart from the dot by a device pixel whenever the dot landed on a
- * fractional x/y; a box-shadow is painted from the element's own border
- * box and cannot. See the header of client/css/status-led.css.
+ * BOTH RINGS ARE DRAWN ON ONE ELEMENT. The inner dot is the span's
+ * fill and the outer ring and its glow are layers of ONE `box-shadow` on
+ * that same span - there is no pseudo-element and there may not be one.
+ * A box gets pixel-snapped independently of its parent's box, so a halo
+ * drawn as its own box came apart from the dot by a device pixel
+ * whenever the dot landed on a fractional x/y (routine in a flex row).
+ * A box-shadow is painted from the element's own border box, so
+ * concentric is the only geometry it can have. See the header of
+ * client/css/status-led.css.
  *
  * They are set separately (`data-inner` / `data-outer`) and every
  * combination renders. That is deliberate: it is what lets a gallery
@@ -70,19 +68,25 @@ console.log('[StatusLed Module] Loading...');
      * Notification - it wants attention and is not stopped), and the
      * startup gate feeds `waiting-input` too. See docs/session-status.md.
      *
-     * `idle` and `done` are separate because they answer different
-     * questions about a session at rest. `idle` is READ: a turn ended,
-     * nothing is waiting, the user has already seen it - a NEUTRAL grey,
-     * the calmest colour on the dial. `done` means "there is something
-     * here you have not read yet". Since 2026-09-09 that pair is the
-     * ONLY place unread is expressed: the ring says nothing about it,
-     * so green versus grey is the whole signal and it carries no
-     * animation with it.
-     * Added 2026-09-09, owner's report verbatim: "i need the lights to go
-     * idle, (i think thats gray) when i click on a tab. there needs to be
-     * a read/idle color." Before this, opening a tab left the inner dot
-     * green (`done`) whether or not it had been read, so the only visible
-     * change was the outer ring - too subtle to register at a glance.
+     * `notice` and `disconnected` were added on 2026-09-08 with the
+     * FIVE-COLOUR pass. `notice` used to share `waiting-input`; it now has
+     * its own name because it is the only state that is BOTH working and
+     * asking for the user, and the owner asked for it to read light blue
+     * rather than yellow ("if it's still working but needs something from
+     * me, make it light blue"). `disconnected` is a TRANSPORT fact, not a
+     * session fact: the browser's socket to this session is down, so no
+     * status we are showing is fresh. It is red like `dead` and says
+     * something different in words - see INNER_LABELS.
+     *
+     * `idle` was added on 2026-09-09 and is the READ half of rest.
+     * Owner's report, verbatim: "i need the lights to go idle, (i think
+     * thats gray) when i click on a tab. there needs to be a read/idle
+     * color." Before it, opening a tab left the dot exactly as it was
+     * and only the ring changed, which is too small a change to register
+     * at a glance. `done` is the state a finished turn holds while the
+     * green unread ring is around it; `idle` is what the dot becomes
+     * once that ring goes. The ring still carries unread - see the
+     * module header - and this pair is what makes its departure visible.
      *
      * @type {string[]}
      */
@@ -90,28 +94,33 @@ console.log('[StatusLed Module] Loading...');
         'working',
         'waiting-permission',
         'waiting-input',
+        'notice',
         'idle',
         'done',
         'dead',
+        'disconnected',
         'unknown',
     ];
 
     /**
-     * Outer-ring vocabulary: ACTIVITY, and nothing else.
+     * Outer-halo vocabulary: activity and attention.
      *
-     * `active` is the only state that animates, and it means exactly one
-     * thing: something is running in this session right now. `steady` is
-     * lit and still - the agent is stopped waiting on the user, which is
-     * a live turn that is not moving. `off` is at rest: finished, idle or
-     * dead, read or unread alike. `dim` is not measured.
-     *
-     * `unread` WAS a member and was retired 2026-09-09 - see the module
-     * header. It made the calmest state on the dial paint the loudest
-     * ring, and a ring that means two things means neither.
+     * `active` means the session is MOVING and it breathes. `unread`
+     * means a turn FINISHED here and nobody has looked: since the
+     * five-colour pass it is a crisp, still green ring rather than a
+     * breathing glow, because an outline that pulses stops reading as an
+     * outline at nine pixels. Motion is therefore now a signal in its own
+     * right - a light that moves is a session that is moving. Since
+     * 2026-09-09 the ring's own DOT is cleared (the stylesheet does that
+     * with the same `--led-fill` the `unknown` dot uses, so it reads as
+     * one ring rather than as a ring around a second light), but the
+     * CENTRE is not empty: it shows the same faint grey dot `unknown`
+     * shows, via the halo bleeding through - only the ring recolours to
+     * green. See client/css/status-led.css for the composition.
      *
      * @type {string[]}
      */
-    const OUTER_STATES = ['active', 'steady', 'off', 'dim'];
+    const OUTER_STATES = ['active', 'steady', 'unread', 'off', 'dim'];
 
     /** @type {string} Fallback inner state for any unrecognised input. */
     const INNER_FALLBACK = 'unknown';
@@ -126,11 +135,19 @@ console.log('[StatusLed Module] Loading...');
      */
     const INNER_LABELS = {
         working: 'working',
-        'waiting-permission': 'waiting on you - permission',
-        'waiting-input': 'waiting on you',
+        'waiting-permission': 'stopped - waiting on your permission',
+        'waiting-input': 'stopped - waiting on you',
+        notice: 'still working - wants your attention',
         idle: 'idle - already read',
-        done: 'done - unread',
-        dead: 'dead - process exited',
+        done: 'done',
+        // TWO RED STATES, TWO DIFFERENT FACTS, and the colour cannot say
+        // which. `dead` is a pane whose process exited - the session is
+        // still there, it can be restarted. `disconnected` is OUR socket
+        // being down: the session may well be fine, we simply have no
+        // live word from it. The words are the only thing separating
+        // them, so they must not be paraphrases of each other.
+        dead: 'dead - the process exited',
+        disconnected: 'disconnected - no live connection to this session',
         unknown: 'status not measured',
     };
 
@@ -142,6 +159,7 @@ console.log('[StatusLed Module] Loading...');
     const OUTER_LABELS = {
         active: '',
         steady: '',
+        unread: 'unread',
         off: '',
         dim: '',
     };
@@ -197,13 +215,11 @@ console.log('[StatusLed Module] Loading...');
      *
      * Description: colour and motion never carry the meaning alone, so
      *   every LED ships this string as both `title` and `aria-label`. The
-     *   outer half is appended only when it says something new, and
-     *   since the ring carries activity alone - which the inner state
-     *   already implies - no outer state adds a word today. The hook is
-     *   kept because a future outer state might.
+     *   outer half is appended only when it says something new - "done,
+     *   unread" is worth two words, "working" plus `active` is not.
      * Inputs: inner (string), outer (string) - already normalized.
      * Output: string.
-     * Example: ledLabel('done', 'off') -> 'done - unread'
+     * Example: ledLabel('done', 'unread') -> 'done, unread'
      */
     function ledLabel(inner, outer) {
         const head = INNER_LABELS[inner];
@@ -233,7 +249,7 @@ console.log('[StatusLed Module] Loading...');
      *     optional CSS length for the whole LED (default comes from the
      *     stylesheet); it is emitted as a custom property, never as a
      *     raw style rule, so the stylesheet keeps control of the ring
-     *     and glow around it. `title` overrides the derived
+     *     and the glow around it. `title` overrides the derived
      *     label when a caller has a more specific sentence.
      * Output:
      *   string - HTML for one inline `<span>`.
@@ -283,35 +299,42 @@ console.log('[StatusLed Module] Loading...');
      *   things in two places.
      *
      *   Order matters and encodes the priority the user asked for:
-     *   dead outranks everything (a corpse is not "busy"), then anything
-     *   blocking on the user, then activity, then rest.
-     *
-     *   THE RING IS DERIVED FROM ONE QUESTION: is something running in
-     *   this session right now. `working` breathes, a stopped-but-live
-     *   turn (`question` / `notice` / a startup prompt) is lit and still,
-     *   and every resting or unmeasurable state leaves it off or dim.
-     *   Unread never touches it - it is the inner dot's business, green
-     *   for finished-and-unread against grey for read. See the module
-     *   header for what that ring was claiming before 2026-09-09.
+     *   a dead transport outranks everything (nothing we are showing is
+     *   fresh), then a dead pane (a corpse is not "busy"), then anything
+     *   blocking on the user, then activity, then attention, then rest.
+     *   `unread` is applied to the HALO independently of all of it, which
+     *   is the whole reason there are two rings - see the module header.
      * Inputs:
-     *   signals (Object|null) - `{activity_status, unread, startup_gate}`
-     *     exactly as they arrive on a `/sessions/list` row. All three are
-     *     optional; missing ones degrade to not-measured rather than to a
-     *     confident answer.
+     *   signals (Object|null) -
+     *     `{activity_status, unread, startup_gate, transport}` as they
+     *     arrive on a `/sessions/list` row, plus `transport` from
+     *     client/js/session-transport.js for the one session this browser
+     *     actually holds a socket to. All are optional; missing ones
+     *     degrade to not-measured rather than to a confident answer.
      * Output:
      *   Object - `{inner, outer}`, both members of the vocabularies.
      * Example:
-     *   ledStateFor({activity_status: 'idle'})
-     *   // {inner: 'idle', outer: 'off'}
-     * Example:
      *   ledStateFor({activity_status: 'idle', unread: true})
-     *   // {inner: 'done', outer: 'off'}
+     *   // {inner: 'done', outer: 'unread'}
+     * Example:
+     *   ledStateFor({activity_status: 'idle'})
+     *   // {inner: 'idle', outer: 'steady'}
      */
     function ledStateFor(signals) {
         const s = signals || {};
         const status = s.activity_status;
         const unread = !!s.unread;
         const gate = s.startup_gate;
+
+        // THE TRANSPORT IS READ FIRST, and only the word `disconnected`
+        // counts. Every other value - `connected`, `unknown`, absent -
+        // falls through, because this browser holds a socket to at most
+        // ONE session and knowing nothing about the rest is the normal
+        // case, not a fault. A light we cannot refresh must not keep
+        // asserting the last status it happened to see.
+        if (s.transport === 'disconnected') {
+            return { inner: 'disconnected', outer: 'off' };
+        }
 
         // A dead pane is dead whatever else is true of it, and an unread
         // flag must not paint a corpse as something to go and read.
@@ -323,74 +346,88 @@ console.log('[StatusLed Module] Loading...');
         // which is a separate probe from the hook stream, so it is
         // checked on its own rather than folded into `activity_status`.
         if (gate === 'awaiting_startup_prompt') {
-            return { inner: 'waiting-input', outer: 'steady' };
+            return { inner: 'waiting-input', outer: 'active' };
         }
 
         // THE AGENT IS STOPPED. `question` is a PermissionRequest and
         // nothing else since the 2026-09-08 split - it gets the louder
         // inner hue, because a yes/no nobody has answered is the one
         // state on this screen that will not resolve itself.
-        // The ring is STEADY, not breathing: the agent is stopped, and a
-        // pulsing ring means something is running. Lit because the turn
-        // is still open - a parked turn is not a resting session.
         if (status === 'question') {
-            return { inner: 'waiting-permission', outer: 'steady' };
+            return { inner: 'waiting-permission', outer: 'active' };
         }
 
-        // Claude asked to be looked at and is NOT blocked. Same ring as a
-        // permission prompt - both are live turns that are not moving -
-        // and the calmer of the two inner hues, shared with the startup
-        // gate above because both are "come and look", not "approve
-        // this".
+        // Claude asked to be looked at and is NOT blocked. Its own inner
+        // state and its own hue since the five-colour pass: the owner's
+        // rule is "if the session is fully stopped waiting for a
+        // response, then yellow. if it's still working but needs
+        // something from me, make it light blue". This is the only state
+        // on the second side of that sentence, so it cannot share a name
+        // with the two yellow ones above.
         if (status === 'notice') {
-            return { inner: 'waiting-input', outer: 'steady' };
+            return { inner: 'notice', outer: 'active' };
         }
 
         // `running` is the pre-hook-era spelling and still arrives from a
         // stale cached response; mapping it here rather than letting it
         // fall through keeps a half-upgraded deployment meaningful.
+        //
+        // A WORKING SESSION IS SOLID GREEN, unread flag or not. It used
+        // to take the unread halo, which after the five-colour pass would
+        // paint the finished-turn ring around a running session and say
+        // two contradictory things at once. Unread on a session that is
+        // moving resolves itself the moment it stops, and the row will
+        // say so then.
         if (
             status === 'working' ||
             status === 'working_subagent' ||
             status === 'running'
         ) {
-            // THE ONLY BREATHING RING IN THE APP. Unread is deliberately
-            // not consulted: a working session is working, and the ring
-            // says so whether or not an earlier turn is still unread.
             return { inner: 'working', outer: 'active' };
         }
 
-        // FINISHED AND UNREAD - the green dot, and NO ring. This is the
-        // 2026-09-09 correction: it used to breathe an amber ring, which
-        // read as background activity on the one state that means the
-        // opposite. The dot's colour is the whole signal.
+        // THE FINISHED TURN NOBODY HAS LOOKED AT. A green ring around the
+        // same faint grey centre dot `unknown` shows: the owner asked
+        // first for "a green outline and grey filled dot", then on
+        // 2026-09-09 for the dot's own solid fill to go, "it should look
+        // like the 'status not measured' dot, but the outline should be
+        // green instead of light grey with the dark grey center", and
+        // then - after a fix that cleared the centre too far, to nothing
+        // - for the centre to come back exactly as `unknown` draws it:
+        // "the green outline dot should look like this grey one on the
+        // bottom, just the ring should be green instead of light gray".
+        // The inner state is still `done` - the CHAT is at rest, and the
+        // ring is what says there is something here for the user. Only
+        // the ring's colour changes; see client/css/status-led.css. This
+        // is what the envelope icon used to carry, before the icon was
+        // removed from both surfaces.
         if (status === 'finished_unread') {
-            return { inner: 'done', outer: 'off' };
+            return { inner: 'done', outer: 'unread' };
         }
 
-        // READ AND AT REST. `idle` on the server already means "already
-        // seen" (docs/session-status.md), so the ordinary case is the
-        // NEUTRAL grey `idle` dot with the ring fully off - at rest reads
-        // as at rest, not as a dim copy of `done`. The `unread` branch is
-        // defensive rather than reachable from a well-formed row (the
-        // server derives this pair from the flag on every path - see
-        // src/core/session_status.derive_read_state), but if the two ever
-        // arrive contradictory the flag must not be swallowed: it renders
-        // identically to `finished_unread` so the header rollup in
-        // session-status-summary.js cannot disagree with the row under it.
+        // READ AND AT REST. The dot goes to the NEUTRAL grey `idle` and
+        // the ring stays lit-and-still in that same grey, so a session
+        // the user has looked at is visibly calmer than one they have
+        // not without the LED changing size. `unread` here is defensive
+        // rather than reachable from a well-formed row - the server
+        // derives this pair from the flag on every path, see
+        // src/core/session_status.derive_read_state - but if the two
+        // ever arrive contradictory the flag must not be swallowed, so
+        // it renders identically to `finished_unread` above and the
+        // group roll-up in session-status-summary.js cannot disagree
+        // with the row under it.
         if (status === 'idle') {
             return unread
-                ? { inner: 'done', outer: 'off' }
-                : { inner: 'idle', outer: 'off' };
+                ? { inner: 'done', outer: 'unread' }
+                : { inner: 'idle', outer: 'steady' };
         }
 
         // Everything else - `unknown`, an absent field, a state this
         // client does not know yet. NOT `done`: not having measured is
         // not the same as having measured rest, and collapsing the two is
-        // the false green this project keeps paying for. The unread flag
-        // does not move it either, for the same reason: a flag is not a
-        // measurement of what the session is doing, and the ring is only
-        // allowed to speak about activity that was measured.
+        // the false green this project keeps paying for. It takes no
+        // unread ring either: a green ring is a claim that a turn
+        // FINISHED here, and nothing was measured.
         return { inner: 'unknown', outer: 'dim' };
     }
 

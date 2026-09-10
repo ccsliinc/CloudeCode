@@ -32,7 +32,12 @@
  *                       foreground process - the old "running".
  *   finished_unread  - a Stop hook landed and nobody has looked since, OR
  *                       the user manually pinned this session unread for
- *                       followup.
+ *                       followup. THE LED IS WHAT SAYS SO: since the
+ *                       owner's 2026-09-09 ruling this state paints a
+ *                       still green ring around a recessed centre. The
+ *                       manual toggle that SETS it is a separate thing
+ *                       and still ships, behind
+ *                       `ui.show_mark_unread_control`.
  *   idle             - alive, nothing pending, already seen.
  *   unknown          - status could not be determined (non-tmux backend,
  *                       tmux query failed, or hooks not installed AND
@@ -55,8 +60,8 @@ console.log('[SessionStatusUI Module] Loading...');
      */
     const STATUS_LABELS = {
         dead: 'dead - process exited',
-        question: 'waiting for permission',
-        notice: 'wants your attention',
+        question: 'your turn - claude needs your permission',
+        notice: 'your turn - claude wants your attention',
         working_subagent: 'working - a subagent is active',
         working: 'working',
         finished_unread: 'done - unread',
@@ -246,20 +251,23 @@ console.log('[SessionStatusUI Module] Loading...');
         // one, and this is the indicator that tells a user their session
         // is dead.
         //
-        // `signals` carries the two fields the LED needs that a bare
-        // status string cannot express - `unread` (which since
-        // 2026-09-09 selects between the green `done` dot and the grey
-        // `idle` one; the ring carries activity alone) and
-        // `startup_gate` (a separate probe from the hook stream). It is
-        // optional: a caller that passes nothing gets a correct LED for
-        // the status alone, just without the read/unread distinction on
-        // a resting row.
+        // `signals` carries the four fields the LED needs that a bare
+        // status string cannot express - `unread` (which drives the
+        // green finished-turn RING; the owner's 2026-09-09 ruling, see
+        // client/js/status-led.js), `startup_gate` (a separate probe
+        // from the hook stream), `transport` (whether THIS browser's
+        // socket to the session is up, which no server response can
+        // report - see client/js/session-transport.js) and
+        // `status_source` (provenance, tooltip only). It is optional: a
+        // caller that passes nothing gets a correct LED for the status
+        // alone, just without the finished-turn ring.
         if (globalThis.StatusLed) {
             const s = signals || {};
             const led = globalThis.StatusLed.ledStateFor({
                 activity_status: key,
                 unread: s.unread,
                 startup_gate: s.startup_gate,
+                transport: s.transport,
             });
             // ONE ELEMENT, BOTH VOCABULARIES. The legacy
             // `status-dot status-dot--<state>` classes are kept on the
@@ -322,6 +330,12 @@ console.log('[SessionStatusUI Module] Loading...');
      *   attributes carry what the handler needs to know which row was
      *   clicked and its CURRENT state, so the handler can send the
      *   opposite value without re-querying the DOM.
+     *
+     *   RETURNS '' WHEN `ui.show_mark_unread_control` IS FALSE. The
+     *   owner kept this control and asked for a switch rather than the
+     *   deletion one line of this project shipped; see
+     *   src/config.py::UIConfig. Unread TRACKING and the LED's unread
+     *   ring are unaffected by the flag - only this button goes.
      * Inputs:
      *   tmuxName (string) - literal tmux session name (unread is keyed by
      *     name server-side, not session_id - see PATCH
@@ -334,6 +348,16 @@ console.log('[SessionStatusUI Module] Loading...');
      *     '<span class="mark-unread-toggle" role="button" ...>...</span>'
      */
     function markUnreadHtml(tmuxName, unread) {
+        // THE ONE GATE, so every surface hides it together. Both callers
+        // (session-sidebar-rows.js and launchpad.js) interpolate this
+        // return value straight into a row's HTML, so an empty string
+        // removes the control from all of them and there is no second
+        // place to remember. `UIFlags` answers the DEFAULT (shown) until
+        // its probe lands and whenever it cannot run at all, so a failed
+        // read never takes the control away - see client/js/ui-flags.js.
+        if (globalThis.UIFlags && !globalThis.UIFlags.showMarkUnreadControl()) {
+            return '';
+        }
         const label = unread
             ? 'clear unread flag'
             : 'mark unread for followup';

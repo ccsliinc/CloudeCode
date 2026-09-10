@@ -5369,3 +5369,132 @@ project is finished); watch restic repo growth from the nightly 4.6 GB
 dump; the archive README on the NAS records a stale size/hash for
 `cloude.db`; `refresh_tokens.db` now sits on the NAS (credential material,
 owner aware).
+
+---
+
+## 2026-09-09 - release/1.2: v1.1 merged with adamdev/master
+
+Two lines of this project that had diverged since `ba2aa5d` (2026-09-08)
+merged onto a new branch `release/1.2`, cut from `v1.1` (`d392aeb`) in a
+throwaway worktree so nothing touched the owner's checkout.
+
+**HIS TIP: `887b8fce9b9595f800b9a222ca4f9ef856c9edf0`** ("feat(brand): real
+app icon in the DMG background and a new hero banner"). Five commits newer
+than the `0d1a12c` the five comparison reports in
+`.claude/notes/compare-1.2/` were written against; all five are additive
+(clickable toast session name plus theme tint, release v1.0.36, docs and
+DMG branding, agent notes under `docs/`) and all five are taken.
+
+**17 CONFLICTED FILES**, resolved one at a time against the owner's six
+decisions rather than by picking a side per file. The auto-merged files
+were the more dangerous half: four of them merged cleanly and CONTRADICTED
+a decision, which is a merge that compiles and lies.
+
+### The six decisions, and what each one cost
+
+1. **UNREAD MODEL: HIS.** Unread rides the OUTER ring as a still green
+   ring, the `done` bucket stays, and his status-key legend
+   (`client/js/session-status-key.js`) ships. Our retired-ring paragraphs
+   in `CLAUDE.md` and `docs/session-status.md` are REWRITTEN to describe
+   what shipped and to record that the owner chose the ring on
+   2026-09-09, rather than left contradicting the code. Kept from our
+   side: the one-element box-shadow geometry (no pseudo-element, so
+   concentric is the only geometry available) and the grey `idle` fill for
+   a read session. Taken from his: the transport rung (`disconnected`),
+   the `notice` inner state and its light blue, and the ONE LIT DIAMETER
+   rule - which under our composition is true by construction, because the
+   five geometry tokens are declared once and no state rule may override
+   one. `tests/test_status_led.node.mjs` is his 48 cases as the base, our
+   composition and motion cases swapped in for the ones that measured his
+   `::after`, and the inner-dot-unread assertions deleted: **62 cases, all
+   passing**.
+2. **MANUAL MARK-UNREAD: KEPT, BEHIND A SETTING.** His branch deleted the
+   control from the whole client. Restored (11 client files reference it
+   again) and gated on a new `ui.show_mark_unread_control` boolean,
+   default true. `UIConfig` in `src/config.py`, wired into
+   `load_auth_config` (the negative-control test caught that a new block
+   is DROPPED unless it is read there explicitly), reported on
+   `GET /api/v1/features` and in the settings summary, read client-side by
+   a new `client/js/ui-flags.js` that follows `archive-entry.js`'s
+   probe-once pattern. ONE GATE: `markUnreadHtml` returns `''`, so every
+   surface hides it together. An unreadable config or a failed probe
+   leaves the control SHOWN - a flag that hides things must fail open.
+   Cover: 1 node case (3 states) plus `tests/test_ui_flags_setting.py` (8).
+3. **ROW CONTROLS: OURS.** His ~1100-line row-menu removal is dropped
+   entirely: `session-row-menu.js`, its gesture module and its stylesheet
+   are restored, along with `session-row-actions.js`, `kebab-icon.js`,
+   `session-sidebar-pin.js`, `session-sidebar-reorder.js`,
+   `project-list-render-guard.js` and `session-sidebar-density.css`; his
+   `session-row-inline-controls.css` and his two tests for that UI are
+   removed. VERIFIED, because the sidebar report warned this is the silent
+   one: `session-sidebar-rows.js` renders `SessionRowMenu.kebabHtml(r)`,
+   which stamps `data-row-status` on the KEBAB, and
+   `session-sidebar-clicks.js` reads it back off `[data-row-menu]`. His
+   hunk re-pointing that read at the ROW auto-merged and was reverted; had
+   it stayed, `runRestart` would have been handed `null` and every restart
+   would have reported "unknown" with nothing failing.
+4. **DEAD ROWS GO TO RECENT: OURS.** `tests/test_dead_row_renders_dead.node.mjs`
+   stays deleted, and his "GATE 1 IS NOW SHUT" paragraph - which claimed a
+   dead row is the only surface still reaching the respawn ladder - is
+   replaced, since decision 3 keeps restart on a live row.
+5. **CI: HIS.** `.github/workflows/tests.yml` (+51), `pytest.ini`'s
+   `.claude` exclusion, `scripts/ci/skip-audit.py` (+109) and its exempt
+   list all taken as-is. Baselines re-measured (below) and written into
+   `CLAUDE.md`.
+6. **VERSION: 1.2.0.** `macOS/package.json` and the three README
+   references (download link, badge, Path A). The Path A sha256 now points
+   at the release page rather than quoting 1.0.36's digest for a file that
+   does not exist. No tag created - the orchestrator tags after deploy.
+
+### Also applied, from the reports' standing rules
+
+- `verify_status_led_geometry.py` landed under `scripts/archive/verify/`
+  rather than top-level, with a README row and a note that it was written
+  against the pseudo-element construction that did NOT ship.
+- `session-status-summary.js` is ours (`signalsFor`, `outerFor`) with the
+  `done` bucket restored and his `inputIsStopped` hue rule taken back.
+  Activity outranks unread on the header ring, and a single-child group
+  now paints exactly what that child's row paints, case by case.
+- `session-sidebar-groups.js` / `.css` are ours (gutter, coloured count,
+  kebab on every band).
+- `client/js/session-sidebar-footer.js` is NEW: the status-light key, the
+  version line and the remembered-slots note extracted out of
+  `session-sidebar-rows.js`, which the new wiring pushed to 531 lines
+  against a 500-line budget its own suite asserts. Now 498.
+- Backend: all three shared files auto-merged. Read both halves rather
+  than assuming - his `subagent_depth` gate is a pure READ taken before
+  `record_hook_event` whose only effect is to skip `record_toast`, while
+  our `auto_ack_toasts` runs after and only moves an ALREADY OPEN toast to
+  `answered`. A suppressed toast was never opened, so there is nothing to
+  double-clear.
+
+### Measured baselines
+
+- **pytest: 5625 passed / 2 failed / 21 skipped**, against **5610 / 2 /
+  21** for `v1.1` alone in the same checkout minutes earlier. 15 tests
+  added, no new failures. The two are the known environmental ones
+  (`test_home_write_guard`, `test_version_probe`). The third `CLAUDE.md`
+  used to name, `test_state_dir_resolution`, now passes.
+- **node: 197 suites, all 197 passing**, against 193 with 2 failing at
+  `v1.1`. `test_archive_full_page_mode.node.mjs` is fixed on his side, and
+  `led_state_for` moved to `tests/helpers/`, out of the CI glob.
+- `scripts/scan_secrets.py`: exit 0, 1369 files, 8 detectors.
+- `tests/test_no_remote_assets.py`: 9 passed.
+
+### A trap worth keeping
+
+A fresh `git worktree` has no `config.json` (it is gitignored), and
+without it the suite reports **19 failed plus 26 errored** - 401s from the
+test client and FileNotFoundError from the route tests, every one of them
+an app that could not start. Reproduced identically on `v1.1` in a second
+throwaway worktree and cleared by copying the file in. Do not attribute a
+failure to a code change until the same run has been done on the base
+commit in the same directory.
+
+### Open
+
+- No git tag: the orchestrator tags `v1.2.0` after deploy.
+- `verify_status_led_geometry.py` measures a construction that did not
+  ship; rewrite it against the box-shadow composition or drop it.
+- The `ui` settings block has no editor in the settings SCREEN yet - it
+  round-trips through the API and is edited by hand in `config.json`.

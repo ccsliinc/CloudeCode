@@ -251,6 +251,68 @@ on a hash mismatch). Do not add a host to the CSP, do not weaken
 `frame-ancestors 'none'`, do not introduce inline script or `eval`, and do not
 read `style-src 'unsafe-inline'` as license to widen anything further.
 
+**THE ATTACH CAPTURE CARRIES THE CURSOR, BECAUSE `capture-pane`
+SERIALISES CELLS AND NEVER CURSOR STATE.** `capture_visible_screen()`
+(`src/core/tmux_backend.py`) appends an explicit `ESC[row;colH` read from
+tmux's `#{cursor_x}` / `#{cursor_y}` via `pane_cursor_position()`. Without
+it the client's cursor lands wherever the last captured character was
+written, which is where the pane's cursor is only by coincidence.
+Measured on a real Claude Code pane 2026-09-08: the pane's cursor sat on
+row 8, inside its input box, while the capture ran to row 13, because the
+box's bottom border, the path line and the mode line all sit BELOW the
+prompt. The client was left five rows too low.
+
+That was survivable on the ALTERNATE screen and is fatal on the NORMAL
+one, which is now the shipped case because `disable_alternate_screen`
+defaults on and is the only thing that makes scrollback exist. Captured
+over a real keystroke, a normal-screen frame is
+`ESC[38D ESC[4B \r ESC[38C ESC[4A X ...` and contains ZERO absolute
+positioning, so a wrong starting cursor is never recovered from; the
+alternate-screen renderer re-anchors with `ESC[H` and `ESC[r;cH` every
+frame and silently corrects the client on the next keypress. The
+normal-screen renderer also steps over runs of spaces with `ESC[nG`
+rather than writing them, so the row it lands on is not even erased,
+which is why the user's typed sentence appeared painted ON TOP of the
+input box's bottom border with the border showing through the word gaps.
+
+Rows line up one to one: `paint_on_attach` sends `ESC[H ESC[2J` first and
+`-S 0` starts at the first VISIBLE row, so tmux's 0-based `#{cursor_y}`
+is client row `y + 1`. **A cursor that cannot be read appends nothing** -
+leaving the client where the text ended is the old behaviour, and an
+invented `(0, 0)` would move every session to the top-left while looking
+like a working feature.
+
+**THE REPORTED "INPUT LAG" WAS THAT SAME DEFECT, NOT A THROUGHPUT
+PROBLEM, AND THE NUMBERS SAY SO.** Claude Code diffs against its OWN
+model of the screen, so the bytes it emits are identical no matter where
+the browser's cursor is: a mispositioned cursor cannot make a repaint
+bigger. Measured on a throwaway socket, per keystroke on the normal
+screen: 52 bytes at an idle prompt, about 650 while the thinking spinner
+animates. With the UI parked at the bottom of the viewport the pane
+scrolled 4 lines over 10 keystrokes, not once per keystroke. And
+`HISTORY_LIMIT` at 50000 does not reach the attach at all - the attach
+paints ONE viewport through `paint_on_attach`, never `scrollback_lines`
+and never the history. What the user actually experienced was measured
+end to end by replaying a real pane's capture into a second real pane and
+then feeding it that pane's own keystroke bytes: with the cursor
+uncorrected, one typed `H` landed on the mode line at row 12 instead of
+the input box at row 8; with it corrected the two panes agreed cell for
+cell. You type, nothing appears where you are looking, a later full
+redraw dumps it all at once. That is indistinguishable from lag from the
+user's seat.
+
+The residual cost of the normal screen is FLICKER on redraw, not latency,
+and it is the price of having scrollback at all;
+`AuthConfig.session.disable_alternate_screen` is the switch and turning
+it off costs every line of history. Note this was NOT A/B'd between
+renderers: Claude Code 2.1.215 on the developer's box reports
+`alternate_on=0` even with no env var and no settings key, so a
+fullscreen comparison could not be produced. The fix costs one extra
+tmux round trip per attach, 9.8 ms median against 17.5 ms for the capture
+beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
+a real second pane rather than a substring assertion, because asserting
+the bytes end in `ESC[3;6H` proves only that the string was formatted.
+
 **Config writes are atomic and backed up.** Copy the pattern in
 `Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the
 pre-write bytes first, then temp file, `fsync`, `os.replace`. A half-written
@@ -450,12 +512,25 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-09 after the status-light round (`922e400..dfddbdc`), is
-  5609 passed / 3 failed / 21 skipped; the three failures are the same
-  ones as before, environmental and pre-existing:
-  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
-  `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
+  2026-09-09 at the 1.2 merge (v1.1 + adamdev/master 887b8fc), is
+  **5625 passed / 2 failed / 21 skipped**, against **5610 / 2 / 21** for
+  v1.1 alone measured in the same checkout minutes earlier - so the merge
+  added 15 tests and no failures. Two failures remain, both environmental
+  and pre-existing:
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
   and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
+  The third this file used to name,
+  `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
+  now PASSES; it was never fixed on purpose, so treat it as environmental
+  in both directions rather than as a guarantee.
+  A CHECKOUT WITH NO `config.json` MANUFACTURES A FAKE FAILURE SET, and it
+  is a big one: 19 failed plus 26 errored in a fresh `git worktree`, every
+  one of them an app that could not start (401s from the test client,
+  FileNotFoundError from the route tests), and every one of them clearing
+  the moment the file is put back. `config.json` is gitignored, so a new
+  worktree never has it. Copy one in before you measure anything, and do
+  not attribute a failure to a code change until you have reproduced the
+  same run on the base commit in the same directory.
   Your job is to add no NEW ones. Watch for a broken environment
   manufacturing a fake baseline: a `venv` symlink pointing at a
   `venv.nosync` directory that no longer exists lets the suite limp
@@ -470,11 +545,14 @@ per server process and no subprocess at all.
   minutes apart) - it drives the real `cloude` tmux socket, which is the
   same class of flakiness INFRA-49 already names. A lone failure there
   without a code change behind it is not a new regression; re-run before
-  chasing it. Node: 191 tracked files (re-counted 2026-09-08), only the
-  pre-existing `test_archive_full_page_mode.node.mjs` fails.
-  `tests/led_state_for.node.mjs` is a piped-stdin CLI helper for that
-  harness, not a standalone test, and exits non-zero when run with no
-  input; that is expected, not a failure.
+  chasing it. Node: **197 tracked suites, all 197 passing** (re-counted
+  2026-09-09 at the 1.2 merge; v1.1 alone had 193, of which 2 failed).
+  `test_archive_full_page_mode.node.mjs`, the one long-standing node
+  failure this file used to name, is FIXED and now passes. The piped-stdin CLI helper for
+  the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
+  the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
+  exits non-zero when run with no input - which is what it used to be
+  reported as, from `tests/led_state_for.node.mjs`, before the move.
 - **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
   launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
   against hooks it actually fired. It is off by default because it spends real
@@ -682,7 +760,12 @@ sidesteps rather than fixes the `session_group_members` primary-key
 defect, which keys on `tmux_name`.
 
 It is DESTRUCTIVE and irreversible, so it is gated four times and no
-gate is derivable from a prediction:
+gate is derivable from a prediction. **ALL FOUR GATES ARE IN FORCE AND
+THE CONTROL IS REACHABLE**, which is the owner's 2026-09-09 call: the
+row's kebab menu stays and restart stays on it. One line of this project
+folded the row's controls back to inline pin and close and removed
+restart with the menu; that was not taken. See "The row's controls" under
+the status lights.
 
 1. `actionsFor` offers restart on a row whose status we POSITIVELY know
    is live. `unknown` still gets close alone.
@@ -897,6 +980,135 @@ to `notice`; `Stop` to `finished_unread` while unread, `idle` once seen;
 tmux's `#{pane_dead}` to `dead`; everything else is `unknown`, which is a
 real answer and never `idle`.
 
+**FIVE COLOURS ON ONE LIGHT, AND THE ENVELOPE IS GONE.** The owner's
+rule, 2026-09-08, verbatim: "if the session is fully stopped waiting for
+a response, then yellow. if it's still working but needs something from
+me, make it light blue", over "red if the connection is disconnected,
+grey if the session is idle, green if there is activity", plus "finished
+turn waiting on me to look at should be a green outline and grey filled
+dot". GREEN is `working` / `working_subagent`. YELLOW is `question` AND
+the startup gate's `awaiting_startup_prompt` - both are fully stopped and
+the user's answer to both is the same. LIGHT BLUE is `notice` alone, the
+only state that is working AND asking for you. GREY is `idle` and
+`unknown`, told apart by SHAPE (`unknown` is drawn hollow) rather
+than by a louder colour. RED is `dead` and a dropped WebSocket. And
+`finished_unread` is a crisp green ring around a CLEARED centre. THE
+EIGHT INNER STATE NAMES STAY EIGHT - only the paint collapses onto five
+hues, because the accessible label still has to say which state it is and
+colour was never allowed to be the only signal.
+
+**THE GREY FILL IN THAT RING WAS WITHDRAWN, and the two hollow lights now
+share one recipe.** Shipped, the ring put a mid-grey `done` dot inside the
+green band and it read as two lights stacked. The owner's 2026-09-09
+correction, verbatim: "it should look like the 'status not measured' dot,
+but the outline should be green instead of light grey with the dark grey
+center". So `--led-fill: transparent` is declared in ONE rule naming both
+`[data-inner='unknown']` and `[data-outer='unread']`, and the dot's
+`background` reads that token rather than `--led-ink`. Two copies of
+"clear the middle" would drift into one state showing the real background
+and the other showing a grey somebody picked, so the count of that
+declaration is asserted. Note the trap the token also closes: the legacy
+`.status-dot.status-led` compat block outranks `[data-outer='unread']` and
+sits later in the file, so a `background: var(--led-ink)` there silently
+refills both hollow states on every surface. CLEARING A FILL MOVES PAINT,
+NOT GEOMETRY - measured at 8x device scale before and after, all nine
+(inner, outer) pairs painted an IDENTICAL extent to the hundredth of a
+pixel, so `--led-lit-scale` is untouched.
+
+**THE KEY IS SEVEN ROWS, ONE PER LIGHT, NOT ONE PER STATE.** It carried
+nine and the owner asked for "one entry per colour": two rows showed the
+same yellow and two the same red, which sends a reader looking up a dot
+hunting for a difference the light cannot show them. Yellow is now
+"stopped, waiting on you", red is "dead / disconnected session", and green
+and grey each appear twice ONLY because a solid dot and an outline are two
+different things on screen. THE STATE MACHINE DID NOT CHANGE: the four
+collapsed states still exist and the dot's own `title` / `aria-label`
+still say which of each pair it is, which makes those labels load-bearing
+rather than decorative. `tests/test_status_key.node.mjs` pins the count,
+that every hue has a row, that no two rows draw the same light, and that
+the collapsed pairs resolve to one colour in the STYLESHEET while their
+words still differ.
+
+The unread ENVELOPE ICON went with it, from the sidebar row menu and the
+launchpad card. It was also the manual mark-unread control, so its click
+and keyboard handlers went too. Unread TRACKING is untouched: `Stop` still
+sets it, a WS terminal binding still clears it, `src/core/unread_store.py`
+still keys on the instance, and `PATCH /sessions/{name}/unread` still
+exists with nothing in the UI calling it. The green ring is the only thing
+saying it now, which is why it is drawn as a REAL RING - transparent
+centre, 2.5px inset band - and not as the blurred wash every other halo
+wears. THE FILL WAS THE TRAP: the halo pseudo-element paints ABOVE the
+element background, which IS the dot, so an opaque disc renders
+`finished_unread` as a solid green blob with no grey in it. Measured in a
+6x render before it shipped.
+
+**ONE LIT DIAMETER FOR EVERY STATE, and the element box was never the
+thing that varied.** Measured 2026-09-09, all forty (inner, outer) pairs
+reported a 9.0px ELEMENT box - which is exactly why 190 green suites had
+never caught what the owner could see. The HALO was sized per state and
+drawn partly OUTSIDE its own box by a spread `box-shadow`, so the lit
+object came out at three diameters: about 14.7px for `active`, 15.3px for
+`unread` (that block set its own scale), and an invisible halo for every
+resting state, which therefore reads at the bare 9px dot. One working
+session in a column of quiet ones read about 60 percent wider than its
+neighbours. `--led-lit-scale` is now declared ONCE on `.status-led` and
+overridden by no state, and the glow is a RADIAL GRADIENT rather than a
+spread shadow - a gradient fades out AT the box edge, so the halo's
+painted extent IS its declared box and can be held to a number; a spread
+shadow paints beyond the element by definition and never could.
+`scripts/verify_status_led_geometry.py` measures the whole matrix in a
+real Chromium across three themes and two viewports, because the
+divergence was in what the box RESOLVES to once a per-state override and
+a pseudo-element's own shadow are composed, and no CSS read composes
+those.
+
+**THE GROUP HEADER'S ROLL-UP IS THE ROW COMPONENT, and its yellow `(n)`
+badge is gone** (2026-09-09, "to be clear remove the yello (1)").
+`session-status-summary.js` folds the children to an (inner, outer) pair
+and hands it to `StatusLed.ledHtml`, so a header takes the finished-turn
+ring exactly as a row does. Nothing replaced the count: the ring already
+says there is something in here for you, and two indicators for one fact
+is how they come to disagree. The plain count pill saying how many
+conversations a folded section hides is a DIFFERENT control and stays.
+
+**THE LIGHTS FINALLY HAVE WORDS**, in `client/js/session-status-key.js` -
+a foldable legend at the foot of the sidebar, collapsed by default on
+`cloude.statusKey.open`. Every swatch is a real `ledHtml`, never a
+drawing of one, so the legend cannot show a colour the app does not
+paint. It replaced the "N remembered positions are held for sessions not
+currently listed" note, which named bookkeeping no reader could act on;
+the remembered slots themselves are untouched and still stamped on the
+list element as `data-order-missing`.
+
+**BELOW THE KEY SITS THE APP'S OWN VERSION, ONE COMPONENT FOR BOTH
+PLACEMENTS IT APPEARS IN.** `client/js/version-footer.js` renders a
+small grey `<span class="version">` and both surfaces call it: the
+sidebar footer (right after the status key, its own `.version-footer`
+block) and the home screen's bottom bar chip
+(`renderHomeBarVersion()` in `launchpad.js`, which now only owns a mount
+point). It reads `<meta name="cloude-app-version">`, stamped once at
+serve time by `src/main.py` from the SAME resolver `GET /api/v1/version`
+calls (`src/core/version.py::resolve_version()`) - not a second fetch of
+that endpoint, because the value cannot change while the page is open
+and the Electron tray already polls that endpoint every 20 seconds for
+its own reason. **AN UNRESOLVED VERSION RENDERS `"version unknown"`, NOT
+A BLANK CHIP.** Before this file existed, an empty meta tag made the
+home bar's chip vanish (`.home-bar__version:empty { display: none }`,
+now removed) - which read as a missing control, not as "the build could
+not be determined", and defeated the one thing a version footer is for.
+
+**A DROPPED SOCKET IS THE ONE SIGNAL THE SERVER CANNOT REPORT**, so it
+lives in `client/js/session-transport.js`, written from `terminal.js`'s
+`ws.onopen` / `ws.onclose` and read by the sidebar rows and the launchpad
+cards on their way into `dotHtml`. This browser holds a socket to at most
+ONE session, so **every other session answers `unknown`** - a sidebar full
+of red because one socket dropped would be the fabricated-measurement
+mistake this whole model exists to avoid. A DELIBERATE close CLEARS the
+record rather than marking it disconnected. `dead` and `disconnected`
+share the red, so the LABEL is the only thing separating them and the two
+must never be paraphrases: "dead - the process exited" against
+"disconnected - no live connection to this session".
+
 **`question` AND `notice` ARE TWO STATES BECAUSE A PERMISSION PROMPT
 STOPS THE AGENT AND A NOTIFICATION DOES NOT.** They were one state named
 `question` until 2026-09-08. A `PermissionRequest` halts claude mid-turn
@@ -911,15 +1123,94 @@ side of the `PermissionRequest` it accompanies must not be able to move
 the blocking claim. `permission_open` is read first, so a session holding
 both answers `question`. Both are cleared by the same three events
 (`UserPromptSubmit`, `PreToolUse`, `Stop`) because what resolves either
-is the user showing up. On the LED, `question` is inner
-`waiting-permission` (its own hue, `--led-color-permission`) and `notice`
-is `waiting-input`, shared with the startup gate - both mean "come and
-look", neither means "approve this". Summary priority for the header's
-INNER dot is
-**permission > input > working > unread > idle > dead > unknown** (the
-`done` bucket, "finished and already read", was retired 2026-09-09 - the
-grey `idle` dot spells that itself); its RING is folded separately, from
-activity across the whole group.
+is the user showing up. On the LED the split is now VISIBLE rather than
+only recorded: `question` is inner `waiting-permission` and paints yellow
+with the startup gate, `notice` is its own inner state and paints light
+blue. Light blue over a third warm hue because the pair has to survive
+red-green colourblindness - under protanopia and deuteranopia the green
+desaturates toward a pale khaki while a blue at this wavelength stays
+plainly blue. Summary priority for the header's INNER dot is
+**permission > input > working > unread > done > dead > unknown**, and
+`notice` still buckets as `input` - the colour split is a rendering
+decision on the ROW, not a re-ranking. The `done` bucket means "finished
+and already read" and renders the grey `idle` dot. The header's RING is
+NOT looked up on the winning bucket: it is folded separately, from
+activity across the whole group, so a group holding one parked session
+and one busy one paints the parked dot inside a breathing ring rather
+than hiding the work behind the more urgent light.
+
+**A SESSION WAITING ON ITS OWN SUB-AGENTS IS NOT WAITING ON THE USER, AND
+NEITHER `Stop` NOR `Notification` MAY SAY IT IS.** claude fires `Stop`
+when the MAIN turn ends whether or not the background agents it launched
+are still running, and it raises a `Notification` in that same state, so
+a pane reading "Waiting for 2 background agents to finish" was raising
+both a "Your turn" and a "wants your attention" card. That is the
+false-urgency twin of the `question`/`notice` fold above: a summons to a
+session that wants nothing. The gate is one condition in
+`claude_event_hook` (`src/api/routes.py`) reading
+`SessionManager.subagent_depth`, a passthrough to the count
+`SessionActivityTracker` already keeps for `working_subagent`; nothing new
+is stored and the state machine is untouched, so a suppressed `Stop`
+still flips unread and still resolves its status. Only the interruption
+is skipped.
+
+**IT REFUSES TO RAISE; `toast_auto_ack.py` ANSWERS WHAT WAS RAISED. THE
+TWO CANNOT DOUBLE-CLEAR.** They are on opposite sides of the same
+handler and touch different state. The gate is a pure read of
+`subagent_depth` taken BEFORE `record_hook_event`, and its only effect is
+to skip the `raise_toast` call for `Stop` and `Notification` - it clears
+nothing, acks nothing and writes nothing. `auto_ack_toasts` runs after
+the event is recorded and only ever moves an ALREADY OPEN toast to
+`answered`, keyed by KIND and bounded by the event's own instant. A toast
+the gate suppressed was never opened, so there is nothing for the ack to
+find; a toast the gate allowed is acked exactly once, by the same
+kind-keyed rule that survives a duplicate or a reorder. Order is what
+makes that safe and it is deliberate: ack what is open first, then decide
+whether to raise.
+
+**`PermissionRequest` IS NEVER SUPPRESSED, AT ANY DEPTH**, because it is
+a HARD BLOCK - claude has stopped mid-turn and cannot continue until a
+human answers - which is the one case where a busy session genuinely is
+waiting on the user. That is the whole exception, and it is the negative
+control the tests turn on: a suppression rule that quietly grew to cover
+it would pass every positive test and strand claude behind a yes/no
+nobody was told about.
+
+**THE DEPTH IS READ BEFORE THE EVENT IS APPLIED, and that ordering is the
+whole mechanism.** `Stop` RESETS `subagent_depth` to 0, so a gate reading
+the count afterwards answers 0 every time and can never fire. It also
+cannot be built on `SubagentStop`, which on a turn with no subagent in it
+arrives about 1.5s AFTER the `Stop` (the punchlist 4 measurement above) -
+an event that has not landed yet can neither confirm nor deny anything.
+And it FAILS TOWARD NOTIFYING: an unknown session, a dropped
+`SubagentStart`, or a read that threw all leave the count at 0 and the
+toast is raised exactly as before. Silence is bought only with a POSITIVE
+count, because a missed "your turn" is a worse failure than a spurious
+one.
+
+**THAT SAME FOLD NOW PICKS THE ONE TOAST CARD A SESSION GETS.** The toast
+stack coalesced on (kind, session) until 2026-09-09, so one session
+produced one card per kind - a "wants your attention" card AND a "Your
+turn" card, about the same session; four cards for two sessions, measured.
+`client/js/toast.js` keys the group on the SESSION alone, and
+`client/js/toast-session-group.js` READS `SUMMARY_PRIORITY` out of
+`session-status-summary.js` to pick which pending event that card shows.
+It declares only the join from a hook event name to a bucket -
+`PermissionRequest` to `permission`, `StartupPrompt` and `Notification`
+to `input`, `Stop` to `unread`, anything unrecognised to `input` (the
+same refusal-to-assume-harmless as `SEVERITY_DEFAULT`) - with toast.js's
+own severity breaking a tie INSIDE a bucket so a blocking startup prompt
+is not displaced by chatter. THERE IS NO SECOND RANKING; if the fold is
+unavailable the module groups NOTHING rather than inventing one. The
+pick is a pure FOLD over what is held, which is what makes the card
+upgrade in place, refuse to downgrade, and survive the same hook event
+twice. The `xn` badge counts the WINNER'S KIND, never the session's pile
+- it sits beside the winner's title and would otherwise put a 7 next to a
+sentence that happened once - while the dismiss control, the "Dismiss
+all" disclosure and the overflow row all count RECORDS. The attachment
+receipt (`client/js/attachment-toast.js`) is deliberately outside this
+grouping: no server record, retired by the prompt being SENT, so it keeps
+a card of its own. Full model in `docs/session-status.md`.
 
 **A CLOSING HOOK EVENT IS NOT A HEARTBEAT ON ITS OWN, and that was
 punchlist 4.** Measured twice by `tests/test_led_real_hooks.py` on claude
@@ -1108,27 +1399,93 @@ around some of the leds are not gray, which means there should be
 background tasks. i dont think those few have any background tasks."
 
 **The LED is two independent rings** (`client/js/status-led.js`): an inner
-dot for the chat's status AND whether it has been read, and an outer ring
-for activity alone, so "a parked session with work still running behind
-it" is sayable on a group header. `dotHtml` delegates to it, so every
-surface renders the same component. BOTH RINGS ARE ONE ELEMENT: the inner
-is the span's `background-color` and the outer is a three-layer
-`box-shadow` on that same span (a hard `0 0 0 1.5px` ring, a low-alpha
-feather at the same spread that softens the ring's own edge, then a
-blurred glow), with every alpha mixed into the shadow colour by
-`color-mix` rather than an element `opacity` that would fade the fill too.
-There is NO pseudo-element, and there may not be one: the halo used to be
-an `::after`, and the browser pixel-snaps that box's position and size
+dot for the chat's status AND an outer ring for activity and attention,
+so "a parked session with work still running behind it" is sayable on a
+group header. `dotHtml` delegates to it, so every surface renders the
+same component - and every surface must PASS IT SIGNALS (`unread`,
+`startup_gate`, `status_source`, `transport`), not just the status
+string, or the finished-turn ring, the disconnected red and the
+provenance tooltip can never render. A WORKING session is solid green
+whatever its unread flag says, and `unknown` never takes the ring at
+all: the ring asserts that a turn FINISHED here, and neither of those
+measured one.
+
+**UNREAD RIDES THE RING, AND THE OWNER SETTLED THAT ON 2026-09-09.** Two
+lines of this project fixed the same reported defect - a ring pulsing on
+sessions with nothing running in them, "the ring around some of the leds
+are not gray, which means there should be background tasks. i dont think
+those few have any background tasks" - and they fixed it in opposite
+ways. One retired the outer `unread` state and moved unread onto the
+inner dot; this one KEPT the ring, stopped it breathing, and made it a
+crisp still green. **The owner chose the ring.** So `unread` is an outer
+state, `--led-color-unread` exists, the `done` bucket stays in the
+summary priority, and MOTION is what carries the original complaint: only
+`active` animates, so a light that moves is a session that is moving.
+`client/js/session-status-key.js` is the legend that teaches the
+vocabulary, and it describes this model. Do not reintroduce the
+inner-dot-unread model - it was decided against, not forgotten.
+
+BOTH RINGS ARE ONE ELEMENT: the inner is the span's `background-color`
+and the outer is a four-layer `box-shadow` on that same span (an optional
+hollow rim inside the dot, a hard `0 0 0 1.5px` ring, a low-alpha feather
+at the same spread that softens the ring's own edge, then a blurred
+glow), with every alpha mixed into the shadow colour by `color-mix`
+rather than an element `opacity` that would fade the fill too. There is
+NO pseudo-element, and there may not be one: the halo used to be an
+`::after`, and the browser pixel-snaps that box's position and size
 independently of the dot's box, so whenever the dot landed on a
 fractional x/y - routine in a flex row, or wherever a text baseline puts
 an inline box on a half pixel - the two circles came apart by a device
 pixel. Symmetric `inset` fixed the halo's own internal symmetry and NOT
 this, because the drift was between two boxes. A box-shadow is painted
 from the element's own border box, so concentric is the only geometry it
-can have. `idle` (read, at rest) has its own grey fill, `--led-color-idle`,
-distinct from `done`'s green and from `unknown`'s hollow grey rim, so
-opening a tab now reads as visibly calmer rather than only moving the
-outer ring - see `docs/session-status.md`.
+can have.
+
+**ONE LIT DIAMETER FOR EVERY STATE**, and no per-state rule may touch a
+geometry token. The halo used to be sized per state, so the LIT object
+came out at three different diameters (9.0, about 14.7 and 15.3px) and
+only the two loud ones were visible - in a sidebar where one session is
+working and the rest are at rest, that paints one dot 60 percent wider
+than its neighbours, which is what the owner reported. Under the
+one-element composition the five geometry numbers are declared once and
+never overridden, so the rule holds by construction rather than by every
+state remembering to agree. `unread` is the state that used to break it.
+
+`idle` (read, at rest) has its own grey fill, `--led-color-idle`, and
+sits under a still ring in that same grey, so opening a tab reads as
+visibly calmer than leaving it unread - a green ring becoming a grey one
+AND a recessed centre becoming a solid grey dot, two changes rather than
+one. See `docs/session-status.md`.
+
+**THE ROW'S CONTROLS LIVE IN A KEBAB MENU, AND RESTART IS ONE OF THEM.**
+They were folded into a per-row three-dot kebab in `cddc823`; one line of
+this project unfolded them again on 2026-09-08 back to inline pin and
+close, deleting `client/js/session-row-menu.js`, its gesture module and
+`session-row-menu.css`, and removing restart from a live row along with
+them. **That was not taken, 2026-09-09.** The kebab stays, right-click
+and long-press still open it, and `data-row-status` stays ON THE KEBAB,
+which is where `session-sidebar-clicks.js` reads it to hand the restart
+picker a measured status. THOSE TWO FILES GO THE SAME WAY OR THE MERGE
+COMPILES AND LIES: point the read at the row while the kebab is what
+carries the attribute and `runRestart` gets `null`, so every restart
+reports "unknown" instead of what was measured. Nothing throws; the
+picker just stops knowing anything.
+
+Keeping the menu also keeps the two things its removal would have cost,
+both of which were named honestly on the branch that removed it: FILING A
+SESSION INTO A GROUP keeps a pointer route (the picker still opens on `g`
+over a focused row, on Alt+Arrow across a band edge, and by dragging onto
+a group header, but on a phone the menu entry is the only one of those a
+thumb can reach), and RESTARTING A LIVE SESSION stays reachable, which is
+gate 1 under "Replacing what is running".
+
+**THE GROUP HEADER IS OURS TOO**: a fixed `--sidebar-gutter` span holding
+the count FIRST so every group name starts at the same x, the count as
+accent-coloured tabular-nums text rather than an oval pill, a kebab on
+the pinned and other bands as well as on named groups so the menu column
+is a straight line, and no numeric unread badge - the roll-up LED carries
+the same finished-turn ring the rows do, and two indicators for one fact
+is how they end up disagreeing.
 
 ## The transcript archive the app maintains
 
@@ -1325,6 +1682,115 @@ that can: keyed on `session_uuid`, a restart CREATES a session with
 directory is MEASURED across every spelling, because `--resume` finds the
 file only under the slug of the LITERAL cwd; a measured absence refuses,
 `unchecked` never does.
+
+## The two session-scoped menus, and where each one lives
+
+They are split by JOB and the rule is learnable: one moves content across
+the terminal's boundary, the other configures the session. They share
+their plumbing (`client/js/fab-menu.js` builds the dropdown,
+`client/js/anchor-popover.js` places it) and nothing else.
+
+| Control | Rows | Surface |
+|---|---|---|
+| `#terminalToolsBtn` | copy output, paste from clipboard, attach file | floating button, bottom row slot 0, **phone only** |
+| `#sessionEditorBtn` | session theme, detach session | a button in the header's `.controls` row, beside the file editor |
+| `#slash-commands-btn` | opens `#slash-commands-modal`: every slash command, grouped, with a description and a starred-favorites row, live-filterable | floating button, bottom-left corner, **phone only** |
+
+**THE TOOLS BUTTON IS MOBILE ONLY, ON THE D-PAD'S BREAKPOINT.** One media
+query in `terminal-tools.css` hides the trigger AND its menu above 769px,
+which is the same line `styles.css` already uses to make
+`.dpad-float-button` touch-only. They sit in the same row, and two
+controls in one row that vanish at two different widths is how that row
+ends up with a hole at some third width nobody tested. The app's OTHER
+"mobile" number, `MOBILE_MAX_PX = 700` in `session-sidebar-pin.js` and
+`config-drawer-pin.js`, answers a different question - is there room to
+dock a panel - and is deliberately not reused. It is pure CSS because a
+JS width check paints the button on the first frame and removes it once
+the script runs.
+
+**AND DESKTOP LOSES TWO OF THE THREE ROWS, WHICH IS RECORDED RATHER THAN
+PAPERED OVER.** Traced before the change shipped: `paste from clipboard`
+is fully covered on a desktop (xterm's own cmd+V, plus the capture-phase
+handler in `terminal.js` that uploads a pasted FILE and injects its path).
+`copy output` - the whole-scrollback sheet - and `attach file` - the file
+picker - have NO other desktop entry point: `CopyOutput.open` has exactly
+one caller and the hidden `#cloude-image-attach-input` is clicked from
+exactly one row, and there is no drag-and-drop handler anywhere in
+`client/`. cmd+C still copies a mouse selection, which is a different
+job. Adding replacement desktop UI is a separate decision.
+
+**THE SESSION EDITOR IS A HEADER BUTTON, AND THE TOP-RIGHT RAIL IS GONE.**
+It was a 45px FAB pinned over the terminal's top-right corner until the
+owner asked for it "up into the menu next to the folder one". The move is
+a MOVE: it carries `.btn-icon`, the class `#configEditorBtn` and the
+kebab carry, so its size, gap, hover, focus and tooltip come from the
+header rather than from anything written for it. `.session-editor-fab`,
+the `--fab-top-edge` token and its `ios-chrome.css` safe-area pair were
+all DELETED, not overridden - an orphan token is how a retired layout
+gets revived by accident.
+
+**SCOPE IS THE ONE THING THAT MOVE COULD LOSE, AND IT IS AN ALLOW-LIST
+NOW.** `.controls` mounts on every screen, including the launchpad and
+the archive where "session theme" and "detach session" name nothing. The
+floating version got its scoping from a DENY-LIST in
+`terminal-tools.css` naming the three sessionless screens, and that list
+had already had to be amended once - when the archive screen arrived and
+the FAB painted a 45x22px overlap across its Export label.
+`client/css/session-editor-header.css` names the ONE screen instead
+(`body:has(#terminal-screen.active)`), so a fourth sessionless screen
+cannot leak it. That file declares `display` and nothing else; a colour
+in it would be a header button restyled somewhere the header cannot see.
+
+**THE HOME HEADER'S CENTRING SURVIVED BECAUSE THE BUTTON IS HIDDEN
+THERE.** `.header--home` centres the launcher title against
+`--home-header-flank-w`, a token mirroring `.controls`' real width, and
+`header-menu.js` is explicit that a third INLINE control is a layout fact
+rather than a list entry. This one is `display: none` on the home screen,
+so the token needs no new branch. Change that gate and you have to
+revisit the token. Measured in headless Chrome at 330px: the four header
+controls occupy x 140-318 of a 330px header at `--control-size` 40 - the
+480px breakpoint's value, not the 768px one - with no overflow, and the
+title elides into what is left.
+
+`tests/test_mobile_only_fab_and_header_editor.node.mjs` RESOLVES the
+cascade at a given width rather than grepping the source, so it answers
+"is the button on screen at 330px" instead of "does the file contain this
+string". It carries a control (the d-pad, unchanged) and refuses loudly
+on any selector its small matcher cannot read.
+
+**A THIRD FLOATING CONTROL FOLLOWED THE SAME RULE: `#slash-commands-btn`,
+THE ROUND "/" BUTTON, BOTTOM-LEFT.** The owner's request, verbatim: "this
+button needs to be removed on desktop view just like the clipboard one."
+`client/css/slash-commands-fab.css` is the same one media query, same
+769px line, hiding the button AND `#slash-commands-modal` - the panel it
+opens - so a hidden trigger never leaves a still-reachable panel behind.
+It is its own small file rather than an addition to `styles.css` (already
+over this project's line-count guideline) or to
+`slash-command-chips.css` (styles the favourites row INSIDE the modal,
+not the modal or its trigger).
+
+**DESKTOP LOSES SOMETHING REAL HERE, NOT NOTHING.** Typing `/` straight
+into the terminal still reaches claude's own CLI, which is a genuine
+slash-command entry point - but it is not the same feature. The modal
+this button opens lists every available command GROUPED, each with a
+short description, plus the user's starred favourites and live filtering
+as they type; typing `/` in the terminal gives none of that on its own.
+Hiding it was the explicit ask, so it is hidden regardless - this is
+recorded so the gap is a known decision rather than a surprise.
+
+`tests/test_mobile_only_fab_and_header_editor.node.mjs` proves the
+button's own visibility the same way it proves the tools FAB's, by
+resolving the cascade. It CANNOT do that for `#slash-commands-modal`
+through the same element-matching path: modelling the modal with its
+real classes (`modal`, `active`) trips the resolver's selector grammar on
+unrelated descendant-combinator rules in `styles.css` (`.modal
+.modal-overlay`, `.slash-commands-modal-content .modal-header`) purely
+because "modal" is a common substring, not because anything is wrong. So
+that one assertion reads the flattened CSS text directly instead - the
+same style `tests/test_terminal_tools_menu.node.mjs` already uses for the
+tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
+exactly once, sits inside a `(min-width: 769px)` block, and carries
+`display: none !important`.
 
 ## Gotchas that have cost real time
 

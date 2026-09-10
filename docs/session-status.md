@@ -101,6 +101,55 @@ and a `Notification` **wants your attention**. The split is only worth
 having if it reaches the surface the user actually reads, and the toast is
 that surface on a phone.
 
+**ONE TOAST CARD PER SESSION, and it shows the same thing the LED would.**
+Until 2026-09-09 the toast stack coalesced on (kind, session), so one
+session produced one card per kind: a "wants your attention" card AND a
+"Your turn" card, side by side, about the same session. Measured on the
+owner's screen that day, four cards for two sessions plus a "Dismiss all
+(9)" row. `client/js/toast.js` now keys the group on the SESSION alone and
+`client/js/toast-session-group.js` picks which pending event that card
+shows, by READING `SUMMARY_PRIORITY` out of
+`client/js/session-status-summary.js` - the same fold, in the same order,
+that the sidebar group headers and the launchpad top bar already use.
+There is no second ranking; the join is only from a hook event name to
+one of that fold's buckets:
+
+| toast kind | bucket | why |
+|---|---|---|
+| `PermissionRequest` | `permission` | Claude is stopped on a yes/no |
+| `StartupPrompt` | `input` | parked on a startup prompt; the same bucket its `waiting-input` LED folds into |
+| `Notification` | `input` | wants a look, is not blocked; matches where the `notice` LED buckets |
+| `Stop` | `unread` | "your turn": a finished turn nobody has looked at |
+| anything else | `input` | an unknown kind is treated exactly as a Notification, never as the least interesting thing |
+
+Severity breaks a tie INSIDE a bucket, so a `StartupPrompt` keeps the card
+from a chatty `Notification` and with it the severity-3 cap exemption and
+`role="alert"`.
+
+**THE CARD UPGRADES AND CANNOT DOWNGRADE, because the pick is a fold and
+not a variable.** A permission prompt landing on a session already showing
+"your turn" re-answers the fold on the SAME group key, so the same card
+element becomes the permission card; a `Stop` landing on a session showing
+a permission prompt changes nothing. Hook events arrive unordered,
+duplicated and droppable, and a fold over what is currently held is
+idempotent against all three - a running "current worst" variable would
+not be.
+
+**THE BADGE COUNTS THE KIND ON THE CARD, NOT THE PILE.** `×5` sits against
+the winner's title, so it is read as "this sentence, five times"; a
+session holding one permission prompt and six finished turns must not
+paint "needs your permission ×7". How many records the x will actually
+clear is a different number and the dismiss control states it in words
+("Dismiss 7 notifications for this session"). For the same reason the
+"Dismiss all" disclosure and the overflow row's worst-severity label count
+RECORDS at that severity, never whole groups.
+
+**The attachment receipt is deliberately NOT in this grouping.** It is a
+browser-raised card describing what is staged in the prompt buffer, with
+no server record, retired by the prompt being SENT rather than by the user
+showing up. It keeps its own card, still coalesced per session, so a
+session can show one status card and one receipt.
+
 ## The rules that keep it honest
 
 **tmux is the only thing that can see a pane die.** The dead check runs
@@ -623,6 +672,16 @@ simpler contract: opened means read. And clearing only the half the user
 happened to have set would leave a `Stop`-flagged row unread while the
 control the user just clicked reported itself off - a dead control.
 
+**THE CONTROL ITSELF IS OPTIONAL, THE STATE IS NOT.** One line of this
+project deleted the mark-unread control from the whole client on the
+grounds that the LED's green ring already says a session is unread. The
+owner kept it and put it behind a setting instead,
+`ui.show_mark_unread_control` in `config.json` (default true, reported on
+`GET /api/v1/features`, gated in exactly one place -
+`SessionStatusUI.markUnreadHtml` returns `''` and every surface loses it
+together). The INDICATOR and the CONTROL are two different things: the
+ring says a turn is waiting, the control is how the user says one is.
+
 **Stored** server-side, not in `localStorage`, because the user drives
 this from a phone and a desktop and the flag has to follow them.
 
@@ -721,44 +780,45 @@ on a permission prompt is a live turn making no progress; a conversation
 that ended an hour ago and one mid-tool-call are both "not blocked". Two
 rings say both.
 
-**THE TWO RINGS ANSWER TWO QUESTIONS, and since 2026-09-09 each answers
-exactly one.** The INNER dot is the session's state INCLUDING whether it
-has been read: green `done` is finished-and-unread, grey `idle` is
-finished-and-read. The OUTER ring is ACTIVITY ONLY: breathing means
-something is running right now, steady means a live turn is stopped
-waiting on the user, off means nothing is running, dim means nothing was
-measured. The ring says nothing about unread and the dot says nothing
-about activity.
+**THE TWO RINGS ANSWER TWO QUESTIONS.** The INNER dot is the session's
+own state. The OUTER ring is activity and attention: breathing means
+something is running right now, steady means lit and still, `unread` is
+the crisp green finished-turn ring, off means nothing at all, dim means
+nothing was measured.
 
-That is the owner's original spec, restored: "behind this is a larger
-glowing circle is colored and pulsing on activity and steady on done."
-It had drifted - `finished_unread` painted a breathing amber ring, so the
-quietest state on the dial wore the loudest light in the app. The report,
-verbatim: "the ring around some of the leds are not gray, which means
-there should be background tasks. i dont think those few have any
-background tasks." The outer `unread` state and its `--led-color-unread`
-hue were retired in the same change.
+**UNREAD RIDES THE RING, and the owner settled that on 2026-09-09.** Two
+lines of this project fixed the same reported defect - a ring pulsing on
+sessions with nothing running in them, "the ring around some of the leds
+are not gray, which means there should be background tasks. i dont think
+those few have any background tasks" - and fixed it in opposite ways. One
+retired the outer `unread` state and moved unread onto the inner dot; the
+other KEPT the ring, stopped it breathing, and made it a still green. The
+owner chose the ring. MOTION is what carries the original complaint now:
+`active` is the only state that animates, so a light that MOVES is a
+session that is moving, and a resting session's ring takes its own dot's
+grey. Do not reintroduce the inner-dot-unread model - it was decided
+against, not forgotten.
 
-**Inner dot** (`data-inner`), the chat's own status and its read state:
-`working`, `waiting-permission`, `waiting-input`, `idle`, `done`, `dead`,
-`unknown`.
+**Inner dot** (`data-inner`), the chat's own status:
+`working`, `waiting-permission`, `waiting-input`, `notice`, `idle`,
+`done`, `dead`, `disconnected`, `unknown`.
 
 `idle` was added 2026-09-09. Owner's report, verbatim: "i need the lights
 to go idle, (i think thats gray) when i click on a tab. there needs to be
-a read/idle color." Before this, a session that had been read (server
-`activity_status: 'idle'`) painted the same green `done` fill as one that
-had NOT (`finished_unread`) - only the outer ring told them apart, which
-is too subtle to register at a glance. `idle` is a neutral grey
-(`--led-color-idle`), a solid dot (not the hollow `unknown` treatment -
-one is a measurement, the other is the absence of one), and pairs with
-outer `off` so a read session reads as calm and at rest rather than as a
-dimmer copy of `done`. Since the ring stopped carrying unread, this pair
-of fills IS the read/unread signal and nothing else says it.
+a read/idle color." Before it, a session that had been read (server
+`activity_status: 'idle'`) painted the same dot as one that had not, and
+only the ring told them apart. `idle` is a neutral grey
+(`--led-color-idle`), a SOLID dot - not the hollow `unknown` treatment,
+because one is a measurement and the other is the absence of one - and it
+pairs with a steady ring in that same grey. So opening a tab changes two
+things at once: the green ring becomes grey, and the recessed centre
+becomes a solid grey dot.
 
-**Outer ring** (`data-outer`), ACTIVITY, and nothing else:
-`active` (breathing - something is running), `steady` (lit and still - a
-live turn stopped waiting on the user), `off` (no ring at all - nothing is
-running, read or unread alike), `dim` (not measured).
+**Outer ring** (`data-outer`), activity and attention:
+`active` (breathing - something is running), `steady` (lit and still),
+`unread` (a crisp, still green ring around a recessed centre), `off` (no
+ring at all - a dead pane, or a transport we have lost), `dim` (not
+measured).
 
 They are set separately and every combination renders. No rule in the
 stylesheet reads one to decide the other.
@@ -817,214 +877,305 @@ reset survives, scoped off the one breathing state with `:not()` - a
 blanket reset ties with the breathing rule at (0,2,0) and wins on order,
 which would kill the pulse everywhere.
 
+### Five colours, nine states
+
+Asked for on 2026-09-08, in the owner's words: "if the session is fully
+stopped waiting for a response, then yellow. if it's still working but
+needs something from me, make it light blue", over "red if the connection
+is disconnected, grey if the session is idle, green if there is activity",
+plus "finished turn waiting on me to look at should be a green outline and
+grey filled dot". The grey fill was withdrawn on 2026-09-09 - see the
+cleared centre below - and the quote is left whole because the ask it
+records is still the ask.
+
+The nine inner state NAMES stay nine (`idle` joined them on 2026-09-09). Only the paint collapses onto
+five hues, and the accessible label still says which state it is, because
+colour was never allowed to be the only signal here.
+
+| colour | states | token |
+|---|---|---|
+| green | `working`, `working_subagent` | `--led-color-working` -> `--color-success` |
+| yellow | `question`, `awaiting_startup_prompt` | `--led-color-permission` / `--led-color-waiting` -> `--color-warning` |
+| light blue | `notice` | `--led-color-notice` -> `--color-info` |
+| grey | `idle`, `done`, `unknown` | `--led-color-idle` / `--led-color-unknown` -> `--color-fg-muted` |
+| red | `dead`, transport disconnected | `--led-color-dead` / `--led-color-disconnected` -> `--color-danger` |
+| green ring, cleared centre | `finished_unread` | `--led-color-unread` ring, `--led-fill: transparent` |
+
+Four things about that table are load-bearing.
+
+**Yellow is STOPPED, light blue is NOT.** `question` is a
+`PermissionRequest` that halted the agent mid-turn; the startup gate is a
+pane parked on the folder-trust dialog. Both are fully stopped and the
+user's answer to both is the same, so they paint the same yellow and keep
+separate names and separate labels. `notice` is a `Notification`: the
+agent is still working and merely wants a look. That is the
+`question` / `notice` split of earlier the same day, now visible on the
+light rather than only in the data.
+
+**Light blue has to survive red-green colourblindness.** Under both
+protanopia and deuteranopia the green (`#4ade80`) desaturates toward a
+pale yellow-khaki while a blue at this wavelength (`#4fc1ff`) stays
+plainly blue. A third warm hue would have failed that.
+
+**Grey at rest and grey unmeasured are told apart by SHAPE.** `idle` and
+`unknown` take the same hue on purpose - neither is interesting to look at
+and neither may be dressed up as a measured healthy state - and `unknown`
+is drawn hollow. Colour would have ranked them; shape does not.
+
+**THE TWO HOLLOW LIGHTS SHARE ONE RECIPE.** `unknown` and the
+finished-turn ring both clear the centre of the dot so the row background
+shows through, and they do it in a single rule naming both states
+(`--led-fill: transparent` in `status-led.css`). That is the owner's
+2026-09-09 correction: the ring shipped with a mid-grey FILLED centre and
+read as two lights stacked, and the ask was "it should look like the
+'status not measured' dot, but the outline should be green instead of
+light grey with the dark grey center". Two copies of "clear the middle"
+would be free to drift into one state showing the real background and the
+other showing a grey somebody picked, so the count of that declaration is
+asserted in `tests/test_status_led.node.mjs`. The two are told apart by
+HUE ALONE - a grey 2px rim on the 9px dot for `unknown`, the same 2px
+rim in green for the ring - never by the centre. Same construction, one
+different token, which is precisely what the owner asked for.
+
+The permission orange this replaced (`--color-status-pending`, `#ffa500`)
+sat too close to the red the dead light takes. At nine pixels an orange
+and a red in the same list read as one colour.
+
+### The envelope ICON is gone, the control is not
+
+`finished_unread` used to be carried by an unread ENVELOPE ICON beside the
+row name on the sidebar and the launchpad. That icon is gone and the green
+ring is what says it now: one fact, one indicator, in one vocabulary.
+
+THE MANUAL CONTROL IS A DIFFERENT THING AND STILL SHIPS. The ring SAYS a
+session is unread; the control is how the user MAKES one unread, which is
+the owner's rule verbatim - "if i want it unread i click unread". It lives
+in the row's kebab menu and on the launchpad card, behind
+`ui.show_mark_unread_control` (default true). Unread TRACKING is untouched
+either way: `src/core/unread_store.py` still keys on the instance, `Stop`
+still sets it, binding a WS terminal still clears it, and
+`PATCH /sessions/{name}/unread` still exists and is still called.
+
 ### The mapping
 
-`StatusLed.ledStateFor({activity_status, unread, startup_gate})` is the
-ONE place the server vocabulary becomes a pair of rings.
+`StatusLed.ledStateFor({activity_status, unread, startup_gate, transport})`
+is the ONE place the server vocabulary becomes a pair of rings.
 
-| activity_status | startup_gate | unread | inner | outer |
-|---|---|---|---|---|
-| `dead` / `stopped` | any | any | `dead` | `off` |
-| any | `awaiting_startup_prompt` | any | `waiting-input` | `steady` |
-| `question` | any | any | `waiting-permission` | `steady` |
-| `notice` | any | any | `waiting-input` | `steady` |
-| `working` / `working_subagent` / `running` | any | any | `working` | `active` |
-| `finished_unread` | any | any | `done` | `off` |
-| `idle` | any | no | `idle` | `off` |
-| `idle` | any | yes | `done` | `off` |
-| `unknown` / absent / unrecognised | any | any | `unknown` | `dim` |
+| transport | activity_status | startup_gate | unread | inner | outer |
+|---|---|---|---|---|---|
+| `disconnected` | any | any | any | `disconnected` | `off` |
+| other | `dead` / `stopped` | any | any | `dead` | `off` |
+| other | any | `awaiting_startup_prompt` | any | `waiting-input` | `active` |
+| other | `question` | any | any | `waiting-permission` | `active` |
+| other | `notice` | any | any | `notice` | `active` |
+| other | `working` / `working_subagent` / `running` | any | any | `working` | `active` |
+| other | `finished_unread` | any | any | `done` | `unread` |
+| other | `idle` | any | no | `idle` | `steady` |
+| other | `idle` | any | yes | `done` | `unread` |
+| other | `unknown` / absent / unrecognised | any | any | `unknown` | `dim` |
 
-Order matters: `dead` outranks everything (an unread flag must not paint a
-corpse as something to go and read), then anything blocking on the user,
-then activity. THE RING IS A FUNCTION OF THE STATUS ALONE - the unread
-flag appears in exactly one row of that table, the defensive `idle` one,
-and it moves the DOT.
+Order matters. A dead TRANSPORT outranks everything: nothing we are
+showing is fresh once the socket is down, so the light may not keep
+asserting the last status it happened to see. Then `dead` (an unread flag
+must not paint a corpse as something to go and read), then anything
+blocking on the user, then activity, then rest.
 
-`working` no longer changes ring when a session is also unread: it is
-working, and the ring says what is running. The unread turn behind it is
-still counted by the group badge, which reads the row's own flag rather
-than the colour of a light (`summarizeStates`).
+`working` does NOT take the unread ring: it is working, and the ring says
+so. The unread turn behind it is still counted by the group fold, which
+reads the row's own flag rather than the colour of a light
+(`summarizeStates`).
 
 THE `idle` + `unread: true` ROW IS DEFENSIVE, NOT NORMALLY REACHABLE. The
 server derives this pair from the flag on every path (see "read and unread
-are derived, never stored" below), so a well-formed row never carries both
+are derived, never stored" above), so a well-formed row never carries both
 at once. If one ever arrives contradictory, the row renders identically to
-`finished_unread` (`done` / `off`) rather than the grey `idle` dot - the
-unread flag is the louder, more urgent claim, and
-`session-status-summary.js`'s group rollup depends on this: its `unread`
+`finished_unread` (`done` / `unread`) rather than the grey `idle` dot -
+the unread flag is the louder, more urgent claim, and
+`session-status-summary.js`'s group rollup depends on it: its `unread`
 bucket is inner `done`, so a row that disagreed would make the header lie
 about its own child (`tests/test_status_summary.node.mjs`, "a single-child
 group renders the same LED state as that child").
 
 THE GROUP HEADER FOLDS THE TWO DIMENSIONS SEPARATELY, for the same reason
 a row keeps them apart. Its inner dot is the highest-priority state among
-the members (permission > input > working > unread > idle > dead >
-unknown); its ring is activity across the WHOLE group - `active` if any
-member is working, `steady` if any is a live turn waiting on the user,
-`off` otherwise, `dim` when nothing in there was measured. So a group
-holding one parked session and one busy one paints the parked dot inside a
-breathing ring, which is both facts at once. It folds the group's member
-ROWS from the merged list rather than anything in the DOM - which is what
-lets a COLLAPSED group, whose rows are deliberately not in the markup,
-still report - and those rows spell the state `status`, not
-`activity_status`, so `session-status-summary.js signalsFor()` reconciles
-the two names in one place; reading only the server's spelling made every
-header on live paint `unknown/dim` at 880247f, an empty group and a group
-of twelve idle sessions alike.
+the members (permission > input > working > unread > done > dead >
+unknown); its ring is folded across the WHOLE group - `active` if any
+member has an open turn, `unread` if none does and something in there is
+unread, `dim` when nothing was measured, `steady` for a group at rest that
+has been read, `off` otherwise. So a group holding one parked session and
+one busy one paints the parked dot inside a breathing ring, which is both
+facts at once. ACTIVITY OUTRANKS UNREAD on that ring, because the ring
+carries both and only one can be painted: a breathing ring expires on its
+own, a green unread ring does not.
+
+It folds the group's member ROWS from the merged list rather than anything
+in the DOM - which is what lets a COLLAPSED group, whose rows are
+deliberately not in the markup, still report - and those rows spell the
+state `status`, not `activity_status`, so
+`session-status-summary.js signalsFor()` reconciles the two names in one
+place; reading only the server's spelling made every header on live paint
+`unknown/dim` at 880247f, an empty group and a group of twelve idle
+sessions alike.
 
 THE SIGNALS ARGUMENT IS NOT OPTIONAL AT A CALL SITE THAT HAS A ROW.
-`SessionStatusUI.dotHtml(status, signals)` takes `unread` and
-`startup_gate` as a second argument because a bare status string cannot
-express either, and until 2026-09-08 no live caller passed it. The flag
-reached the row, was fingerprinted by both repaint signatures and forced a
-repaint - and was dropped at the last inch, so an `idle` unread session
-rendered identically to one with nothing waiting on it.
-`tests/test_unread_led_one_field.node.mjs` renders one `/sessions/list`
-row through the sidebar row, the launchpad card and the project-tree row
-and fails if any of the three disagrees. Since the ring stopped carrying
-unread, the observable that proves the field survived the trip is
-`data-inner` (`done` versus `idle`), and it is only observable on a
-RESTING row - a working session is painted working whether or not an
-older turn is unread, deliberately.
+`SessionStatusUI.dotHtml(status, signals)` takes `unread`, `startup_gate`,
+`status_source` and `transport` as a second argument because a bare status
+string cannot express any of them, and until 2026-09-08 no live caller
+passed it. The flag reached the row, was fingerprinted by both repaint
+signatures and forced a repaint - and was dropped at the last inch, so an
+`idle` unread session rendered identically to one with nothing waiting on
+it. `tests/test_unread_led_one_field.node.mjs` renders one
+`/sessions/list` row through the sidebar row, the launchpad card and the
+project-tree row and fails if any of the three disagrees.
 
-Both inner waiting states are reachable from live data as of 2026-09-08.
-`waiting-permission` is `question` and nothing else - the agent is
-stopped. `waiting-input` is `notice` OR the startup gate, which is the
-right pairing: both mean "come and look", neither means "approve this".
+Two rows changed with the five-colour pass and both are deliberate.
+**A working session is solid green whatever its unread flag says** - the
+unread halo is now the green finished-turn ring, and a ring claiming a
+turn ended, around a session that is mid-turn, is two contradictory claims
+on one light. **`unknown` never takes the ring either**, for the same
+reason in its stronger form: the ring asserts that a turn FINISHED here,
+and nothing was measured.
 
-`waiting-permission` has its own hue, `--led-color-permission`, resolving
-to the existing `--color-status-pending` (`#ffa500`). It sits between the
-terracotta `--color-accent` that `waiting-input` takes (`#d77757`) and
-the red `--color-danger` that `dead` takes (`#ff4444`): hotter than "come
-and look", and deliberately NOT a red, because a blocked session is not a
-dead one and the two lights must never be confusable at a glance. An
-existing palette token was chosen over a new value so no theme has to
-learn one.
+### Transport: the one signal the server cannot report
+
+`client/js/session-transport.js`. Every other signal here is a fact about
+the session, measured on the Mac and shipped down `/sessions/list`.
+"Disconnected" is a fact about the BROWSER: the WebSocket in
+`client/js/terminal.js` closed. It is written from `ws.onopen` and
+`ws.onclose` and read by `session-sidebar-rows.js` and `launchpad.js` on
+their way into `dotHtml`.
+
+This browser holds a socket to at most ONE session, so **every other
+session answers `unknown`, never `connected` and never `disconnected`**. A
+sidebar full of red because one socket dropped would be exactly the
+fabricated-measurement mistake this whole model exists to avoid. A
+DELIBERATE close clears the record rather than marking it disconnected:
+"you left it" and "we lost it" are different facts and only one is worth
+painting red.
+
+`dead` and `disconnected` share the red, so the LABEL is the only thing
+separating them, and the two must never be paraphrases: "dead - the
+process exited" against "disconnected - no live connection to this
+session".
 
 ### Motion
 
-`active` and `unread` breathe on a 2s ease-in-out cycle. The keyframes
-animate the GLOW LAYER of the box-shadow only - its spread and its alpha,
-both off the one `--led-glow-rest` fraction so it shrinks and dims together
-and reads as a glow swelling rather than a light flickering. The fill stays
-at full strength at every point in the cycle, and the hard ring is
-byte-identical at both ends of the animation, so it is the shape that says
-where the LED ends.
+`active` is the only state that breathes, on a 2s ease-in-out cycle. The
+keyframes animate the GLOW LAYER of the box-shadow only - its spread and
+its alpha, both off the one `--led-glow-rest` fraction so it shrinks and
+dims together and reads as a glow swelling rather than a light
+flickering. The fill stays at full strength at every point in the cycle,
+and the hard ring is byte-identical at both ends of the animation, so it
+is the shape that says where the LED ends.
+
+`unread` DOES NOT BREATHE, and that is the point of keeping it. An
+outline that pulses stops reading as an outline at nine pixels, and the
+defect both lines of this project were fixing was a ring pulsing on a
+session with nothing running in it. Motion is therefore a signal in its
+own right: a light that moves is a session that is moving.
 
 NOTHING IN THE ANIMATION MOVES THE ELEMENT. No transform, no width, no
 margin, no inset - `box-shadow` is a paint-only property, so the dot's own
 box is identical at every frame and the LED cannot drift against the text
 it sits beside. That is the same guarantee the one-element rewrite bought
 statically, held across time. (It costs a repaint per frame rather than a
-composited transform; the repainted region is about 16px square, and the
+composited transform; the repainted region is about 18px square, and the
 alternative is a second box.)
 
-`steady` is lit and still (reachable today only from the group-summary
-rollup's `done` bucket, kept for that fixed pair - see `session-status-
-summary.js` - though not currently produced by a single row through
-`ledStateFor`). `off` has no ring and no glow, for a dead pane or a
-read-and-at-rest one. Under
+`steady` is lit and still: a session at rest that has been read, its ring
+in its own dot's grey. `off` has no ring and no glow at all, for a dead
+pane or a transport we have lost - a corpse must not glow. Under
 `prefers-reduced-motion: reduce` the ring and glow stay and the pulse
 stops - the base rule already paints the full lit value, so killing the
-animation is the whole of it, and the reduced-motion block must NOT restate
-the shadow or the two would drift apart. The active/resting distinction
-lives entirely in the ring and glow alphas.
+animation is the whole of it, and the reduced-motion block must NOT
+restate the shadow or the two would drift apart. The active/resting
+distinction lives entirely in the ring and glow alphas.
 
-The seven state colours (`idle` added 2026-09-09) plus the unread hue are
-named tokens declared exactly once, at the top of `status-led.css`. A
-theme that wants a different palette redefines `--led-color-*`, never
-these rules.
+Every state colour is a named token declared exactly once, at the top of
+`status-led.css`, and every one defers to a palette token all of
+`client/css/themes` already declares. A theme that wants a different
+palette redefines `--led-color-*`, never these rules.
 
 ### Sizing
 
-`--led-size` is 9px by default, and every call site in this app actually
-renders at that default: the sidebar row (`session-sidebar-rows.js`) and
-the launchpad card (`launchpad.js`) both call `dotHtml()` with no `size`,
-so neither passes a per-instance override.
+**ONE LIT DIAMETER FOR EVERY STATE.** Everything the component paints, in
+any state, fits inside the same circle. States differ in colour, alpha
+and fill. They never differ in size.
 
-The ring and glow are FLAT PIXEL VALUES around that dot, not fractions of
-it, because at this size a flat value reads truer than a proportional one.
-`--led-ring-width` (1.5px, widened from 1px on 2026-09-09 - owner's ask:
-"lets make the border a little larger") is the hard ring: a zero-blur
-spread shadow, so the lit ring's outer diameter is exactly
-`size + 2 * width`, which at the 9px default is 12px (was 11px) - three
-pixels larger than the dot, and still an INTEGER, so the ring's outer edge
-lands on the pixel grid whenever the dot's does.
+Under the one-element composition that is true BY CONSTRUCTION rather
+than by every state rule remembering to agree: the five geometry numbers
+(`--led-size` 9px, `--led-ring-width` 1.5px, `--led-ring-feather-blur`
+1px, `--led-glow-blur` 6px, `--led-glow-spread` 1.5px) are declared once
+on `.status-led` and **no `[data-inner]` or `[data-outer]` rule may
+override any of them**. `unread` is the state that used to break the
+rule, by sizing its own halo, and its rule now sets colour, alpha and the
+inset rim only.
 
-`--led-ring-feather-blur` (1px) and `--led-ring-feather-fraction` (0.35)
-answer the same request's second half - "can we feather it". A hard
-`0 0 0 <width>` shadow is a knife-edge: fully the ring colour one device
-pixel, fully transparent the next. The feather is a SECOND shadow layer at
-the SAME spread as the hard ring (so its own unblurred edge sits exactly
-on the ring's outer edge) but blurred and at a fraction of the ring's own
-alpha, so the transition happens over a few pixels instead of one. The
-fraction multiplies `--led-ring-alpha` rather than carrying its own value,
-so it goes to zero automatically wherever the ring does (`off`) - the same
-trick `--led-glow-rest` already uses for the breathing trough, reused
-rather than re-invented. The feathered ring's own visible reach is
-`width + feather-blur/2` = 1.5 + 0.5 = 2px past the dot's edge, comfortably
-inside the owner's "about 4px past the dot" ceiling for the ring alone.
+Every call site renders at the 9px default: the sidebar row
+(`session-sidebar-rows.js`) and the launchpad card (`launchpad.js`) both
+call `dotHtml()` with no `size`. A surface that needs a different size
+passes `size` to `ledHtml()`, which scales `--led-size`.
 
-`--led-glow-blur` (6px, raised from 4px on 2026-09-09) and
-`--led-glow-spread` (1.5px, held fixed) are the soft halo beyond both ring
-layers; a blurred shadow reaches `spread + blur/2` past the border box, so
-4.5px (was 3.5px), and the whole lit object fades out by about 18px across
-(was 16.2px). Raising the blur alone, with the spread untouched, spreads
-the SAME amount of light over a wider fade - which is what reads as
-"softer", the owner's word, rather than "bigger": a spread increase would
-have made the glow read as a larger solid disc instead. The 1.8px growth
-in the lit object's overall reach is the documented, accepted cost of that
-softer edge, not a silent regrowth of the "glowing is still too big"
-problem this geometry originally fixed.
+**Why that had to be written down.** Until 2026-09-09 the halo was sized
+per state AND drawn partly outside its own box, so the LIT object came
+out at three different diameters while the ELEMENT box measured 9px in
+every one of them - which is exactly why no CSS-text test caught it:
 
-`--led-halo-scale` and `--led-halo-inset` are RETIRED. They sized and
-positioned a box that no longer exists.
+| state | halo box | painted outside it | what a reader sees |
+|---|---|---|---|
+| `active` | 11.69px | a 1.5px spread glow | about 14.7px, saturated |
+| `unread` | 15.30px (own override) | nothing | 15.3px ring |
+| `steady` | 11.69px | a glow at 0.30 opacity | 9px - grey on a grey dot |
+| `dim` | 11.69px | a glow at 0.18 opacity | 9px |
+| `off` | 11.69px | nothing, opacity 0 | 9px |
 
-The owner's original calibration (2026-09-08): "glowing is still to big.
-like 1 or 2 px larger than the front circle" - the halo ring itself reads
-as only a couple of px bigger than the dot, with the glow adding a further
-1-2px on top. Two earlier configs are worth knowing if you are tracing a
-regression: 1.7x scale / 0.3x spread (shipped earlier the same day) put
-the lit object at about 21px across, still visibly larger than "1 or 2px
-more"; before that, 2.6x scale / 0.62x spread put it at about 35px across
-at the peak - larger than the row text itself and overlapping neighbours
-on the compact sidebar density and on the launchpad cards, which is what
-the owner meant by "the breathing is way too big" the first time. The
-breathing keyframes move the glow's spread between `--led-glow-rest` (0.4)
-and 1 of its resting value - never past it - so the geometry tokens above
-are the true maximum rather than a floor the animation overshoots. The
-ring and its feather do NOT breathe at all; both are held byte-identical
-across the animation, restated in full at both keyframes because a
-box-shadow animation interpolates layer by layer.
+The bottom three are invisible on a real row, so in a sidebar where one
+session is working and the rest are at rest, that one dot read about 60
+percent wider than its neighbours. That is what the owner reported.
 
-There is one set of geometry tokens, not one per surface, because every
-surface that renders a LED today renders it at the same 9px size. A
-surface that needs a different size passes `size` to `ledHtml()` (see
-`client/js/status-led.js`), which sets `--led-size`. Note the ring and glow
-do NOT scale with it - they are flat pixel values - so a much larger LED
-reads as a thinner ring. That is deliberate at the sizes in play and would
-need revisiting if a surface ever shipped at, say, 36px.
+Earlier configurations, if you are tracing a regression: 1.3x halo plus a
+1.5px spread glow put the lit object at about 14.7px with a hard-edged
+11.7px core; 1.7x/0.3x put it at about 21px; the original 2.6x/0.62x put
+it at about 35px, larger than the row text itself. The breathing
+keyframes move the GLOW's alpha and spread only, never past the resting
+value, so the tokens are the true maximum rather than a floor the
+animation overshoots.
+
+`scripts/archive/verify/verify_status_led_geometry.py` measures the
+(inner, outer) pairs in a real Chromium, across themes and viewports.
+A CSS-text read cannot do that job: the divergence was in what the box
+RESOLVES to once a per-state override is composed. Note the script was
+written against the pseudo-element construction that preceded the
+one-element rewrite; re-read it before trusting a run.
 
 ### Rolling a group up
 
-`client/js/session-status-summary.js` folds a set of sessions into one LED
-plus an unread count. THE TWO DIMENSIONS ARE FOLDED SEPARATELY, the same
-way a row keeps them apart.
+`client/js/session-status-summary.js` folds a set of sessions into one
+LED. Priority: **permission > input > working > unread > done > dead >
+unknown**.
 
-The INNER dot is the highest-priority state present. Priority:
-**permission > input > working > unread > idle > dead > unknown**.
+**The roll-up IS the row component.** `summaryHtml` picks an (inner,
+outer) pair and hands it to `StatusLed.ledHtml`, the same builder every
+row uses, so a header takes every treatment a row takes - including the
+green ring around a cleared centre for a finished turn nobody has read. It
+is not a header-shaped dot, and building one would be how the two come to
+disagree.
 
-The OUTER ring is ACTIVITY across the whole group, computed independently:
-`active` if any member is working, `steady` if any member is a live turn
-waiting on the user, `off` otherwise, and `dim` when nothing in the group
-was measured at all. So a group holding one parked session and one busy
-one paints the parked dot inside a breathing ring - both facts at once,
-which is what two rings are for. Taking the ring off the winning bucket's
-row instead would hide the running work behind the more urgent dot.
+**The ring is folded across the whole group, not looked up on the
+winning bucket** (`outerFor`), so a group holding one parked session and
+one busy one paints the parked dot inside a breathing ring. Activity
+outranks unread there, because the ring carries both and only one can be
+painted.
 
-The `done` bucket ("finished and already read") was retired 2026-09-09 and
-lost no meaning: the inner dot spells that difference itself now, so
-`done`-as-read IS `idle` and a bucket for it could never be reached.
+**There is no numeric unread badge beside it.** A yellow `(n)` pill used
+to carry the unread count on every group header; it was removed on
+2026-09-09 at the owner's request ("to be clear remove the yello (1)")
+and nothing replaced it. The ring already says there is something here
+for the user, and two indicators for one fact is how two indicators end
+up disagreeing. `summarizeStates` still RETURNS `unreadCount`, which is a
+measured property of the fold; nothing renders it. The plain count pill
+on the header is a different control - it says how many conversations a
+folded section is hiding - and stays.
 
 `permission` is a session stopped on a yes/no; `input` is one that wants
 the user's eyes (a `notice`, or a startup prompt nobody has answered)
@@ -1046,6 +1197,75 @@ its raw `activity_status`, so a header cannot disagree with the rows under
 it. The unread COUNT is read off each row's own flag rather than off the
 colour of a light, so a working session with an older unread turn is still
 counted even though its dot says `working`.
+
+**The `input` bucket holds two hues and its RANK did not move.** Since the
+five-colour pass, `waiting-input` is yellow (stopped on a startup prompt)
+and `notice` is light blue (still working). They stay in one bucket -
+that priority is the product decision - but the header has to paint one of
+them, so it paints yellow if any member is stopped and light blue when
+every member is a notice. A header that painted the stopped yellow over a
+group holding nothing stopped would be claiming something nobody measured,
+and a header that disagreed with its only child is a bug the suite guards.
+
+`disconnected` buckets with `dead`: they paint the same red and rank the
+same way. No group feeds one in today - children come from a REST listing,
+which has no socket.
+
+### The key, and why the lights finally have words
+
+`client/js/session-status-key.js` renders a foldable legend at the foot
+of the session sidebar. Collapsed by default; the fold rides
+`cloude.statusKey.open` in localStorage, the same `cloude.*` convention
+the pin and the density preference use, and an unreadable or absent value
+means collapsed rather than an error.
+
+It exists because the LED is now the ONLY thing on a row saying what a
+session is doing - the envelope is gone and there is no text badge beside
+it - and its meaning lives in a `title` nobody hovers on a phone.
+
+**Every swatch is a real LED.** `itemHtml` calls `StatusLed.ledHtml` with
+the same (inner, outer) pair the rows resolve to, so the key cannot show
+a colour, a size or a shape the app does not paint. A hand-drawn legend
+would be a second implementation of the component, and this project has
+already paid for two stylesheets drawing one dot.
+
+**SEVEN ROWS, ONE PER LIGHT.** It carried nine until 2026-09-09, one per
+inner state, and the owner asked for "one entry per colour": two rows
+showed the same yellow and two showed the same red, which sends a reader
+looking up a dot on their screen hunting for a difference the light
+cannot show them. The rows, top to bottom, in the same urgency order the
+group-header fold uses:
+
+| light | row |
+|---|---|
+| yellow | stopped, waiting on you |
+| light blue | still working, but needs your attention |
+| green | working |
+| green ring | done, unread |
+| grey | idle |
+| red | dead / disconnected session |
+| grey outline | not measured - nothing reported in, so this is not idle |
+
+Green and grey each appear twice and that is not a breach of the rule:
+a solid dot and an outline are two different things on screen, which is
+exactly what the last row exists to explain. **THE STATE MACHINE DID NOT
+CHANGE.** There are still eight inner states, `waiting-permission` and
+`waiting-input` still paint one yellow, `dead` and `disconnected` still
+paint one red, and the component's own `title` and `aria-label` still say
+WHICH of each pair a given dot is. Collapsing the rows made those labels
+load-bearing rather than decorative, so
+`tests/test_status_key.node.mjs` now pins that the collapsed pairs really
+do resolve to one colour in the stylesheet AND that their words still
+differ. It also asserts the count, that every hue the component can paint
+has a row, and that no two rows draw the same light.
+
+It sits where the sidebar's "N remembered positions are held for sessions
+not currently listed" note used to, removed the same day: it named
+bookkeeping no reader could act on. **The remembered positions themselves
+are untouched** - `session-sidebar-arrangement.js` still keeps those
+slots, they still reach the repaint signature, and
+`session-sidebar.js` still stamps the count on the list element as
+`data-order-missing`. Only the sentence went.
 
 ## A silent degradation worth knowing about
 

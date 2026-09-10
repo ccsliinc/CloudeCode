@@ -50,6 +50,18 @@ console.log('[SessionSidebarClicks Module] Loading...');
             onGroupToggleClick(ctrl, groupToggle);
             return;
         }
+        // THE STATUS-LIGHT KEY IS A ROW OF THIS LIST TOO, sitting at its
+        // foot, so its click arrives here and has to be claimed before
+        // anything row-shaped runs. It folds IN PLACE rather than asking
+        // for a repaint: rebuilding every row to move one attribute would
+        // also drop the focus the user is holding on the button they just
+        // pressed.
+        const keyToggle = e.target.closest && e.target.closest('[data-status-key-toggle]');
+        if (keyToggle) {
+            e.stopPropagation();
+            if (window.SessionStatusKey) window.SessionStatusKey.onToggleClick(keyToggle);
+            return;
+        }
         // An edit in progress owns every click inside itself. Without
         // this the click that puts the caret in the input also reaches
         // the row handler and switches conversation out from under it.

@@ -71,6 +71,29 @@ function loadStatusUI() {
     return fakeWindow.SessionStatusUI;
 }
 
+/**
+ * Load the module in a sandbox that already holds a UIFlags stub, which
+ * is the only way to exercise the mark-unread gate: the module reads
+ * `globalThis.UIFlags`, and inside `vm.runInContext` that is the CONTEXT
+ * object, not this file's own globalThis. Setting it from out here would
+ * assert nothing - the module would never see it.
+ * Inputs: uiFlags (Object|undefined) - the stub, or undefined for none.
+ * Output: object - the module's exported API.
+ */
+function loadStatusUIWithFlags(uiFlags) {
+    const src = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'session-status-ui.js'),
+        'utf8',
+    );
+    const fakeWindow = {};
+    fakeWindow.window = fakeWindow;
+    const context = { window: fakeWindow, console };
+    if (uiFlags !== undefined) context.UIFlags = uiFlags;
+    vm.createContext(context);
+    vm.runInContext(src, context);
+    return fakeWindow.SessionStatusUI;
+}
+
 const StatusUI = loadStatusUI();
 
 /**
@@ -186,7 +209,7 @@ test('dotHtml escapes its interpolations too', () => {
     assert.ok(html.includes('status-dot--question'));
     assert.equal(
         rawAttr(html, 'aria-label'),
-        'waiting for permission',
+        'your turn - claude needs your permission',
     );
     // An unknown status must not leak the caller's raw string into markup.
     const unknown = StatusUI.dotHtml('<script>');
@@ -203,7 +226,7 @@ test('question and notice are separate keys with separate labels', () => {
     assert.ok(n.includes('status-dot--notice'));
     assert.equal(
         rawAttr(n, 'aria-label'),
-        'wants your attention',
+        'your turn - claude wants your attention',
     );
     assert.notEqual(rawAttr(q, 'aria-label'), rawAttr(n, 'aria-label'));
     // Two distinct legacy classes as well, so the fallback path this
@@ -211,6 +234,42 @@ test('question and notice are separate keys with separate labels', () => {
     // The (inner, outer) mapping is asserted in test_status_led.node.mjs,
     // which is the file that loads the LED module.
     assert.ok(q.includes('status-dot--question'));
+});
+
+test('THE MARK-UNREAD CONTROL IS GATED, AND THE GATE FAILS OPEN', () => {
+    // Decision, 2026-09-09: the control stays, behind
+    // `ui.show_mark_unread_control`. One line of this project deleted it
+    // outright on the grounds that the LED's green ring says the same
+    // thing; the owner kept the control and asked for a switch. So there
+    // are three cases and only ONE of them hides anything.
+    //
+    // markUnreadHtml is the single gate for every surface (both callers
+    // interpolate its return value straight into a row), which is why
+    // this can be asserted here rather than once per renderer.
+
+    // 1. NO FLAGS MODULE AT ALL - an older page, or a load failure. The
+    //    control ships enabled, so its absence must not hide it.
+    assert.ok(
+        loadStatusUIWithFlags(undefined).markUnreadHtml('cloude_x', false)
+            .includes('data-mark-unread'),
+        'no UIFlags must mean shown',
+    );
+
+    // 2. MEASURED ON.
+    assert.ok(
+        loadStatusUIWithFlags({ showMarkUnreadControl: () => true })
+            .markUnreadHtml('cloude_x', false).includes('data-mark-unread'),
+        'flag true must mean shown',
+    );
+
+    // 3. MEASURED OFF - the one case that hides it, and it hides the
+    //    WHOLE control, not just its glyph, so no empty click target is
+    //    left in the row.
+    const off = loadStatusUIWithFlags({ showMarkUnreadControl: () => false });
+    assert.equal(off.markUnreadHtml('cloude_x', false), '',
+                 'flag false must render nothing at all');
+    assert.equal(off.markUnreadHtml('cloude_x', true), '',
+                 'the already-unread state is gated too');
 });
 
 await runQueue();

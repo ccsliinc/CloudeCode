@@ -220,12 +220,16 @@ for (const [name, render] of SURFACES) {
             `${name} dropped the row's unread field`);
     });
 
-    await test(`${name}: and it does NOT ring - nothing is running`, () => {
-        // 2026-09-09. The ring means activity; a finished conversation
-        // with an unread turn has none, and it used to breathe.
+    await test(`${name}: and the ring is the STILL green one, never breathing`, () => {
+        // The owner's 2026-09-09 ruling: unread rides the ring, and the
+        // ring is crisp and still. `active` is the only state that
+        // animates, so a light that MOVES is a session that is moving -
+        // which is the whole of the defect this replaced.
         const html = render(listRow('idle', true));
-        assert.equal(outerOf(html), 'off',
-            `${name} rang an idle session that is only unread`);
+        assert.equal(outerOf(html), 'unread',
+            `${name} dropped the unread ring`);
+        assert.notEqual(outerOf(html), 'active',
+            `${name} made a finished conversation breathe`);
     });
 }
 
@@ -240,13 +244,15 @@ for (const [name, render] of SURFACES) {
         const html = render(listRow('idle', false));
         assert.equal(innerOf(html), 'idle',
             `${name} claimed unread on a row that is not`);
-        assert.equal(outerOf(html), 'off', `${name} rang a resting session`);
+        assert.equal(outerOf(html), 'steady',
+            `${name} did not calm the ring on a session that was read`);
     });
 
     await test(`${name}: a working row rings active whatever the flag says`, () => {
-        // BOTH directions, because the ring must be a function of the
-        // status alone now. A renderer that still folded unread into the
-        // ring would differ across these two.
+        // BOTH directions. The ring carries unread AND activity, and
+        // activity outranks it: a working session is working, and a
+        // renderer that let an old unread turn stop the pulse would be
+        // hiding the louder, more perishable fact behind the quieter one.
         assert.equal(outerOf(render(listRow('working', false))), 'active',
             `${name} lost the working ring`);
         assert.equal(outerOf(render(listRow('working', true))), 'active',
@@ -286,17 +292,26 @@ await test('every surface renders the same LIGHT for the same list row', () => {
 });
 
 // ---------------------------------------------------------------------
-// 3b. AND NO SURFACE RINGS UNREAD, ever. The retired outer state must not
-//     survive anywhere in the render path.
+// 3b. THE RING IS A FUNCTION OF BOTH, AND ACTIVITY WINS. The exhaustive
+//     check that no surface invents a ring the others do not, and that
+//     `unread` is reachable ONLY where nothing is running.
 // ---------------------------------------------------------------------
 
-await test('no surface can produce the retired unread ring', () => {
+await test('the unread ring appears exactly where a turn finished and nothing runs', () => {
     for (const status of ['idle', 'working', 'finished_unread', 'unknown', 'dead']) {
         for (const unread of [true, false]) {
             const row = listRow(status, unread);
+            const resting = status === 'finished_unread'
+                || (status === 'idle' && unread);
             for (const [name, render] of SURFACES) {
-                assert.notEqual(outerOf(render(row)), 'unread',
-                    `${name} still paints an unread ring for ${status}`);
+                const outer = outerOf(render(row));
+                if (resting) {
+                    assert.equal(outer, 'unread',
+                        `${name} lost the unread ring for ${status}/unread=${unread}`);
+                } else {
+                    assert.notEqual(outer, 'unread',
+                        `${name} claimed a finished turn for ${status}/unread=${unread}`);
+                }
             }
         }
     }

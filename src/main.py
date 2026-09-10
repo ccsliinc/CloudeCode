@@ -1189,15 +1189,40 @@ async def features(_: str = Depends(require_auth)) -> JSONResponse:
       surface that is not there. When ``state`` says enabled and
       ``routes_mounted`` is false, the answer is "restart the server",
       and the payload says so in ``restart_required``.
+      It ALSO carries the ``ui`` block, which is a different KIND of
+      thing and is shaped differently on purpose: a plain boolean per
+      surface, because these are the owner's own preferences rather than
+      a subsystem that can be half-present. There is no third state to
+      report - an unreadable config leaves each flag at its default, and
+      the default is always "shown", so a failed read can never remove a
+      control the user has.
     Inputs: none (auth required, same as every other /api/v1 route).
-    Output: JSONResponse - {"message_archive": {state, source, reason,
-      routes_mounted, restart_required, env_override}}.
+    Output: JSONResponse - {"ui": {show_mark_unread_control},
+      "message_archive": {state, source, reason, routes_mounted,
+      restart_required, env_override}}.
     Example: GET /api/v1/features -> {"message_archive": {"state":
       "disabled", ...}}
     """
     mounted = _archive_routes_mounted()
+    # Read once per request rather than cached: config.json is written
+    # atomically by Settings.update_settings_config, so a re-read is a
+    # cheap way to make a flipped switch reach the next page load without
+    # a restart. An unreadable config leaves the flag at its DEFAULT (the
+    # control is shown) rather than hiding a capability on a failed read -
+    # the same "unknown never denies" rule ArchiveEntry follows.
+    try:
+        show_mark_unread = settings.load_auth_config().ui.show_mark_unread_control
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        logger.warning("features_ui_flags_unreadable", error=str(exc))
+        show_mark_unread = True
     return JSONResponse(
         content={
+            "ui": {
+                # Whether the manual mark-unread toggle is rendered. See
+                # src/config.py::UIConfig for why it defaults to shown and
+                # why the LED's ring is not a substitute for the control.
+                "show_mark_unread_control": show_mark_unread,
+            },
             "message_archive": {
                 "state": MESSAGE_ARCHIVE.state,
                 "source": MESSAGE_ARCHIVE.source,

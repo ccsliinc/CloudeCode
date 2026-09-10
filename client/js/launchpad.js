@@ -1739,14 +1739,36 @@ class Launchpad {
             const forkBtn = owned
                 ? `<button type="button" class="running-session-fork" data-fork-name="${escapedName}" title="copy this conversation into a new session and open it - this session is not changed. Note: Claude Code&#39;s own /fork runs the copy in the BACKGROUND and leaves you here; this button behaves like its /branch." aria-label="fork this session into a new one">fork</button>`
                 : '';
-            // Real activity status via the shared SessionStatusUI helper,
-            // title + aria-label so state is never color-only. `signals`
-            // is what the LED outer ring needs - see session-sidebar-rows.js.
+            // Status dot: real activity status (running/idle/dead/unknown)
+            // via the shared SessionStatusUI helper
+            // (client/js/session-status-ui.js), NOT the old
+            // ownership-colored placeholder. title + aria-label on the dot
+            // itself so the state is never color-only.
+            //
+            // FOUR SIGNALS, because a bare status string cannot express
+            // any of them: the persisted `unread` flag (which the LED
+            // paints as its still green finished-turn ring), the
+            // `startup_gate` probe, `status_source` (provenance, tooltip
+            // only) and `transport` (whether THIS browser's socket to the
+            // session is up, which no server response can report). Drop
+            // one and the card's light silently disagrees with the
+            // sidebar row for the same session.
             const statusDot = window.SessionStatusUI
-                ? window.SessionStatusUI.dotHtml(s.status,
-                    { unread: !!s.unread, startup_gate: s.startup_gate,
-                      status_source: s.status_source })
+                ? window.SessionStatusUI.dotHtml(s.status, {
+                    unread: !!s.unread,
+                    startup_gate: s.startup_gate,
+                    status_source: s.status_source,
+                    transport: window.SessionTransport
+                        ? window.SessionTransport.stateFor(s.name)
+                        : undefined,
+                })
                 : '';
+            // THE MANUAL UNREAD CONTROL, kept and gated. The LED says
+            // whether a session is unread; this is what SETS it, and the
+            // owner's rule is "if i want it unread i click unread".
+            // markUnreadHtml returns '' when
+            // `ui.show_mark_unread_control` is false, so the gate lives
+            // in one place rather than on every surface.
             const markUnread = window.SessionStatusUI
                 ? window.SessionStatusUI.markUnreadHtml(s.name, !!s.unread)
                 : '';
@@ -2734,6 +2756,9 @@ class Launchpad {
             // Envelope icon path: manual mark/clear unread. Stop
             // propagation so the row click handler (return/adopt) never
             // also fires - this is a status toggle, not a navigation.
+            // The element is absent entirely when
+            // `ui.show_mark_unread_control` is false, so this branch
+            // simply never matches; there is no second gate here.
             if (markUnreadEl) {
                 e.stopPropagation();
                 await this._handleMarkUnread(markUnreadEl);
@@ -2828,8 +2853,8 @@ class Launchpad {
      *
      * Description: Optimistic-ish - awaits the PATCH, then forces a
      *   re-render by invalidating the signature cache and re-fetching, so
-     *   the toggle's visual state (and the finished_unread dot it may
-     *   flip on/off) updates immediately rather than waiting for the next
+     *   the toggle's visual state (and the finished-turn ring it may flip
+     *   on or off) updates immediately rather than waiting for the next
      *   5s poll tick.
      * Inputs:
      *   toggleEl (Element) - the `[data-mark-unread]` span clicked,
@@ -3613,7 +3638,7 @@ class Launchpad {
                     <span class="home-bar__status-text" id="home-bar-status-text"></span>
                 </span>
                 <span class="home-bar__spacer" aria-hidden="true"></span>
-                <span class="version home-bar__version" id="home-bar-version"></span>
+                <span class="home-bar__version" id="home-bar-version"></span>
                 <a class="home-bar__link" href="https://nyedis.ai" target="_blank" rel="noopener noreferrer"
                    aria-label="nyedis.ai" title="nyedis.ai">
                         <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 986 937" role="img" aria-label="Black bird silhouette">
@@ -3642,21 +3667,24 @@ class Launchpad {
     /**
      * Stamp the app version into the home bar's chip.
      *
-     * The version is resolved server-side and stamped into the
-     * `cloude-app-version` meta tag by src/main.py; this markup is built
-     * at runtime and so has no server-rendered token of its own. An
-     * absent or empty meta leaves the chip empty, which
-     * `.home-bar__version:empty` then removes from the layout - a blank
-     * gap beside the bird would read as a broken control.
+     * `#home-bar-version` is a mount point, not the version text itself:
+     * client/js/version-footer.js owns the string (a real version, or
+     * "version unknown" when the resolver could not determine one - see
+     * that file for why the unresolved case is named rather than left
+     * blank) and this markup is built at runtime, so it has no
+     * server-rendered content of its own to stamp. The same call
+     * produces the sidebar footer's version line
+     * (VersionFooter.sidebarFooterHtml() in
+     * client/js/session-sidebar-rows.js), so the two placements can
+     * never show two different strings.
      *
      * @returns {void}
      */
     renderHomeBarVersion() {
-        const chip = document.getElementById('home-bar-version');
-        if (!chip) return;
-        const meta = document.querySelector('meta[name="cloude-app-version"]');
-        const version = meta ? (meta.getAttribute('content') || '').trim() : '';
-        chip.textContent = version;
+        const mount = document.getElementById('home-bar-version');
+        if (!mount) return;
+        mount.innerHTML = window.VersionFooter
+            ? window.VersionFooter.versionSpanHtml() : '';
     }
 
     /**
@@ -4185,10 +4213,19 @@ class Launchpad {
         const displayName = this._sessionDisplayLabel(s);
         const escapedName = this._escapeHtml(s.name);
         const escapedDisplay = this._escapeHtml(displayName);
+        // Same signals the running-session card passes, for the same
+        // reason: one component, one meaning per colour, on every
+        // surface. A project-tree row that painted a plainer light than
+        // the card above it would be two answers to one question.
         const statusDot = window.SessionStatusUI
-            ? window.SessionStatusUI.dotHtml(s.status,
-                { unread: !!s.unread, startup_gate: s.startup_gate,
-                  status_source: s.status_source })
+            ? window.SessionStatusUI.dotHtml(s.status, {
+                unread: !!s.unread,
+                startup_gate: s.startup_gate,
+                status_source: s.status_source,
+                transport: window.SessionTransport
+                    ? window.SessionTransport.stateFor(s.name)
+                    : undefined,
+            })
             : '';
         return `
                 <div class="project-session-row" data-name="${escapedName}" data-active="${s.is_active ? '1' : '0'}"${this._workRecencyAttrs(s)} role="button" tabindex="0">
