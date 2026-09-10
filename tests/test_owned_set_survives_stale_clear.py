@@ -14,7 +14,7 @@ one the file never came back: three later starts logged
 today.
 
 WHAT THAT COSTS. ``session_metadata.json`` is the ONLY durable home of
-``SessionManager.owned_tmux_sessions``. ``_clear_stale_metadata`` unlinks
+``SessionManager._owned.names``. ``_clear_stale_metadata`` unlinks
 the whole file in order to discard ONE session's un-rehydratable pointer,
 so N sessions lose their ownership record to clean up 1. The trigger is
 not an error path: ``session_metadata_slug_not_in_backend`` is the
@@ -103,7 +103,7 @@ def test_clearing_a_stale_pointer_keeps_the_owned_set(dirs):
 
     mgr = SessionManager()
     mgr._load_session_metadata()
-    assert mgr.owned_tmux_sessions == set(owned)
+    assert mgr._owned.names == set(owned)
 
     # The persisted slug is not live. This is the ordinary case, and it is
     # the exact call lifespan_startup makes on it.
@@ -114,7 +114,7 @@ def test_clearing_a_stale_pointer_keeps_the_owned_set(dirs):
     reloaded = SessionManager()
     reloaded._load_session_metadata()
 
-    assert reloaded.owned_tmux_sessions >= {"cloude_alpha", "cloude_beta"}, (
+    assert reloaded._owned.names >= {"cloude_alpha", "cloude_beta"}, (
         "clearing ONE session's stale pointer destroyed the ownership "
         "record for every other session; every launcher-created session "
         "reads EXTERNAL from here on"

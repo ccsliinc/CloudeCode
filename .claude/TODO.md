@@ -7276,3 +7276,140 @@ says `src/models.py` ends "under 200, a re-export shim only". A module and a
 package of one name cannot coexist, so the shim is `src/models/__init__.py` at
 149 lines and the flat file is gone. The budget is the same number and it is
 enforced by `test_the_re_export_shim_stays_a_shim`.
+
+## 2026-09-10 - decomposition v2 slice S3: OwnedTmuxLedger
+
+Plan v2 section 6, slice S3. The first slice on the boot path, and the first
+one that moves a durable file.
+
+**What moved.** `src/core/sessions/owned_tmux_ledger.py`, 435 lines, owns the
+owned tmux NAME set (`owned_tmux_sessions` -> `OwnedTmuxLedger.names`), the
+pre-v3 backfill sentinel, the boot listing, `session_metadata.json` (load,
+save, the atomic write and the pointer drop) and the two datastore-backed
+ownership queries (`_owned_instances_from_db` -> `instances_from_db`,
+`owned_tmux_instances` -> `instances`, `is_owned_tmux_name` -> `is_owned_name`).
+`src/core/session_manager.py` goes 7,894 to 7,725, a drop of 169.
+
+`SessionManager` keeps no copy and no forwarder: `self._owned` is the ledger and
+every one of the 66 internal reads reaches it directly. `AppServices` grew an
+`owned_tmux` field and `build_services` hands the SAME object to both sides.
+Rule B is enforced by `tests/test_no_cluster_forwarders.py`, whose deleted-name
+list grew by the seven members that left.
+
+**Three methods stayed, and they are not forwarders.** `_load_session_metadata`
+registers the session the ledger parsed, which wires backends and subscribers
+and would put the registry on the far side of the package rule.
+`_save_session_metadata` fills in the current session as a default.
+`_clear_stale_metadata` wipes in-memory state the ledger cannot see. Each does
+work of its own, so the full docstring rule applies to each and does.
+
+**The socket and the metadata path are late-bound, and both had to be.**
+`_tmux_socket_name` lets the PROBED socket win over the configured one, and a
+captured string would key every ownership read on the configured value and
+answer the badge from a socket nothing was ever written to. The metadata path is
+a callable resolving `settings` out of the `session_manager` module's globals at
+call time, which is the S2 near-miss rule: a ledger that imported `src.config`
+would be invisible to the 41 `monkeypatch.setattr("src.core.session_manager.settings", ...)`
+calls in the suite and would read and WRITE the owner's real
+`~/.cloude-sessions/session_metadata.json` during a plain pytest run. In
+`build_services` the socket callable closes over the name `manager`, which the
+NEXT statement binds; there is no value that could be supplied at that point.
+
+`SettingsReader` grew one method, `session_metadata_path`, which is the growth
+model its own docstring describes: one method at a time, when a collaborator
+genuinely needs one.
+
+**The no-copy legs, chosen for THIS data.** The risk here is two objects holding
+one logical set, which passes every `==` assertion until the first write through
+the wrong reference and then badges a session this app created as somebody
+else's.
+(a) identity, `services.owned_tmux is manager._owned`;
+(b) data forward, add through the manager's handle, read on the ledger;
+(c) data reverse, add on the ledger, read through the manager. S1 measured a
+    copy that left (a) and (b) both green and failed only here;
+(d) through the FILE, which is the medium this cluster exists for: save from one
+    ledger, load into a second, then mutate the first and assert the second does
+    not see it. That last half is the control on the other three - if they
+    passed because everything in the module aliases everything else, (d) fails.
+The same four legs were added to `tests/test_composition_root.py`'s existing
+services-versus-facade pair.
+
+**Seven mutations. Six red, one green that was MY MUTATION'S FAULT, and one
+that was red outside the runner I first used.**
+1. `build_services` stops handing the ledger to the manager -> 3 red, all three
+   composition legs.
+2. `write_atomic` writes in place, no tmp and no rename -> 1 red.
+3. `drop_session_pointer` stops re-writing the owned set -> 2 red, including the
+   pre-existing `test_owned_set_survives_stale_clear.py`.
+4. A failed read empties the owned set -> 1 red.
+5. `is_owned_name` falls back to a `cloude_` prefix match -> 4 red. That is the
+   spoofable heuristic the set exists to replace.
+6. `save` stops stamping the owned set onto the payload -> 6 red across four
+   files.
+7. **GREEN, and the test was right.** `self._owned.names = set(self._owned.names)`
+   after construction is not a divergence at all: the copy is assigned back ONTO
+   the ledger, so both references still see one object. Rewritten as 7b, a
+   create-path write into a local copy (`_copy = set(...); _copy.add(...)`),
+   which is the divergence that can actually happen. 7b is red - in
+   `test_session_backend.py`, NOT in the focused runner I had been using, which
+   is worth writing down: a mutation is only measured against the tests you
+   actually ran.
+
+Every revert verified byte-identical by sha256.
+
+**A reverted file, and the lesson.** Reverting mutation 7 with
+`git checkout -- src/core/session_manager.py` threw away every S3 edit to that
+file, because the file was not yet committed. Re-applied from the same script
+(`scratchpad/s3/apply_manager.py`) and re-verified. Revert a mutation with the
+`.bak` you took, never with git, while the slice is uncommitted.
+
+**Patch sweep and repointed guards.** No `patch(` in the suite aims at any name
+that moved: the 23 sites patching `_load_session_metadata` /
+`_save_session_metadata` target members that still exist. Repointed: two
+`monkeypatch.setattr(SessionManager, "_owned_instances_from_db", ...)` in
+`test_s4_regressions.py` onto `OwnedTmuxLedger.instances_from_db`; the
+`AppServices` field list and the port conformance double; two SOURCE-TEXT guards
+in `test_session_ownership_origin.py`, one of which got STRONGER because the two
+resolvers have left `session_manager.py` and no longer need exempting; and
+`tests/test_launchpad_help_content.node.mjs`, which reads
+`owned_names=set(...)` out of the manager source to check a help-text claim and
+would otherwise have been the only failing node suite.
+
+**A double stopped answering a question nobody asks.** The listing double in
+`test_tmux_listing_consumers.py` carried an owned-name set that no assertion ever
+observed; the route reads `list_attachable_sessions()` and nothing else. Removed
+rather than repointed, so a future read through it is an AttributeError.
+
+**Verification.** 6,170 passed / 2 failed / 20 skipped, 6,192 collected, against
+the S2 tree's 6,141 / 2 / 20 and 6,163 collected. Delta +29, accounted entirely
+by collection diff: 18 in `test_owned_tmux_ledger.py`, 7 in the forwarder
+invariant's deleted-name list, 3 in `test_sessions_package_rules.py` (one more
+module in the package, three rules each) and 1 in `test_no_unresolved_names.py`.
+ZERO tests removed. The two failures are the known environmental pair. Node
+200/200, `check-js-syntax.sh` clean. The three listing cost ceilings pass.
+`scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Plan versus code, and the code won twice.**
+1. The plan's mutation for this slice is "make the atomic write skip the `.bak`.
+   If nothing goes red, the rule that protects the user's whole setup is
+   undefended." THERE IS NO `.bak` IN THIS WRITE. `_write_metadata_atomic` was
+   tmp plus `fsync` plus `os.replace` and never had one; the `.bak` belongs to
+   `Settings.update_settings_config` in `src/config.py`, which is slice S5. The
+   invariant that IS here is the atomic rename, and mutation 2 above is the test
+   of it.
+2. The plan says "9 test files, 2 `src` call sites". The `src` count is exactly
+   right. A plain attribute grep finds 13 test files, but re-measured with the
+   plan's own methodology (accesses through a variable named `manager`, `sm`,
+   `session_manager` or `mgr`) it is 9 on the nose. The extra four are two
+   docstring-only mentions and two files using other variable names, plus
+   `test_session_ownership_origin.py`, whose reach is source text rather than an
+   attribute and which a name-grep of either kind would have missed.
+
+**What is NOT done, said out loud.** `SessionManager._datastore_connection` and
+`_writable_datastore_connection` survive with about 28 callers across clusters
+this slice does not own; the ledger reaches the datastore through the
+`SessionRecordStore` port instead, so the ONE ownership caller moved and the
+private pair keeps the rest until their own slices. And `routes.py` still guards
+`active_tmux_names` with `hasattr` two lines from the call this slice edited;
+that name belongs to S4 and removing its tolerance here would change behaviour
+outside this slice.

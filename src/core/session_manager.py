@@ -54,6 +54,8 @@ from src.core.session_backend import SessionBackend, build_backend
 # while there is exactly one definition of the dataclass. Re-exporting a
 # name is the facade rule applied to a type rather than to a method: no
 # caller moves.
+from src.core.live_ports import LiveSessionRecordStore, LiveSettings
+from src.core.sessions.owned_tmux_ledger import OwnedTmuxLedger
 from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
 from src.core.sessions.registry import SessionRegistry
 from src.core.sessions.sidecars import AttachmentSidecars
@@ -281,6 +283,7 @@ class SessionManager:
         toast_inbox: Optional[ToastInbox] = None,
         registry: Optional[SessionRegistry] = None,
         sidecars: Optional[AttachmentSidecars] = None,
+        owned_tmux: Optional[OwnedTmuxLedger] = None,
     ):
         """Initialize the session manager.
 
@@ -299,8 +302,10 @@ class SessionManager:
           registry (SessionRegistry | None) - the owner of the per-session
           log buffers and command counters. sidecars (AttachmentSidecars |
           None) - the owner of the idle watchers, the adopt FIFO offsets
-          and the pending terminal commands. Each default-constructed when
-          None.
+          and the pending terminal commands. owned_tmux (OwnedTmuxLedger |
+          None) - the owner of the owned-tmux-name set, its
+          ``session_metadata.json`` file and the two ownership queries.
+          Each default-constructed when None.
         Output: None.
         Example: SessionManager(probe_health=ProbeHealthRecorder())
         """
@@ -403,23 +408,37 @@ class SessionManager:
         # src/core/session_notification_policy.py.
         self._notification_policy_store = None
 
-        # Track 1 - adopt-external-session support.
+        # S3 - the ONE owner of the owned-tmux cluster. The owned NAME
+        # set, the pre-v3 backfill sentinel, the boot listing,
+        # ``session_metadata.json`` and the two datastore-backed
+        # ownership queries all live on the ledger and NOWHERE else. This
+        # class keeps no copy of any of them and exposes no forwarder to
+        # them, so the two objects cannot hold one logical set.
         #
-        # ``owned_tmux_sessions`` holds the full tmux session names that
-        # Cloude Code itself created (e.g. ``cloude_myproject``). Persisted
-        # in ``session_metadata.json`` so the UI can reliably tell
-        # OUR-sessions apart from USER-started tmux sessions on the same
-        # ``-L cloude`` socket (rather than spoof-able prefix matching).
-        # Populated by ``create_session`` BEFORE return, pruned by
-        # ``destroy_session``, reconciled on ``lifespan_startup``.
-        self.owned_tmux_sessions: set[str] = set()
-
-        # Set True by ``_load_session_metadata`` when reading a pre-v3
-        # metadata file that lacks ``owned_tmux_sessions``. In that case
-        # we treat the single active slug as owned for ONE rehydrate, then
-        # re-persist the new schema on first successful round-trip. Guards
-        # against stranding in-flight sessions on upgrade.
-        self._legacy_metadata_needs_backfill: bool = False
+        # THE METADATA PATH IS A CALLABLE, for the same measured reason
+        # the pin path above is: it resolves ``settings`` out of THIS
+        # module's globals at call time, which is what the loose
+        # ``_write_metadata_atomic`` did, and which is what the 41
+        # ``monkeypatch.setattr("src.core.session_manager.settings", ...)``
+        # calls in the suite bind. A ledger that imported ``src.config``
+        # itself would read and WRITE the owner's real
+        # ``~/.cloude-sessions/session_metadata.json`` during a plain
+        # pytest run.
+        #
+        # THE SOCKET IS THE BOUND METHOD, not a captured string.
+        # ``_tmux_socket_name`` lets the PROBED socket win over the
+        # configured one, and that preference has to be re-evaluated on
+        # every ownership read or the badge is answered from a socket
+        # nothing was ever written to.
+        self._owned: OwnedTmuxLedger = (
+            owned_tmux
+            if owned_tmux is not None
+            else OwnedTmuxLedger(
+                metadata_path=lambda: settings.get_session_metadata_path(),
+                records=LiveSessionRecordStore(settings_reader=LiveSettings()),
+                socket_name=self._tmux_socket_name,
+            )
+        )
 
 
         # v0.7.0 Part 3 - per-session HMAC tokens. Minted on
@@ -446,11 +465,12 @@ class SessionManager:
         # returns 200, and resolves to nothing - measured, and from the
         # agent's side indistinguishable from success.
         self._hook_tmux_names: dict[str, str] = {}
-        # Boot re-adopt handoff. ``_boot_listing`` is set ONLY past the
+        # Boot re-adopt handoff. The listing itself lives on the ledger
+        # (``self._owned.boot_listing``), set ONLY past the
         # ``listing.ok`` gate in ``_lifespan_tmux_reconcile``; None means
         # the probe never answered and nothing may be claimed. The task
-        # reference is held so it cannot be garbage collected mid-flight.
-        self._boot_listing = None
+        # reference is held here so it cannot be garbage collected
+        # mid-flight.
         self._boot_readopt_task = None
         # session_id -> tmux_created_epoch, cached the moment a create or
         # adopt persist step resolves it (see ``create_session`` and
@@ -887,7 +907,7 @@ class SessionManager:
           accumulating for the life of the install.
 
           READS ``session_metadata.json`` DIRECTLY rather than
-          ``self.owned_tmux_sessions``, because this runs from
+          ``self._owned.names``, because this runs from
           ``__init__`` before that set is rehydrated.
 
           KNOWN: IT IS ONE RESTART BEHIND. The file is reconciled against
@@ -1365,7 +1385,7 @@ class SessionManager:
         """
         from src.core.session_boot_readopt import schedule_boot_readopt
 
-        if self._boot_listing is None:
+        if self._owned.boot_listing is None:
             return None
         return schedule_boot_readopt(self)
 
@@ -1400,7 +1420,7 @@ class SessionManager:
         # top-level ``backfill_agent_type`` helper for direct unit testing
         # without spinning up the full lifespan path. Idempotent + safe to
         # re-run; only persists + logs when something actually changed.
-        backfilled = backfill_agent_type(persisted, self.owned_tmux_sessions)
+        backfilled = backfill_agent_type(persisted, self._owned.names)
         if backfilled:
             self._save_session_metadata()
             logger.info(
@@ -1437,7 +1457,7 @@ class SessionManager:
                 "lifespan_tmux_probe_unavailable",
                 reason=listing.reason,
                 detail=listing.detail,
-                owned_count=len(self.owned_tmux_sessions),
+                owned_count=len(self._owned.names),
                 note=(
                     "tmux could not be enumerated - skipping ownership, "
                     "pinned-theme and unread pruning, and skipping "
@@ -1452,20 +1472,20 @@ class SessionManager:
         # reads it after this method returns, so the multi-session
         # re-adopt is structurally unable to run on a probe that never
         # answered. Left None when we returned early.
-        self._boot_listing = listing
+        self._owned.boot_listing = listing
 
         # Reconciler: prune owned-set entries no longer alive on tmux.
         # Persist the pruned set only if we also have an active session
         # on record (otherwise there's nothing else to write and we'd
         # just emit a shell metadata file).
-        if self.owned_tmux_sessions:
-            stale = self.owned_tmux_sessions - tmux_alive
+        if self._owned.names:
+            stale = self._owned.names - tmux_alive
             if stale:
                 logger.info(
                     "owned_tmux_sessions_pruning_stale",
                     stale=sorted(stale),
                 )
-                self.owned_tmux_sessions -= stale
+                self._owned.names -= stale
                 if persisted is not None:
                     self._save_session_metadata()
 
@@ -1545,8 +1565,8 @@ class SessionManager:
         ownership_ok = (
             target_name is not None
             and (
-                self.is_owned_tmux_name(target_name)
-                or self._legacy_metadata_needs_backfill
+                self._owned.is_owned_name(target_name)
+                or self._owned.needs_legacy_backfill
             )
         )
 
@@ -1575,13 +1595,13 @@ class SessionManager:
 
             # Legacy backfill: first successful rehydrate populates the
             # owned-set and re-persists under the new schema.
-            if self._legacy_metadata_needs_backfill:
-                self.owned_tmux_sessions.add(target_name)
+            if self._owned.needs_legacy_backfill:
+                self._owned.names.add(target_name)
                 self._save_session_metadata()
                 logger.info(
                     "session_metadata_legacy_backfilled",
                     session_id=persisted.id,
-                    owned=sorted(self.owned_tmux_sessions),
+                    owned=sorted(self._owned.names),
                 )
 
             logger.info(
@@ -1603,7 +1623,7 @@ class SessionManager:
                     "session_metadata_slug_not_owned",
                     session_id=persisted.id,
                     target=target_name,
-                    owned=sorted(self.owned_tmux_sessions),
+                    owned=sorted(self._owned.names),
                     note="not rehydrating a non-owned session",
                 )
             else:
@@ -1616,50 +1636,20 @@ class SessionManager:
             self._clear_stale_metadata(persisted.id)
 
     def _clear_stale_metadata(self, session_id: Optional[str] = None) -> None:
-        """Delete on-disk metadata for a session that can't be re-adopted.
+        """Drop the on-disk session pointer and wipe that session's state.
 
-        If ``session_id`` is given, that session's in-memory state is
-        wiped too; if None, the current session (if any) is wiped.
+        Description: two halves that must both happen and belong to
+          different owners. The ledger drops the POINTER while keeping
+          the owned set, because the file is that set's only durable home
+          and unlinking it outright threw away N sessions' ownership
+          record to clean up one. This class then wipes the in-memory
+          state, which the ledger cannot see.
+        Inputs: session_id (str | None) - whose state to wipe; the
+          current session when None, and nothing when there is neither.
+        Output: None.
+        Example: mgr._clear_stale_metadata('ses_1')
         """
-        metadata_path = settings.get_session_metadata_path()
-        # DROP THE SESSION POINTER, KEEP THE OWNED SET. This file is the
-        # only durable home of ``owned_tmux_sessions``, and that set is
-        # about EVERY session the app created - not about the one session
-        # whose slug we are discarding here. Unlinking the file outright
-        # (what this used to do) threw away N sessions' ownership record
-        # to clean up 1, and the trigger is the ORDINARY case, not an
-        # error path: ``session_metadata_slug_not_in_backend`` fires
-        # whenever the last-active tmux session is simply gone by the next
-        # start. Measured on the live install - four load/delete pairs
-        # ~40ms apart, then the file never returned, and from that point
-        # every launcher-created session resolved EXTERNAL because
-        # ``resolve_ownership`` fell past its empty tier-3 legacy set.
-        #
-        # An owned-set-only payload (no ``id``) is written instead, which
-        # ``_load_session_metadata`` reads back without rehydrating a
-        # session - so the dead pointer stays dead and surfaces in the
-        # Adopt list exactly as before.
-        # ORDERING IS DELIBERATE: unlink FIRST, then re-write. The unlink
-        # of the RESOLVED path is left exactly as it was so this change
-        # does not disturb the state-dir migration semantics - the file
-        # still relocates out of the legacy ``log_directory`` on the next
-        # write, which ``tests/test_session_meta_continuity.py`` measures.
-        # ``_write_metadata_atomic`` re-resolves after the unlink, which is
-        # the same thing ``_save_session_metadata`` would have done.
-        try:
-            if metadata_path.exists():
-                metadata_path.unlink()
-                logger.info("stale_session_metadata_deleted")
-            if self.owned_tmux_sessions:
-                self._write_metadata_atomic(
-                    {"owned_tmux_sessions": sorted(self.owned_tmux_sessions)}
-                )
-                logger.info(
-                    "stale_session_metadata_owned_set_kept",
-                    owned_count=len(self.owned_tmux_sessions),
-                )
-        except Exception as exc:
-            logger.error("failed_to_delete_stale_metadata", error=str(exc))
+        self._owned.drop_session_pointer()
         sid = session_id
         if sid is None:
             cur = self.current_session()
@@ -1703,143 +1693,66 @@ class SessionManager:
     # ---- metadata persistence -------------------------------------------
 
     def _load_session_metadata(self):
-        """Load session metadata from disk if it exists.
+        """Rehydrate the persisted session, if the ledger read one.
 
-        Unlike the pre-refactor code, we do NOT probe the process here - at
-        `__init__` time we don't yet know which backend to build. The probe
-        happens in `lifespan_startup()`.
+        Description: the ledger owns the FILE and the owned-name set;
+          this owns what happens to the session it finds. The split is
+          not cosmetic - registering a session wires backends and
+          subscribers, which is this class's job and would put the
+          registry on the far side of the package rule that keeps
+          ``src/core/sessions/`` from importing this module.
 
-        Schema v3 adds ``owned_tmux_sessions`` (a list). Missing field
-        triggers the legacy-backfill path: populate the set with the
-        active session's slug for ONE rehydrate, flip a sentinel flag,
-        and re-persist with the new schema on the first successful save.
-        This avoids stranding in-flight sessions on upgrade.
+          We do NOT probe the process here: at ``__init__`` time the
+          backend to build is not yet known. The probe happens in
+          ``lifespan_startup()``.
+        Inputs: none.
+        Output: None.
+        Example: called once from ``__init__``.
         """
-        metadata_path = settings.get_session_metadata_path()
-
-        if not metadata_path.exists():
-            logger.info("no_existing_session_metadata")
+        load = self._owned.load()
+        if load.session is None:
             return
 
         try:
-            with open(metadata_path, "r") as f:
-                raw = json.load(f)
+            loaded = Session(**load.session)
+        except (TypeError, ValueError) as exc:
+            # A payload the model refuses is a session we cannot restore,
+            # and it is NOT a reason to discard the owned set the ledger
+            # has already applied - that set is about every session this
+            # app created, not about this one.
+            logger.error("failed_to_load_session_metadata", error=str(exc))
+            return
 
-            # Extract the new schema field BEFORE handing the rest to
-            # ``Session(**)``, which would reject unknown keys with
-            # ``extra='forbid'`` if we ever tightened it.
-            owned = raw.pop("owned_tmux_sessions", None)
-
-            # OWNED-SET-ONLY PAYLOAD. Written by ``_clear_stale_metadata``
-            # when it drops an un-rehydratable session pointer but has an
-            # ownership record worth keeping. There is no session to
-            # rehydrate, and that is the whole point - handing this to
-            # ``Session(**raw)`` would raise and the except below would
-            # swallow the owned set along with it, which is the exact loss
-            # the owned-set-only payload exists to prevent.
-            if not raw.get("id"):
-                self.owned_tmux_sessions = set(owned or [])
-                self._legacy_metadata_needs_backfill = False
-                logger.info(
-                    "session_metadata_owned_set_only_loaded",
-                    owned_count=len(self.owned_tmux_sessions),
-                    note="no persisted session to rehydrate",
-                )
-                return
-
-            loaded = Session(**raw)
-            # Register the persisted session into the per-session dicts
-            # (backend wired later by ``_lifespan_tmux_reconcile``). This
-            # is the only session restored across restarts; concurrent live
-            # sessions are a runtime-only feature.
-            self._register_session(loaded, backend=None)
-
-            if owned is None and raw.get("id"):
-                # Pre-v3 metadata: no owned-set was persisted. Mark for
-                # backfill on next save; the reconciler in
-                # ``lifespan_startup`` will populate the set once the
-                # slug is confirmed live on the tmux socket.
-                self.owned_tmux_sessions = set()
-                self._legacy_metadata_needs_backfill = True
-                logger.info(
-                    "session_metadata_legacy_detected",
-                    session_id=loaded.id,
-                    note="owned_tmux_sessions will be backfilled on rehydrate",
-                )
-            else:
-                self.owned_tmux_sessions = set(owned or [])
-                self._legacy_metadata_needs_backfill = False
-
-            logger.info(
-                "session_metadata_loaded",
-                session_id=loaded.id,
-                owned_count=len(self.owned_tmux_sessions),
-                note="probe deferred to lifespan_startup",
-            )
-        except Exception as e:
-            logger.error("failed_to_load_session_metadata", error=str(e))
-
-    def _write_metadata_atomic(self, data: dict) -> None:
-        """Durable, crash-consistent metadata write.
-
-        Protocol: write to a sibling ``.tmp`` file → ``f.flush()`` →
-        ``os.fsync(fd)`` → ``os.replace(tmp, final)``. ``os.replace`` is
-        the only rename primitive guaranteed atomic across POSIX and
-        Windows. ``fsync`` before the rename prevents a kernel panic
-        from stranding a zero-byte file at the final path (which, on
-        ext4 ``data=ordered``, is a real scenario).
-
-        The directory's own ``fsync`` (for rename durability) is skipped
-        - this is metadata, not a source of truth for money. Losing
-        the very last write to a sudden power failure is acceptable;
-        losing SESSION OWNERSHIP isn't, which is what the atomic rename
-        prevents.
-        """
-        path = settings.get_session_metadata_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-
-        with tmp.open("w") as f:
-            json.dump(data, f, indent=2, default=str)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError as exc:
-                # tmpfs and some network FS don't support fsync; log and
-                # continue - the rename is still atomic per POSIX.
-                logger.debug("metadata_fsync_unsupported", error=str(exc))
-
-        os.replace(str(tmp), str(path))
+        # Register the persisted session into the per-session dicts
+        # (backend wired later by ``_lifespan_tmux_reconcile``). This is
+        # the only session restored across restarts; concurrent live
+        # sessions are a runtime-only feature.
+        self._register_session(loaded, backend=None)
+        logger.info(
+            "session_metadata_loaded",
+            session_id=loaded.id,
+            owned_count=load.owned_count,
+            note="probe deferred to lifespan_startup",
+        )
 
     def _save_session_metadata(self, session: Optional[Session] = None):
-        """Save session metadata atomically, including the owned-set.
+        """Persist a session and the owned set, defaulting to the current one.
 
-        Persists ``session`` if given, else the current session. Only one
-        session is ever persisted across restarts - the most-recently-
-        active one is the pragmatic choice (concurrent live sessions are a
-        runtime feature, not a durability one).
+        Description: only one session is ever persisted across restarts -
+          the most-recently-active one is the pragmatic choice, since
+          concurrent live sessions are a runtime feature and not a
+          durability one. The owned set is stamped on by the ledger, so a
+          pointer can never be written without the ownership record.
+        Inputs: session (Session | None) - the session to persist;
+          defaults to the current one, and nothing is written when there
+          is neither.
+        Output: None.
+        Example: mgr._save_session_metadata()
         """
         sess = session or self.current_session()
         if not sess:
             return
-
-        try:
-            payload = sess.model_dump()
-            payload["owned_tmux_sessions"] = sorted(self.owned_tmux_sessions)
-            self._write_metadata_atomic(payload)
-
-            # Clear the backfill sentinel once we've successfully persisted
-            # the new schema - one successful save is the migration.
-            self._legacy_metadata_needs_backfill = False
-
-            logger.debug(
-                "session_metadata_saved",
-                session_id=sess.id,
-                owned_count=len(self.owned_tmux_sessions),
-            )
-
-        except Exception as e:
-            logger.error("failed_to_save_session_metadata", error=str(e))
+        self._owned.save(sess.model_dump())
 
     # ---- read/unread persistence (feat/hook-driven-status) ---------------
     #
@@ -3049,7 +2962,7 @@ class SessionManager:
         #   - the live tmux socket (probe.discover_existing()) - tmux
         #     itself hard-fails "duplicate session" on collision
         #   - self.active_tmux_names() - in-memory live backends
-        #   - self.owned_tmux_sessions - persisted names we've taken,
+        #   - self._owned.names - persisted names we've taken,
         #     including detached-but-not-destroyed sessions
         # This mirrors rename_session's collision check (active OR
         # owned_tmux_sessions) so a name minted here can never be
@@ -3089,7 +3002,7 @@ class SessionManager:
                     ),
                 )
             tmux_existing = set(collision_listing.names)
-            taken = tmux_existing | self.active_tmux_names() | self.owned_tmux_sessions
+            taken = tmux_existing | self.active_tmux_names() | self._owned.names
 
             base_name = tmux_session_name
             if base_name in taken:
@@ -3235,7 +3148,7 @@ class SessionManager:
             # - and the adopt UI correctly flags it as ``created_by_cloude``.
             owned_name = getattr(backend, "tmux_session", None)
             if owned_name:
-                self.owned_tmux_sessions.add(owned_name)
+                self._owned.names.add(owned_name)
 
             self._save_session_metadata(new_session)
 
@@ -3554,7 +3467,7 @@ class SessionManager:
             # Track 1: drop ownership record BEFORE we lose the backend handle.
             owned_name = getattr(backend, "tmux_session", None) if backend else None
             if owned_name:
-                self.owned_tmux_sessions.discard(owned_name)
+                self._owned.names.discard(owned_name)
                 # SESSION-IDENTITY-V2 - explicit destroy means this name is
                 # dead; drop its pin too.
                 self._theme_store.discard_pin(owned_name)
@@ -3954,7 +3867,7 @@ class SessionManager:
         # truth for "names we've taken"; live ``active_tmux_names`` is
         # the runtime source for "names we're holding right now".
         active = self.active_tmux_names()
-        if new_name in active or new_name in self.owned_tmux_sessions:
+        if new_name in active or new_name in self._owned.names:
             raise FileExistsError(
                 f"Tmux session name {new_name!r} is already in use"
             )
@@ -3969,9 +3882,9 @@ class SessionManager:
         # only when the OLD name was in the set, so an adopt-then-rename
         # doesn't accidentally promote an external session into the owned
         # registry.
-        if old_name in self.owned_tmux_sessions:
-            self.owned_tmux_sessions.discard(old_name)
-            self.owned_tmux_sessions.add(new_name)
+        if old_name in self._owned.names:
+            self._owned.names.discard(old_name)
+            self._owned.names.add(new_name)
 
         # Re-key the deprecated pinned-themes map. v0.7.0's project theme
         # ``.cc.theme`` is keyed by working_dir (unaffected by rename), but
@@ -4771,7 +4684,7 @@ class SessionManager:
             # payloads can never disagree about the same session.
             created_by_cloude=bool(
                 tmux_session_name
-                and self.is_owned_tmux_name(tmux_session_name)
+                and self._owned.is_owned_name(tmux_session_name)
             ),
         )
 
@@ -5001,37 +4914,6 @@ class SessionManager:
         except Exception as exc:  # noqa: BLE001 - never break the render path
             logger.debug("ownership_datastore_unavailable", error=str(exc))
             return None
-
-    def _owned_instances_from_db(self) -> Optional[set]:
-        """Read the owned ``(tmux_name, epoch)`` pairs from sessions.origin.
-
-        Description: the single DB read behind every ownership decision in
-          this class. Keyed on the instance, never on the name alone, so a
-          reused tmux name cannot inherit a dead session's badge.
-        Inputs: none.
-        Output: set[tuple[str, int]] | None - None when the datastore
-          could not answer at all (absent, unreadable, pre-v2). An EMPTY
-          SET is a real answer of "the DB knows of no owned instance";
-          None is the absence of an answer, and the two are handled
-          differently by every caller.
-        """
-        conn = self._datastore_connection()
-        if conn is None:
-            return None
-        try:
-            from src.core.session_store import owned_instances, sessions_table_ready
-
-            if not sessions_table_ready(conn):
-                return None
-            return owned_instances(conn, socket=self._tmux_socket_name())
-        except Exception as exc:  # noqa: BLE001 - never break the render path
-            logger.debug("ownership_db_read_failed", error=str(exc))
-            return None
-        finally:
-            try:
-                conn.close()
-            except Exception:  # noqa: BLE001 - close failure is not a verdict
-                pass
 
     def _writable_datastore_connection(self):
         """Open the datastore for WRITING, or return None.
@@ -5684,57 +5566,6 @@ class SessionManager:
         """
         return self._tmux_socket_name()
 
-    def owned_tmux_instances(self) -> Optional[set]:
-        """Owned ``(tmux_name, epoch)`` pairs from the datastore, and only those.
-
-        Description: the value handed to the attachable listing, which is
-          the one path that HAS the epoch for every row and can therefore
-          make the identity-correct decision.
-
-          THE LEGACY NAME SET IS DELIBERATELY NOT FOLDED IN HERE. It used
-          to be, as ``(name, None)``, and the backend read a None epoch as
-          a NAME-ONLY WILDCARD. That disabled the epoch tier for every
-          session this app had created since the last restart - which is
-          precisely the population the epoch exists to protect - so a dead
-          ``cloude_work`` replaced by the user's own unrelated
-          ``cloude_work`` badged as ours, exactly as it did before the
-          epoch was introduced. The legacy names still reach the backend,
-          but as the SEPARATE ``owned_names`` argument, so they can be
-          resolved at their own, lower, explicitly name-only tier and can
-          never override a stored epoch. See
-          :func:`src.core.tmux_listing_parse.resolve_ownership`.
-        Inputs: none.
-        Output: set[tuple[str, int]] | None - None when the datastore
-          could not answer at all. An EMPTY SET is a real answer ("the DB
-          knows of no owned instance") and is not the same as None.
-        """
-        from_db = self._owned_instances_from_db()
-        if from_db is None:
-            return None
-        return set(from_db)
-
-    def is_owned_tmux_name(self, name: Optional[str]) -> bool:
-        """Report whether a tmux NAME belongs to a session we own.
-
-        Description: the name-only fallback, for call sites that carry no
-          creation epoch - ``SessionInfo`` is one. Lossy in exactly one
-          way, stated so nobody has to rediscover it: a name owned as one
-          instance and now reused by a different, unowned instance reads
-          as owned here until the epoch reaches this call site. The
-          attachable listing, which does have the epoch, is not lossy.
-        Inputs: name (str | None) - a tmux session name.
-        Output: bool - False for None or an empty name.
-        Example: mgr.is_owned_tmux_name('cloude_a')
-        """
-        if not name:
-            return False
-        if name in self.owned_tmux_sessions:
-            return True
-        from_db = self._owned_instances_from_db()
-        if from_db is None:
-            return False
-        return any(owned_name == name for owned_name, _epoch in from_db)
-
     def _fingerprint_agent_type_for_listing(
         self, *, socket: str, name: str, epoch: Optional[int]
     ) -> Optional[str]:
@@ -6197,7 +6028,7 @@ class SessionManager:
             sessions whether or not they currently have an active session
             (the adopt-UI fetch happens at launchpad render time).
 
-        Inputs: none (reads ``self.owned_tmux_sessions``).
+        Inputs: none (reads ``self._owned.names``).
 
         Output:
             TmuxListing: ``ok=True`` with decorated dict rows (each
@@ -6222,8 +6053,8 @@ class SessionManager:
         self._probe_health.record_socket(getattr(probe, "socket_name", None))
         listing = coerce_listing(
             probe.list_attachable_sessions(
-                owned_names=set(self.owned_tmux_sessions),
-                owned_instances=self.owned_tmux_instances(),
+                owned_names=set(self._owned.names),
+                owned_instances=self._owned.instances(),
             )
         )
         if not listing.ok:
@@ -6943,8 +6774,8 @@ class SessionManager:
         # just killed it, the entry is now stale; if it wasn't owned,
         # the discard is a no-op. Persist so a server restart doesn't
         # resurrect the pruned entry.
-        if name in self.owned_tmux_sessions:
-            self.owned_tmux_sessions.discard(name)
+        if name in self._owned.names:
+            self._owned.names.discard(name)
             try:
                 self._save_session_metadata()
             except Exception as exc:

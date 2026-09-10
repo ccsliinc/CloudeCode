@@ -420,7 +420,7 @@ def _build_route_app(monkeypatch, tmp_path):
     backend.__class__.__name__ = "TmuxBackend"
     backend.is_alive = lambda: True
     sm.backends[sess.id] = backend
-    sm.owned_tmux_sessions.add("cloude_routeproj")
+    sm._owned.names.add("cloude_routeproj")
 
     # Patch ``list_attachable_sessions`` to return one row matching the
     # session so the known-names probe doesn't 404 us.

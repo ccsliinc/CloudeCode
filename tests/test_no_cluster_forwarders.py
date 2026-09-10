@@ -51,6 +51,7 @@ SHIPPED_COLLABORATORS = {
     "_toast_inbox",
     "_registry",
     "_sidecars",
+    "_owned",
 }
 
 #: Names that were forwarders before this slice, kept so a REVIVAL is
@@ -79,6 +80,14 @@ DELETED_FORWARDERS = {
     "ack_toast",
     "get_toasts",
     "last_probe_health",
+    # v2 slice S3, the owned-tmux ledger.
+    "owned_tmux_sessions",
+    "_legacy_metadata_needs_backfill",
+    "_boot_listing",
+    "_write_metadata_atomic",
+    "_owned_instances_from_db",
+    "owned_tmux_instances",
+    "is_owned_tmux_name",
 }
 
 
@@ -195,7 +204,7 @@ def test_no_member_forwards_to_a_shipped_collaborator():
 
 @pytest.mark.parametrize("name", sorted(DELETED_FORWARDERS))
 def test_a_deleted_forwarder_is_not_revived(name: str):
-    """The 23 names that went in S1 do not come back on this class.
+    """The names that went in S1 and S3 do not come back on this class.
 
     Description: by NAME, alongside the shape check above, because the two
       catch different revivals. A member re-added with a line of real work
@@ -212,6 +221,6 @@ def test_a_deleted_forwarder_is_not_revived(name: str):
     }
 
     assert name not in members, (
-        f"SessionManager.{name} is back; it was deleted in S1 and its "
-        "callers hold the collaborator now"
+        f"SessionManager.{name} is back; it was deleted by the slice that "
+        "extracted its cluster, and its callers hold the collaborator now"
     )

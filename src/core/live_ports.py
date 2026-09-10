@@ -151,6 +151,20 @@ class LiveSettings:
         """
         return Path(self._settings().get_state_dir())
 
+    def session_metadata_path(self) -> Path:
+        """Where ``session_metadata.json`` lives.
+
+        Description: resolved per call, matching what the loose
+          ``_load_session_metadata`` / ``_write_metadata_atomic`` did
+          before the owned-tmux cluster moved. The file relocates itself
+          out of the legacy log directory on its next write, so a value
+          captured once would go stale at exactly the moment it matters.
+        Inputs: none.
+        Output: Path.
+        Example: LiveSettings().session_metadata_path().name
+        """
+        return self._settings().get_session_metadata_path()
+
 
 class LiveSessionRecordStore:
     """The real ``cloude.db``, satisfying :class:`SessionRecordStore`.

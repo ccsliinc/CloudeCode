@@ -61,6 +61,7 @@ REQUIRED_FIELDS = {
     "toasts",
     "registry",
     "sidecars",
+    "owned_tmux",
     "clock",
     "settings_reader",
     "records",
@@ -129,6 +130,7 @@ def test_the_five_collaborators_are_the_manager_s_own_objects():
     assert services.toasts is manager._toast_inbox
     assert services.registry is manager._registry
     assert services.sidecars is manager._sidecars
+    assert services.owned_tmux is manager._owned
 
 
 def test_a_write_through_the_services_side_is_visible_on_the_facade():
@@ -147,6 +149,7 @@ def test_a_write_through_the_services_side_is_visible_on_the_facade():
     services.registry.command_counts["ses_from_services"] = 3
     services.sidecars.adopt_fifo_offsets["ses_from_services"] = 41
     services.sidecars.pending_terminal_commands["ses_from_services"] = "cmd_1"
+    services.owned_tmux.names.add("cloude_from_services")
 
     assert manager._theme_store.pinned_themes["cloude_from_services"] == "matrix"
     assert "ses_from_services" in manager._toast_inbox.pending
@@ -156,6 +159,7 @@ def test_a_write_through_the_services_side_is_visible_on_the_facade():
     assert (
         manager._sidecars.pending_terminal_commands["ses_from_services"] == "cmd_1"
     )
+    assert "cloude_from_services" in manager._owned.names
 
 
 def test_a_write_through_the_facade_is_visible_on_the_services_side():
@@ -166,10 +170,12 @@ def test_a_write_through_the_facade_is_visible_on_the_services_side():
     manager._theme_store.pinned_themes["cloude_from_facade"] = "amber"
     manager._registry.log_buffers["ses_from_facade"] = []
     manager._sidecars.idle_watchers["ses_from_facade"] = object()  # type: ignore[assignment]
+    manager._owned.names.add("cloude_from_facade")
 
     assert services.themes.pinned_themes["cloude_from_facade"] == "amber"
     assert "ses_from_facade" in services.registry.log_buffers
     assert "ses_from_facade" in services.sidecars.idle_watchers
+    assert "cloude_from_facade" in services.owned_tmux.names
 
 
 def test_probe_health_records_once_and_both_sides_read_it():
@@ -235,8 +241,11 @@ def test_wrapping_an_existing_manager_mints_no_sixth_object():
 
     assert services.session_manager is manager
     assert services.themes is manager._theme_store
+    assert services.owned_tmux is manager._owned
     manager._registry.command_counts["ses_wrapped"] = 9
     assert services.registry.command_counts["ses_wrapped"] == 9
+    manager._owned.names.add("cloude_wrapped")
+    assert "cloude_wrapped" in services.owned_tmux.names
 
 
 def test_the_theme_store_writes_where_the_patched_settings_say(

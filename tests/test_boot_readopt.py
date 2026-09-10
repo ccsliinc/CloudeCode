@@ -378,7 +378,7 @@ async def test_a_cloude_session_with_no_row_is_not_claimed(
     assert held_names == {"cloude_mine"}
     # And nothing invented an ownership record for it either, which is
     # what the attachable listing reads to answer created_by_cloude.
-    owned = mgr.owned_tmux_instances() or set()
+    owned = mgr._owned.instances() or set()
     assert ("cloude_stranger", EPOCH_B) not in owned
     assert ("cloude_mine", EPOCH_A) in owned
 
@@ -400,7 +400,7 @@ async def test_a_listing_that_did_not_run_holds_nothing_and_disowns_nothing(
     """
     mgr = SessionManager()
     seed_row(state_dir, mgr, name="cloude_mine", epoch=EPOCH_A)
-    before = mgr.owned_tmux_instances()
+    before = mgr._owned.instances()
 
     install_backends(
         monkeypatch,
@@ -414,7 +414,7 @@ async def test_a_listing_that_did_not_run_holds_nothing_and_disowns_nothing(
     assert report.held == []
     assert report.plan is None, "nothing was decided, so there is no plan"
     assert mgr.backends == {}
-    assert mgr.owned_tmux_instances() == before
+    assert mgr._owned.instances() == before
 
 
 @pytest.mark.asyncio
@@ -432,7 +432,7 @@ async def test_boot_does_not_even_schedule_the_pass_on_a_failed_probe(
 
     await mgr.lifespan_startup()
 
-    assert mgr._boot_listing is None
+    assert mgr._owned.boot_listing is None
     assert mgr._boot_readopt_task is None
     assert mgr.sessions == {}
 

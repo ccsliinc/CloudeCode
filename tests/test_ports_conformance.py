@@ -171,9 +171,13 @@ class StubSettingsReader:
         """The fixed state directory."""
         return self._state
 
+    def session_metadata_path(self) -> Path:
+        """The fixed metadata-file location, under the state directory."""
+        return self._state / "session_metadata.json"
+
 
 def test_settings_reader_conforms_real(tmp_path):
-    """The live reader answers three real values off the patchable name."""
+    """The live reader answers four real values off the patchable name."""
     reader = LiveSettings()
 
     assert isinstance(reader, SettingsReader)
@@ -181,6 +185,7 @@ def test_settings_reader_conforms_real(tmp_path):
     assert isinstance(reader.pinned_themes_path(), Path)
     assert isinstance(reader.log_buffer_size(), int)
     assert isinstance(reader.state_dir(), Path)
+    assert isinstance(reader.session_metadata_path(), Path)
 
 
 def test_settings_reader_conforms_double(tmp_path):

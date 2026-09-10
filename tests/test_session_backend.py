@@ -1444,8 +1444,8 @@ async def test_lifespan_startup_does_not_rehydrate_non_owned_session(tmp_path):
         ),
         backend=None,
     )
-    sm.owned_tmux_sessions = set()  # NOT owned
-    sm._legacy_metadata_needs_backfill = False  # new-schema file
+    sm._owned.names = set()  # NOT owned
+    sm._owned.needs_legacy_backfill = False  # new-schema file
 
     # Build a fake probe backend that reports the slug is live (simulating
     # an external user-created ``cloude_foo`` session on the socket).
@@ -1503,8 +1503,8 @@ async def test_lifespan_startup_legacy_backfill_populates_owned_set(tmp_path):
         ),
         backend=None,
     )
-    sm.owned_tmux_sessions = set()  # empty set
-    sm._legacy_metadata_needs_backfill = True  # <-- key flag for the legacy path
+    sm._owned.names = set()  # empty set
+    sm._owned.needs_legacy_backfill = True  # <-- key flag for the legacy path
 
     fake_probe = MagicMock()
     fake_probe.discover_existing = MagicMock(return_value=["cloude_legacy_sess"])
@@ -1526,8 +1526,8 @@ async def test_lifespan_startup_legacy_backfill_populates_owned_set(tmp_path):
     attach_mock.assert_awaited_once(), (
         "legacy-backfill path must still rehydrate the active session"
     )
-    assert "cloude_legacy_sess" in sm.owned_tmux_sessions, (
-        f"owned_tmux_sessions must be backfilled; got {sm.owned_tmux_sessions}"
+    assert "cloude_legacy_sess" in sm._owned.names, (
+        f"owned_tmux_sessions must be backfilled; got {sm._owned.names}"
     )
     save_mock.assert_called(), (
         "metadata must be re-persisted after legacy backfill to migrate schema"
@@ -1668,7 +1668,7 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
         assert sm.backend is not None
         tmux_name = sm.backend.tmux_session
         # The newly-created session is tracked as owned.
-        assert tmux_name in sm.owned_tmux_sessions
+        assert tmux_name in sm._owned.names
 
         # Sanity: tmux says the session is alive BEFORE detach.
         alive_before = subprocess.run(
@@ -1690,7 +1690,7 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
 
         # owned_tmux_sessions must persist so Adopt UI still flags the
         # detached session as cloude-owned.
-        assert tmux_name in sm.owned_tmux_sessions, (
+        assert tmux_name in sm._owned.names, (
             "owned_tmux_sessions entry must survive detach so the Adopt "
             "UI labels the detached session as created_by_cloude=True"
         )
@@ -1762,7 +1762,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
         )
         assert sm.backend is not None, "A must be the active backend"
         tmux_name_a = sm.backend.tmux_session
-        assert tmux_name_a in sm.owned_tmux_sessions
+        assert tmux_name_a in sm._owned.names
 
         alive_a_before = subprocess.run(
             ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", tmux_name_a],
@@ -1801,7 +1801,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
 
         # --- Step 5: A stays in owned_tmux_sessions so the Adopt UI
         # re-offers it tagged created_by_cloude=True.
-        assert tmux_name_a in sm.owned_tmux_sessions, (
+        assert tmux_name_a in sm._owned.names, (
             "owned_tmux_sessions entry for A must survive adopt-swap "
             "so the launchpad re-lists A as cloude-owned"
         )

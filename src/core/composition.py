@@ -44,6 +44,7 @@ from typing import Optional
 from src.core.live_ports import LiveSessionRecordStore, LiveSettings, SystemClock
 from src.core.session_manager import SessionManager
 from src.core.sessions.ports import Clock, SessionRecordStore, SettingsReader
+from src.core.sessions.owned_tmux_ledger import OwnedTmuxLedger
 from src.core.sessions.probe_health import ProbeHealthRecorder
 from src.core.sessions.registry import SessionRegistry
 from src.core.sessions.sidecars import AttachmentSidecars
@@ -89,6 +90,9 @@ class AppServices:
     registry: SessionRegistry
     #: S5's cluster: idle watchers, adopt FIFO offsets, pending commands.
     sidecars: AttachmentSidecars
+    #: v2 S3's cluster: the owned tmux name set, session_metadata.json and
+    #: the two datastore-backed ownership queries.
+    owned_tmux: OwnedTmuxLedger
 
     #: Wall-clock and monotonic time, so a timing rule can be tested
     #: without sleeping.
@@ -109,6 +113,7 @@ def build_services(
     toasts: Optional[ToastInbox] = None,
     registry: Optional[SessionRegistry] = None,
     sidecars: Optional[AttachmentSidecars] = None,
+    owned_tmux: Optional[OwnedTmuxLedger] = None,
     session_manager: Optional[SessionManager] = None,
 ) -> AppServices:
     """Construct the application's collaborators in dependency order.
@@ -149,6 +154,7 @@ def build_services(
         "toasts": toasts,
         "registry": registry,
         "sidecars": sidecars,
+        "owned_tmux": owned_tmux,
     }
     if session_manager is not None:
         conflicting = sorted(k for k, v in collaborator_args.items() if v is not None)
@@ -179,6 +185,7 @@ def build_services(
         resolved_toasts = manager._toast_inbox
         resolved_registry = manager._registry
         resolved_sidecars = manager._sidecars
+        resolved_owned = manager._owned
     else:
         resolved_probe = (
             probe_health if probe_health is not None else ProbeHealthRecorder()
@@ -206,12 +213,31 @@ def build_services(
         resolved_sidecars = (
             sidecars if sidecars is not None else AttachmentSidecars()
         )
+        # THE SOCKET IS A LATE BINDING, and it has to be. The ledger's
+        # ownership reads must follow ``SessionManager._tmux_socket_name``,
+        # which lets the PROBED socket win over the configured one - and
+        # the manager does not exist yet at this point. So the callable
+        # closes over the name ``manager``, which the next statement
+        # binds, rather than over a value nothing could supply here. A
+        # captured string would key every ownership read on the
+        # configured socket and answer the badge from a socket nothing
+        # was ever written to.
+        resolved_owned = (
+            owned_tmux
+            if owned_tmux is not None
+            else OwnedTmuxLedger(
+                metadata_path=resolved_settings.session_metadata_path,
+                records=resolved_records,
+                socket_name=lambda: manager.tmux_socket_name(),
+            )
+        )
         manager = SessionManager(
             probe_health=resolved_probe,
             theme_store=resolved_themes,
             toast_inbox=resolved_toasts,
             registry=resolved_registry,
             sidecars=resolved_sidecars,
+            owned_tmux=resolved_owned,
         )
 
     return AppServices(
@@ -221,6 +247,7 @@ def build_services(
         toasts=resolved_toasts,
         registry=resolved_registry,
         sidecars=resolved_sidecars,
+        owned_tmux=resolved_owned,
         clock=resolved_clock,
         settings_reader=resolved_settings,
         records=resolved_records,

@@ -232,32 +232,33 @@ def test_adopt_instance_on_an_ABSENT_row_is_still_False(conn):
 def test_the_MANAGER_never_fabricates_a_wildcard_epoch(monkeypatch):
     """D3: the wildcard must not come back at the source that used to build it.
 
-    ``owned_tmux_instances()`` returned
+    ``OwnedTmuxLedger.instances()`` returned
     ``db_instances | {(name, None) for name in owned_tmux_sessions}``.
     The resolver now ignores a None epoch, so restoring that union alone
     is harmless - but it would put the app one line away from the defect
     again, and it would also make the DB's answer and the legacy set
-    indistinguishable to any future reader. The manager must return the
+    indistinguishable to any future reader. The ledger must return the
     datastore's instances and nothing else; legacy names travel by their
     own argument.
     """
     from src.core.session_manager import SessionManager
+    from src.core.sessions.owned_tmux_ledger import OwnedTmuxLedger
 
     manager = SessionManager()
-    manager.owned_tmux_sessions = {"legacy_name", "another"}
+    manager._owned.names = {"legacy_name", "another"}
     monkeypatch.setattr(
-        SessionManager,
-        "_owned_instances_from_db",
+        OwnedTmuxLedger,
+        "instances_from_db",
         lambda self: {("stored", 1000)},
     )
 
-    instances = manager.owned_tmux_instances()
+    instances = manager._owned.instances()
     assert instances == {("stored", 1000)}
     assert all(
         epoch is not None for _name, epoch in instances
     ), "a None epoch was fabricated; that is the wildcard, rebuilt"
     assert not any(
-        name in manager.owned_tmux_sessions for name, _epoch in instances
+        name in manager._owned.names for name, _epoch in instances
     ), "legacy names leaked into the INSTANCE set instead of owned_names"
 
 
@@ -270,18 +271,19 @@ def test_the_manager_reports_NO_OPINION_distinctly_from_OWNS_NOTHING(monkeypatch
     datastore return a non-empty set, which hid the distinction.
     """
     from src.core.session_manager import SessionManager
+    from src.core.sessions.owned_tmux_ledger import OwnedTmuxLedger
 
     manager = SessionManager()
-    manager.owned_tmux_sessions = {"legacy_name"}
+    manager._owned.names = {"legacy_name"}
 
     monkeypatch.setattr(
-        SessionManager, "_owned_instances_from_db", lambda self: None
+        OwnedTmuxLedger, "instances_from_db", lambda self: None
     )
-    assert manager.owned_tmux_instances() is None
+    assert manager._owned.instances() is None
 
     monkeypatch.setattr(
-        SessionManager, "_owned_instances_from_db", lambda self: set()
+        OwnedTmuxLedger, "instances_from_db", lambda self: set()
     )
-    assert manager.owned_tmux_instances() == set()
+    assert manager._owned.instances() == set()
 
 

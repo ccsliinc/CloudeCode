@@ -161,7 +161,12 @@ test('the EXTERNAL tag explanation matches how ownership is actually computed', 
     const sessionManager = fs.readFileSync(path.join(repoRoot, 'src/core/session_manager.py'), 'utf8');
     const text = textOnly(helpBodyHtml()).toLowerCase();
     assert.match(text, /worked out fresh each time this list loads/, 'help text should describe EXTERNAL as computed live, not a stored flag');
-    assert.match(sessionManager, /owned_names=set\(self\.owned_tmux_sessions\)/, 'ownership computation changed; re-verify the EXTERNAL-tag claim');
+    // Decomposition slice S3 moved the owned NAME set onto
+    // OwnedTmuxLedger.names; the computation is unchanged and is still
+    // done live, at listing time, off the set plus the datastore. The
+    // claim this guards is "computed fresh, not a stored flag", so it
+    // reads the call site rather than the set's home.
+    assert.match(sessionManager, /owned_names=set\(self\._owned\.names\)/, 'ownership computation changed; re-verify the EXTERNAL-tag claim');
 });
 
 test('the help body still has all three sections, in a stuck-user-first order', () => {

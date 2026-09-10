@@ -42,9 +42,29 @@ guessing.
 **Created vs adopted is a real distinction, not a detail.** Cloude Code can
 attach to a tmux session it did not create. A TRULY external one - no row for
 its instance triple - gets an id of `adopted:<tmux-name>` and is absent from
-`owned_tmux_sessions`. Anything that parses, matches, displays or routes on a
+the owned tmux name set. Anything that parses, matches, displays or routes on a
 session id has to handle both shapes. Strip the prefix to recover the tmux name;
 do not assume the id is a clean display string.
+
+**THAT SET LIVES ON `OwnedTmuxLedger`, NOT ON THE MANAGER, AND SO DOES THE FILE
+THAT REMEMBERS IT.** `src/core/sessions/owned_tmux_ledger.py` owns the set (as
+`.names`), the pre-v3 backfill sentinel, the boot listing,
+`session_metadata.json` and the two datastore-backed ownership queries
+(`is_owned_name`, `instances`). `SessionManager` holds one as `self._owned` and
+keeps no copy and no forwarder; `build_services` hands the same object to
+`AppServices.owned_tmux`, so a route reaches it there rather than through the
+manager. `owned_tmux_sessions` is still the ON-DISK key in that file and must
+stay spelled that way, because a v3 file written by an older build uses it.
+
+Two halves of that file are unrelated and must not be confused: the owned set is
+about EVERY session this app created, and the session pointer is about the one
+most-recently-active. `drop_session_pointer` unlinks the pointer and re-writes
+the set, because unlinking the file outright threw away N sessions' ownership
+record to clean up one, on the ORDINARY path - after which every
+launcher-created session resolved EXTERNAL. The write is tmp plus `fsync` plus
+`os.replace` and `tests/test_owned_tmux_ledger.py` measures the protocol rather
+than the resulting file, because a plain in-place write produces identical
+contents and no atomicity.
 
 **AN ADOPTION RESOLVES THE ID, IT DOES NOT MINT ONE, and the difference is the
 hook path.** `adopt_external_session` opened with the literal
@@ -2112,7 +2132,8 @@ exactly once, sits inside a `(min-width: 769px)` block, and carries
    sessions.** `build_backend` with no `session_name` rebuilds
    `cloude_<slug(session_id)>`, which for an adopted id yields
    `cloude_adopted_cloude_Foo` - a name no socket has ever carried. It then fails
-   the liveness test and `_clear_stale_metadata` throws the pointer away. Pass the
+   the liveness test and `_clear_stale_metadata` throws the pointer away (it
+   keeps the owned set; see `OwnedTmuxLedger.drop_session_pointer`). Pass the
    STORED `tmux_session`, and keep the derivation as the fallback for pre-field
    metadata.
 5. **A uuid on the row is not evidence a transcript exists, and a missing

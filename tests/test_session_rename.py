@@ -130,7 +130,7 @@ def _register(
     mgr._subscribers.setdefault(sid, [])
     mgr._last_session_id = sid
     if owned:
-        mgr.owned_tmux_sessions.add(tmux_session)
+        mgr._owned.names.add(tmux_session)
     return sess, backend
 
 
@@ -152,8 +152,8 @@ async def test_rename_persists_in_session_object(monkeypatch, tmp_path):
 
     assert backend.rename_calls == ["newname"]
     assert sess.tmux_session == "newname"
-    assert "cloude_old" not in mgr.owned_tmux_sessions
-    assert "newname" in mgr.owned_tmux_sessions
+    assert "cloude_old" not in mgr._owned.names
+    assert "newname" in mgr._owned.names
     # SessionInfo carries the new name at the top level.
     assert info.tmux_session == "newname"
 
@@ -199,8 +199,8 @@ async def test_rename_adopted_external_session(monkeypatch, tmp_path):
 
     await mgr.rename_session("adopted:external_a", "external_b")
 
-    assert "external_a" not in mgr.owned_tmux_sessions
-    assert "external_b" not in mgr.owned_tmux_sessions
+    assert "external_a" not in mgr._owned.names
+    assert "external_b" not in mgr._owned.names
     # Session's tmux_session still updates.
     assert mgr.sessions["adopted:external_a"].tmux_session == "external_b"
 
@@ -238,7 +238,7 @@ async def test_rename_conflict_with_owned_but_detached(monkeypatch, tmp_path):
     work.mkdir()
     _register(mgr, "ses_a", work, "name_a", owned=True)
     # Simulate a detached but still-owned name.
-    mgr.owned_tmux_sessions.add("ghost_name")
+    mgr._owned.names.add("ghost_name")
 
     with pytest.raises(FileExistsError):
         await mgr.rename_session("ses_a", "ghost_name")
@@ -275,7 +275,7 @@ async def test_rename_noop_same_name(monkeypatch, tmp_path):
 
     assert backend.rename_calls == []
     assert info.tmux_session == "samename"
-    assert "samename" in mgr.owned_tmux_sessions
+    assert "samename" in mgr._owned.names
 
 
 # --------------------------------------------------------------------------- #
@@ -419,8 +419,8 @@ def test_labelling_never_moves_the_tmux_name(monkeypatch, tmp_path):
     )
 
     assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
-    assert "cloude_route" in mgr.owned_tmux_sessions
-    assert "Something Entirely Different" not in mgr.owned_tmux_sessions
+    assert "cloude_route" in mgr._owned.names
+    assert "Something Entirely Different" not in mgr._owned.names
 
 
 def test_rename_unknown_session_id_404(monkeypatch, tmp_path):

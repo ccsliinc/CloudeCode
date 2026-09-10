@@ -111,6 +111,15 @@ class SettingsReader(Protocol):
         """The application state directory that holds ``cloude.db``."""
         ...
 
+    def session_metadata_path(self) -> Path:
+        """Where ``session_metadata.json`` lives, resolved at each call.
+
+        Added by slice S3 for ``OwnedTmuxLedger``. Resolved per call
+        rather than captured, because the file RELOCATES itself out of
+        the legacy log directory on its next write.
+        """
+        ...
+
 
 @runtime_checkable
 class TmuxReader(Protocol):

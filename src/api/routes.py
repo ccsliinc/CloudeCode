@@ -1314,7 +1314,11 @@ async def destroy_external_session(request: Request, name: str):
 
 
 async def _apply_session_theme(
-    session_manager, themes, session_name: str, theme_id: Optional[str]
+    session_manager,
+    themes,
+    owned_tmux,
+    session_name: str,
+    theme_id: Optional[str],
 ) -> SessionInfo:
     """Shared implementation for both ``/theme`` and the deprecated
     ``/pinned-theme`` alias.
@@ -1325,7 +1329,9 @@ async def _apply_session_theme(
       * Writes ``<session.working_dir>/.cc.theme`` via the
         ``ThemeStore`` handed in as ``themes`` (atomic tmp+rename).
         Taken as an argument rather than reached through the manager,
-        because the manager no longer forwards to it.
+        because the manager no longer forwards to it. ``owned_tmux`` is
+        the ``OwnedTmuxLedger`` and arrives the same way for the same
+        reason: it is what knows which tmux names this app created.
         Empty/None ``theme_id`` clears the dotfile.
       * Mirrors onto the live ``Session.pinned_theme`` so a follow-up
         ``get_session_info`` reflects the change without re-reading.
@@ -1342,7 +1348,7 @@ async def _apply_session_theme(
 
     # Build the set of tmux names we recognize: live attachable rows
     # (caught by tmux probe) ∪ owned_tmux_sessions ∪ every live backend.
-    known_names: set[str] = set(session_manager.owned_tmux_sessions)
+    known_names: set[str] = set(owned_tmux.names)
     if hasattr(session_manager, "active_tmux_names"):
         known_names |= session_manager.active_tmux_names()
     elif session_manager.backend is not None:
@@ -1500,6 +1506,7 @@ async def set_session_theme(
     return await _apply_session_theme(
         session_manager,
         request.app.state.services.themes,
+        request.app.state.services.owned_tmux,
         session_name,
         body.theme_id,
     )
@@ -1568,6 +1575,7 @@ async def set_pinned_theme(
     return await _apply_session_theme(
         session_manager,
         request.app.state.services.themes,
+        request.app.state.services.owned_tmux,
         session_name,
         body.pinned_theme,
     )

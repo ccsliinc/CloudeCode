@@ -402,9 +402,7 @@ async def lifespan(app: FastAPI):
                     _import_result = run_first_run_import(
                         _import_conn,
                         listing=_listing,
-                        owned_tmux_names=set(
-                            session_manager.owned_tmux_sessions
-                        ),
+                        owned_tmux_names=set(services.owned_tmux.names),
                         # THE SOCKET THE PROBE ACTUALLY RAN AGAINST.
                         # Omitting it took the module default while
                         # SessionManager._tmux_socket_name() reads the
