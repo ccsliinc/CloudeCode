@@ -1105,9 +1105,13 @@ class AppController {
 
         // Initialize slash commands modal
         if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
-            await window.SlashCommandsModal.init((command) => {
-                // Insert command into terminal without Enter
-                window.TerminalController.insertText(command);
+            await window.SlashCommandsModal.init((command, ticket) => {
+                // Insert command into terminal without Enter. The ticket
+                // is ownership claimed when the panel OPENED - the panel
+                // survives a session switch, so a pick made after one
+                // would otherwise run in the wrong pane. See
+                // client/js/terminal-input-ownership.js.
+                window.TerminalController.insertText(command, ticket);
             }, session && session.working_dir);
         }
 
@@ -1263,8 +1267,9 @@ class AppController {
             window.DPad.show();
         }
         if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
-            await window.SlashCommandsModal.init((command) => {
-                window.TerminalController.insertText(command);
+            await window.SlashCommandsModal.init((command, ticket) => {
+                // Same ticket rule as showTerminal()'s copy above.
+                window.TerminalController.insertText(command, ticket);
             }, session && session.working_dir);
         }
         if (window.SlashCommandsModal) {

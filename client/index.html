@@ -1045,6 +1045,14 @@
     <!-- Must load BEFORE terminal.js: it is the gate that keeps one
          session's bytes out of another session's terminal. -->
     <script src="/static/js/terminal-frame-guard.js"></script>
+    <!-- The input direction of that same gate: the one predicate every
+         path with an await between the gesture and the write asks before
+         it puts bytes into a session. The frame guard above keeps one
+         session's OUTPUT out of another's terminal; this keeps the
+         user's INPUT out, which is worse - output in the wrong pane is
+         confusing, input in the wrong pane runs a command. Must load
+         BEFORE terminal.js and before clipboard.js. -->
+    <script src="/static/js/terminal-input-ownership.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Punchlist item 1: after a measured absence, OFFER full history, a
          summary of what happened, or just carry on, instead of the app

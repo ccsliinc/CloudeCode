@@ -492,6 +492,13 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         const container = document.getElementById('terminal');
         if (!container) return;
         container.addEventListener('paste', async (e) => {
+            // OWNERSHIP, CLAIMED AT THE GESTURE - the first statement in
+            // the handler, before anything that can await. This is the
+            // path the whole rule exists for: an upload finishing after a
+            // session switch used to insert a file path into a DIFFERENT
+            // agent's prompt. See client/js/terminal-input-ownership.js.
+            const ticket = window.TerminalInputOwnership
+                ? window.TerminalInputOwnership.claim('paste') : null;
             const items = (e.clipboardData && e.clipboardData.items) || [];
             let fileItem = null;
             for (const item of items) {
@@ -507,7 +514,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             const blob = fileItem.getAsFile();
             if (!blob) return;
 
-            await this._uploadAndInjectFile(blob, blob.name || '');
+            await this._uploadAndInjectFile(blob, blob.name || '', ticket);
         }, true);
     }
 
@@ -603,14 +610,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * @param {Blob} blob - bytes to upload; a File carries its own name.
      * @param {string} [filename] - declared name; empty for a clipboard
      *   blob, where api.js derives "paste.<ext>" from the blob type.
+     * @param {object} [ticket] - ownership claimed at the user's gesture;
+     *   see client/js/terminal-input-ownership.js.
      * @returns {Promise<void>}
      */
-    async _uploadAndInjectFile(blob, filename) {
+    async _uploadAndInjectFile(blob, filename, ticket) {
         if (!window.ClipboardTools || typeof window.ClipboardTools.uploadAndInject !== 'function') {
             this._showStatusPill('upload unavailable', 'error');
             return;
         }
-        await window.ClipboardTools.uploadAndInject(this, blob, filename || '');
+        await window.ClipboardTools.uploadAndInject(this, blob, filename || '', ticket);
     }
 
     /**
@@ -2431,10 +2440,23 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     }
 
     /**
-     * Insert text into terminal without pressing Enter
-     * Used for slash commands
+     * Insert text into terminal without pressing Enter.
+     *
+     * THE ONE WRITE POINT for every path that produces text rather than
+     * keystrokes: the file upload's path injection, the clipboard paste,
+     * the paste fallback sheet and the slash command modal. A `ticket`
+     * is ownership claimed at the user's GESTURE, and a stale one drops
+     * the write and says so. Absent means the caller has declared it
+     * needs none - see client/js/terminal-input-ownership.js for which
+     * paths take one and why the keyboard does not.
+     *
+     * @param {string} text - the bytes to send.
+     * @param {object} [ticket] - from TerminalInputOwnership.claim().
+     * @returns {void}
      */
-    insertText(text) {
+    insertText(text, ticket) {
+        if (window.TerminalInputOwnership
+            && !window.TerminalInputOwnership.deliver(this, ticket)) return;
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
             console.warn('Terminal: Cannot insert text - WebSocket not connected');
             return;

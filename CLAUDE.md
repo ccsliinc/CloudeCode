@@ -2117,6 +2117,49 @@ scheduler below. A missing module answers TRUE: the token is a correctness
 guard, never a dependency, and a load-order accident must not stop the
 terminal working.
 
+**AND THE INPUT DIRECTION IS THE SAME RULE, ONE LAYER DOWN.**
+`bd9a2b2` and `terminal-frame-guard.js` keep one session's OUTPUT out of
+another's terminal. `client/js/terminal-input-ownership.js` is the INPUT
+half, which is worse: output in the wrong pane is confusing, input in the
+wrong pane RUNS A COMMAND. The unambiguous case was the file paste -
+`terminal.js` intercepts it, uploads the blob and inserts the returned
+absolute path, and nothing between those two checked the user was still
+where they started, so an upload finishing after a switch inserted a path
+into a DIFFERENT agent's prompt.
+
+**CLAIM AT THE GESTURE, CHECK AT THE WRITE**, and that is the half that
+is easy to get backwards. `claim()` taken at COMPLETION time reads
+exactly like a check and is a no-op, because by then the session HAS
+changed and the value compared is itself - the same shape as the
+`ensure_pipe_pane` guard whose only exercised caller set the flag it
+checked. Five paths take a ticket, and every one has an await, a network
+round trip, or an open panel between the gesture and the write: the
+desktop paste interceptor, the attach-file picker's `change` handler,
+`pasteFromClipboard`, the paste fallback SHEET (it stands on screen while
+the user finds their clipboard) and the slash commands MODAL (nothing
+closes it on a session switch, so a pick made after one used to run in the
+pane the user left).
+
+**THE KEYBOARD, THE SHIFT+ENTER CHORD, THE D-PAD AND `_writeSynthetic`
+TAKE NONE, deliberately.** There is no await between the key and
+`ws.send`, and the socket is swapped synchronously by the session entry
+paths, so the socket held at the write IS the session's. The copy sheet
+takes none either and that was MEASURED rather than assumed: `CopyOutput`
+reads the xterm buffer and writes the SYSTEM clipboard, and never writes
+into the terminal at all. `tests/test_input_ownership.node.mjs` pins both
+absences, so a later decorative check has to argue with a test.
+
+**A STALE TICKET DROPS AND SAYS SO.** It never queues and never replays -
+the user meant that paste for the session they were in, and delivering it
+later out of context is not better than dropping it. The report goes
+through `Terminal#_showStatusPill`, which routes to `FabMenu.notify`, the
+app's single status-pill path; a seventh toast shape would be the bug.
+`Terminal#insertText(text, ticket)` is the ONE write point for every
+text-shaped path and is the last line of defence, and `injectText` checks
+the ticket BEFORE its "clipboard is empty" and "terminal not connected"
+reports, because those would be misleading answers to "why did my paste
+vanish". A dropped upload also raises no attachment card.
+
 ## Gotchas that have cost real time
 
 1. **Wrapper vs `.session`.** Described above. When a field reads as missing,

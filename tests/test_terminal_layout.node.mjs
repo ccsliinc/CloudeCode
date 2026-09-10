@@ -712,8 +712,18 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // and the call at each of those sites; the whole rule, why a counter
     // rather than a session id and why a stale token discards rather than
     // retries, lives in client/js/navigation-generation.js.
+    // RAISED 2470 -> 2492, with the stated reason this comment demands.
+    // Input ownership: the file-paste interceptor now claims the
+    // navigation at the GESTURE and insertText() refuses a stale claim,
+    // so an upload finishing after a session switch can no longer insert
+    // a path into a different agent's prompt. What is here is the claim,
+    // one guard clause, and one extra parameter threaded through
+    // _uploadAndInjectFile; the whole rule - which paths take a ticket,
+    // why the keyboard and the D-pad deliberately do not, and why a
+    // stale claim drops rather than queues - lives in
+    // client/js/terminal-input-ownership.js.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2470, `terminal.js must not grow, is ${lines} lines`);
+    assert.ok(lines < 2492, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {
