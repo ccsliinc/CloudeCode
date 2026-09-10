@@ -7460,3 +7460,58 @@ Protocol notes for the next slice:
 - `jsdom` is a new devDependency in `web/`, and it is there for one reason: the
   slice's whole claim is a mutation count, and counting real DOM mutations against
   a real mounted component is the only measurement of it that means anything.
+
+### 2026-09-10 later - the real-browser run, and the number it corrected
+
+Brave, `127.0.0.1:5057` (the port slice 2 used; every NEW origin I invented -
+`5011`, `8010`, `localhost:8010` - was refused by the browser before a request
+left it, which is a per-origin extension permission and not the app). Same
+fixture as the Vitest harness: 9 projects, 45 rows, 442 elements against
+jsdom's 443. `visibilityState` was `hidden` for every phase and is recorded
+with every number below.
+
+| measurement | real browser | vitest DOM | agrees |
+|---|---|---|---|
+| 12 ticks, nothing changing | **6048 records / 16128 nodes** | 0 / 0 | NO |
+| one status change | **5 attribute records on one dot** | 5 / 0 nodes | yes |
+| legacy `innerHTML` rebuild | **1 record / 918 nodes** | 1 / 916 | yes |
+| busy case (menu open) | **dot updated, same node, menu intact** | same | yes |
+
+**THE BROWSER NUMBER IS AUTHORITATIVE FOR THE REAL TICK PATH, and the
+disagreement is a defect this slice introduced rather than an instrument
+artefact.** 6048 over 12 ticks is 504 records and 1344 nodes PER TICK, every one
+a `childList` record on `.project-node__sessions`, with ZERO attribute records -
+so it is not the data changing. Measured about it:
+
+- the rows are MOVED, not rebuilt: the row element, its `.status-dot` and its
+  parent are all the same node after a tick, still connected, still 45 of them.
+- the row ORDER is identical across three consecutive ticks, in the DOM and in
+  the store.
+- EVERY individual store write costs 0: `runningSessions`, `sessionRecords`,
+  `workStampByName`, `projects`, `projectPresence`, the three attribution
+  structures, and all seven of `loadSessionAttribution`'s assignments replayed
+  by hand - synchronously, after a microtask, and after a real fetch.
+- ONLY the real `loadSessionAttribution()` reproduces it: 432 records / 1152
+  nodes standalone. So the trigger is inside `loadAttribution` and it is NOT the
+  seven assignments it ends with. NOT ROOT-CAUSED.
+
+WHY THE VITEST TEST CANNOT SEE IT, which is the part to fix first:
+`tree-harness.ts` writes the store's fields directly through `applyFixture`. It
+never calls `loadRunningSessions` or `loadSessionAttribution`, so it measures the
+tree's response to a DATA CHANGE and not the tick the app actually runs. A
+harness that drove the real load path would have failed on the first run.
+`mutation-count.test.ts`'s "12 ticks, nothing changing: 0 records" is TRUE OF
+THE ASSERTION IT MAKES and NOT true of a real poll tick; the file should say so
+until this is closed.
+
+- [ ] Root-cause the per-tick `childList` churn on `.project-node__sessions`
+  and drive `mutation-count.test.ts` through `loadRunningSessions` rather than
+  through `applyFixture`. Until then the committed "0 records on an unchanged
+  tick" figure describes the harness, not the app.
+- [ ] The 12-tick loop could not be completed in a backgrounded tab: after a few
+  minutes hidden, the browser throttles the inter-tick timer far enough that the
+  run does not finish. The real 5s poller ticked ONCE in 60 seconds, measured.
+  Every figure above was therefore driven by calling the tick's own work
+  directly, which is a deviation from "let the poller drive it" and is stated
+  rather than hidden. Foregrounding the tab needs either the owner or macOS
+  automation permission for AppleScript, which hung when tried.
