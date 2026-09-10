@@ -49,10 +49,34 @@
     background: transparent;
     border: none;
     border-radius: 0;
-    color: var(--color-fg-faint);
+    /* --color-fg-faint read too bold for a control that just opens a
+     * menu (owner: "make the dots not as bold"). --color-fg-subtle is
+     * the same token the row's own placeholder/disabled text already
+     * uses for the quietest legible weight; hover/focus still light it
+     * up to --color-fg-strong below, so it stays fully readable on
+     * intent. */
+    color: var(--color-fg-subtle);
     cursor: pointer;
     line-height: 0;
     transition: color 120ms ease;
+}
+
+/* Owner: "remove the gap between the dots and the pin". The row's own
+ * flex `gap` (session-sidebar-density.css) is uniform across every
+ * control on the row - grip, dot, name, pin, this trigger - so it cannot
+ * be zeroed there without also collapsing spacing the request did not
+ * name. This cancels it for JUST this one adjacent pair, by pulling the
+ * trigger back toward the pin by exactly the gap it would otherwise
+ * leave. `.session-row-menu-trigger` only ever follows the pin directly
+ * on a LIVE row (a dead row's inline restart/remove sits there instead),
+ * which is the one case this request is about. Matches the gap per
+ * density: 8px in cozy/detailed (the base rule's value), 5px in compact. */
+.session-sidebar-row-pin + .session-row-menu-trigger {
+    margin-inline-start: -8px;
+}
+
+.session-sidebar-panel[data-density="compact"] .session-sidebar-row-pin + .session-row-menu-trigger {
+    margin-inline-start: -5px;
 }
 
 .session-row-menu-trigger:hover,
