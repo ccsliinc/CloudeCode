@@ -5854,3 +5854,147 @@ in rather than dropped. tmux subprocesses were 1 per pass at both 12 and
   session-entry-toasts.js, macOS/main.js.
 - `scripts/scan_secrets.py`: exit 0. The pre-commit hook ran normally on
   every commit, gitleaks gate included; `--no-verify` was not used.
+
+## 2026-09-10 - release/1.2.1: adam's four newest folded in, the row menu held
+
+Owner authorised the fold ("2. yes all folded in"). Range
+`2b1fcb9..adamdev/master`, his tip `8898f07`. Merge commit `94ecc85`,
+both parents recorded, so his tip is in ancestry and cannot silently
+re-propose itself on the next fetch.
+
+### Per commit
+
+- **`4ae4b71` docs plan. TAKEN, unedited.** 242 lines, new file,
+  `docs/webui-performance-and-session-menu-plan.md`. His roadmap, taken
+  as his document.
+- **`46e7aca` mute. TAKEN.** Schema v26 (`sessions.notifications_muted`,
+  `notification_policy_generation`), nullable, no backfill, so the
+  absence of a decision on a row IS unmuted. VERIFIED rather than
+  believed: the gate sits BELOW `record_hook_event` (`routes.py:2286`
+  against the check at `2467`), so a muted `PermissionRequest` still sets
+  `permission_open` and still resolves `question`, and a muted `Stop`
+  still flips unread. `toast_auto_ack.py`, `session_view_clears.py` and
+  `client/js/toast.js` are untouched, so our toast semantics do not move.
+- **`6f79e90` themes. TAKEN.** Removes the SECOND WRITER of the terminal
+  palette (app.js's `Themes.applySession(agent_type)` running after
+  theme-navigation had painted the pin). `applyForTarget` survives as the
+  total function gotcha 7 requires and now hands both inputs to one
+  resolution, so this strengthens the invariant rather than widening it.
+- **`8898f07` row action menu. HELD, NOT RESOLVED. OWNER DECIDES.**
+
+### Why the row menu was held
+
+His `session-row-actions.js` DELETES `LIVE_STATUSES` and returns
+`[CLOSE]` alone for every non-dead status, under a comment block titled
+"NO LIVE-ROW RESTART LIST ANY MORE" citing the owner's 2026-09-08 "remove
+'add to group' / 'restart the agent'". His five menu items are rename,
+fork session, new session in folder, mute/unmute and close; pin goes back
+inline. Ours carries pin/unpin, mark unread, close/remove plus restart,
+and group filing.
+
+So it contradicts THREE settled decisions of the 1.2 round, not one:
+decision 3 (row controls are ours, the kebab WITH restart on live rows),
+decision 2 (manual mark-unread kept behind `ui.show_mark_unread_control`)
+and decision 4's replacement of his "only a dead row reaches the respawn
+ladder" claim. The 2026-09-08 instruction he cites is real; decision 3 is
+dated 2026-09-09 and is the later ruling. That tension is the owner's to
+settle, not a merge's.
+
+**Resolution applied:** all 25 of its paths resolved to OURS. The 19 we
+share were `git checkout HEAD --`'d; the 4 modules it adds alone
+(`session-row-menu-actions.js`, `session-row-menu-open.js`,
+`test_session_row_menu.node.mjs`, `test_session_row_menu_renders.py`) were
+removed; the 2 that decision 3 had already deleted
+(`test_session_row_inline_controls.node.mjs`,
+`test_session_row_controls_render.py`) stay deleted. Verified afterwards
+that no trace survives (`offersMenu`, `SessionRowMenuOpen`,
+`SessionRowMenuActions` all absent) and that our surface is intact
+(`LIVE_STATUSES` present, `actionsFor` still returns
+`[ACTION_CLOSE, ACTION_RESTART]` on a live row).
+
+**Dropped WHOLE, deliberately.** The commit is atomic: it also deletes
+double-click rename and routes rename through the new menu, so taking
+half would leave no way to rename a session at all.
+
+**Zero file overlap** between `8898f07` and the other three commits, so
+the drop cost the kept work nothing.
+
+### The consequence the owner should weigh
+
+**The mute feature now ships SERVER SIDE ONLY.** `46e7aca` touches no
+client file at all; its single UI control was the menu item in the
+dropped commit. So a mute is reachable through
+`PATCH /sessions/records/{session_uuid}/notifications` and through
+nothing a user can click. Recorded as a note in `docs/session-status.md`
+rather than papered over by inventing a control, which would have been
+the same class of unilateral product decision as resolving the menu.
+
+**→ ONE QUESTION FOR THE OWNER:** decision 3 kept the kebab WITH restart
+on a live row; adam's new menu replaces it with five different items and
+no restart. Take his menu and lose live-row restart, keep ours and lose
+his four new actions plus the only mute control, or have the two
+reconciled into one menu that keeps restart AND adds his four?
+
+Recovery either way is cheap and neither direction is lost:
+`git checkout 8898f07 -- <paths>` re-lands his version.
+
+### Two of his tests were repointed
+
+`test_session_notification_mute.py` imported `LIVENESS_ALIVE` from
+`src/core/session_liveness`, a module introduced by `ba2aa5d` - the
+commit the owner OVERRULED AND REVERTED (dead rows go to Recent,
+decision 4). Repointed at our settled three-value vocabulary,
+`session_status.LIVENESS_LIVE`. Test-only; no product code moved and
+decision 4 is untouched. His 43 mute cases all pass.
+
+### Verification
+
+- pytest **5708 passed / 2 failed / 19 skipped** against a 5656/2/19
+  baseline, so +52 and NO new failures. The two are the known
+  environmental pair (`test_home_write_guard`, `test_version_probe`).
+- Node **198 suites, 0 failing** (run exactly as CI).
+- `node --check` clean on all 4 touched JS files.
+- `scan_secrets.py` exit 0, gitleaks clean via the pre-commit hook.
+- Version confirmed still **1.2.1**; nothing bumped, tagged, pushed or
+  deployed.
+- Our 1.2.1 perf work verified intact: socket-scoped liveness
+  (`session_status_map`), index-backed seed row read
+  (`session_status_seed_read`), permission re-look throttle
+  (`PERMISSION_TAIL_RECHECK_SECONDS`). **No per-row query or per-row tmux
+  capture is added to the listing path**: `_session_info_for` does call
+  `notification_policy_for` per row, but it resolves against the
+  in-memory `_by_uuid` projection hydrated once at boot, not SQL.
+
+### 500-line rule
+
+His work pushes two PRODUCTION files over the line, both his and both
+left alone rather than restructured mid-merge:
+`src/core/session_notification_policy.py` (new, 563) and
+`src/core/notifications/idle_watcher.py` (459 -> 513). Four test files
+also cross. None is ours to extract; flagged for a later round.
+
+### For the later 1.3 re-port
+
+`feat/svelte-1.3` rebuilt the row menu on a plugin registry with
+mark-unread as a plugin. NOT touched here. Whatever the owner rules on
+the menu, the re-port must reconcile: `client/js/session-row-actions.js`
+(the `actionsFor` / `LIVE_STATUSES` contract and his `offersMenu`),
+`client/js/session-row-menu.js`, `client/js/session-row-menu-gestures.js`,
+`client/js/session-sidebar-rows.js`, `client/js/session-sidebar-clicks.js`
+(the `data-row-status` read, kebab vs row - the silent one),
+`client/js/session-sidebar-rename.js` (double-click vs menu item),
+`client/js/session-sidebar-fetch.js`, `client/js/session-sidebar.js`,
+`client/js/launchpad.js`, `client/js/project-list-render-guard.js`,
+`client/css/session-row-menu.css` and `client/index.html`. The theme
+change also re-ports: `client/js/themes/registry.js`,
+`client/js/theme-navigation.js`, `client/js/app.js`,
+`client/js/terminal.js`.
+
+### Unverified, stated plainly
+
+Nothing was run against a live install. The mute gate, the theme
+resolution and the dropped menu are verified by the test suites and by
+reading the merged code, NOT by clicking the app on the owner's box.
+His `test_terminal_theme_survives_agent_renders.py` and
+`test_session_row_menu_renders.py` drive real Chromium; the former runs
+here, the latter was removed with the menu.
