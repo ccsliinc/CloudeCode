@@ -3,7 +3,7 @@ party: adoom666
 id: adoom666-unmeasured-is-not-absent
 title: a detector that answers "nothing to see" on input it could not read
 observed: 2026-09-10
-occurrences: 6
+occurrences: 7
 supersedes:
 scope: codebase
 ---
@@ -11,73 +11,75 @@ scope: codebase
 ## pattern
 
 A function whose job is to NOTICE something is handed input it cannot
-interpret, and returns the same answer it returns when there is genuinely
-nothing to notice. The caller cannot tell "I looked and found nothing" from
-"I could not look", so a failure to measure is silently promoted to a
-measurement of absence.
+interpret, or reads a source that is not ready, and returns the same answer
+it returns when there is genuinely nothing to notice. The caller cannot tell
+"I looked and found nothing" from "I could not look", so a failure to measure
+is silently promoted to a measurement of absence.
 
-ADAM-Docs asked whether this was worth a lesson at two occurrences. It is at
-least six, and this codebase has independently arrived at the same principle
-in five separate modules without anyone writing it down.
+Seven occurrences, across two repos and two teams, none of whom recognised it
+as a repeat at the time.
 
-1. **`coord.py expired()`, 2026-09-10, today.** An unreadable claim date
-   returned "expired", and `cmd_check` skips expired claims. A claim with a
-   typo in its header was invisible to the overlap detector. In the one
-   function whose entire job is catching collisions. Found while another
-   party was reading the file before adopting it.
-2. **`listing_proves_alive`, `c8ef6a8`.** The first version trusted a bulk
-   listing's silence in BOTH directions. Four cases in `test_session_rename`
-   caught it dropping live sessions. Corrected to be asymmetric: a listing
-   that NAMES a session proves it exists, an absent name proves nothing and
-   still pays `is_alive()`.
-3. **`resolve_startup_gate`.** Rung 5, no tail captured, refuses with
-   `unknown`. Rung 7, tail read and nothing matched, answers `ready`. Two
-   different answers for two different reasons, deliberately.
-4. **`refuse_if_transcript_missing`.** `unchecked` never refuses. CLAUDE.md,
-   verbatim: "not having been able to look is not evidence a file is gone."
-5. **The `unknown` status itself.** CLAUDE.md: "everything else is `unknown`,
-   which is a real answer and never `idle`." A tmux `running` pane maps to
-   `unknown`, NOT `working`, because it means only "not a bare shell".
-6. **The matcher family.** CLAUDE.md, on the uuid backfill: "A matcher that
-   always finds something is worse than useless", with a mandatory negative
-   control. Same failure wearing the opposite sign.
+1. **`coord.py expired()`.** An unreadable claim date returned "expired" and
+   the overlap detector skips expired claims. A typo'd header made a claim
+   invisible to the one function whose job is catching collisions.
+2. **`listing_proves_alive`, `c8ef6a8`.** First version trusted a bulk
+   listing's silence both ways. Four rename tests caught it dropping live
+   sessions. Now asymmetric: a naming proves existence, an absence proves
+   nothing and still pays `is_alive()`.
+3. **`resolve_startup_gate`.** No tail captured refuses with `unknown`; tail
+   read and nothing matched answers `ready`. Two answers, two reasons.
+4. **`refuse_if_transcript_missing`.** `unchecked` never refuses. "Not having
+   been able to look is not evidence a file is gone."
+5. **The `unknown` status itself.** "A real answer and never `idle`." A tmux
+   `running` pane maps to `unknown`, not `working`.
+6. **The uuid matcher.** "A matcher that always finds something is worse than
+   useless", with a mandatory negative control. Same failure, opposite sign.
+7. **NEW, 2026-09-10, ccsliinc on ArgentSI, and the most instructive one.**
+   GitHub's own API is not read-your-writes consistent. Immediately after
+   `gh pr create`, `gh issue view N --json closedByPullRequestsReferences`
+   returned `[]`. **Twelve seconds later the same call returned `[7]`.** An
+   agent following the documented procedure reads the empty list as "no
+   competition, the claim is mine". The defect had moved into the layer whose
+   entire purpose is preventing two agents from taking the same work.
+
+Number 7 matters because it is not a coding mistake. The code was correct,
+the API was correct, and the eventual consistency window did the rest. The
+pattern survives being careful.
 
 ## resolution
 
-**Give the unmeasured case its own answer.** Three states, not two: found,
-measured-absent, could-not-measure. Collapsing the third into the second is
-the bug, every time.
+**Give the unmeasured case its own answer.** Found, measured-absent,
+could-not-measure. Collapsing the third into the second is the bug, every
+time.
 
-**Then choose the failure direction from what the consumer is FOR, not from
-a general preference.** This is the part that is easy to get wrong by
-applying a slogan. Three from tonight, all correct, all different:
+**Then choose the failure direction from what the consumer is FOR.** There is
+no universal safe direction, only a universal requirement to know which case
+you are in:
 
-- **The overlap detector reports on unknown.** Missing a collision is the
-  whole cost; a spurious report costs a glance.
-- **The sub-agent notification gate alerts on unknown** (`0d1a12c`). A missed
-  notification is worse than a spurious one.
-- **The mute gate SUPPRESSES on unknown** (`46e7aca`), logging
-  `notification_policy_unknown`. Opposite direction, and correct: the user
-  explicitly asked for quiet, so alerting them because a read failed breaks
-  the thing they asked for.
+- The overlap detector REPORTS on unknown. Missing a collision is the cost.
+- The sub-agent notification gate ALERTS on unknown. A missed alert is worse.
+- The mute gate SUPPRESSES on unknown. The user asked for quiet; alerting
+  them because a read failed breaks the thing they asked for.
 
-So there is no universal safe direction. There is a universal requirement to
-KNOW which case you are in.
+**FOR AN EVENTUALLY CONSISTENT SOURCE, MAKE THE READ SELF-CHECKING.** This is
+ccsliinc's fix for number 7 and it is the best answer any of the seven
+produced, because it needs no guessed timeout. The agent already knows its
+own PR number. So the read is only VALID once the response contains that
+number. Absence of your own write means a stale index, not an uncontested
+issue. Bounded retry, and on exhaustion it reports could-not-confirm rather
+than concluding it won.
 
-**Write the negative control.** Every one of these was caught by a test that
-fails when the detector goes blind, or was not caught at all. Item 2 was
-caught by four rename tests. Item 1 was caught by a human reading the file.
-A green suite that could not have failed proves nothing, which is the point
-ccsliinc makes in `lessons/ccsliinc-a-test-that-cannot-fail.md` from the
-other direction.
+Generalised: **when polling a source you have just written to, validate the
+response against your own write, not against emptiness.** Emptiness is
+ambiguous. Your own record appearing is proof the index has caught up.
 
 ## how we know it works
 
-Items 2 through 6 are shipped and have held. Item 1 is fixed today and
-verified against six malformed inputs: an impossible month, garbage, a short
-date, empty, today, and a genuinely old date. Only the last reports expired.
+Items 2 through 6 are shipped and have held. Item 1 is fixed and verified
+against six malformed inputs. Item 7 is ccsliinc's, fixed with the
+self-checking retry described above and measured across a real twelve second
+window.
 
-The reason this is written now rather than after a seventh occurrence: the
-first six were each found by a different person or agent, none of them
-recognised it as a repeat, and the same defect was therefore re-derived five
-times. That is the cost this entry exists to stop.
+The reason to write at two occurrences rather than seven: each of these was
+found by a different person or agent, none recognised it as a repeat, and the
+same defect was therefore re-derived six times across two codebases.
