@@ -1624,6 +1624,11 @@ counts as a secret, shared with the transcript message model. Add a detector
 there and a case to `tests/test_secret_detectors.py`; never write a second set
 of patterns. No matched value is ever printed, logged or stored, by any path.
 
+The hook runs a second gate after that scanner passes: gitleaks, against the
+same `.gitleaks.toml` config CI runs. Installed via Homebrew on mac-mini-m4
+(version 8.30.1, matching the version CI pins). A missing gitleaks binary does
+not refuse the commit, it prints a NOTE that the second gate did not run.
+
 Audit the tree with `./venv/bin/python3 scripts/scan_secrets.py`. Exit 2 means
 could-not-scan and is not a pass. Full detail in `docs/secret-scanning.md`.
 
