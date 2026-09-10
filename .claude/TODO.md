@@ -6636,3 +6636,81 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 `macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
 would want the same ruling.
 
+
+## 2026-09-10 - GAME PLAN: four tracks, and the dependency that orders them
+
+Owner's direction, verbatim: "come up with a game plan, lets get this all into
+gear. make sure you keep the git up to date. then lets knock this out, then we
+can tell the other agent we dont want things removed that he or i design that
+we both dont agree upon into plugins. this way we can use the 2 of our wants to
+see whats resonable for main app and whats reasonable for plugins. making
+classsed code and probably should have language vars if we can get this to be
+bigger and people want to use this"
+
+**THE DEPENDENCY THAT ORDERS EVERYTHING:** language variables must land BEFORE
+svelte slices 2 to 7. Every screen hardcodes its strings today. Porting six
+more screens and retrofitting translation afterwards rewrites every file twice
+and touches every file the migration just wrote. So i18n is a gate, not a
+follow-up.
+
+### Track A - backend to first-class python
+- [x] v1 plan, 12 slices, `.claude/notes/backend-decomposition-plan.md`
+- [x] S1 `4e911b6` ProbeHealthRecorder, S2 `c170eb6` themes, S3 `bb7abb0` toast
+      inbox, S4 `09284df` SessionRegistry, S5 `209947d` AttachmentSidecars
+- [x] MEASURED PROBLEM: 8,340 to 8,239 across five slices, 101 net lines, and
+      two of the last three slices GREW the file. Cause is the preserved facade
+      (74 public names, no-arg ctor for 107 bare test constructions) plus the
+      docstring rule: a 20-line body out costs ~70 lines of documented
+      delegating property back in.
+- [ ] v2 plan IN FLIGHT on `docs/backend-plan-v2`: composition root with
+      injected collaborators, Protocol boundaries at tmux/store/clock/fs, the
+      facade given a DELETE DATE with its ~575 call sites migrated, an explicit
+      ruling on the docstring rule for pure forwarding, the OTHER monoliths
+      diagnosed (routes 4,387, tmux_backend 2,801, models 2,495, config 2,112,
+      auth 1,674, db_models 1,663, main 1,406, db_steps 1,402), and a numeric
+      stopping condition per file.
+- [ ] Then resume slices under v2.
+
+### Track B - svelte client, slices 2 to 7
+- [x] toolchain, slice 1, LED port + drift guard, plugin registry, rebased onto
+      1.2.1 and validated: `feat/svelte-1.3-on-121`, 13 commits.
+- [ ] BLOCKED on Track D. Do not start slice 2 until i18n lands.
+
+### Track C - plugin engine and the core-versus-plugin policy
+- [x] registry shipped, four surfaces, mark-unread as the first plugin behind
+      `ui.show_mark_unread_control`.
+- [ ] IN FLIGHT on `docs/plugin-policy`: the owner's governance rule written
+      into `docs/DECISIONS.md` (neither party removes the other's designed
+      behaviour without agreement; a conflict ships BOTH, one as a plugin or a
+      setting; the two kept-behaviour lists decide core versus plugin; a
+      graduation and demotion path so the policy is not a ratchet), plus a
+      MECHANISM that would actually have caught this week's two removals, with
+      a firing and a quiet control.
+- [ ] Ask Adam for `docs/kept-behaviours/adoom666.md`; the policy is symmetric
+      and useless with one side filled in.
+
+### Track D - language variables (NEW, and it gates Track B)
+- [ ] IN FLIGHT on `feat/i18n-foundation`: catalog format and location, key
+      scheme that survives the rewrite, interpolation and plurals via built-in
+      `Intl` rather than a dependency, ONE source read by BOTH the legacy client
+      and svelte (a second table is a dual path and is forbidden), locale
+      selection, loud missing-key behaviour, a pseudo-locale as the coverage
+      test, and one real surface ported as the worked example.
+- [ ] Server-emitted strings (toast bodies, refusal sentences, picker copy):
+      scope decision required, not silent omission.
+
+### Governance, to tell Adam once Track C lands
+Neither party removes a behaviour the other designed without agreement. A
+design disagreement ships BOTH, one as a plugin contribution or a setting, each
+defaulting to its own preference. The two kept-behaviour lists are the input
+that decides core versus plugin. Evidence, both directions: his row menu
+removed restart, mark-unread and group filing; our own side nearly deleted the
+owner's double-click rename by following his commit's intent.
+
+### Git hygiene
+- Main checkout moved OFF the stale `feat/svelte-web` onto `release/1.2.1`
+  today; the finished `release-1.2.1` worktree was removed. `feat/svelte-web`
+  carries the LOSING led model's text and fooled a worker into writing an
+  inverted ruling into the shared `docs/DECISIONS.md`. Do not read docs from it.
+- Every branch pushes to `origin`; releases and coord also to `adamdev`. NEVER
+  `upstream`.
