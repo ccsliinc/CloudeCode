@@ -44,6 +44,7 @@ from fastapi.testclient import TestClient
 import src.api.routes as routes_mod
 from src.api.auth import require_auth
 from src.core.session_manager import SessionManager
+from src.core.sessions.theme_accents import ThemeAccents
 from src.models import Session, SessionStatus
 
 
@@ -321,9 +322,15 @@ def test_session_accent_color_memoization(monkeypatch, tmp_path):
     # Drop the manifest path the next read would consult and verify
     # subsequent reads still return the cached value — the cache is
     # the source of truth on the hot path.
+    #
+    # S2: patched on ``ThemeAccents``, which is what the read consults.
+    # Patching ``SessionManager._themes_dir`` still "works" in the sense
+    # that it raises nothing, and tests nothing at all: the facade name
+    # is a delegate the accent read never calls, so this assertion would
+    # pass over a manifest that was never moved.
     monkeypatch.setattr(
-        SessionManager,
-        "_themes_dir",
+        ThemeAccents,
+        "themes_dir",
         staticmethod(lambda: tmp_path / "does_not_exist"),
     )
     t2 = mgr.record_toast("ses_memo", "Notification", "second")

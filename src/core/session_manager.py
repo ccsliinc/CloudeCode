@@ -55,6 +55,9 @@ from src.core.session_backend import SessionBackend, build_backend
 # name is the facade rule applied to a type rather than to a method: no
 # caller moves.
 from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
+from src.core.sessions import theme_dotfile
+from src.core.sessions.theme_accents import ThemeAccents
+from src.core.sessions.theme_store import ThemeStore
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
@@ -271,6 +274,7 @@ class SessionManager:
         self,
         *,
         probe_health: Optional[ProbeHealthRecorder] = None,
+        theme_store: Optional[ThemeStore] = None,
     ):
         """Initialize the session manager.
 
@@ -282,7 +286,9 @@ class SessionManager:
           positional optional would let a later slice's collaborator
           land silently in this one's slot.
         Inputs: probe_health (ProbeHealthRecorder | None) - the owner of
-          the tmux probe health cluster. Default-constructed when None.
+          the tmux probe health cluster. theme_store (ThemeStore | None) -
+          the owner of the pinned-theme map, the project dotfile and the
+          accent cache. Each default-constructed when None.
         Output: None.
         Example: SessionManager(probe_health=ProbeHealthRecorder())
         """
@@ -293,6 +299,24 @@ class SessionManager:
         # this facade keeps no copy, so the two cannot drift.
         self._probe_health: ProbeHealthRecorder = (
             probe_health if probe_health is not None else ProbeHealthRecorder()
+        )
+        # S2 - the ONE owner of the theme cluster. ``pinned_themes`` and
+        # ``_theme_accent_cache`` are PROPERTIES on this class now, both
+        # aliasing the store's own dicts, so there is exactly one of each
+        # object no matter which spelling a caller reaches it through.
+        #
+        # THE PIN PATH IS A CALLABLE ON PURPOSE. It resolves ``settings``
+        # out of THIS module's globals at call time, which is what the
+        # loose ``_load_pinned_themes`` / ``_save_pinned_themes`` did. A
+        # store that imported ``settings`` itself would not see the
+        # ``monkeypatch.setattr("src.core.session_manager.settings", ...)``
+        # every theme test uses, and would read and WRITE the developer's
+        # real ``~/.cloude-sessions/pinned_themes.json`` during a pytest
+        # run.
+        self._theme_store: ThemeStore = (
+            theme_store
+            if theme_store is not None
+            else ThemeStore(pin_path=lambda: settings.get_pinned_themes_path())
         )
         # ---- per-session state, keyed by session_id ---------------------
         # Multiple sessions coexist; two browser tabs can each be attached
@@ -360,11 +384,9 @@ class SessionManager:
         # v0.7.0 Part 2 - per-session toast notifications. Newest-first list
         # per session id; pruning keeps ALL unacked + last 50 acked (see
         # ``_prune_toasts``). Cleared on ``_wipe_session_state``. The
-        # ``_theme_accent_cache`` memoizes theme manifest accent-color reads
-        # keyed by theme id (manifest files are effectively static across
-        # the server's lifetime - no invalidation needed).
+        # accent cache the toast colour is read from lives on the S2
+        # theme store; ``_theme_accent_cache`` below is a property onto it.
         self._pending_toasts: dict[str, list[Toast]] = {}
-        self._theme_accent_cache: dict[str, Optional[str]] = {}
 
         # v0.7.0 Part 3 - per-session HMAC tokens. Minted on
         # ``create_session`` / ``adopt_external_session``, injected as
@@ -447,16 +469,6 @@ class SessionManager:
         self._superseded_hook_tokens = SupersededHookTokens()
         self._load_hook_tokens()
 
-        # SESSION-IDENTITY-V2 - durable per-tmux-name pinned-theme map.
-        # Lives in its own file (``pinned_themes.json``) so it survives
-        # detach + swap + re-adopt cycles; ``session_metadata.json`` is
-        # unlinked on detach and overwritten on swap and so cannot
-        # function as the source of truth for a per-name pin. Mutated
-        # by ``set_pinned_theme`` / ``clear_pinned_theme``; consulted by
-        # ``adopt_external_session`` (seeds Session.pinned_theme on
-        # re-entry) and ``list_attachable_sessions`` (decorates rows so
-        # the launchpad can paint the pin without entering the session).
-        self.pinned_themes: dict[str, str] = {}
 
         # feat/hook-driven-status - ephemeral, in-memory hook-signal state
         # machine (question/working/subagent-depth/heartbeat). One instance
@@ -515,7 +527,63 @@ class SessionManager:
 
         # Load persisted session if it exists
         self._load_session_metadata()
-        self._load_pinned_themes()
+        # Same point in construction the loose ``_load_pinned_themes``
+        # ran, so the settings stub a test installed before constructing
+        # is what the pin path callable resolves to.
+        self._theme_store.load()
+
+    # ---- S2: the theme cluster, owned by ``self._theme_store`` ----------
+    #
+    # THESE TWO ARE PROPERTIES, NOT FIELDS, AND THAT IS THE WHOLE RULE.
+    # Assigning ``self.pinned_themes = store.pinned_themes`` in
+    # ``__init__`` would ALSO make every read agree today, and would fork
+    # the two the first time anything rebound either name - which
+    # ``tests/test_tmux_listing_consumers.py`` does, with a whole-dict
+    # assignment through the facade. A property with a setter makes the
+    # rebind land on the store, so there is exactly one dict however it
+    # is reached. See ``tests/test_theme_store.py`` for the four legs
+    # that prove it.
+
+    @property
+    def pinned_themes(self) -> dict[str, str]:
+        """The durable per-tmux-name pinned-theme map.
+
+        Description: the SAME dict object the theme store holds, not a
+          copy. Kept as a public attribute because 14 external call
+          sites read and write it directly.
+        Inputs: none.
+        Output: dict[str, str] - tmux name to theme id.
+        Example: mgr.pinned_themes is mgr._theme_store.pinned_themes  # True
+        """
+        return self._theme_store.pinned_themes
+
+    @pinned_themes.setter
+    def pinned_themes(self, value: dict[str, str]) -> None:
+        """Rebind the whole map, on the store rather than on this object.
+
+        Description: exists so a caller replacing the map wholesale
+          (several tests do) moves the STORE's map. Without the setter
+          the assignment would create a facade-local attribute that
+          shadows this property, and from then on the two objects would
+          hold different dicts while every value assertion still passed.
+        Inputs: value (dict[str, str]) - the replacement map.
+        Output: None.
+        Example: mgr.pinned_themes = {"cloude_x": "matrix"}
+        """
+        self._theme_store.pinned_themes = value
+
+    @property
+    def _theme_accent_cache(self) -> dict[str, Optional[str]]:
+        """The memoized theme-manifest accent colours.
+
+        Description: aliases the store's cache, which itself aliases the
+          composed ``ThemeAccents`` cache. Three names, one dict.
+        Inputs: none.
+        Output: dict[str, str | None] - theme id to accent, where a
+          stored None means "this theme declares no accent".
+        Example: mgr._theme_accent_cache["matrix"]  # '#00ff41'
+        """
+        return self._theme_store.accent_cache
 
     # ---- multi-session accessors / back-compat shims --------------------
 
@@ -1408,18 +1476,7 @@ class SessionManager:
         # unanswered question. Prevents indefinite growth from sessions
         # the user destroyed outside our UI (``tmux -L cloude
         # kill-session``).
-        if self.pinned_themes:
-            dead_pins = {
-                name for name in self.pinned_themes if name not in tmux_alive
-            }
-            if dead_pins:
-                logger.info(
-                    "pinned_themes_pruning_dead",
-                    names=sorted(dead_pins),
-                )
-                for name in dead_pins:
-                    self.pinned_themes.pop(name, None)
-                self._save_pinned_themes()
+        self._theme_store.prune_to_live(tmux_alive)
 
         # feat/hook-driven-status - same reconciliation for the persisted
         # unread store: a tmux session the user killed outside our UI
@@ -1789,54 +1846,25 @@ class SessionManager:
     def _load_pinned_themes(self) -> None:
         """Load the per-tmux-name pinned-theme map from disk.
 
-        Missing file = empty map (first run / never pinned). Malformed
-        file = empty map + warning log; we never crash startup over a
-        corrupt non-critical preferences file. Values must be strings;
-        any other type is dropped on load.
+        Description: delegates to the S2 theme store, which owns both
+          the map and the file. Kept on the facade because the name is
+          reached from outside.
+        Inputs: none.
+        Output: None.
+        Example: mgr._load_pinned_themes()
         """
-        path = settings.get_pinned_themes_path()
-        if not path.exists():
-            return
-        try:
-            with open(path, "r") as f:
-                raw = json.load(f)
-            if not isinstance(raw, dict):
-                logger.warning(
-                    "pinned_themes_unexpected_shape",
-                    type=type(raw).__name__,
-                )
-                return
-            self.pinned_themes = {
-                str(k): v for k, v in raw.items()
-                if isinstance(v, str) and v
-            }
-            logger.info(
-                "pinned_themes_loaded", count=len(self.pinned_themes)
-            )
-        except Exception as exc:
-            logger.warning("failed_to_load_pinned_themes", error=str(exc))
+        self._theme_store.load()
 
     def _save_pinned_themes(self) -> None:
         """Persist the pinned-theme map atomically.
 
-        Re-uses the same atomic-rename protocol as ``_save_session_metadata``
-        so a crash mid-write can never leave a half-written file at the
-        canonical path.
+        Description: delegates to the S2 theme store, which carries the
+          temp-then-``os.replace`` protocol.
+        Inputs: none.
+        Output: None.
+        Example: mgr._save_pinned_themes()
         """
-        path = settings.get_pinned_themes_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            with tmp.open("w") as f:
-                json.dump(self.pinned_themes, f, indent=2)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
-            os.replace(str(tmp), str(path))
-        except Exception as exc:
-            logger.error("failed_to_save_pinned_themes", error=str(exc))
+        self._theme_store.save()
 
     # ---- read/unread persistence (feat/hook-driven-status) ---------------
     #
@@ -1943,10 +1971,14 @@ class SessionManager:
             session_view_clears.clear_view_state(self, tmux_name=tmux_name)
 
     def get_pinned_theme(self, tmux_name: str) -> Optional[str]:
-        """Return the persisted pin for a tmux session name, or None."""
-        if not tmux_name:
-            return None
-        return self.pinned_themes.get(tmux_name)
+        """Return the persisted pin for a tmux session name, or None.
+
+        Inputs: tmux_name (str) - a bare tmux session name.
+        Output: str | None - the theme id, None when unset or the name
+          is empty.
+        Example: mgr.get_pinned_theme("cloude_demo")  # 'matrix'
+        """
+        return self._theme_store.get_pin(tmux_name)
 
     def set_pinned_theme(
         self, tmux_name: str, theme_id: Optional[str]
@@ -1960,13 +1992,8 @@ class SessionManager:
         subsequent ``get_session_info()`` reflects the change without
         requiring a re-load from disk.
         """
-        if not tmux_name:
+        if not self._theme_store.set_pin(tmux_name, theme_id):
             return
-        if theme_id:
-            self.pinned_themes[tmux_name] = theme_id
-        else:
-            self.pinned_themes.pop(tmux_name, None)
-        self._save_pinned_themes()
 
         # Mirror onto any live Session whose backend IS this tmux name, so
         # SessionInfo serialization picks it up immediately.
@@ -1989,9 +2016,7 @@ class SessionManager:
         ``destroy_external_session``) so a tmux name that's truly gone
         doesn't accumulate dead pins forever.
         """
-        if tmux_name and tmux_name in self.pinned_themes:
-            self.pinned_themes.pop(tmux_name, None)
-            self._save_pinned_themes()
+        self._theme_store.discard_pin(tmux_name)
 
     # ---- project-scoped theme (v0.7.0 - .cc.theme dotfile) -------------
     #
@@ -2010,203 +2035,92 @@ class SessionManager:
 
     @staticmethod
     def _project_theme_path(working_dir) -> Optional[Path]:
-        """Resolve the dotfile path under ``working_dir``.
+        """Resolve the ``.cc.theme`` path under ``working_dir``.
 
-        Returns None when ``working_dir`` is empty / unresolvable so callers
-        can short-circuit without try/except gymnastics. Tilde-expansion
-        and absolute resolution happen here so caller paths stay simple.
+        Description: delegates to ``sessions.theme_dotfile``, which owns
+          the file format. Returns None when the directory is empty or
+          unresolvable so callers can short-circuit.
+        Inputs: working_dir (str | Path | None).
+        Output: Path | None.
+        Example: SessionManager._project_theme_path("~/proj")
         """
-        if not working_dir:
-            return None
-        try:
-            return Path(str(working_dir)).expanduser().resolve() / ".cc.theme"
-        except (OSError, RuntimeError):
-            return None
+        return theme_dotfile.project_theme_path(working_dir)
 
     def get_project_theme(self, working_dir) -> Optional[str]:
-        """Read ``<working_dir>/.cc.theme``; fall back to pinned_themes.json.
+        """Read ``<working_dir>/.cc.theme``.
 
-        Resolution order:
-          1. ``<working_dir>/.cc.theme`` (v0.7.0+ project-scoped source of truth)
-          2. ``pinned_themes.json`` keyed by the bare tmux name - but ONLY
-             when a caller already supplied ``working_dir`` *and* no
-             dotfile exists. This branch is the read-time back-compat
-             fallback for sessions pinned under v0.6.x.
-
-        Step 2 cannot be performed here without a tmux name; this method
-        only does the dotfile read. Callers that need the JSON fallback
-        should call ``get_pinned_theme(tmux_name)`` themselves and prefer
-        whichever they receive. Returns None when nothing is pinned.
+        Description: the DOTFILE ONLY, which is the v0.7.0+ source of
+          truth for a project's theme. It cannot perform the legacy
+          ``pinned_themes.json`` fallback, which is keyed by tmux name
+          and needs an argument this does not take;
+          ``resolve_project_theme`` is the combined lookup.
+        Inputs: working_dir (str | Path | None).
+        Output: str | None - the theme id, None when nothing is pinned
+          or the file is unreadable.
+        Example: mgr.get_project_theme(project)  # 'metal'
         """
-        path = self._project_theme_path(working_dir)
-        if path is None or not path.exists():
-            return None
-        try:
-            content = path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            logger.warning(
-                "project_theme_read_failed",
-                path=str(path),
-                error=str(exc),
-            )
-            return None
-        return content or None
+        return self._theme_store.get_project_theme(working_dir)
 
     def set_project_theme(self, working_dir, theme_id: Optional[str]) -> None:
-        """Atomically write/clear ``<working_dir>/.cc.theme``.
+        """Atomically write or clear ``<working_dir>/.cc.theme``.
 
-        Empty/None ``theme_id`` deletes the dotfile (clears the pin).
-        Otherwise writes ``<theme_id>\\n`` with mode 0o644 via
-        ``tmp + os.replace`` so a crash mid-write can never leave a
-        half-written file at the canonical path.
-
+        Description: an empty or None ``theme_id`` deletes the dotfile.
+          RAISES on failure, unlike the pin-map save: this is reached
+          from a user action with a response to fail, so a write that
+          did not happen must not report success.
+        Inputs: working_dir (str | Path) - must exist and be a
+          directory. theme_id (str | None).
+        Output: None.
         Raises:
             FileNotFoundError: ``working_dir`` does not exist.
+            NotADirectoryError: ``working_dir`` is not a directory.
             OSError: ``working_dir`` is not writable.
             ValueError: ``working_dir`` resolves to None (caller bug).
+        Example: mgr.set_project_theme(project, "metal")
         """
-        path = self._project_theme_path(working_dir)
-        if path is None:
-            raise ValueError(f"Invalid working_dir: {working_dir!r}")
-
-        parent = path.parent
-        if not parent.exists():
-            raise FileNotFoundError(
-                f"working_dir does not exist: {parent}"
-            )
-        if not parent.is_dir():
-            raise NotADirectoryError(
-                f"working_dir is not a directory: {parent}"
-            )
-
-        # Clear branch - delete the dotfile if present.
-        if not theme_id:
-            if path.exists():
-                try:
-                    path.unlink()
-                    logger.info("project_theme_cleared", path=str(path))
-                except OSError as exc:
-                    logger.error(
-                        "project_theme_clear_failed",
-                        path=str(path),
-                        error=str(exc),
-                    )
-                    raise
-            return
-
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        try:
-            with tmp.open("w", encoding="utf-8") as f:
-                f.write(f"{theme_id}\n")
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError:
-                    pass
-            try:
-                os.chmod(str(tmp), 0o644)
-            except OSError:
-                # chmod failure on the tmp shouldn't abort the write -
-                # the final replace will still publish the file. Log only.
-                logger.debug("project_theme_chmod_failed", path=str(tmp))
-            os.replace(str(tmp), str(path))
-            logger.info(
-                "project_theme_set",
-                path=str(path),
-                theme_id=theme_id,
-            )
-        except OSError:
-            # Best-effort cleanup of the tmp on failure so we don't leave
-            # turds in user projects.
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        self._theme_store.set_project_theme(working_dir, theme_id)
 
     def migrate_pinned_theme_to_dotfile(self, session) -> bool:
-        """Ferry a v0.6.x pinned_themes.json entry into ``.cc.theme``.
+        """Ferry a v0.6.x ``pinned_themes.json`` entry into ``.cc.theme``.
 
-        Runs on attach/adopt when:
-          - ``<session.working_dir>/.cc.theme`` does NOT exist, AND
-          - ``pinned_themes.json`` has an entry for ``session.tmux_session``
-            (or the trailing component of ``session.id`` for owned sessions).
+        Description: runs on attach and adopt. Writes only when the
+          dotfile is ABSENT and the legacy map holds an entry for the
+          session's pin key. The legacy entry is deliberately NOT
+          deleted - this release still reads it as a fallback and it
+          decays as users re-pin. Best effort: a failed migration is
+          logged inside the store and never breaks the attach path.
 
-        Best-effort: any exception is logged and swallowed so the
-        attach/adopt path is never broken by a failed migration. The
-        legacy map entry is intentionally NOT deleted - let it decay
-        naturally; this release keeps it as a read-time fallback.
-
-        Returns True on successful migration, False otherwise.
+          This facade half exists to unwrap the ``Session``: the store
+          takes strings only, which is what keeps it free of a models
+          import and testable with no manager at all.
+        Inputs: session (Session | None) - the live session; None and a
+          session with no ``working_dir`` both answer False.
+        Output: bool - True only on a completed migration.
+        Example: mgr.migrate_pinned_theme_to_dotfile(sess)
         """
         if session is None:
             return False
-        working_dir = getattr(session, "working_dir", None)
-        if not working_dir:
-            return False
-        try:
-            path = self._project_theme_path(working_dir)
-            if path is None:
-                return False
-            # If the dotfile already exists, the new format wins - nothing
-            # to migrate.
-            if path.exists():
-                return False
-            # Working dir must actually exist on disk before we'd write to it.
-            if not path.parent.is_dir():
-                logger.debug(
-                    "migrate_pinned_theme_skipped_no_dir",
-                    working_dir=str(working_dir),
-                )
-                return False
-            # Resolve the legacy key. Prefer the explicit ``tmux_session``
-            # field (canonical pin handle); fall back to the trailing
-            # component of ``session.id`` for adopted rows pre-PIN-FIX.
-            tmux_name = getattr(session, "tmux_session", None)
-            if not tmux_name:
-                sid = getattr(session, "id", "") or ""
-                if sid.startswith("adopted:"):
-                    tmux_name = sid[len("adopted:"):]
-                else:
-                    tmux_name = sid
-            if not tmux_name:
-                return False
-            legacy_pin = self.pinned_themes.get(tmux_name)
-            if not legacy_pin:
-                return False
-            self.set_project_theme(working_dir, legacy_pin)
-            logger.info(
-                "theme_migrated_to_dotfile",
-                session_id=getattr(session, "id", None),
-                working_dir=str(working_dir),
-                tmux_name=tmux_name,
-                theme_id=legacy_pin,
-            )
-            return True
-        except Exception as exc:
-            logger.warning(
-                "theme_migration_failed",
-                session_id=getattr(session, "id", None),
-                working_dir=str(working_dir),
-                error=str(exc),
-            )
-            return False
+        return self._theme_store.migrate_to_dotfile(
+            working_dir=getattr(session, "working_dir", None),
+            tmux_session=getattr(session, "tmux_session", None),
+            session_id=getattr(session, "id", None),
+        )
 
     def resolve_project_theme(
         self, working_dir, tmux_name: Optional[str] = None
     ) -> Optional[str]:
-        """Combined lookup: dotfile first, then JSON fallback by tmux name.
+        """The effective theme: dotfile first, then the legacy JSON map.
 
-        Convenience wrapper for callers (create_session / adopt) that want
-        a single call returning the effective pin without writing migration
-        glue at every call site.
+        Description: the single call the create and adopt paths make, so
+          neither writes fallback glue. The ORDER is the contract - a
+          dotfile beats a JSON pin, because the dotfile is what a second
+          machine can see.
+        Inputs: working_dir (str | Path | None). tmux_name (str | None) -
+          the legacy key, omitted when there is none.
+        Output: str | None.
+        Example: mgr.resolve_project_theme(work, "cloude_demo")
         """
-        dotfile = self.get_project_theme(working_dir)
-        if dotfile is not None:
-            return dotfile
-        if tmux_name:
-            return self.get_pinned_theme(tmux_name)
-        return None
+        return self._theme_store.resolve_project_theme(working_dir, tmux_name)
 
     # ---- toast notifications (v0.7.0 Part 2) ----------------------------
     #
@@ -2242,72 +2156,51 @@ class SessionManager:
     def _themes_dir() -> Path:
         """Return the bundled themes root (``client/css/themes/``).
 
-        Computed from this file's location: session_manager.py lives at
-        ``src/core/session_manager.py``, so two ``parent`` hops reach
-        the repo root. Mirrors the resolver used in
-        ``routes._bundled_themes_root`` - kept duplicated rather than
-        cross-imported to avoid a routes <-> session_manager cycle.
+        Description: delegates to ``ThemeAccents.themes_dir``, which is
+          the ONE resolver now that the accent read lives there. Kept as
+          a name on this class only so a caller holding a manager can
+          still ask; PATCHING THIS ONE PATCHES NOTHING, because the read
+          consults the accents object. A test that wants to move the
+          themes root patches ``ThemeAccents.themes_dir``.
+        Inputs: none.
+        Output: Path.
+        Example: SessionManager._themes_dir() / "matrix" / "theme.json"
         """
-        return (
-            Path(__file__).resolve().parent.parent.parent
-            / "client"
-            / "css"
-            / "themes"
-        )
+        return ThemeAccents.themes_dir()
 
     def _get_theme_accent_color(self, theme_id: Optional[str]) -> Optional[str]:
-        """Resolve the ``--color-accent`` hex/rgba string for a theme id.
+        """Resolve the ``--color-accent`` string for a theme id, memoized.
 
-        Memoized in ``self._theme_accent_cache`` so repeated toast records
-        for the same theme don't pay the JSON parse cost every time.
-        Returns None when ``theme_id`` is falsy, the manifest is missing,
-        the manifest is malformed, or ``cssVars`` lacks ``--color-accent``.
+        Description: delegates to the S2 theme store's composed accent
+          memo. A cached None is a real answer ("this theme declares no
+          accent") and is not re-read.
+        Inputs: theme_id (str | None).
+        Output: str | None - None when the id is falsy, the manifest is
+          missing or malformed, or ``cssVars`` lacks the var.
+        Example: mgr._get_theme_accent_color("matrix")  # '#00ff41'
         """
-        if not theme_id:
-            return None
-        # ``None`` is a valid cached value (theme exists but has no
-        # accent var) - distinguish via ``in`` check rather than truthiness.
-        if theme_id in self._theme_accent_cache:
-            return self._theme_accent_cache[theme_id]
-
-        manifest_path = self._themes_dir() / theme_id / "theme.json"
-        accent: Optional[str] = None
-        try:
-            with manifest_path.open("r", encoding="utf-8") as fh:
-                raw = json.load(fh)
-            css_vars = raw.get("cssVars") if isinstance(raw, dict) else None
-            if isinstance(css_vars, dict):
-                val = css_vars.get("--color-accent")
-                if isinstance(val, str) and val.strip():
-                    accent = val.strip()
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            logger.debug(
-                "toast_theme_accent_read_failed",
-                theme_id=theme_id,
-                path=str(manifest_path),
-                error=str(exc),
-            )
-            accent = None
-
-        self._theme_accent_cache[theme_id] = accent
-        return accent
+        return self._theme_store.accent_for_theme(theme_id)
 
     def _get_session_accent_color(
         self, session: Optional[Session]
     ) -> Optional[str]:
-        """Resolve the per-session accent color via the project theme.
+        """Resolve the per-session accent colour via the project theme.
 
-        Returns None when the session is unknown, has no working dir, or
-        has no resolvable theme. The hot path is two dict reads + a
-        cached lookup once the theme is known - cheap enough to call on
-        every ``record_toast`` without batching.
+        Description: unwraps the ``Session`` for the store, which takes
+          strings only. Returns None when the session is unknown, has no
+          working dir, or has no resolvable theme. The hot path is a
+          dict read plus a cached lookup once the theme is known, cheap
+          enough to call on every ``record_toast`` without batching.
+        Inputs: session (Session | None).
+        Output: str | None.
+        Example: mgr._get_session_accent_color(sess)  # '#00ff41'
         """
         if session is None:
             return None
-        working_dir = getattr(session, "working_dir", None)
-        tmux_name = getattr(session, "tmux_session", None)
-        theme_id = self.resolve_project_theme(working_dir, tmux_name)
-        return self._get_theme_accent_color(theme_id)
+        return self._theme_store.accent_for(
+            getattr(session, "working_dir", None),
+            getattr(session, "tmux_session", None),
+        )
 
     def _prune_toasts(self, session_id: str) -> None:
         """Trim the acked-toasts tail past ``_TOAST_ACKED_CAP``.
@@ -4379,12 +4272,9 @@ class SessionManager:
         # Re-key the deprecated pinned-themes map. v0.7.0's project theme
         # ``.cc.theme`` is keyed by working_dir (unaffected by rename), but
         # the legacy per-tmux-name JSON map needs to follow the name so a
-        # downgrade-to-v0.6.x doesn't lose the pin. ``self.pinned_themes``
-        # is the in-memory mirror of that file.
-        if old_name in self.pinned_themes:
-            theme_id = self.pinned_themes.pop(old_name)
-            self.pinned_themes[new_name] = theme_id
-            self._save_pinned_themes()
+        # downgrade-to-v0.6.x doesn't lose the pin. The S2 theme store
+        # owns that map and its file; ``rekey_pin`` moves and saves.
+        self._theme_store.rekey_pin(old_name, new_name)
 
         # Mirror the new tmux name onto the Session record so SessionInfo
         # serialization picks it up immediately (and so a restart-rehydrate
@@ -6736,7 +6626,7 @@ class SessionManager:
         for row in rows:
             name = row.get("name")
             if name:
-                row["pinned_theme"] = self.pinned_themes.get(name)
+                row["pinned_theme"] = self._theme_store.get_pin(name)
                 # The user-facing label for this instance, so the home
                 # screen shows what the user called it rather than the
                 # derived tmux handle. None falls back to the name.

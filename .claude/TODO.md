@@ -6665,3 +6665,82 @@ a renamed package would otherwise look perfectly compliant).
 for S1, which does no I/O and calls nothing. No live deploy, so the plan's proof
 by measurement for S1 (`/sessions/list` row count against
 `tmux -L cloude list-sessions | wc -l`) is UNVERIFIED and still owed.
+
+## 2026-09-10 - backend decomposition S2: the theme cluster
+
+Slice S2 of `.claude/notes/backend-decomposition-plan.md`. `pinned_themes`
+and `_theme_accent_cache` left `SessionManager` for `src/core/sessions/`.
+
+- `src/core/sessions/theme_store.py` (466) owns the pin map, its atomic
+  file, and the two-source resolution ladder.
+- `src/core/sessions/theme_accents.py` (116) owns the manifest accent
+  memo. COMPOSED, not inherited.
+- `src/core/sessions/theme_dotfile.py` (144) is the stateless `.cc.theme`
+  format: path, read, atomic write.
+- The plan called S2 "about 250 lines" in one class. It is 726 in three,
+  because the docstring standard roughly doubles the body and one class
+  holding all of it measured 573 lines, over the package's own 500 rule.
+  Split by concern rather than by line count.
+
+`session_manager.py` 8,317 -> 8,207 (-110).
+
+**The no-copy rule, four legs** (`tests/test_theme_store.py`). This
+cluster is dicts, not S1's scalars, so identity is meaningful - and still
+not sufficient on its own, because assigning `self.pinned_themes =
+store.pinned_themes` in `__init__` satisfies it and forks on the first
+rebind. (a) identity across all three spellings; (b) neither name is in
+the facade's instance `__dict__` and both are properties on the class;
+(c) writes cross in both directions INCLUDING a whole-dict rebind, which
+`tests/test_tmux_listing_consumers.py` really does; (d) a real
+`set_pinned_theme` round trip onto real disk, read back by a second store.
+
+**The landmine, and it was not a green-suite one.** Every theme test does
+`monkeypatch.setattr("src.core.session_manager.settings", stub)`. A store
+importing `settings` itself would not see that patch and would read and
+WRITE the owner's real `~/.cloude-sessions/pinned_themes.json` during a
+pytest run. The pin path is therefore an injected zero-argument callable
+resolved at call time, which is what the loose methods did anyway.
+
+**A test that could no longer fail, fixed in the same commit.**
+`tests/test_toast_lifecycle.py` patched `SessionManager._themes_dir` to
+prove the accent cache serves a value after the manifest moves. Once the
+read moved, that patch bound a name nothing consults and the assertion
+would have passed over a manifest that never moved. Repointed at
+`ThemeAccents.themes_dir`, and `test_theme_store.py` carries a negative
+control that the patch actually changes the answer.
+
+**Mutations, all run and all reverted to a byte-identical tree.**
+- facade keeps its own copy of the map, run as TWO variants because the
+  weaker one is the one that matters. A `dict(...)` copy: 8 red across 4
+  files. A REFERENCE copy (`self.pinned_themes = store.pinned_themes`,
+  the naive fix): only 3 red, and leg (a) IDENTITY STAYED GREEN, along
+  with the in-place-write half of leg (c). Only leg (b) (no field on the
+  facade), the whole-dict rebind, and one real behaviour test
+  (`test_successful_empty_probe_still_prunes`) caught it. That is the
+  measurement behind "identity alone proves nothing here".
+- `save()` writes the temp and skips `os.replace`: 4 red.
+- `ThemeStore` imports `settings` instead of taking the provider: 6 red,
+  so the injection is load-bearing rather than ceremony.
+- accent cache reads a cached `None` as a miss: GREEN on the first
+  attempt, which is the useful result. The cache test asserted the return
+  value and the cache contents, and BOTH implementations agree on both:
+  each returns None and each writes None. What separates them is the
+  SECOND call. Test rewritten to publish the manifest after the None is
+  cached and assert the answer does not move; 1 red, reverted, green.
+  A mutation that fails to go red is the point of running it.
+
+**Measured in this worktree, control run by me rather than quoted.**
+Control 5,734 passed / 2 failed / 19 skipped. After: 5,778 / 2 / 19, same
+two environmental failures. Collection 5,755 -> 5,799, +44, ZERO removed:
+35 new in `test_theme_store.py`, 6 from the package-rules parametrisation
+(2 rules x 3 modules), 3 from `test_no_unresolved_names`. Node 200/200.
+Listing cost ceilings hold. `scan_secrets.py` exit 0.
+
+One full run also failed
+`test_session_restart_wrapper_choice.py::test_the_picked_wrapper_is_what_ends_up_in_the_pane`
+in its SETUP ("the pane did not exit" inside a 6s wait). It passes in
+isolation and passed on the immediate re-run of the full suite. Real tmux
+socket, INFRA-49 class, not this change.
+
+No protocol added. The plan names three; none is a substitution point
+here, and the one injection a test needs is a parameter, not a Protocol.

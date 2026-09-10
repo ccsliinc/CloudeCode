@@ -715,7 +715,21 @@ per server process and no subprocess at all.
   rather than remembered: nothing in there may import `session_manager`, and no
   file exceeds 500 lines. `ProbeHealthRecorder` (slice S1) is the worked
   example, and `ProbeHealth` is DEFINED there and re-exported from
-  `session_manager` so every existing import keeps resolving.
+  `session_manager` so every existing import keeps resolving. `ThemeStore`
+  (S2, with `theme_accents` and `theme_dotfile` beside it) is the worked
+  example for a cluster of DICTS, and it carries two rules the scalar one
+  could not teach. **A moved attribute that anything REBINDS needs a
+  property SETTER that writes through to the collaborator**: several tests
+  assign `mgr.pinned_themes = {...}` wholesale, and a read-only property
+  raises while a plain instance attribute silently shadows the property and
+  forks the two objects while every value assertion still passes. **And a
+  collaborator that does file I/O takes its path as a zero-argument
+  CALLABLE, not a `settings` import.** Every theme test redirects state with
+  `monkeypatch.setattr("src.core.session_manager.settings", stub)`, which
+  patches the name in THAT module; a collaborator importing `settings`
+  itself does not see it and reads and WRITES the developer's real
+  `~/.cloude-sessions` during a pytest run. Resolving the path at call time
+  is also exactly what the loose methods did.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in
