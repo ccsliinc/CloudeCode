@@ -53,6 +53,7 @@ from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
 from src.core.agent_wrapper_display import resolve_wrapper_for_display
 from src.core.session_agent_evidence import choose_agent_evidence
+from src.core.session_theme_resolution import resolve_theme
 from src.core import session_agent_infer_apply
 from src.core.session_agent_infer import restart_agent_type
 from src.core.hook_token_recovery import (
@@ -1418,25 +1419,25 @@ class SessionManager:
                 if persisted is not None:
                     self._save_session_metadata()
 
-        # SESSION-IDENTITY-V2 - prune pinned-theme entries whose tmux
-        # session is gone. Reaching this line already means the probe
-        # RAN (the ``listing.ok`` gate above returns early otherwise), so
-        # an empty ``tmux_alive`` here is a measured zero rather than an
-        # unanswered question. Prevents indefinite growth from sessions
-        # the user destroyed outside our UI (``tmux -L cloude
-        # kill-session``).
-        if self.pinned_themes:
-            dead_pins = {
-                name for name in self.pinned_themes if name not in tmux_alive
-            }
-            if dead_pins:
-                logger.info(
-                    "pinned_themes_pruning_dead",
-                    names=sorted(dead_pins),
-                )
-                for name in dead_pins:
-                    self.pinned_themes.pop(name, None)
-                self._save_pinned_themes()
+        # A PIN OUTLIVES ITS TMUX SESSION, AND THAT IS A POLICY CHANGE
+        # THAT CAME WITH THE READ ORDER. This pass used to drop every
+        # ``pinned_themes`` entry whose name was absent from the live
+        # listing. That was defensible only while the dotfile was the
+        # real store and this map was a decaying back-compat fallback:
+        # deleting a fallback costs nothing. Since ``pinned_themes.json``
+        # became the durable record of a session's theme
+        # (``resolve_project_theme``), the same prune is data loss - it
+        # would erase the user's deliberate choice for any session not
+        # running at the moment the reconcile happened, including every
+        # session on a box where the app started before tmux did, and the
+        # app re-mints tmux names from project slugs, so the pin would go
+        # missing on a name that is about to come back.
+        #
+        # Growth is bounded where the intent actually is: an entry is
+        # created only by a human picking a theme, and ``destroy_session``
+        # / ``destroy_external_session`` call ``discard_pinned_theme`` on
+        # the explicit close. A handful of stale short strings is a
+        # strictly smaller problem than a lost preference.
 
         # feat/hook-driven-status - same reconciliation for the persisted
         # unread store: a tmux session the user killed outside our UI
@@ -1830,19 +1831,48 @@ class SessionManager:
             logger.info(
                 "pinned_themes_loaded", count=len(self.pinned_themes)
             )
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
+            # Unreadable or unparseable. We start empty rather than crash
+            # boot over a preferences file, but the pins on disk are NOT
+            # gone: ``_save_pinned_themes`` copies the pre-write bytes to
+            # ``.bak`` before it replaces anything, so the next pin does
+            # not silently take the rest of them with it.
             logger.warning("failed_to_load_pinned_themes", error=str(exc))
 
     def _save_pinned_themes(self) -> None:
-        """Persist the pinned-theme map atomically.
+        """Persist the pinned-theme map: backup, then atomic replace.
 
-        Re-uses the same atomic-rename protocol as ``_save_session_metadata``
-        so a crash mid-write can never leave a half-written file at the
-        canonical path.
+        Copies ``Settings.update_settings_config()``: the pre-write bytes
+        go to ``pinned_themes.json.bak`` (one generation, overwritten each
+        call) BEFORE anything else, then temp file, ``fsync``,
+        ``os.replace``. The backup is not decoration here. This file is
+        the durable record of every session's theme, and
+        ``_load_pinned_themes`` deliberately starts from an EMPTY map when
+        it cannot parse what is on disk - so without a backup, one corrupt
+        read followed by one pin would write that empty map over the
+        user's entire set of pins with nothing left to recover from. A
+        reading that did not happen is not a reading of nothing.
+
+        Every failure is logged and swallowed: a preferences file that
+        will not write must not take a session pin, an adopt or a destroy
+        down with it.
         """
         path = settings.get_pinned_themes_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                try:
+                    path.with_suffix(path.suffix + ".bak").write_bytes(
+                        path.read_bytes()
+                    )
+                except OSError as exc:
+                    # A backup we could not take is worth saying out loud,
+                    # but it must not block the write the user asked for.
+                    logger.warning(
+                        "pinned_themes_backup_failed",
+                        path=str(path),
+                        error=str(exc),
+                    )
             tmp = path.with_suffix(path.suffix + ".tmp")
             with tmp.open("w") as f:
                 json.dump(self.pinned_themes, f, indent=2)
@@ -1852,7 +1882,7 @@ class SessionManager:
                 except OSError:
                     pass
             os.replace(str(tmp), str(path))
-        except Exception as exc:
+        except (OSError, TypeError, ValueError) as exc:
             logger.error("failed_to_save_pinned_themes", error=str(exc))
 
     # ---- read/unread persistence (feat/hook-driven-status) ---------------
@@ -1970,12 +2000,24 @@ class SessionManager:
     ) -> None:
         """Persist (or clear) the pinned theme for a tmux session name.
 
-        ``theme_id`` None or empty clears the pin. Always persists - a
-        cleared pin must round-trip across server restart same as a set
-        one. Mirrors onto the live in-memory ``Session.pinned_theme``
-        when the named session is the currently-active backend, so a
-        subsequent ``get_session_info()`` reflects the change without
-        requiring a re-load from disk.
+        ``pinned_themes.json`` IS THE DURABLE SOURCE OF TRUTH FOR A
+        SESSION'S THEME, and ``resolve_project_theme`` reads it first.
+        The directory's ``.cc.theme`` is the PROJECT DEFAULT and is a
+        separate, lower rung - see ``set_project_theme``.
+
+        ``theme_id`` None or empty clears the pin, which drops this
+        session back to its project default rather than to nothing.
+        Always persists - a cleared pin must round-trip across a server
+        restart the same as a set one. Mirrors onto the live in-memory
+        ``Session.pinned_theme`` when the named session is the
+        currently-active backend, so a subsequent ``get_session_info()``
+        reflects the change without requiring a re-load from disk.
+
+        Args:
+            tmux_name: The bare tmux name, never a session id. An
+                adopted session's id is ``adopted:<tmux-name>`` and would
+                key a pin nothing ever reads back.
+            theme_id: The theme to pin, or None/empty to clear.
         """
         if not tmux_name:
             return
@@ -1994,8 +2036,9 @@ class SessionManager:
                     sess.pinned_theme = theme_id
                     # Persist into session_metadata so a server-restart
                     # rehydrate path keeps the in-memory mirror coherent
-                    # (belt-and-suspenders; durable source of truth is
-                    # ``pinned_themes.json`` - adopt seeds from there).
+                    # (belt-and-suspenders; the durable source of truth
+                    # is ``pinned_themes.json`` - every seeding path
+                    # reads it back through ``resolve_project_theme``).
                     self._save_session_metadata(sess)
                 break
 
@@ -2010,20 +2053,28 @@ class SessionManager:
             self.pinned_themes.pop(tmux_name, None)
             self._save_pinned_themes()
 
-    # ---- project-scoped theme (v0.7.0 - .cc.theme dotfile) -------------
+    # ---- project-scoped theme (the .cc.theme dotfile) ------------------
     #
-    # The source of truth for a project's theme is ``<working_dir>/.cc.theme``
-    # (a single-line file containing the theme id + trailing newline). This
-    # supersedes the per-tmux-name ``pinned_themes.json`` map for the
-    # multi-machine use case: two browsers / two machines pointed at the
-    # same checkout converge on the same theme without round-tripping a
-    # per-machine cache.
+    # ``<working_dir>/.cc.theme`` (a single-line file holding the theme id
+    # plus a trailing newline) is a PROJECT DEFAULT, not a session's pin.
+    # It is what gives a checkout its colours before any session exists,
+    # what two browsers or two machines pointed at one checkout converge
+    # on, and the only one of the two stores a user can commit or hand to
+    # somebody else.
     #
-    # ``pinned_themes.json`` is RETAINED as a back-compat fallback for one
-    # release so sessions pinned under v0.6.x still paint correctly.
-    # ``migrate_pinned_theme_to_dotfile`` is best-effort and runs on
-    # attach/adopt to ferry old entries into the new format. The old map
-    # is not deleted by migration - it decays naturally as users re-pin.
+    # IT IS THE LOWER RUNG. ``resolve_project_theme`` reads the
+    # per-session pin in ``pinned_themes.json`` FIRST and only falls
+    # through to this file for a session that has never been pinned. It
+    # shipped the other way round until 2026-09-10, which is why a pin did
+    # not survive a restart and why two sessions in one folder could never
+    # look different - see ``src/core/session_theme_resolution.py`` for
+    # the ladder and the reasoning.
+    #
+    # NOTHING SESSION-SCOPED MAY WRITE HERE. A per-session pin that also
+    # wrote this file would retheme every OTHER session in the folder,
+    # which is the defect itself wearing the fix's clothes. The theme
+    # PATCH writes the pin alone; this file is set deliberately, by hand
+    # or by a caller that means "this project's default".
 
     @staticmethod
     def _project_theme_path(working_dir) -> Optional[Path]:
@@ -2041,19 +2092,24 @@ class SessionManager:
             return None
 
     def get_project_theme(self, working_dir) -> Optional[str]:
-        """Read ``<working_dir>/.cc.theme``; fall back to pinned_themes.json.
+        """Read this directory's ``.cc.theme`` project default.
 
-        Resolution order:
-          1. ``<working_dir>/.cc.theme`` (v0.7.0+ project-scoped source of truth)
-          2. ``pinned_themes.json`` keyed by the bare tmux name - but ONLY
-             when a caller already supplied ``working_dir`` *and* no
-             dotfile exists. This branch is the read-time back-compat
-             fallback for sessions pinned under v0.6.x.
+        This is ONE STORE'S ANSWER, not the effective theme for a
+        session. It knows nothing about per-session pins and deliberately
+        cannot see them. Callers that want the theme a session should
+        actually paint call ``resolve_project_theme``, which asks this
+        only after the session's own pin has come back empty.
 
-        Step 2 cannot be performed here without a tmux name; this method
-        only does the dotfile read. Callers that need the JSON fallback
-        should call ``get_pinned_theme(tmux_name)`` themselves and prefer
-        whichever they receive. Returns None when nothing is pinned.
+        Args:
+            working_dir: The directory to read. Canonicalised by
+                ``_project_theme_path``, so two spellings of one folder
+                (gotcha 6, a symlink into iCloud) read the same file.
+
+        Returns:
+            The theme id, or None when the folder carries no default. A
+            file that exists but cannot be READ also returns None and
+            logs; it is the lower rung, so the worst that costs is the
+            default, never a pin.
         """
         path = self._project_theme_path(working_dir)
         if path is None or not path.exists():
@@ -2070,9 +2126,14 @@ class SessionManager:
         return content or None
 
     def set_project_theme(self, working_dir, theme_id: Optional[str]) -> None:
-        """Atomically write/clear ``<working_dir>/.cc.theme``.
+        """Atomically write/clear this directory's ``.cc.theme`` default.
 
-        Empty/None ``theme_id`` deletes the dotfile (clears the pin).
+        THIS WRITES A FOLDER-WIDE VALUE. Every session in the directory
+        that has no pin of its own reads it, so calling this to record
+        ONE session's choice rethemes its neighbours. Per-session pins go
+        through ``set_pinned_theme``.
+
+        Empty/None ``theme_id`` deletes the dotfile (clears the default).
         Otherwise writes ``<theme_id>\\n`` with mode 0o644 via
         ``tmp + os.replace`` so a crash mid-write can never leave a
         half-written file at the canonical path.
@@ -2141,89 +2202,44 @@ class SessionManager:
                 pass
             raise
 
-    def migrate_pinned_theme_to_dotfile(self, session) -> bool:
-        """Ferry a v0.6.x pinned_themes.json entry into ``.cc.theme``.
-
-        Runs on attach/adopt when:
-          - ``<session.working_dir>/.cc.theme`` does NOT exist, AND
-          - ``pinned_themes.json`` has an entry for ``session.tmux_session``
-            (or the trailing component of ``session.id`` for owned sessions).
-
-        Best-effort: any exception is logged and swallowed so the
-        attach/adopt path is never broken by a failed migration. The
-        legacy map entry is intentionally NOT deleted - let it decay
-        naturally; this release keeps it as a read-time fallback.
-
-        Returns True on successful migration, False otherwise.
-        """
-        if session is None:
-            return False
-        working_dir = getattr(session, "working_dir", None)
-        if not working_dir:
-            return False
-        try:
-            path = self._project_theme_path(working_dir)
-            if path is None:
-                return False
-            # If the dotfile already exists, the new format wins - nothing
-            # to migrate.
-            if path.exists():
-                return False
-            # Working dir must actually exist on disk before we'd write to it.
-            if not path.parent.is_dir():
-                logger.debug(
-                    "migrate_pinned_theme_skipped_no_dir",
-                    working_dir=str(working_dir),
-                )
-                return False
-            # Resolve the legacy key. Prefer the explicit ``tmux_session``
-            # field (canonical pin handle); fall back to the trailing
-            # component of ``session.id`` for adopted rows pre-PIN-FIX.
-            tmux_name = getattr(session, "tmux_session", None)
-            if not tmux_name:
-                sid = getattr(session, "id", "") or ""
-                if sid.startswith("adopted:"):
-                    tmux_name = sid[len("adopted:"):]
-                else:
-                    tmux_name = sid
-            if not tmux_name:
-                return False
-            legacy_pin = self.pinned_themes.get(tmux_name)
-            if not legacy_pin:
-                return False
-            self.set_project_theme(working_dir, legacy_pin)
-            logger.info(
-                "theme_migrated_to_dotfile",
-                session_id=getattr(session, "id", None),
-                working_dir=str(working_dir),
-                tmux_name=tmux_name,
-                theme_id=legacy_pin,
-            )
-            return True
-        except Exception as exc:
-            logger.warning(
-                "theme_migration_failed",
-                session_id=getattr(session, "id", None),
-                working_dir=str(working_dir),
-                error=str(exc),
-            )
-            return False
-
     def resolve_project_theme(
         self, working_dir, tmux_name: Optional[str] = None
     ) -> Optional[str]:
-        """Combined lookup: dotfile first, then JSON fallback by tmux name.
+        """The effective theme for a session: its own pin, else the folder's.
 
-        Convenience wrapper for callers (create_session / adopt) that want
-        a single call returning the effective pin without writing migration
-        glue at every call site.
+        THE PER-SESSION PIN WINS. ``pinned_themes.json`` records a theme
+        the user chose for THIS conversation; ``<working_dir>/.cc.theme``
+        records the default the FOLDER carries. A default that outranks
+        an explicit choice is not a default, it is an override, and until
+        2026-09-10 that is exactly what this function implemented: it read
+        the dotfile first, so every server restart and every boot re-adopt
+        threw away a per-session pin that was sitting on disk the whole
+        time, and two sessions in one folder could never hold two
+        different themes.
+
+        The ordering itself lives in ``session_theme_resolution`` as a
+        pure function, so the three seeding call sites (create, adopt,
+        boot re-adopt) cannot drift into three orderings.
+
+        Args:
+            working_dir: The session's working directory. Supplies the
+                project default via ``get_project_theme``.
+            tmux_name: The bare tmux name this session is pinned under.
+                None for a caller that has no name to key on, which
+                simply skips the pin rung.
+
+        Returns:
+            The theme id to paint, or None when neither store holds one.
+
+        Example:
+            >>> mgr.resolve_project_theme(work_dir, "cloude_Shopify")
+            'blade_runner'
         """
-        dotfile = self.get_project_theme(working_dir)
-        if dotfile is not None:
-            return dotfile
-        if tmux_name:
-            return self.get_pinned_theme(tmux_name)
-        return None
+        pinned = self.get_pinned_theme(tmux_name) if tmux_name else None
+        return resolve_theme(
+            pinned=pinned,
+            project_default=self.get_project_theme(working_dir),
+        ).theme_id
 
     # ---- toast notifications (v0.7.0 Part 2) ----------------------------
     #
@@ -3636,10 +3652,11 @@ class SessionManager:
             # defense-in-depth for any future backend that omits `.pid`.
             pid = getattr(backend, "pid", None)
 
-            # v0.7.0 - seed pinned_theme from ``<work_path>/.cc.theme`` (or
-            # legacy ``pinned_themes.json`` for the tmux name when no
-            # dotfile exists). New projects without a pin yield None,
-            # which is the original behavior.
+            # Seed pinned_theme from this name's own pin in
+            # ``pinned_themes.json``, falling back to the folder's
+            # ``.cc.theme`` default when the name has never been pinned.
+            # A brand new project with neither yields None, which is the
+            # original behavior.
             prior_pin = self.resolve_project_theme(work_path, tmux_session_name)
             new_session = Session(
                 id=session_id,
@@ -3658,16 +3675,6 @@ class SessionManager:
             )
 
             self._register_session(new_session, backend)
-            # Best-effort: ferry any legacy pinned_themes.json entry into
-            # the dotfile so subsequent restarts read from the new source
-            # of truth. Read-then-migrate ordering keeps the read above
-            # deterministic when both exist.
-            try:
-                self.migrate_pinned_theme_to_dotfile(new_session)
-            except Exception as exc:  # pragma: no cover - helper swallows
-                logger.debug(
-                    "post_create_migrate_unexpected_throw", error=str(exc)
-                )
 
             # Track 1: record tmux-backend ownership so a post-create crash
             # still leaves the name recoverable from ``session_metadata.json``
@@ -4345,10 +4352,11 @@ class SessionManager:
           * ``owned_tmux_sessions`` re-keyed (drop old, add new) for owned
             sessions. Adopted sessions keep their ``adopted:<old_name>`` id
             but the in-memory ``Session.tmux_session`` carries the new name.
-          * ``pinned_themes`` map re-keyed (drop old, add new) so a v0.6.x
-            downgrade still finds the pin under the new name. v0.7.0 themes
-            live in ``<working_dir>/.cc.theme`` keyed by cwd, so the
-            authoritative project theme is unaffected by the rename.
+          * ``pinned_themes`` map re-keyed (drop old, add new). This is
+            the session's durable theme and it is keyed on the NAME, so
+            the re-key is what keeps a renamed session painting what the
+            user pinned it to rather than falling back to its folder's
+            default.
           * ``session_metadata.json`` re-persisted so a restart rehydrate
             sees the new name.
 
@@ -4412,11 +4420,13 @@ class SessionManager:
             self.owned_tmux_sessions.discard(old_name)
             self.owned_tmux_sessions.add(new_name)
 
-        # Re-key the deprecated pinned-themes map. v0.7.0's project theme
-        # ``.cc.theme`` is keyed by working_dir (unaffected by rename), but
-        # the legacy per-tmux-name JSON map needs to follow the name so a
-        # downgrade-to-v0.6.x doesn't lose the pin. ``self.pinned_themes``
-        # is the in-memory mirror of that file.
+        # RE-KEY THE PIN ONTO THE NEW NAME. ``pinned_themes`` is keyed on
+        # the tmux name and is the store ``resolve_project_theme`` reads
+        # FIRST, so leaving the entry under the old name silently demotes
+        # a renamed session to its folder's ``.cc.theme`` default on the
+        # next restart. The dotfile is keyed on working_dir and a rename
+        # does not move it. ``self.pinned_themes`` is the in-memory
+        # mirror of the file.
         if old_name in self.pinned_themes:
             theme_id = self.pinned_themes.pop(old_name)
             self.pinned_themes[new_name] = theme_id
@@ -7200,10 +7210,10 @@ class SessionManager:
                 )
 
         # Step 5 - register.
-        # v0.7.0 - project-scoped theme lookup: ``<working_dir>/.cc.theme``
-        # is the source of truth. ``pinned_themes.json`` is read as a
-        # back-compat fallback only when no dotfile exists; the
-        # migration helper below ferries old entries into the new format.
+        # This name's own pin in ``pinned_themes.json`` first, then the
+        # folder's ``.cc.theme`` default when it has never been pinned.
+        # Re-adopting a session must return the theme it was pinned to,
+        # which is exactly what the old dotfile-first order threw away.
         prior_pin = self.resolve_project_theme(working_dir, name)
         # fix/adopt-response-pid - ``_session_info_for`` still resolves
         # ``pty_pid`` LIVE on every subsequent read (a tmux pane's
@@ -7241,13 +7251,6 @@ class SessionManager:
             tmux_session=name,
         )
         self._register_session(adopted_session, backend)
-        # Best-effort migration AFTER the read so the read remains
-        # deterministic (dotfile beats JSON when both exist post-migration).
-        # Failures here are logged + swallowed; never block adopt.
-        try:
-            self.migrate_pinned_theme_to_dotfile(adopted_session)
-        except Exception as exc:  # pragma: no cover - helper already swallows
-            logger.debug("post_adopt_migrate_unexpected_throw", error=str(exc))
 
         # v0.7.0 Part 3 - mint a hook token for the adopted session and
         # best-effort push the env into the live tmux session via
