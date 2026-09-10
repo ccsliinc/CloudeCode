@@ -7,6 +7,94 @@ is the whole point and the source of most of the interesting design.
 
 Read this before writing code here. It is orientation first, conventions second.
 
+## THE SPELLING "Cloude" IS DELIBERATE. NEVER CORRECT IT.
+
+This product is called **Cloude Code**, one letter off "Claude Code", and that
+is on purpose. Measured 2026-09-10: **214 files** in this tree carry the
+spelling (`grep -rl "Cloude" .`, excluding the repository metadata directory,
+`venv` and `node_modules`). It looks exactly like a typo that propagated, which
+is why this warning is the first thing in the file rather than an entry in the
+gotchas list at the bottom.
+
+A rename is NEVER in scope for a tidying, linting, typo-fixing or naming
+consistency pass. It is not a small change and it is not reversible by a second
+find-and-replace, because the string is load bearing in places that are not
+prose:
+
+- **The tmux socket, `tmux -L cloude`.** Every session this app owns lives on
+  that socket. Rename it and the server addresses a socket with nothing on it,
+  while the user's live panes carry on running somewhere it can no longer see.
+- **The session name prefix, `cloude_*`** (`SESSION_PREFIX`,
+  `src/core/tmux_backend.py`). Discovery, adoption, the boot re-adopt and the
+  recreate gate all scope themselves by that prefix. Change it and every
+  existing session becomes invisible to its own app.
+- **The database filename, `cloude.db`**, and the state directory
+  `~/Library/Application Support/cloude-code-menubar/`. Rename either and the
+  app boots onto an empty database beside the real one, losing every project
+  binding, title, pinned theme and unread flag on disk.
+- **The Electron bundle id, `com.cloudecode.menubar`** (`macOS/package.json`).
+  macOS keys permissions, the login item and the app's own container on that
+  id. A changed bundle id is a different application to the operating system.
+- **Every environment variable, `CLOUDE_*`**, and every log event name a
+  running install and its already-installed hook block emit today.
+
+So the blast radius of "fixing the typo" is: the sessions the user is currently
+working in, their entire database, and the app's identity to macOS. If you were
+told to fix typos, this is not one of them. If a document, a comment, a path or
+a variable reads `Cloude`, leave it.
+
+The same prohibition is carried by `.github/ISSUE_TEMPLATE/task.yml` and by
+`.claude/skills/work/SKILL.md`. Both of those are opt-in and reach only an
+agent that happens to read them. This file is the one every agent loads, which
+is why a third copy is correct rather than duplication.
+
+## Every document in `docs/`, and when to read it
+
+CLAUDE.md is the only entry point guaranteed to be loaded, so a document it
+does not name is effectively invisible: a clean-context agent will re-derive
+what the file already says, or contradict it. Gotcha 8 below is the argument -
+a doc nobody can find is a missing doc that still costs maintenance.
+
+This table is the routing layer. Read the one that answers your question; do
+not read all 27.
+
+| Document | Read it when |
+|---|---|
+| `docs/DECISIONS.md` | **Before you re-litigate any design choice.** Standing rulings from Adam, who owns the code and is the sole tie-breaker. A ruling binds both parties and both sides' agents. This is the file that says double-click rename stays. |
+| `docs/LESSONS.md` | Before you debug something that feels familiar. Defect shapes that have bitten this project more than once, with the evidence. Add one when a pattern REPEATS; once is an incident, twice is a pattern. |
+| `docs/session-status.md` | Anything about the status lights. The single source of truth for the state model, the two rings, the five colours and where each fact is stored. |
+| `docs/session-status-model.md` | You need the transition-by-transition derivation. Four independent state machines, every state citing the symbol it was read out of, drift-tested by `tests/test_status_model_chart_drift.py`. |
+| `docs/notifications.md` | Anything about toasts. Raising is global, dismissing is per session, and those are independent axes. |
+| `docs/alert-state-model.md` | You are designing alerting. DESIGN ONLY, nothing in it is built, and it deliberately disagrees with `docs/session-status-model.md` in two places. Read that one first. |
+| `docs/session-project-operations.md` | You need to know what an operation does to a session row, a project row and the tmux session underneath. Every node cites the symbol it came from. |
+| `docs/project-reconcile.md` | The project list looks wrong after an upgrade. Written after a round trip actually lost rows. |
+| `docs/session-attribution-import.md` | Sessions are reported as external that the launcher itself created. DESIGN ONLY, not implemented. |
+| `docs/reconnect.md` | The terminal repaints wrong after sleep, wake or a dropped socket. Names the two re-attach paths, which behave differently. |
+| `docs/ci.md` | You need to know what CI runs and what it does when a secret it needs is missing. Read it with the CI status paragraph under "How we work here", which says whether it is switched on at all. |
+| `docs/debugging.md` | You need logs. The `CLOUDE_DEBUG=1` switch, from source and inside the packaged app. |
+| `docs/secret-scanning.md` | You are touching the pre-commit hook, `.gitleaks.toml`, or `scripts/scan_secrets.py`. Carries the incident that caused all three. |
+| `docs/test-artifact-cleanup.md` | You are removing a test session or project. It leaves traces in SEVEN places, and killing the tmux session clears exactly one of them. |
+| `docs/upgrade-with-claude.md` | You are upgrading an install. The runbook `/upgrade` follows. Take the baseline FIRST. |
+| `docs/upgrade-downgrade-roundtrip.md` | You are asking whether the previous version can be dropped back in. Answered by executing the round trip, not by reading the migration's own promises. |
+| `docs/deploy-mini.md` | You are pushing this code to the `mac-mini-m4` dev box. A developer tool, NOT the end-user upgrade path. |
+| `docs/deployment-docker.md` | You are running the server as a pure container. Operator facing. |
+| `docs/ios-simulator-testing.md` | You changed anything that renders on a phone. Names the three things desktop responsive emulation cannot show you. |
+| `docs/ios-standalone.md` | You are working on add-to-home-screen. What works over plain http, and what needs TLS. |
+| `docs/perf-baseline-2026-09-10.md` | You need a number to judge a performance change against. Read its machine-load note before quoting any absolute figure. |
+| `docs/webui-performance-and-session-menu-plan.md` | You picked up an issue carrying a `phase:N` label. This is the plan those issues were cut from, with the audit that justified it. |
+| `docs/message-browser-api.md` | You are building the archive browser's server. DESIGN SPEC, not implemented. |
+| `docs/message-browser-ui.md` | You are building the archive browser's client. DESIGN SPEC, not implemented. |
+| `docs/message-model-gate.md` | You are touching the message model's ingest gate or `src/core/message_gate_contract.py`. |
+| `docs/jsonl-shape-inventory.md` | You are writing a test against the transcript archive and need a real exemplar of a given line shape. |
+| `docs/help-content-audit.md` | You are rewriting the launchpad help copy. |
+
+Two rules keep this table honest. **Unreferenced is not unused**, so do not
+delete or move a file in `docs/` because it looks orphaned. And **a new file in
+`docs/` gets a row here in the same change**, or it is invisible on the day it
+is written, which is the failure this table exists to end.
+`tests/test_docs_index.py` fails the build if a `docs/*.md` file is not named
+in this file, on the same principle as `tests/test_no_remote_assets.py`.
+
 ## Stack
 
 | Layer | What | Where |
@@ -318,6 +406,54 @@ the bytes end in `ESC[3;6H` proves only that the string was formatted.
 pre-write bytes first, then temp file, `fsync`, `os.replace`. A half-written
 `config.json` costs the user their whole setup, so there is no "just dump the
 JSON" shortcut anywhere in this codebase.
+
+**THE LOCAL SERVER DETECTOR IS FULLY WIRED, HAS NO CLIENT, AND IS KEPT ON
+PURPOSE.** `LocalServersTracker` (`src/core/local_servers.py`) scrapes a port
+number out of pane output, validates it with `is_valid_dev_port`, probes it
+with `port_is_listening`, and broadcasts `local_server_detected` /
+`local_server_lost` over the WebSocket. It is constructed, attached and started
+at boot (`src/main.py:537-539`), stopped on shutdown (`:776-777`), read by
+`GET /sessions/{session_name}/local-servers` (`src/api/routes.py:2614`) and
+cleared when a session is destroyed (`:963`). **The owner ruled it STAYS.** Do
+not remove the tracker, the route, the two WebSocket message models
+(`src/models.py:1818, 1826`) or the model fields, and do not disable the
+janitor. It is dead code retained deliberately, which is not the same thing as
+dead code nobody noticed, and this paragraph exists so a dead-code sweep can
+tell the two apart.
+
+Nothing in `client/` has consumed it since `4ee2f44` removed the panel.
+Grepping `client/` for `local_server`, `localServer` or `local-servers` finds
+only comments: three in `terminal-resize-settle.js`, `terminal-away-bar.js` and
+`terminal-away-bar.css` citing `#localServersContainer` as the worked example
+of why a panel must never sit IN FLOW beside `.terminal-container` (it was
+toggled on every fetch, so it reflowed the terminal under the user), plus one
+unrelated CSS accent comment. So the route and both WebSocket messages are live
+and unread. **Do not put any panel back in flow beside the terminal container.**
+
+**AND THE `local_servers` FIELD ON THE API IS HARDCODED EMPTY, SO IT DOES NOT
+REFLECT WHAT THE TRACKER KNOWS.** `SessionInfo.local_servers` and
+`SessionStats.local_servers` (`src/models.py:229, 236`) are assigned an empty
+value at all four assignment sites: `session_manager.py:4845` (`0`),
+`session_manager.py:5167` (`[]`), `routes.py:1459` (`[]`) and `:1461` (`0`).
+Those literals PREDATE the panel removal, so this is not a consequence of it.
+A client reading that field today is told, wrongly, that the session has no
+local servers while the tracker sitting beside it is detecting them. **Anyone
+reviving this feature must wire those four sites, not assume they work** - the
+tracker is the part that is correct, and an afternoon spent debugging it would
+be an afternoon spent on the wrong file. They are deliberately NOT wired here:
+reporting real detections to a client that does not read them is a behaviour
+change nobody asked for.
+
+The standing cost, measured rather than assumed, so it can be judged later: the
+janitor (`_janitor_loop`) wakes every `JANITOR_INTERVAL_SECONDS` (30.0) and
+re-probes only the ports it is ALREADY TRACKING, in a worker thread so a slow
+`connect_ex` cannot stall the event loop. State is in-memory and starts empty
+on every boot, and a port is tracked only after a pane actually prints one. So
+on a box where no session has printed a port the loop costs one wakeup every 30
+seconds and ZERO probes, not a sweep per session. That is small, and it is not
+nothing; the open question of whether it is worth paying while nothing reads
+the result is the owner's to answer, and it is written down here so he can
+answer it with the real number in front of him.
 
 ## The `/sessions/list` shape
 
@@ -708,21 +844,47 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-10 on `release/1.2.1` with `-p no:randomly`, is
-  **5656 passed / 2 failed / 19 skipped**. The same worktree read
+  2026-09-10 on `docs/6-meta-cluster` off `51f3489` with `-p no:randomly`,
+  is **5758 passed / 0 failed / 18 skipped**, and ZERO FAILED IS THE NEW
+  NUMBER TO HOLD: the two this file used to call permanently environmental
+  were diagnosed and fixed on that branch (see below), so a failure here is
+  now a real signal rather than one you are meant to recognise and ignore.
+  The reading before it was
+  **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`. The same worktree read
   **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
   **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
   this round added 15, with no new failures at either step. Note the SKIP COUNT MOVES BY ONE between
   runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
   22 is not a test that stopped being measured; the skip REASONS are what
-  to read, and `-p no:randomly` pins it at 21. Two failures remain, both environmental
-  and pre-existing:
+  to read, and `-p no:randomly` pins it at 21. Two failures this file used to name as
+  permanently environmental are FIXED as of 2026-09-10, by diagnosis rather
+  than by a skip, and the precondition behind each is written down because
+  nobody had ever recorded it:
+  `test_version_probe.py::test_current_version_empty_when_unresolvable`
+  asserts a directory with no version source resolves to `""`, and
+  `CLOUDE_APP_VERSION` is rung 1 of `resolve_version` and IGNORES the
+  directory entirely. It is exported in the developer's own shell, so the
+  test failed locally with `assert '0.8.1' == ''` and passed in CI, where
+  nothing exports it. It now clears the variable for that one test, and a
+  new test asserts the override outranks the directory so the rung has
+  coverage instead of being a trap.
+  `test_nuke_sandbox.py::test_dry_run_deletes_nothing` asserts a `--dry-run`
+  leaves the sandbox manifest bit-identical; `nuke.sh` falls through to the
+  `python3` on PATH, and when THAT interpreter lives inside a read-only
+  bundle CPython redirects bytecode caching to
+  `$HOME/Library/Caches/com.apple.python/...`, where HOME is the sandbox. The
+  dry run deleted nothing and still grew the manifest by 49 directories. On
+  this box `/usr/bin/python3` is the Xcode-bundled Python 3.9, which is
+  exactly that case; CI uses `actions/setup-python`, which writes
+  `__pycache__` beside the source. The fixture sets
+  `PYTHONDONTWRITEBYTECODE=1`, suppressing only `.pyc` writing, so anything
+  `nuke.sh` itself creates in HOME is still measured.
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
-  and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
-  The third this file used to name,
+  and
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
-  now PASSES; it was never fixed on purpose, so treat it as environmental
-  in both directions rather than as a guarantee.
+  which this file also used to name, both PASS. Neither was fixed on
+  purpose, so treat them as environmental in both directions rather than as
+  a guarantee.
   A CHECKOUT WITH NO `config.json` MANUFACTURES A FAKE FAILURE SET, and it
   is a big one: 19 failed plus 26 errored in a fresh `git worktree`, every
   one of them an app that could not start (401s from the test client,
@@ -748,7 +910,22 @@ per server process and no subprocess at all.
   minutes apart) - it drives the real `cloude` tmux socket, which is the
   same class of flakiness INFRA-49 already names. A lone failure there
   without a code change behind it is not a new regression; re-run before
-  chasing it. Node: **197 tracked suites, all 197 passing** (re-counted
+  chasing it. **THAT GROUP HAS A NAME NOW: the `real_tmux` marker**, 115 of
+  the 5776 collected tests, so `-m "not real_tmux"` gives a fast local loop
+  and `-m real_tmux` runs the contended group on its own, more than once,
+  because one pass proves nothing about a flake. It is applied
+  AUTOMATICALLY by `tests/conftest.py`, derived from the module importing
+  `tests/socket_guard.py` or the test requesting the `tmux_test_socket`
+  fixture, never hand-written on a test - a hand-kept list is wrong the
+  first time somebody adds a test without knowing the list exists. It
+  deliberately OVER-includes: marking a fast test costs a little coverage
+  in a loop that was never a full verification anyway, while missing a
+  real-tmux test puts a load-sensitive flake back into the fast loop. It
+  adds no skip, changes no timeout and touches no assertion, so a plain
+  `pytest` run collects and runs exactly what it did before, and
+  `-m "not real_tmux"` IS NOT A VERIFICATION RUN. No timeout was raised to
+  fix a flake: a timeout long enough never to flake is also long enough to
+  hide a real hang. See `docs/ci.md`. Node: **197 tracked suites, all 197 passing** (re-counted
   2026-09-09 at the 1.2 merge; v1.1 alone had 193, of which 2 failed).
   `test_archive_full_page_mode.node.mjs`, the one long-standing node
   failure this file used to name, is FIXED and now passes. The piped-stdin CLI helper for
@@ -756,6 +933,29 @@ per server process and no subprocess at all.
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
   exits non-zero when run with no input - which is what it used to be
   reported as, from `tests/led_state_for.node.mjs`, before the move.
+- **CI IS SWITCHED OFF, ON PURPOSE, AND YOUR LOCAL RUN IS THE ONLY EVIDENCE
+  THERE IS.** The owner's ruling, 2026-09-10, verbatim: "P25 - kill the CI".
+  Three workflows on `Adoom666/CloudeCodeDev` are `disabled_manually` -
+  `tests`, `secret scan` and `release`. `Claude Code Review` and `Claude Code`
+  are still active, because they are the review bot rather than CI.
+  **NO TEST WAS FAILING AND NO TEST WAS REMOVED.** Every run from
+  2026-09-10T13:47Z was refused BEFORE STARTING with "recent account payments
+  have failed or your spending limit needs to be increased": twelve
+  consecutive red runs, two workflows, four jobs each, none of which ever
+  executed, which is why `gh run view --log-failed` answers `log not found`.
+  **A check that could not run is not a check that failed**, the same
+  distinction as `StatusMap.complete`, the recreate gate's `gone` versus
+  `unknown`, and `db_integrity`'s `cannot_determine` versus `failed`. GitHub
+  renders both as a red X and emails both, so a human has to draw it.
+  The consequence, said plainly: `2b1fcb98` is the last commit CI ever tested,
+  everything after it including the v1.2.1 merge has never been through it,
+  and **nothing you write today will be checked by anything but you.** Run the
+  python suite and the node suites yourself, and say in the PR which ones you
+  actually ran. The workflow FILES are untouched, so reversing this is
+  `gh workflow enable <name> -R Adoom666/CloudeCodeDev` per workflow once the
+  billing is settled. Do not delete, `continue-on-error` or otherwise green a
+  workflow to quiet the board; that replaces a true "unknown" with a false
+  "passed". Details and the re-enable commands are in `docs/ci.md`.
 - **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
   launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
   against hooks it actually fired. It is off by default because it spends real

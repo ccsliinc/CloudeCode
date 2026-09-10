@@ -425,12 +425,92 @@ def run_for_session_count(n_sessions: int, quick: bool = False) -> dict:
                 page.wait_for_timeout(150)
 
                 # -- settings: the real settings panel --------------------- #
+                #
+                # #settingsBtn IS NOT IN THE HEADER ROW. It lives inside the
+                # header overflow dropdown, and that is why this step read
+                # n/a in every column of the 2026-09-10 baseline.
+                # client/js/header-menu.js re-parents both overflow controls
+                # (`HEADER_MENU_CONTROL_IDS` = logoutBtn, settingsBtn) into
+                # `#header-menu-panel` at `_fold()`, `applyLayout()` calls
+                # that unconditionally at EVERY width ("an overflow, not a
+                # responsive fold any more"), and the panel is created with
+                # `panel.hidden = true`.
+                #
+                # So the button really has no box until the kebab is opened,
+                # for the harness and for a human alike. That is why a
+                # `wait_for_selector(state="visible")` did not help and why
+                # `force=True` could not either: force bypasses hit-testing,
+                # not "has no box at all". The failure was deterministic
+                # rather than a race, which is what the baseline's own note
+                # meant when it said the cause is not simply timing.
+                #
+                # THE APP IS NOT AT FAULT AND THERE IS NOTHING TO FILE. The
+                # step was measuring an interaction nobody can perform. The
+                # real one is two clicks: open the overflow, then settings.
+                #
+                # The overflow is opened OUTSIDE the timed callback on
+                # purpose. measure_visible_box stamps t0 and then runs the
+                # action, so opening the menu inside it would bill the
+                # menu's own animation to "settings open" and the number
+                # would stop being about settings.
+                # IT HAS TO BE IDEMPOTENT AND IT HAS TO RETRY, and both of
+                # those came out of measuring rather than reading. The
+                # toggle TOGGLES, and this step cannot assume which state
+                # the previous pass left it in: header-menu.js collapses the
+                # panel when a control inside it is clicked, and Escape
+                # closes the panel as well as the settings modal. So a
+                # single unconditional click could just as easily shut the
+                # menu as open it, and a single conditional click can land
+                # while the settings modal is still on its way out and do
+                # nothing at all. Both were observed on the warm pass.
+                #
+                # THE CONDITION IS THE BUTTON, NOT THE PANEL. What this
+                # step needs is `#settingsBtn` clickable; the panel is only
+                # the mechanism. Keying on the panel would leave the loop
+                # trusting a proxy for the thing it actually wants.
+                def _overflow_is_open() -> bool:
+                    return bool(page.is_visible("#settingsBtn"))
+
+                def _open_header_overflow(attempts: int = 5) -> None:
+                    for _ in range(attempts):
+                        if _overflow_is_open():
+                            return
+                        perf_browser.click_tolerant(page, "#header-menu-toggle")
+                        try:
+                            page.wait_for_selector(
+                                "#settingsBtn", state="visible", timeout=1000
+                            )
+                            return
+                        except perf_browser.PlaywrightTimeoutError:
+                            # Only Playwright's own timeout is swallowed, and
+                            # only to take another attempt. If every attempt
+                            # fails the measurement below reports a
+                            # could-not-measure, which is the honest answer;
+                            # raising here would turn one unmeasured row into
+                            # a dead run.
+                            page.wait_for_timeout(150)
+
                 def _open_settings():
                     perf_browser.click_tolerant(page, "#settingsBtn")
 
                 def _close_settings():
+                    # WAIT FOR IT TO ACTUALLY BE GONE. The modal overlay
+                    # sits over the header, so re-opening the overflow while
+                    # it is still on screen clicks the overlay instead of
+                    # the toggle. Escape alone plus a fixed sleep was not
+                    # enough under load.
                     page.keyboard.press("Escape")
+                    try:
+                        page.wait_for_selector(
+                            "#settings-panel-body", state="hidden", timeout=3000
+                        )
+                    except perf_browser.PlaywrightTimeoutError:
+                        # Same reasoning as above: a close that did not
+                        # complete is for the next step's own retry to
+                        # survive, not for this helper to raise on.
+                        pass
 
+                _open_header_overflow()
                 result["settings_open_cold_ms"] = _safe(
                     "settings_open_cold",
                     lambda: perf_browser.measure_visible_box(page, "#settings-panel-body", _open_settings),
@@ -438,6 +518,7 @@ def run_for_session_count(n_sessions: int, quick: bool = False) -> dict:
                 )
                 _close_settings()
                 page.wait_for_timeout(150)
+                _open_header_overflow()
                 result["settings_open_warm_ms"] = _safe(
                     "settings_open_warm",
                     lambda: perf_browser.measure_visible_box(page, "#settings-panel-body", _open_settings),
