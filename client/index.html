@@ -1170,6 +1170,10 @@
          keep that file under the 500-line budget. Must load BEFORE it:
          the controller's handlers delegate straight into this. -->
     <script src="/static/js/session-sidebar-clicks.js"></script>
+    <!-- Entering a session dismisses its toast cards. Split out of
+         session-sidebar.js for the same 500-line reason, and must load
+         BEFORE it for the same reason: setActiveSession calls into this. -->
+    <script src="/static/js/session-entry-toasts.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->

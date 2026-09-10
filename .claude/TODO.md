@@ -5723,3 +5723,134 @@ the upstream this project may not push to, so a 1.2 install keeps being
 told it is behind a line it does not follow. No `v1.2.0` git tag was
 created here either; that is a separate deliberate act and the release
 workflow triggers on it.
+
+---
+
+## 2026-09-10 - release/1.2.1: adam's listing round merged, plus the two gaps that are ours
+
+Built in a throwaway worktree on `release/1.2.1`, branched from
+`release/1.2` (344da42). NOT deployed, NOT tagged, NOT pushed - that is
+the orchestrator's step after validation.
+
+### Per commit
+
+- **merge** - `adamdev/master` 2b1fcb9 into `release/1.2`. Every code file
+  auto-merged. The two conflicts were both documentation and both were
+  test baseline numbers: kept ours (measured on this tree) and folded in
+  his "take your own baseline on a clean tree" discipline. His corrected
+  "the tail read was claimed to be free in steady state and it was not"
+  paragraph replaces our falsified sentence, which is the one place his
+  text overrides ours and is the right way round, because he measured it.
+  README now carries 1.2.1 everywhere and keeps his rebuilt 1.0.36 dmg
+  hash attributed to upstream.
+- **fix(listing) socket scope** - `listing_proves_alive` was trusting a
+  listing from ONE socket to stand in for a probe of ANOTHER. `StatusMap`
+  carries its socket, the function takes the socket being asked about,
+  and unstated-or-mismatched refuses. New test on two real throwaway
+  sockets, same name alive on A and killed on B, with the PRE-FIX rule
+  reproduced inline so the file fails if the old behaviour returns.
+  Also hoisted `kq = None` above the try in `pipe_wakeup._try_watch`.
+- **perf(listing) gap A** - the status seed's `read_instance_row` opened a
+  connection per session on `/sessions/list`. It now answers from HIS
+  index, which grew the four seed columns rather than acquiring a rival.
+  `InstanceIndex` gained `complete` (the `StatusMap` discipline) so an
+  index that could not be BUILT falls back instead of answering "no row"
+  and blanking the ladder. The index is skipped entirely when no held
+  session is hookless, which is his own 2b1fcb9 correction on this path.
+- **perf(permission) gap B** - measured before changing anything, and the
+  briefed premise did not hold: `should_capture_permission_tail` is
+  FAIL-CLOSED at every rung, so a healthy box already spent zero here.
+  That is now a measurement over six sessions rather than a docstring
+  claim. What WAS real is the re-look, bounded by
+  `PERMISSION_TAIL_RECHECK_SECONDS = 30` through a ledger keyed on the
+  CLAIM, not the session, so the first look at a new claim is never
+  delayed.
+- **version + docs** - `macOS/package.json` 1.2.0 to 1.2.1 (confirmed the
+  only hand-written declaration). CLAUDE.md gains the listing-cost
+  paragraphs and a re-measured test baseline.
+
+### Measured, in-process against real tmux, one listing pass
+
+| n sessions | datastore opens | pass p50 | pass p99 |
+|---|---|---|---|
+| 12, before | 60 | 40.0 ms | 42.2 ms |
+| 12, after | 49 | 33.9 ms | 46.8 ms |
+| 19, before | 95 | 58.9 ms | 68.4 ms |
+| 19, after | 77 | 49.7 ms | 57.2 ms |
+
+"Before" is the same tree with the bulk index forced to report it could
+not be built, so the seam falls through to the per-row connection - the
+pre-round shape, on the same panes, in the same process. The index costs
+one open and saves one per session.
+
+TRUST THE COUNT, NOT THE MILLISECONDS. That timing is a warm local
+database with no rows in it and n=15 passes; the p99 at 12 sessions is
+higher after than before, which is noise at that sample size and is left
+in rather than dropped. tmux subprocesses were 1 per pass at both 12 and
+19 sessions, which is his fix holding: the pre-round shape was
+`2N + 1`, so 39 at 19 sessions.
+
+### What was NOT measured, and why
+
+- **No live measurement.** Nothing was deployed and the live box was not
+  touched. The figures this work is aimed at are the review's:
+  `/sessions/list` p50 270.1 ms / p99 418.5 ms with 19 sessions, and a
+  no-op `/health` going from p50 45.3 ms quiet to 181.9 ms while a
+  listing is in flight. Re-measure there after deploy.
+- **No local HTTP timing.** A local server needs a `.env`, and the only
+  one available points at the live state dir and the live `cloude` tmux
+  socket, which a boot re-adopt would then attach to. The in-process
+  measurement above measures the same thing (the synchronous pass, and
+  the event loop gap around it) without that risk.
+- **NEAR MISS WORTH RECORDING**: an ad-hoc probe script written outside
+  pytest read the PRODUCTION `cloude` socket, because `socket_guard`'s
+  subprocess guard is installed by conftest and an ad-hoc script does not
+  get it. It was read-only (`list-panes -a`) and nothing was written, and
+  it was caught by the socket name appearing in its own debug output.
+  Every measurement was redone under pytest. Do not write throwaway tmux
+  probes outside the suite.
+
+### Follow-ups this round measured but did not close
+
+1. **FOUR name-keyed per-row datastore readers remain on
+   `/sessions/list`**, attributed by caller at 19 sessions:
+   `_restored_activity_state` 19, `_identity_for_live_name` 19,
+   `_label_for_tmux_name` 19, `_owned_instances_from_db` 19. They are not
+   folded into the index because all four take "the newest instance of
+   this name" while the index keys on the full triple; answering them
+   from it would be a silent behaviour change in the duplicate-name case.
+   Closing them means giving them the epoch the pass already holds, or a
+   second name-keyed bulk read. `tests/test_listing_pass_datastore_cost.py`
+   pins the ceiling at `4N + 2` and names the reader that grew.
+2. **OWNER DECIDES** whether `STARTUP_TAIL_RECHECK_SECONDS = 30` is an
+   acceptable worst case for noticing a session that becomes stuck LATER
+   (claude quit and hand-restarted in a pane whose `pane_pid` does not
+   move). First looks are unthrottled. Carried over from the round-2
+   review, still open.
+3. **A SUPPRESSED TOAST IS RECORDED, UNACKED AND UNRENDERABLE.** His
+   `ToastManager.add()` drops a toast for the ACTIVE session while our
+   `StartupGateLedger.claim_toast` is once per instance and the server has
+   already recorded it open; `reconcileOpen` only removes cards the server
+   has closed, so it never re-materialises. For a permission or startup
+   prompt on the session the user is looking at, silence is the intent.
+   Recorded here rather than left to be found.
+4. **`client/js/session-sidebar.js` WAS AT EXACTLY ITS 500-LINE BUDGET**,
+   so his 8-line toast-dismissal addition broke
+   `tests/test_sidebar_sessions.node.mjs` on the merged tree (it passed on
+   his). Fixed by extracting the rule to
+   `client/js/session-entry-toasts.js` and collapsing two delegating
+   methods to the one-line form the two methods above them already use.
+   The file has three lines of headroom now; the next addition there
+   needs an extraction, not a trim.
+
+### Verification
+
+- pytest, full, `-p no:randomly`: **5656 passed / 2 failed / 19 skipped**.
+  The two failures are the same environmental pair the baseline names
+  (`test_home_write_guard`, `test_version_probe`). Merge point read
+  5641/2/19 and `release/1.2` read 5628/2/19 in this same worktree.
+- node, exactly as CI runs it: **197 suites, 0 failing**.
+- `node --check` on every JS file touched: toast.js, session-sidebar.js,
+  session-entry-toasts.js, macOS/main.js.
+- `scripts/scan_secrets.py`: exit 0. The pre-commit hook ran normally on
+  every commit, gitleaks gate included; `--no-verify` was not used.

@@ -934,6 +934,7 @@ await test('every new sidebar file stays under the 500-line budget', () => {
         ['js', 'session-sidebar.js'], ['js', 'session-sidebar-rows.js'],
         ['js', 'session-sidebar-arrangement.js'], ['js', 'session-sidebar-density.js'],
         ['js', 'session-sidebar-reorder.js'], ['js', 'session-sidebar-fetch.js'],
+        ['js', 'session-entry-toasts.js'],
         ['js', 'session-listing-state.js'], ['css', 'session-sidebar-density.css'],
         ['css', 'session-sidebar.css'],
     ];
@@ -949,6 +950,7 @@ await test('nothing added here uses an em-dash, an en-dash, or an emoji', () => 
         ['client', 'js', 'session-sidebar-density.js'],
         ['client', 'js', 'session-sidebar-reorder.js'],
         ['client', 'js', 'session-sidebar-fetch.js'],
+        ['client', 'js', 'session-entry-toasts.js'],
         ['client', 'js', 'session-listing-state.js'],
         ['client', 'js', 'session-sidebar-rows.js'],
         ['client', 'js', 'session-sidebar.js'],

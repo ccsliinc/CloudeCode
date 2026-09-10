@@ -468,6 +468,100 @@ identity and launch and the LAST for the title. Collapsing them would be a silen
 change in the duplicate case nobody looks at. **Measure what is actually wrong,
 not what the last fix happened to be.**
 
+**AND THE SAME PASS OPENS A SQLITE CONNECTION PER ROW, WHICH IS THE HALF
+HIS INDEX DID NOT REACH.** `session_instance_index` was wired to
+`/sessions/attachable` only. `/sessions/list` has the identical shape one
+layer down: the status seed ladder's
+`session_status_seed_read.read_instance_row` opens its OWN connection, per
+session, for four columns off the row found by the SAME instance triple
+the index already keys on. Measured in-process against real tmux with 19
+live panes, one pass: **95 datastore opens before, 77 after** - the index
+costs one and saves one per session - and the synchronous pass itself
+**58.9 ms p50 / 68.4 p99 to 49.7 / 57.2**. Trust the COUNT, not the
+milliseconds: that timing is a warm local database with no rows in it, and
+the live figure it is meant to explain is 270.1 ms p50 against 418.5 p99
+with a no-op `/health` inflating from 45.3 ms quiet to 181.9 ms while a
+listing is in flight. **THE COST IS A BURST, NOT A DRIP**, and saying so
+accurately is the point: `seeded_display` re-derives at most once per 60s
+per session, so about one poll in twelve reaches the read - but the seeds
+warm together and therefore EXPIRE together, so the shape is N synchronous
+opens landing inside ONE pass, which is what a p99 is made of.
+
+**`InstanceIndex` NOW CARRIES `complete`, AND THAT IS WHAT MAKES IT SAFE TO
+READ FROM.** An empty index is harmless for a DECORATION - a missing title
+renders as nothing, exactly what the per-row read produced when the
+datastore would not open - and is NOT harmless for the seed, where `None`
+means "this instance could not be identified" and would blank the status
+ladder for every session in the pass. So `complete` is True only when a
+query actually RAN, a real answer of zero rows included, and the seam reads
+the index only then; anything else falls through to the connection it was
+always opening. Same discipline as `StatusMap.complete`, same sentence
+underneath it: a reading that did not happen is not a reading of nothing.
+The four seed columns join the FIRST-row group in the duplicate-triple
+rule, because `read_instance_row` also took an unordered `fetchone()`.
+**AND THE INDEX IS SKIPPED WHEN NOTHING CAN USE IT**, which is his own
+`2b1fcb9` correction applied to this path: the seam is reached only inside
+`if not hooks_seen(session_id)`, so a box where every session has fired a
+hook would pay one connection to answer nobody. `hooks_seen` is a
+NECESSARY condition and not a sufficient one, so that gate may over-include
+and must never under-include.
+
+**FOUR PER-ROW READERS REMAIN ON THIS PASS AND ARE DELIBERATELY NOT
+FOLDED IN.** Measured and attributed by caller, 19 sessions:
+`_restored_activity_state` 19, `_identity_for_live_name` 19,
+`_label_for_tmux_name` 19, `_owned_instances_from_db` 19. Every one is
+NAME-KEYED with a recency rule ("the newest instance of this name") while
+the index is keyed on the full instance triple, so answering them from it
+would be a silent behaviour change in the duplicate-name case nobody
+looks at. Closing them means giving them the epoch the pass already holds,
+or a second name-keyed bulk read; that is real work and was not done here.
+`tests/test_listing_pass_datastore_cost.py` pins the ceiling at `4N + 2`
+and its failure message names WHICH reader grew - **raising that bound is
+re-introducing the defect with the alarm switched off.**
+
+**THE PERMISSION VERIFY WAS CHECKED AND ITS GATE WAS ALREADY RIGHT, WHICH
+IS WORTH KEEPING BECAUSE THE OBVIOUS READ WAS WRONG.**
+`verify_open_permission` is a third potential per-row `capture-pane` on
+this pass, and the expectation was that it carried the startup gate's
+defect. It does not, and the difference is the DIRECTION of the refusals.
+`should_capture_tail`'s "no hook on record" is FAIL-OPEN: the ledger is
+in-memory, so a missing record makes it PASS, which is how 13 of 13
+healthy sessions captured on every poll forever.
+`should_capture_permission_tail` is FAIL-CLOSED at every rung - no open
+claim, no stamp, no capture - so a box with no dialog on any pane spends
+nothing here, measured over six sessions rather than asserted. What WAS
+real is the RE-look: both verdicts that KEEP the flag leave the gate
+passing next poll, so a genuinely open claim paid one subprocess every 5s
+until a human answered it. `PERMISSION_TAIL_RECHECK_SECONDS = 30` bounds
+that and nothing else. **THE LEDGER IS KEYED ON THE CLAIM,
+`(session_id, permission_opened_at)`, NOT ON THE SESSION**: a new
+`PermissionRequest` carries a new stamp, finds no record and is read at
+once, so the throttle can never delay the FIRST look at a claim - which is
+the only thing that catches a flag no reachable event can retire, the
+adopted-id stuck bit of gotcha 10. A session-keyed record would have
+delayed exactly that case, silently. A window opens only after a capture
+ACTUALLY happened, so a refusal cannot throttle the first real look once a
+pane comes back.
+
+**AND A LISTING MAY ONLY VOUCH FOR THE SOCKET IT WAS TAKEN FROM.**
+`listing_proves_alive` replaces a `backend.is_alive()` that probed THE
+BACKEND'S OWN socket with a lookup in a listing taken from the PROBE'S. As
+merged, neither was compared. A tmux session NAME is not unique across
+sockets and this app mints names from project slugs, so a name present on
+the probe's socket would have vouched for a dead session held by a backend
+pinned elsewhere - a green `Connected` dot over a corpse, this project's
+recurring failure. `StatusMap` now carries the socket the listing came
+from, read off the probe so it can never claim one it did not come from,
+and the function takes the socket the caller is asking ABOUT. Unstated on
+either side, or a mismatch, REFUSES - and a refusal costs exactly the
+pre-fix probe, so refusing too often is free and answering across sockets
+is not. `tests/test_listing_liveness_socket_scope.py` measures it on two
+real throwaway sockets with one name alive on A and killed on B, and
+reproduces the PRE-FIX rule inline so the file fails if the old behaviour
+returns rather than only checking that a keyword argument exists. Its
+positive control is load-bearing: a backend on the listing's own socket
+must still skip its probe, or a fix that refused everything would pass.
+
 **THE PIPE READER WAKES ON THE APPEND NOW, AND THE 20ms IS A BACKSTOP.**
 `TmuxBackend._tail_loop` used to `asyncio.sleep(0.02)` on every empty read, which
 made that interval a FLOOR ON KEYSTROKE LATENCY - the echo lands at a uniformly
@@ -614,10 +708,11 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-09 at the 1.2 merge (v1.1 + adamdev/master 887b8fc), is
-  **5626 passed / 2 failed / 21 skipped**, against **5610 / 2 / 21** for
-  v1.1 alone measured in the same checkout minutes earlier - so the merge
-  added 16 tests and no failures. Note the SKIP COUNT MOVES BY ONE between
+  2026-09-10 on `release/1.2.1` with `-p no:randomly`, is
+  **5656 passed / 2 failed / 19 skipped**. The same worktree read
+  **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
+  **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
+  this round added 15, with no new failures at either step. Note the SKIP COUNT MOVES BY ONE between
   runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
   22 is not a test that stopped being measured; the skip REASONS are what
   to read, and `-p no:randomly` pins it at 21. Two failures remain, both environmental

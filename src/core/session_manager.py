@@ -5051,7 +5051,7 @@ class SessionManager:
         status_map = self._build_tmux_status_map()
         instance_index = self._instance_index_for_listing(
             socket=self._tmux_socket_name(),
-            names=self._listed_tmux_names(),
+            names=self._seed_candidate_tmux_names(),
         )
         out: list[SessionInfo] = []
         for sid in list(self.sessions.keys()):
@@ -5063,7 +5063,44 @@ class SessionManager:
         await self._flush_startup_toasts()
         return out
 
-    def _listed_tmux_names(self) -> list[str]:
+    def _seed_candidate_tmux_names(self) -> list[str]:
+        """The tmux names whose stored row this pass could actually read.
+
+        Description: THE INDEX MUST NOT COST MORE THAN IT SAVES, and on a
+          box where it saves nothing it must cost nothing. The seed seam
+          is reached only inside ``if not hooks_seen(session_id)``, so a
+          session whose hooks have spoken can never reach the row read
+          the index exists to replace. Building the index over those
+          would open ONE connection to answer nothing - which is exactly
+          the net cost `2b1fcb9` removed from the sibling listing after
+          measuring that it returns zero rows on a settled box.
+
+          ``hooks_seen`` is a NECESSARY condition, not a sufficient one:
+          the seam also needs the status to still be ``unknown`` and the
+          pane measured LIVE, and neither is known before the loop runs.
+          So this can over-include and never under-include, which is the
+          right direction - under-including would silently push a session
+          back onto its own connection.
+
+          A tracker that cannot be read yields every name rather than
+          none. Not being able to tell is not evidence that nobody needs
+          the index.
+        Inputs: none.
+        Output: list[str] - possibly empty, in which case no connection
+          is opened at all.
+        Example: mgr._seed_candidate_tmux_names() -> ['cloude_a']
+        """
+        tracker = getattr(self, "_activity_tracker", None)
+        names = self._listed_tmux_names_by_session()
+        if tracker is None or not hasattr(tracker, "hooks_seen"):
+            return [name for _sid, name in names]
+        return [
+            name
+            for session_id, name in names
+            if not tracker.hooks_seen(session_id)
+        ]
+
+    def _listed_tmux_names_by_session(self) -> list[tuple]:
         """Every tmux name this pass may need a stored row for.
 
         Description: read off the BACKENDS, which is where
@@ -5082,19 +5119,22 @@ class SessionManager:
           listing would refuse the seed for any registered session the
           listing did not name, which is a different set.
         Inputs: none.
-        Output: list[str] - deduplicated, order preserved, no falsy entries.
-        Example: mgr._listed_tmux_names() -> ['cloude_a', 'cloude_b']
+        Output: list[tuple[str, str]] - (session_id, tmux_name) pairs,
+          deduplicated by NAME, order preserved, no falsy entries.
+        Example: mgr._listed_tmux_names_by_session() -> [('ses_1', 'cloude_a')]
         """
         hook_names = getattr(self, "_hook_tmux_names", None) or {}
-        names: list[str] = []
+        pairs: list[tuple] = []
+        seen: set = set()
         for session_id in list(self.sessions.keys()):
             backend = self.backends.get(session_id)
             name = getattr(backend, "tmux_session", None) or hook_names.get(
                 session_id
             )
-            if name:
-                names.append(name)
-        return list(dict.fromkeys(names))
+            if name and name not in seen:
+                seen.add(name)
+                pairs.append((session_id, name))
+        return pairs
 
     async def _flush_startup_toasts(self) -> None:
         """Broadcast startup-prompt toasts queued by the sync listing pass.

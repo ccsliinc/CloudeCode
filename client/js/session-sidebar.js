@@ -182,22 +182,15 @@ class SessionSidebarController {
     /**
      * Description: record which session is currently attached so the row
      *   list can mark it active and the click handler can no-op on a
-     *   self-click. This is also the single source of truth ToastManager
-     *   reads to decide whether a session's own notifications are "news" -
-     *   see client/js/toast.js `_isActiveSession` - so switching into a
-     *   session clears whatever card is still showing for it: the user is
-     *   looking at it now, so a card about it is stale the instant this
-     *   runs.
+     *   self-click, and dismiss its toast cards - the rule, and why it is
+     *   a file of its own, are in client/js/session-entry-toasts.js.
      * Inputs: sessionId (string|null), tmuxName (string|null).
      * Output: void.
      */
     setActiveSession(sessionId, tmuxName) {
         this._activeSessionId = sessionId || null;
         this._activeTmuxName = tmuxName || null;
-        if ((this._activeSessionId || this._activeTmuxName) && window.ToastManager
-            && typeof window.ToastManager.dismissForSessionEntry === 'function') {
-            window.ToastManager.dismissForSessionEntry(this._activeSessionId, this._activeTmuxName);
-        }
+        window.SessionEntryToasts?.dismissFor(this._activeSessionId, this._activeTmuxName);
         if (this.isOpen) this._fetchAndRender();
     }
 
@@ -491,17 +484,13 @@ class SessionSidebarController {
      * Description: toggle the manual unread flag for one row.
      * Inputs: toggleEl (Element). Output: Promise<void>.
      */
-    async _onMarkUnreadClick(toggleEl) {
-        await window.SessionSidebarClicks.onMarkUnreadClick(this, toggleEl);
-    }
+    async _onMarkUnreadClick(toggleEl) { await window.SessionSidebarClicks.onMarkUnreadClick(this, toggleEl); }
 
     /**
      * Description: run a row's destructive action (close or remove).
      * Inputs: btnEl (Element). Output: Promise<void>.
      */
-    async _onRowActionClick(btnEl) {
-        await window.SessionSidebarClicks.onRowActionClick(this, btnEl);
-    }
+    async _onRowActionClick(btnEl) { await window.SessionSidebarClicks.onRowActionClick(this, btnEl); }
 }
 
 window.SessionSidebar = new SessionSidebarController();
