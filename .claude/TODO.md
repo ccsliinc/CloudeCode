@@ -6100,3 +6100,24 @@ failed (both the known environmental failures,
 `test_home_write_guard::test_guard_refuses_the_real_claude_settings_path_by_name`
 and `test_version_probe::test_current_version_empty_when_unresolvable`), 19
 skipped - nothing new introduced.
+
+## 2026-09-10 - BACKLOG: the idle warning goes full width when the sidebar is pinned
+
+Owner's report, verbatim: "also put into backlog the idle warning, is going
+full width when sidebar is pinned".
+
+- [ ] The idle warning bar spans the full viewport width instead of stopping at
+  the sidebar edge when the sidebar is PINNED (open and holding layout space).
+  It presumably renders against the viewport rather than against the content
+  column, so the pinned sidebar's gutter is not subtracted. Unconfirmed: the
+  exact element and whether it is a fixed-position bar or a flow element with a
+  width rule; measure before fixing, do not guess which of the two it is.
+- Not reproduced or diagnosed yet; recorded from the owner's observation only.
+- Related surfaces that already solve this correctly and are worth copying:
+  the sleep/wake away bar (`client/js/terminal-away-bar.js`) and the sidebar
+  gutter token `--sidebar-gutter`.
+- Fix belongs in the SVELTE rewrite if the affected screen has already moved by
+  the time it is picked up, since the vanilla client is being replaced screen by
+  screen (`.claude/notes/svelte-migration-launchpad.md`). If it still bites in
+  the vanilla client before then, a CSS-only fix is acceptable and expected to
+  be thrown away.
