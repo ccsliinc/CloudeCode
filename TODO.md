@@ -515,3 +515,154 @@ verified HTTP 200 on `/` and on `/static/css/slash-commands-fab.css` from the
 derived copy at `~/Library/Application Support/cloude-code-menubar/server/`.
 15 live tmux sessions and `cloude_cloudecode` (the user's own live pane)
 confirmed untouched throughout.
+
+[webui-performance-plan] [2026-09-09]: Saved the DAR-reviewed Web UI performance and session action menu plan to /Users/Adam/Dropbox/My Projects/Cloude Code Repos/Dev/cloudecode/docs/webui-performance-and-session-menu-plan.md at the owner's request. Implementation remains pending; this task saved the plan only.
+
+[webui-performance-plan] [2026-09-09]: Added the owner's requirement that all themes and durable app settings persist globally across computers and browsers to /Users/Adam/Dropbox/My Projects/Cloude Code Repos/Dev/cloudecode/docs/webui-performance-and-session-menu-plan.md. Includes server authority, cross-client updates, explicit browser-preference migration, scoped override behavior, concurrent-write protection, and independent-browser validation. Focused DAR passed with its config-serialization and theme-consent clarifications incorporated. Documentation only; implementation remains pending.
+
+[webui-performance-plan] [2026-09-09]: Added the reported SNES terminal palette reset on session re-entry to /Users/Adam/Dropbox/My Projects/Cloude Code Repos/Dev/cloudecode/docs/webui-performance-and-session-menu-plan.md. Read-only reproduction with the real registry/navigation code confirmed that applySession('claude') overwrites the restored SNES xterm palette while app chrome stays SNES. Planned a shared theme-resolution fix for both entry paths and initial terminal construction, with real xterm pixel checks covering re-entry, fallback, reset, and opacity. Focused correctness and validator-agent reviews passed for the plan. Documentation only; no application fix, deployment, or new browser-rendered validation performed.
+
+## Web UI performance and session menu plan (2026-09-10)
+Spec: docs/webui-performance-and-session-menu-plan.md. Deployment is OUTSIDE this
+plan's authorization: agents commit and push, nobody restarts the app.
+
+Already done before this plan started: concurrent listing (c8ef6a8), attachable
+index (a4eff35), kqueue tail wakeup (2b1fcb9) which closes plan item 7's first
+experiment.
+
+### Wave 1 (parallel, file-fenced) - ALL FOUR LANDED
+- [x] theme-restore: shipped in 6f79e90. One resolution, one writer
+      (paintTerminalScope), pin and agent are two inputs. 15 node checks plus 8
+      real-Chromium checks, both red on the pre-fix tree.
+- [x] session-menu: shipped in 8898f07 plus 074b381, merged into ccsliinc's
+      superset per docs/DECISIONS.md. Note double-click rename was RESTORED by
+      the owner's ruling; the plan's bullet to remove it is overruled.
+- [x] mute-backend: shipped in 46e7aca. Schema v26, unknown SUPPRESSES, both
+      gates plus the drain-time policy generation check, 41 tests.
+- [x] perf-harness: shipped in 67f3dc8. Baseline in
+      docs/perf-baseline-2026-09-10.md.
+
+Contract shared by session-menu and mute-backend, as shipped:
+  PATCH /api/v1/sessions/records/{session_uuid}/notifications  body {"muted": bool}
+  returns {"muted": bool, "policy_generation": int}
+  SessionInfo wrapper gains `notifications_muted: bool` (absent reads as false).
+
+### Everything remaining is now filed as GitHub issues
+
+Filed 2026-09-10 on Adoom666/CloudeCodeDev after cross-referencing the plan
+against the tree. Do not track remaining plan work here; the issues are the
+spec and a draft PR is the claim. See .claude/skills/work/.
+
+Live failure modes, take these first:
+  #5  the pipe rotation never re-points the read fd, so a terminal goes silent
+      after 24 hours or 10 MiB. p0.
+  #6  CLAUDE.md never says the Cloude spelling is deliberate, and hides 22 of
+      26 docs. p0.
+
+Plan phases, parent issue then children:
+  #7  phase 1 remainder      children #8 #9 #10 #16
+  #17 phase 2 waits          children #20 #21 #24 #25 #26 #27 #28
+  #29 phase 3 remainder      children #30 #31 #32
+  #33 phase 4 events         children #34 #35 #36 #37 #38 #39 #40
+  #41 phase 5 ui_preferences children #42 #43 #44 #45 #46
+  #47 phase 6 startup        children #48 #49 #50 #51 #52 #53
+  #54 phase 7 control-mode experiment, standalone. The kqueue half shipped in
+      2b1fcb9 and is closed.
+
+Loose ends:
+  #55 toast.js is 1307 lines against a 1000-line guideline
+  #56 the perf harness cannot measure settings open
+  #57 document the local server subsystem as intentionally retained dead code
+  #58 the sidebar and the home card disagree about renaming a detached session
+  #59 two machine-local test failures and real-tmux flakes
+
+Known overlaps with ccsliinc's open draft PRs, flagged in comments on each
+affected issue and NOT resolved by either party: #11 / PR 23 deletes
+client/js/launchpad.js at slice 7, which #35 #36 #50 #51 #58 all edit; #12 /
+PR 19 restructures src/core/session_manager.py, which #31 #32 #37 all change;
+#13 / PR 22 moves menu action availability onto a plugin registry, which
+contradicts the approach in #36 and #58. Adam is the tie-breaker.
+
+[mute-backend] [2026-09-10T04:35Z]: durable notification mute shipped server-side.
+  Schema v25 -> v26 adds `sessions.notifications_muted` and
+  `sessions.notification_policy_generation`, both nullable with NO default and NO
+  backfill - the absence of a decision on a row IS "unmuted", so existing rows,
+  new sessions and forks all start unmuted for free, and the mute survives a
+  server restart and a `respawn-pane -k` because both keep the row.
+  `src/core/session_notification_policy.py` is the in-memory projection every gate
+  reads (hydrated once at boot in `src/main.py` BEFORE the router starts and before
+  the app serves), with three values where `unknown` SUPPRESSES - deliberately the
+  opposite posture from the sub-agent toast gate, because a failed read may not
+  answer "not muted". Web alerts are gated in `claude_event_hook` immediately above
+  the sub-agent gate (`toast_suppressed: notifications_muted`), covering every toast
+  kind INCLUDING PermissionRequest; external pushes are gated twice in
+  `NotificationRouter` (at emit so a muted session cannot evict other sessions'
+  alerts from the bounded queue, and at drain where the policy GENERATION is
+  checked, which is what stops an alert queued before a mute/unmute cycle from
+  escaping after it). Muting acknowledges nothing: `record_hook_event` runs above
+  the gate, so a muted PermissionRequest still leaves the session blocked and
+  reporting `question`, and a muted Stop still flips unread.
+  `PATCH /api/v1/sessions/records/{session_uuid}/notifications` takes
+  `{"muted": bool}` plus an optional expected `(tmux_name, tmux_created_epoch)` and
+  answers 409 rather than muting whatever holds a reused name now; it returns
+  `{"muted", "policy_generation"}` read back from the row. `SessionInfo` gains
+  `notifications_muted` on the WRAPPER (per the /sessions/list shape rule) and
+  `SessionRecord` gains it plus the generation. 41 new tests in
+  `tests/test_session_notification_mute.py`. Full suite: 5369 passed / 12 failed,
+  the same 12 as the pre-change baseline (8 `test_session_row_controls_render` and
+  2 `test_js_syntax_scan_coverage` belong to the concurrent client-side menu work;
+  `test_nuke_sandbox` and `test_version_probe` are environmental). NOT DEPLOYED.
+
+[theme-restore] 2026-09-10 00:20Z: A session pinned to snes lost its terminal
+  palette on re-entry because the TERMINAL HAD TWO WRITERS. Reproduced at tip
+  (`d407fa1`) against the shipped snes/claude manifests before touching any
+  production code: picking snes gave xterm background `#3A3A40` / cyan
+  `#3CC4B5`, and leaving plus returning gave `#1e1e1e` / `#11a8cd` while
+  `<html data-theme>` still read `snes`. `theme-navigation.js` painted the
+  session pin, then `app.js` called `Themes.applySession(agent_type)` and the
+  agent's manifest won because it ran last. A second symptom was visible at
+  the moment of the pick: the xterm palette was snes while
+  `#terminal-screen[data-session-theme]` was still `claude`, so the palette
+  and the CSS scope had disagreed all along.
+  The pin and the agent are now two INPUTS to one resolution rather than two
+  paints: `Themes.applySessionScope({pinnedTheme, agentType})` records both and
+  `resolveTerminalThemeId()` ranks them (valid pin, then valid agent, then the
+  global theme). `paintTerminalScope()` is the only writer of the terminal's
+  CSS scope and its xterm palette, and it moves both together, so a var the
+  outgoing theme owned is removed rather than orphaned. The page paint now
+  passes `forXterm:false` inside a session, so there is no intermediate flash.
+  `applyGlobal()` records an in-session pick as that session's pin and repaints
+  through the same writer, which is what makes a picker change survive leaving
+  and returning. `terminal.js` seeds a new xterm from
+  `getActiveTerminalManifest()` rather than `getActiveGlobal()`: on first
+  attach the terminal is built AFTER the paint, so the page's palette was
+  being used to seed it. The replay gate now defers a BOOLEAN and re-resolves
+  on drain instead of replaying a captured theme id, so a paint that waited out
+  a replay cannot repaint a theme the user has since navigated away from.
+  The agent fallback is unchanged: an unpinned session still wears its agent's
+  theme, and a null or unknown agent still hands the terminal to the global
+  theme. The background-opacity adapter remains the only opacity transform.
+  Measured: `tests/test_terminal_theme_survives_agent.node.mjs` (15 checks
+  against the real registry, navigation and app) goes 12-red on the pre-fix
+  tree and green after; `tests/test_terminal_theme_survives_agent_renders.py`
+  (8 checks in real Chromium against a real xterm canvas) goes 4-red pre-fix
+  and green after, the decisive one rendering `(30, 30, 30)` where the snes
+  manifest says `(58, 58, 64)`. Both pre-fix controls were run against a
+  complete `git archive HEAD client` tree, because a first attempt that copied
+  only four files silently dropped the opacity adapter and produced one
+  failure that was an artifact of the harness rather than evidence.
+  Node: 194 of 194 suites pass (baseline 192 of 192; one suite added here, one
+  by concurrent work). NOT DEPLOYED.
+
+[session-menu] 2026-09-10T09:55Z: Session action menu shipped. A live session row (sidebar and home card) now draws a vertical three-dot trigger where its close X was; the X is gone and `close session` is an item inside the menu. Pin stays inline. A DEAD row is untouched - inline restart and remove, no menu - and `SessionRowActions.offersMenu` is the single predicate deciding which of the two a status gets, so a row can never draw both or neither. Five items with shortcut letters: rename (R), fork session (F), new session in folder (N), mute/unmute notifications (M), close session (C) below a separator.
+[session-menu] 2026-09-10T09:55Z: Double-click rename removed completely - the dblclick listener in session-sidebar.js, `deferActivation` and `onDblClick` in session-sidebar-rename.js, and the 250 ms hold in session-sidebar-clicks.js. That hold was the measured cost of the gesture and it was paid on EVERY click on a renameable row name. F2 and the home card's title pencil are untouched.
+[session-menu] 2026-09-10T09:55Z: Identity is captured at PAINT time into the trigger's data attributes and read back once when the menu opens. Measured in a browser: the list can be rebuilt from a different payload under an open menu and the item still acts on the row that was clicked (tests/test_session_row_menu_renders.py::test_a_repaint_under_an_open_menu_cannot_redirect_an_action).
+[session-menu] 2026-09-10T09:55Z: Mute uses PATCH /api/v1/sessions/records/{session_uuid}/notifications with {"muted": bool}, keyed on the durable record resolved from GET /sessions/records at ACTIVATION time - opening the menu still costs no request. The label is optimistic with a rollback on failure. `notifications_muted` is now carried through both live merges (session-sidebar-fetch.js and launchpad.js); an ABSENT field reads as not muted, which is the old-server case and the safe direction.
+[session-menu] 2026-09-10T09:55Z: `project-list-render-guard.js` consults `SessionRowMenuOpen.isOpen()` again. The check was removed with the old kebab on 2026-09-08; without it a poll repaint under an open menu leaves the body-mounted panel anchored to a trigger that no longer exists.
+[session-menu] 2026-09-10T09:55Z: MEASURED, and it changed the design - a refusal sentence on an unavailable item stretched the panel to 730px, because a grid track sizes to its content. Capped at min(320px, 100vw - 16px) so `white-space: normal` on the reason actually wraps. Screenshot evidence in the scratchpad, not the repo.
+[session-menu] 2026-09-10T09:55Z: OPEN ITEM - `scripts/verify_sidebar_rename.py` still drives `page.dblclick` on a row name. It is a manual verify script, not collected by pytest, so nothing fails; it will simply no longer reproduce a rename. It should be moved to F2 or to the menu item.
+[session-menu] 2026-09-10T09:55Z: OPEN ITEM - `SessionSidebarRows.renameState` gates on `session_id` (a live backend) while the home card's `_renameVerdict` accepts any tmux name. The two surfaces therefore disagree about whether a detached session can be renamed, and each surface's menu agrees with the control beside it rather than with the other surface. Pre-existing; the menu inherits it rather than causing it.
+[perf-baseline] 2026-09-10T10:30Z: Measurement harness built for spec item 1 ("Establish measurements and fix interaction races") plus the Validation and delivery section. `scripts/perf/` boots an ISOLATED, real `src.main:app` on a throwaway tmux socket and free port (never the live `cloude` socket), drives it with a real Chromium via Playwright, and proves terminal echo through xterm's own `onRender` paint callback rather than a parser event - see `scripts/perf/perf_browser.py`'s module docstring for why that distinction is load-bearing. Every session it creates is `agent_type=shell` (no real `claude` binary, no LLM turns), which is what lets typing/switching/launch be measured deterministically and separately from agent-startup latency, per the plan's own requirement to measure those separately. `venv/bin/python3 scripts/perf/run_baseline.py --sessions 1,10,50` reproduces it end to end in one command; `--quick` collapses repetition counts for a fast run.
+[perf-baseline] 2026-09-10T10:30Z: Baseline recorded to docs/perf-baseline-2026-09-10.md, raw samples in scripts/perf/perf-baseline-raw.json. Against the plan's four targets at N=1/10/50 (this run's numbers, captured under heavy concurrent machine load - see the doc's methodology note for why the absolute figures should be re-measured on an idle box before being used to judge a later phase): deterministic terminal echo (warm) FAILs at all three N (120.5/121.0/51.4 ms p95 against a 50 ms target); warm switch with unchanged geometry PASSes at N=1 (163.4 ms) and FAILs at N=10/50 (285.7/871.4 ms against 200 ms); menu-open FAILs at all three N (37.3/145.9/702.6 ms against one 60 Hz frame, 16.7 ms); local-hook-to-visible-toast is unmeasured at N=1/10 and FAILs at N=50 (140.8 ms against 100 ms). Idle CPU stayed under 3% and RSS under 105 MB at every N measured; a direct `SELECT COUNT(*) FROM sessions` against the isolated database stayed under 30 ms even under load.
+[perf-baseline] 2026-09-10T10:30Z: OPEN ITEM - `settings open, cold/warm` reads unmeasured in every run: `#settingsBtn` was measured to still report "not visible" to a forced Playwright click immediately after the preceding UI interaction, even after adding an explicit visibility wait ahead of the click (the same fix resolved an equivalent failure on the notification-toast step). Needs its own investigation, tracked as P1 in the delivering agent's final report.
+[perf-baseline] 2026-09-10T10:30Z: Smoke coverage added to the normal suite: tests/test_perf_stats.py (pure percentile math, no server, sub-second) and tests/test_perf_harness_smoke.py (boots the isolated server for real, skips by name when tmux or Playwright is unavailable, and proves one real keystroke reaches onRender). Both pass.
