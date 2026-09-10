@@ -62,3 +62,38 @@ ArgentSI requires protected main, signed commits, squash-merge and npm. None
 of that binds CloudeCodeDev, which is a Python project with an unprotected
 main by choice. Adam owning both codebases makes him the tie-breaker in both;
 it does not make a decision about one a decision about the other.
+
+## ccsliinc's open draft PRs land first; the colliding issues get re-scoped
+**2026-09-10, scope: CloudeCodeDev, ruled by Adam as code owner and sole
+tie-breaker**
+
+ccsliinc's work is already written. The colliding issues were only filed, not
+started. Rebasing written work onto a spec costs more than re-scoping a spec
+onto merged work, so the written work goes in first and the filed work is
+re-scoped against the tree that results.
+
+Three collisions:
+
+1. PR 23 (svelte migration of `client/js/launchpad.js`, slices 2 to 7) deletes
+   that file outright. Issues #35, #36, #50 and #51 all edit it.
+2. PR 19 (decompose the python backend god objects into typed collaborators)
+   restructures `src/core/session_manager.py`. Issues #31, #32 and #37 touch
+   it.
+3. PR 22 (the row menu renders from a typed plugin surface registry) moves
+   menu action availability onto a plugin registry. This contradicts the
+   approach described in issues #36 and #58, even though neither shares a
+   file with PR 22. This is the expensive kind of collision: a path-overlap
+   check cannot see it, both sides look clean in isolation, and the
+   contradiction only surfaces later as a behaviour bug.
+
+Every listed issue (#31, #32, #35, #36, #37, #50, #51, #58) is labeled
+`blocked` and carries a comment naming which PR it collides with and that it
+must be re-scoped against the post-merge tree before anyone starts it. #36
+and #58 additionally note that their collision with PR 22 is a design
+contradiction, not a file overlap, so re-scoping them means revisiting the
+approach itself, not just adjusting file paths.
+
+General rule this implies: when filed-but-unstarted work collides with
+written-but-unmerged work, the written work has precedence. The filed spec
+gets re-scoped onto the shape that results after the written work merges,
+rather than the written work being rebased onto the spec.
