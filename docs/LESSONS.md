@@ -110,7 +110,8 @@ prevents.
 
 ## Never pipe in a verification step
 
-**Two occurrences, same day, both parties, both went green.**
+**Two occurrences, same day, both parties, both went green while the thing
+under test had actually failed.**
 
 I verified an overlap detector with `check <path> | head -3; echo "exit=$?"`.
 That reads `head`'s status, not the tool's. A case that correctly returned 2
@@ -118,20 +119,54 @@ printed 0, and I nearly went hunting for a second bug that did not exist.
 
 ccsliinc verified that branch protection rejected a push with
 `git push 2>&1 | grep -iE "reject|denied" | head -6; echo "exit: $?"`. It
-printed the `GH013` rejection AND `exit: 0`, directly contradicting each
-other, and both were published without the contradiction registering.
+printed the `GH013` rejection AND `exit: 0` on adjacent lines, directly
+contradicting each other, and both were published without the contradiction
+registering.
 
-**And the usual workaround does not work in this shell.** Verified here:
+**The bare `$?` reports the LAST command in the pipeline, not the one that
+failed.** In both incidents that last command was `head`, which reads
+whatever it is given and exits 0 regardless of what came before it. Verified
+here (zsh 5.9, Darwin 25.5.0):
+
+    zsh -c 'false | true; echo $?'   ->  0
+
+**The standard bash fix, `PIPESTATUS`, does not exist in this shell.**
 
     zsh -c 'false | true; echo "[${PIPESTATUS[0]}]"'   ->  []
+    bash -c 'false | true; echo "[${PIPESTATUS[0]}]"'   ->  [1]
 
-`PIPESTATUS` is empty in zsh; it is lowercase `pipestatus` and one-indexed.
-So the bash idiom silently yields nothing, which in a numeric test reads as
-another false pass.
+It works in bash, which is why an engineer reaches for it. In zsh the array
+is lowercase `pipestatus` and one-indexed instead
+(`${pipestatus[1]}` -> `1`, the real status of the first command); the
+capitalised bash name silently expands to nothing.
 
-**Do:** in a verification step, do not pipe at all. Redirect to `/dev/null`
-and check `$?`, or capture to a variable and inspect it afterwards. A pipe in
-a test is a pipe between you and the thing you are testing.
+**A plain comparison against that empty value fails loudly, which is
+honest:**
+
+    zsh -c 'false | true; [ "${PIPESTATUS[0]}" = "0" ] && echo pass || echo fail'   ->  fail
+
+Empty is not `"0"`, so the test correctly reports failure. Noisy, but right.
+
+**The defensive-looking fix is what turns it silent.** An unset variable
+inside a numeric test (`-eq`) is a syntax error, so a careful engineer
+reaches for a default:
+
+    zsh -c 'false | true; [ ${PIPESTATUS[0]:-0} -eq 0 ] && echo pass || echo fail'   ->  pass
+
+on a pipeline whose first command actually exited 1. The `:-0` default is
+exactly what a careful engineer adds to avoid the syntax error, and it is
+exactly what manufactures the wrong answer. Same shape as a date-parsing
+helper that returned `True` on an unreadable date (see "Unmeasured is not
+absent" above): the defensive branch is the one that picked the reassuring
+value instead of reporting that it could not tell.
+
+**Do:** do not try to recover an exit status from a pipeline at all, in any
+shell. Every recovery mechanism here has its own distinct failure: the bare
+`$?` reads the wrong command, `PIPESTATUS` does not exist in zsh, and
+defaulting the missing value manufactures a pass. Redirect the output to a
+file and check `$?`, or capture the output into a variable and inspect it
+afterwards. There is no correct way to read a status through a pipe, only
+less-wrong ones.
 
 ## Global tool state is shared state
 
