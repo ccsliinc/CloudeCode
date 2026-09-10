@@ -751,7 +751,12 @@ test('terminal.js delegates the resize pipeline instead of growing', () => {
     // client/js/terminal-reconnect-policy.js. What is here is the state
     // those rules read and the four call sites that act on them.
     const lines = src.split('\n').length;
-    assert.ok(lines < 2745, `terminal.js must not grow, is ${lines} lines`);
+    // RAISED 2745 -> 2760 for two fixes found reviewing the above: a
+    // second session switch used to overwrite the first one's drain
+    // resolver, parking that teardown on a promise nobody could settle,
+    // and connectWebSocket() cleared what the LIVE connection had
+    // measured about itself before deciding it had nothing to do.
+    assert.ok(lines < 2760, `terminal.js must not grow, is ${lines} lines`);
 });
 
 test('sendResize names its no-op instead of failing silently when no session is attached', () => {

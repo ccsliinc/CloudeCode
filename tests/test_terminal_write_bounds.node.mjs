@@ -283,6 +283,31 @@ test('THE DECISIVE CASE: a switch discards our bytes and waits for xterm\'s', as
     assert.equal(released, true, 'and it proceeds the moment that write lands');
 });
 
+test('a SECOND switch releases the first one\'s wait rather than orphaning it', async () => {
+    // There is one resolver slot. Overwriting it would leave the earlier
+    // teardown parked on a promise nobody can settle - a session switch
+    // hung forever, on exactly the rapid double-switch this chain exists
+    // to make safe.
+    const { self, term, sandbox } = makeController();
+    let frame = null;
+    sandbox.requestAnimationFrame = (fn) => { frame = fn; return 1; };
+    self.enqueue(chunk(10, 1));
+    frame.call(self);
+    assert.equal(self._writeInFlight, true);
+
+    let firstDone = false;
+    const first = self._releaseQueueForSwitch().then(() => { firstDone = true; });
+    await Promise.resolve();
+    assert.equal(firstDone, false, 'the first switch is waiting');
+
+    const second = self._releaseQueueForSwitch();
+    await first;
+    assert.equal(firstDone, true,
+        'the superseded switch must be released, not stranded');
+    term.pendingCallback();
+    await second;
+});
+
 test('a switch with nothing in flight does not wait at all', async () => {
     const { self } = makeController();
     self.enqueue(chunk(4));           // flushes and completes? no - callback pending

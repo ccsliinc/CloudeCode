@@ -732,6 +732,17 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     _releaseQueueForSwitch() {
         this.queue.length = 0;
         this._queuedBytes = 0;
+        // A SECOND SWITCH MUST NOT ORPHAN THE FIRST ONE'S WAIT. There is
+        // one resolver slot, so overwriting it would leave the earlier
+        // teardown parked on a promise nobody can settle - a session
+        // switch hung forever, on the rapid double-switch this whole
+        // chain exists to make safe. Release it: that navigation has been
+        // superseded and its caller re-checks the token anyway.
+        if (this._writeDrained) {
+            const orphan = this._writeDrained;
+            this._writeDrained = null;
+            orphan();
+        }
         if (!this._writeInFlight) return Promise.resolve();
         return new Promise((resolve) => { this._writeDrained = resolve; });
     }
@@ -1255,14 +1266,17 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             }
         }
 
-        // A fresh attempt has measured nothing yet.
-        this._socketEverOpened = false;
-        this._bytesEverSeen = false;
-
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             console.log('Terminal: Already connected');
             return;
         }
+
+        // A fresh attempt has measured nothing yet. BELOW the refusal
+        // above, deliberately: clearing these for a call that turns out
+        // to be a no-op would throw away what the LIVE connection has
+        // already measured about itself.
+        this._socketEverOpened = false;
+        this._bytesEverSeen = false;
 
         // A SOCKET STILL IN CONNECTING MUST BE CLOSED, NOT JUST DROPPED:
         // the refusal above covers OPEN only, so one mid-handshake used to
