@@ -170,13 +170,22 @@ class SessionSidebarController {
     /**
      * Description: record which session is currently attached so the row
      *   list can mark it active and the click handler can no-op on a
-     *   self-click.
+     *   self-click. This is also the single source of truth ToastManager
+     *   reads to decide whether a session's own notifications are "news" -
+     *   see client/js/toast.js `_isActiveSession` - so switching into a
+     *   session clears whatever card is still showing for it: the user is
+     *   looking at it now, so a card about it is stale the instant this
+     *   runs.
      * Inputs: sessionId (string|null), tmuxName (string|null).
      * Output: void.
      */
     setActiveSession(sessionId, tmuxName) {
         this._activeSessionId = sessionId || null;
         this._activeTmuxName = tmuxName || null;
+        if ((this._activeSessionId || this._activeTmuxName) && window.ToastManager
+            && typeof window.ToastManager.dismissForSessionEntry === 'function') {
+            window.ToastManager.dismissForSessionEntry(this._activeSessionId, this._activeTmuxName);
+        }
         if (this.isOpen) this._fetchAndRender();
     }
 

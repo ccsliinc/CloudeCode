@@ -243,6 +243,129 @@ test('an expanded overflow does not survive a Dismiss all', async () => {
         'an emptied stack must come back capped, not still expanded');
 });
 
+// ------------------------------------------------------ active-session gate
+//
+// A THIRD PATH, alongside the two the header above names: never showing a
+// card for the session the user already has on screen, in both
+// directions. `_isActiveSession` gates `add()` against
+// `window.SessionSidebar._activeSessionId` / `_activeTmuxName` - the same
+// pair app.js sets, synchronously, before a session's WS opens or its
+// attach backfill is requested - and `dismissForSessionEntry` clears
+// whatever card was already showing for a session the moment the user
+// switches into it. Both exclude the local attachment receipt, which is
+// not a session-status event.
+
+test('NEGATIVE CONTROL: with no SessionSidebar stub, a toast renders normally', async () => {
+    const { container, mgr } = makeEnv();
+    mgr.add(toast('Stop', 'Your turn', null, 'A'));
+    await settle();
+    assert.equal(cards(container).length, 1,
+        'blind harness check: the card must render before any suppression '
+        + 'assertion below means anything');
+});
+
+test('a toast for the session on screen never becomes a card', async () => {
+    const { container, mgr, sandbox } = makeEnv();
+    sandbox.window.SessionSidebar = { _activeSessionId: 'A', _activeTmuxName: null };
+    mgr.add(toast('Stop', 'Your turn', null, 'A'));
+    await settle();
+    assert.equal(cards(container).length, 0,
+        'the user is already looking at A; a card would repeat what the '
+        + 'live terminal already shows');
+});
+
+test('a toast for a different session still renders while A is active', async () => {
+    const { container, mgr, sandbox } = makeEnv();
+    sandbox.window.SessionSidebar = { _activeSessionId: 'A', _activeTmuxName: null };
+    mgr.add(toast('Notification', 'needs input', 'hi', 'B'));
+    await settle();
+    assert.equal(cards(container).length, 1,
+        'suppression must be scoped to the active session, not every session');
+});
+
+test('matched on tmux name too, for a toast that only carries session_name', async () => {
+    const { container, mgr, sandbox } = makeEnv();
+    sandbox.window.SessionSidebar = { _activeSessionId: null, _activeTmuxName: 'cloude_x' };
+    mgr.add(toast('Stop', 'Your turn', null, 'A', 'cloude_x'));
+    await settle();
+    assert.equal(cards(container).length, 0);
+});
+
+test('the attachment receipt still renders for the active session', async () => {
+    // Do NOT change the attachment receipt: it is a local toast about
+    // what the user is typing right now, not a session-status card, and
+    // it must render for the active session exactly as it always has.
+    const { container, mgr, sandbox } = makeEnv();
+    sandbox.window.SessionSidebar = { _activeSessionId: 'A', _activeTmuxName: null };
+    mgr.add({
+        id: 'att1', session_id: 'A', session_name: null, kind: mgr.ATTACHMENT_KIND,
+        title: 'file.png', body: null, color: null, acknowledged: false, local: true,
+    });
+    await settle();
+    assert.equal(cards(container).length, 1,
+        'the local receipt is not a session-status event and must not be suppressed');
+});
+
+test('NO RACE: a session marked active before the backfill call suppresses it', async () => {
+    // Mirrors app.js's real order exactly: SessionSidebar.setActiveSession
+    // runs synchronously BEFORE TerminalController.connectToSession opens
+    // the WS and requests the attach backfill. Setting the flag first and
+    // then backfilling proves there is no window where a stale toast for
+    // the session just entered can sneak a card onto screen.
+    const { container, mgr, sandbox } = makeEnv();
+    sandbox.window.SessionSidebar = { _activeSessionId: null, _activeTmuxName: null };
+    sandbox.window.SessionSidebar._activeSessionId = 'A';
+    mgr.backfill([toast('Stop', 'Your turn', 'stale tail', 'A')]);
+    await settle();
+    assert.equal(cards(container).length, 0,
+        'a toast backfilled for the session just marked active must not surface');
+});
+
+test('switching into a session clears its existing card', async () => {
+    const { container, mgr, acked } = makeEnv();
+    const t = toast('Stop', 'Your turn', null, 'A');
+    mgr.add(t);
+    assert.equal(cards(container).length, 1, 'setup');
+    const n = mgr.dismissForSessionEntry('A', null);
+    await settle();
+    assert.equal(n, 1);
+    assert.equal(cards(container).length, 0,
+        'entering the session it is about makes the card stale immediately');
+    assert.deepEqual(acked, [t.id], 'the dismissal must stick server-side, same as any other');
+});
+
+test('switching into A leaves an unrelated session B alone', async () => {
+    const { container, mgr } = makeEnv();
+    mgr.add(toast('Stop', 'Your turn', null, 'A'));
+    mgr.add(toast('Notification', 'other', 'b', 'B'));
+    mgr.dismissForSessionEntry('A', null);
+    await settle();
+    const left = cards(container);
+    assert.equal(left.length, 1, "B's card must survive entering A");
+    assert.equal(left[0].querySelector('.toast__title-text').textContent, 'other');
+});
+
+test('dismissForSessionEntry excludes the local attachment receipt', async () => {
+    const { container, mgr } = makeEnv();
+    mgr.add({
+        id: 'att2', session_id: 'A', session_name: null, kind: mgr.ATTACHMENT_KIND,
+        title: 'file.png', body: null, color: null, acknowledged: false, local: true,
+    });
+    assert.equal(cards(container).length, 1, 'setup');
+    mgr.dismissForSessionEntry('A', null);
+    await settle();
+    assert.equal(cards(container).length, 1,
+        'a pending attachment thumbnail must survive entering the session it belongs to');
+});
+
+test('dismissForSessionEntry with neither id nor name is a no-op', async () => {
+    const { container, mgr } = makeEnv();
+    mgr.add(toast('Stop', 'Your turn', null, 'A'));
+    assert.equal(mgr.dismissForSessionEntry(null, null), 0);
+    await settle();
+    assert.equal(cards(container).length, 1);
+});
+
 // ------------------------------------------------------------ no dwell timer
 
 test('NO toast expires on its own - there is still no dwell timer', async () => {

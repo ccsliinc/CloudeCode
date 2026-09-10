@@ -41,7 +41,7 @@
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
-import { makeEnv, toast, cards, overflow } from './lib_toast_dom_stub.mjs';
+import { makeEnv, toast, cards, overflow, settle } from './lib_toast_dom_stub.mjs';
 
 /** Description: a per-session id for burst cases. Inputs/Output: string. */
 function ses(i) { return `ses_${i}`; }
@@ -438,6 +438,22 @@ test('clicking the session name runs the SAME switch the sidebar row runs', () =
     assert.equal(calls[0].rowEl.dataset.name, 'cloude_myproject',
         'the tmux name the sidebar switch needs must be the toast record\'s session_name');
     assert.equal(calls[0].rowEl.dataset.sessionId, 'ses_1');
+});
+
+test('clicking the session name also dismisses the card', async () => {
+    // The card's job is to get the user to the session; once they have
+    // clicked through, it has done that job and the notification is
+    // stale. Reuses dismissGroup - the SAME teardown the x button runs -
+    // so this is proof there is no second dismissal path, not a new one.
+    const { container, mgr, sandbox, acked } = makeEnv();
+    const t = toast('Stop', 'Your turn', null, 'ses_1', 'cloude_myproject');
+    mgr.add(t);
+    sandbox.window.SessionSidebarClicks = { activateRow: () => {} };
+    const nameBtn = cards(container)[0].querySelector('.toast__session');
+    nameBtn.click();
+    await settle();
+    assert.deepEqual(acked, [t.id], 'the click must ack the toast, same as the x button');
+    assert.equal(cards(container).length, 0, 'the card must be gone after its name is clicked');
 });
 
 test('a toast with no session_name renders a plain, non-clickable name', () => {
