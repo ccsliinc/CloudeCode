@@ -445,11 +445,37 @@ def cmd_sync(remote: str, me: str) -> int:
         capture_output=True, text=True,
     )
     sys.stdout.write(push.stdout + push.stderr)
-    if push.returncode != 0:
-        print("\npush rejected: someone else wrote first. re-read before retrying.")
+    if push.returncode == 0:
+        print(f"pushed {', '.join(staged)}")
+        return 0
+
+    # A rejection means the other party wrote while we were composing, which
+    # is information rather than an error. Rebase so the work is not stranded
+    # (party-namespaced paths cannot conflict), then STOP: what they just
+    # wrote may change what you were about to say. Re-run sync to push.
+    before = subprocess.run(
+        ["git", "-C", str(tree), "rev-parse", f"{remote}/{BRANCH}"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "-C", str(tree), "fetch", "--quiet", remote, BRANCH],
+                   check=False)
+    rebase = subprocess.run(
+        ["git", "-C", str(tree), "rebase", f"{remote}/{BRANCH}"],
+        capture_output=True, text=True,
+    )
+    print("\npush rejected: the other party wrote first.")
+    if rebase.returncode != 0:
+        subprocess.run(["git", "-C", str(tree), "rebase", "--abort"], check=False)
+        print("could not rebase automatically. resolve in", tree)
         return 3
-    print(f"pushed {', '.join(staged)}")
-    return 0
+    landed = subprocess.run(
+        ["git", "-C", str(tree), "log", "--oneline", f"{before}..{remote}/{BRANCH}"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    print("your commit is rebased and NOT pushed. what they wrote:\n")
+    print(landed or "(nothing new, transient failure)")
+    print("\nread it, revise if it changes what you were saying, then sync again.")
+    return 3
 
 
 def main(argv: list[str]) -> int:

@@ -82,8 +82,12 @@ does not carry your party name.
 `lessons` prints every party's recorded lessons. `read` already ends with
 them, so you get them at session start without asking.
 
-`sync` commits and pushes. A rejected push means the other party wrote first,
-so re-read before retrying: what you were about to claim may now be claimed.
+`sync` commits and pushes. A rejected push means the other party wrote first.
+It rebases your commit so the work is not stranded, then STOPS without
+pushing and prints what they wrote. Read that, revise if it changes what you
+were about to say, then run `sync` again. The two-step is deliberate: the
+rejection is information, and auto-pushing through it would throw the
+information away.
 
 Exit codes: 0 clear, 2 overlap, 3 cannot determine, 4 refused.
 
