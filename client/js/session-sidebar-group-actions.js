@@ -171,7 +171,13 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
      *   code, and hittable by a finger - which is the whole point of
      *   having a non-drag route at all.
      * Inputs: anchor (Element) - what to sit beside.
-     *   entries (Array<object>) - [{label, onPick, current}].
+     *   entries (Array<object>) - [{label, onPick, current, icon}]. `icon`
+     *     is optional - a session-row-menu-icons.js glyph id, reused
+     *     rather than a second icon system. Only entries from the SAME
+     *     call that carries at least one `icon` get the icon column, so
+     *     a menu whose entries never set one (the row's "move to a
+     *     group" picker, the reserved-band fold/unfold menu) renders
+     *     exactly as before.
      *   ariaLabel (string).
      * Output: void.
      */
@@ -181,15 +187,23 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
         menu.className = 'session-sidebar-group-menu';
         menu.setAttribute('role', 'menu');
         menu.setAttribute('aria-label', ariaLabel);
+        const withIcons = entries.some((entry) => entry.icon);
+        const Icons = window.SessionRowMenuIcons;
         menu.innerHTML = entries.map((entry, index) => (
             `<button type="button" role="menuitem" `
             + `class="session-sidebar-group-menu__item`
-            + `${entry.current ? ' session-sidebar-group-menu__item--current' : ''}" `
+            + `${entry.current ? ' session-sidebar-group-menu__item--current' : ''}`
+            + `${withIcons ? ' session-sidebar-group-menu__item--with-icon' : ''}" `
             + `data-menu-index="${index}"`
             // The CURRENT group is marked with aria-checked, not with
             // colour alone - a checkmark nobody can see is not a state.
             + `${entry.current ? ' aria-checked="true" role="menuitemradio"' : ''}>`
-            + `${esc(entry.label)}</button>`
+            + (withIcons
+                ? `<span class="session-sidebar-group-menu__icon">`
+                    + `${(entry.icon && Icons) ? Icons.svg(entry.icon) : ''}</span>`
+                : '')
+            + `<span class="session-sidebar-group-menu__label">${esc(entry.label)}</span>`
+            + `</button>`
         )).join('');
         const box = anchor.getBoundingClientRect();
         menu.style.position = 'fixed';
@@ -329,19 +343,22 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
         const order = G.current().groups.map((g) => g.group_uuid);
         const at = order.indexOf(groupUuid);
         const entries = [
-            { label: 'rename', onPick: () => renameGroup(groupUuid) },
+            { label: 'rename', icon: 'rename', onPick: () => renameGroup(groupUuid) },
             {
                 label: 'move up',
+                icon: 'move-up',
                 onPick: () => moveGroup(groupUuid, -1),
             },
             {
                 label: 'move down',
+                icon: 'move-down',
                 onPick: () => moveGroup(groupUuid, 1),
             },
             {
                 label: `remove (${group.members.length} `
                     + `${group.members.length === 1 ? 'conversation' : 'conversations'} `
                     + 'move to other)',
+                icon: 'close',
                 onPick: () => deleteGroup(groupUuid),
             },
         ];

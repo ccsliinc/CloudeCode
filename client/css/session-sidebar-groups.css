@@ -396,6 +396,10 @@
  * .session-row-menu (session-row-menu.css), the row-level kebab this
  * menu is the group-level equivalent of; the two are never open at the
  * same time (openMenu is a single slot), so sharing a value is safe.
+ *
+ * --shadow-modal is the same theme-aware elevation token the row menu
+ * and the app's other floating popovers already use, in place of the
+ * hardcoded shadow this used to carry.
  */
 .session-sidebar-group-menu {
     z-index: 1200;
@@ -405,23 +409,29 @@
     background: var(--color-bg-raised, var(--color-bg));
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-modal);
 }
 
+/* font-size 0.68em matches .session-row-menu__item so the two popup
+ * menus read as one family. display: flex holds an optional fixed-width
+ * icon column beside the label without the two drifting apart
+ * vertically. min-height: 32px is a floor: the item shrank from 0.8em,
+ * and without a floor the smaller glyph would also shrink the tap
+ * target. box-sizing is border-box globally (styles.css' `*` reset), so
+ * 32px is the item's whole height, padding included. */
 .session-sidebar-group-menu__item {
-    display: block;
+    display: flex;
+    align-items: center;
     width: 100%;
+    min-height: 32px;
     padding: 5px 8px;
     background: transparent;
     border: none;
     border-radius: var(--radius-sm);
     color: var(--color-fg);
     font-family: inherit;
-    font-size: 0.8em;
+    font-size: 0.68em;
     text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     cursor: pointer;
 }
 
@@ -430,6 +440,38 @@
     background: var(--color-accent-bg-soft);
     color: var(--color-accent);
     outline: none;
+}
+
+/* Ellipsis lives on the label, not the item: a flex CONTAINER does not
+ * truncate its own content, a flex ITEM does, and min-width: 0 is what
+ * lets this one shrink narrower than its text first. */
+.session-sidebar-group-menu__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The prefix icon column, present only on a menu where at least one
+ * entry supplies one (showMenu in session-sidebar-group-actions.js
+ * decides that per menu, not per item, so a mixed menu still reserves
+ * the column and every label stays aligned). Same 16px box and the same
+ * shared builder (client/js/session-row-menu-icons.js) as the row menu's
+ * .session-row-menu__icon, not a second icon system. gap sits on this
+ * modifier only, so an item with no icon (the row's "move to a group"
+ * picker, the reserved-band fold/unfold menu) keeps its old spacing. */
+.session-sidebar-group-menu__item--with-icon {
+    gap: 8px;
+}
+
+.session-sidebar-group-menu__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    line-height: 0;
 }
 
 /* The CURRENT group is marked with a glyph and not with colour alone.

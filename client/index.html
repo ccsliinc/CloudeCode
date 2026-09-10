@@ -1186,9 +1186,18 @@
          when that crossed the 500-line budget; must load BEFORE it. -->
     <script src="/static/js/session-sidebar-drop-target.js"></script>
     <script src="/static/js/session-sidebar-reorder.js"></script>
+    <!-- The shared prefix-glyph builder for a menu item, same pattern as
+         kebab-icon.js. Loads here, BEFORE session-sidebar-group-actions.js
+         below, because that module's group-header menu (rename/move up/
+         move down/remove) now calls it too; it must also still load
+         before session-row-menu.js further down, which is its original
+         consumer. -->
+    <script src="/static/js/session-row-menu-icons.js"></script>
     <!-- Create/rename/delete/reorder groups, and every NON-DRAG way to
          move a session between them. Loads AFTER reorder because it
-         borrows that module's live-region announcer. -->
+         borrows that module's live-region announcer, and AFTER
+         session-row-menu-icons.js, which its group-header menu calls for
+         each item's prefix glyph. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
     <!-- The reserved bands' (pinned/other) kebab menu, split out to keep
          session-sidebar-group-actions.js under the 500-line budget. Must
@@ -1207,10 +1216,10 @@
          AND after session-sidebar.js, whose #session-sidebar-list it
          attaches to; it owns right click and long press only, because
          -open.js binds the trigger tap itself. session-row-menu-icons.js
-         is the shared builder for each item's prefix glyph, same pattern
-         as kebab-icon.js; must load before session-row-menu.js, which
-         calls it. -->
-    <script src="/static/js/session-row-menu-icons.js"></script>
+         (the shared builder for each item's prefix glyph, same pattern as
+         kebab-icon.js) already loaded earlier, above, for
+         session-sidebar-group-actions.js; it is also required here, since
+         session-row-menu.js calls it too. -->
     <script src="/static/js/session-row-menu-items.js"></script>
     <script src="/static/js/session-row-menu.js"></script>
     <script src="/static/js/session-row-menu-actions.js"></script>

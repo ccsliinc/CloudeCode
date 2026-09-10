@@ -1,5 +1,5 @@
 /**
- * The eight glyphs prefixing the row action menu's items, in ONE place.
+ * The glyphs prefixing the row action menu's items, in ONE place.
  * ----------------------------------------------------------------------
  * Same pattern as client/js/kebab-icon.js: a single builder function
  * returning a self-contained `<svg>` string, so client/js/session-row-
@@ -7,6 +7,13 @@
  * drift out of sync with each other across the panel and the launchpad's
  * copy of it (there is only one copy - this module is what keeps it
  * that way).
+ *
+ * ALSO REUSED BY THE GROUP HEADER MENU. `move-up` and `move-down` were
+ * added for client/js/session-sidebar-group-actions.js's `openGroupMenu`
+ * so the group menu's reorder entries could carry the same icon treatment
+ * as the row menu, rather than the group menu growing a second icon
+ * system. The two consumers share this one glyph set for that reason -
+ * do not fork a second builder for the group menu.
  *
  * Every glyph shares one visual family: a 16-unit viewBox, `fill="none"`,
  * `stroke="currentColor"`, round caps and joins. `currentColor` is what
@@ -16,14 +23,15 @@
  * `currentColor` resolves against that with no separate rule needed).
  * The close glyph is the one exception to matching stroke-width: it is
  * drawn heavier (1.6 against 1.3 elsewhere) because it is the one
- * destructive entry in the menu and is meant to read that way even
+ * destructive entry in the row menu and is meant to read that way even
  * before the red hover fires.
  *
  * `aria-hidden="true"` on every glyph, because the button around it
  * already carries the accessible name via its label text - a screen
  * reader must read "rename", not "rename icon rename".
  *
- * No dependencies. Must load BEFORE session-row-menu.js.
+ * No dependencies. Must load BEFORE session-row-menu.js AND BEFORE
+ * session-sidebar-group-actions.js.
  */
 
 console.log('[SessionRowMenuIcons Module] Loading...');
@@ -100,6 +108,16 @@ console.log('[SessionRowMenuIcons Module] Loading...');
         close:
             '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" '
             + 'stroke-linecap="round"/>',
+        // A single shaft with an arrowhead at the top - reorder up. Used
+        // by the group header menu.
+        'move-up':
+            '<path d="M8 13V3M4.5 6.5L8 3l3.5 3.5" stroke="currentColor" '
+            + 'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
+        // The same shaft, arrowhead at the bottom - reorder down. Used by
+        // the group header menu.
+        'move-down':
+            '<path d="M8 3v10M4.5 9.5L8 13l3.5-3.5" stroke="currentColor" '
+            + 'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>',
     };
 
     /**
@@ -108,7 +126,8 @@ console.log('[SessionRowMenuIcons Module] Loading...');
      * Inputs:
      *   id (string) - a session-row-menu-items.js item id (`rename`,
      *     `mark-unread`, `move-to-group`, `fork`, `new-in-folder`,
-     *     `mute`, `restart`, `close`).
+     *     `mute`, `restart`, `close`), or one of the group-menu-only ids
+     *     (`move-up`, `move-down`).
      *   size (number|undefined) - rendered width and height in CSS
      *     pixels. Defaults to DEFAULT_SIZE (14).
      * Output:
