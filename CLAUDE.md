@@ -1841,6 +1841,57 @@ cannot verify a migration without a record of what the data was, and that is
 the step everyone skips. `./scripts/upgrade-verify.sh` exits 2 when a check
 could not be evaluated; 2 is not 0.
 
+## Refreshing the local install on a new version
+
+Adam's rule: every time there is a new version, his local copy gets
+refreshed to it, so he is always running the latest code. Write down the
+mechanics, because every one of them is a way the refresh silently does
+not happen, and each has already cost time on this machine.
+
+**There are two launch modes and they rsync from different places.** The
+packaged app (`/Applications/Cloude Code.app`) rsyncs from the bundle's own
+`Contents/Resources`, so launching it REVERTS any unreleased repo change.
+Dev mode (`npm start` / `electron .` from `macOS/`) rsyncs from the REPO
+ROOT instead. Both write into the same derived copy, at
+`~/Library/Application Support/cloude-code-menubar/server/`, which is what
+the server actually executes - so the launch mode is what decides which
+code Adam ends up running, and the two can drift apart for a long time
+with nothing on screen saying so. Measured 2026-09-10: the installed
+bundle read version 1.0.33 while `macOS/package.json` already said 1.2.1,
+and the gap was invisible because Adam was running dev mode off the repo.
+
+**The version lives in exactly one place, `macOS/package.json`.** There is
+no root `package.json` and no second version literal to grep for. The web
+client's own version comes from a `{{VERSION}}` token that `src/main.py`
+substitutes at serve time, via `src/core/version.py::resolve_version()`.
+
+**A refresh is kill, relaunch, verify, in that order, or it only looks like
+one.**
+- macOS has no `setsid`. `setsid nohup npm start &` fails with "command not
+  found" and starts nothing while reading as success. Use
+  `nohup npm start > /tmp/cloude-menubar.log 2>&1 & disown` instead.
+- Killing Electron does not kill its Python child. The old server keeps its
+  port and keeps serving the OLD code, a health check on that port still
+  answers 200, and it reads as a successful deploy of nothing. Kill both
+  processes and confirm the port is free before relaunching.
+- Verify against the DERIVED copy, never the repo, and never trust a
+  matching timestamp as proof: rsync PRESERVES MTIME, so the file dates
+  lining up proves nothing about whether a fresh sync happened. Grep the
+  derived file for the actual code change instead.
+
+**Sessions survive this by design**, because they live on the dedicated
+`tmux -L cloude` socket, not inside the Electron/Python process being
+restarted. A refresh is safe to do with live work in progress, and
+`tmux -L cloude list-sessions` reporting the same session count before and
+after is one of the checks that proves the restart did not touch them.
+
+A refresh is not done until all four of these are true: the port answers,
+the derived copy at
+`~/Library/Application Support/cloude-code-menubar/server/` contains the
+new code (grepped, not timestamp-checked), `tmux -L cloude list-sessions`
+reports an unchanged session count, and the reported version matches
+`macOS/package.json`.
+
 ## Imported conversations
 
 `scripts/import_transcript_sessions.py` gives every real Claude Code
