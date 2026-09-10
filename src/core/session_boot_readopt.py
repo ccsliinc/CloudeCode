@@ -354,7 +354,7 @@ async def readopt_surviving_sessions(
         await backend.attach_existing(needs_pipe_setup=True)
 
         session = session_for(target)
-        session.pinned_theme = manager.resolve_project_theme(
+        session.pinned_theme = manager._theme_store.resolve_project_theme(
             Path(target.working_dir), target.name
         )
         manager._register_session(session, backend)

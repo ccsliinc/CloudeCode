@@ -81,6 +81,6 @@ def test_the_collaborators_on_app_state_are_the_manager_s_own(booted):
     assert services.toasts is manager._toast_inbox
 
     services.registry.command_counts["ses_booted"] = 4
-    assert manager.command_counts["ses_booted"] == 4
-    manager.pinned_themes["cloude_booted"] = "matrix"
+    assert manager._registry.command_counts["ses_booted"] == 4
+    manager._theme_store.pinned_themes["cloude_booted"] = "matrix"
     assert services.themes.pinned_themes["cloude_booted"] == "matrix"

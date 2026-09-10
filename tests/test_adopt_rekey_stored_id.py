@@ -155,7 +155,7 @@ async def _drop_backends(manager: SessionManager) -> None:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
-    for watcher in list(manager.idle_watchers.values()):
+    for watcher in list(manager._sidecars.idle_watchers.values()):
         try:
             await watcher.stop()
         except Exception:

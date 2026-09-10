@@ -155,28 +155,27 @@ def _register(manager: SessionManager, session_id: str, work: Path) -> Session:
 
 def test_leg_a_the_facade_containers_are_the_registry_containers(manager):
     """LEG (a). One object per container, not two that agree today."""
-    assert manager.log_buffers is manager._registry.log_buffers
-    assert manager.command_counts is manager._registry.command_counts
+    assert manager._registry.log_buffers is manager._registry.log_buffers
+    assert manager._registry.command_counts is manager._registry.command_counts
 
 
 def test_leg_b_the_facade_holds_no_field_of_its_own(manager):
-    """LEG (b). The names are properties, not instance attributes.
+    """LEG (b), REWRITTEN BY S1. There is no second door at all now.
 
-    This is the leg that fails on an ``__init__`` which assigns
-    ``self.log_buffers = registry.log_buffers``. Leg (a) stays GREEN on
-    that mutation, measured in S2, because on the day it is written the
-    two names are the same object. It forks the first time either side
-    rebinds, and nothing raises when it does.
+    Description: this used to assert the names were PROPERTIES on the
+      class rather than fields on the instance, which was the right check
+      while the facade forwarded: a ``self.log_buffers = ...`` in
+      ``__init__`` would pass leg (a) on a fresh object and shadow the
+      property forever after. S1 deleted the forwarders, so the invariant
+      is stronger and simpler - the manager resolves none of these names
+      by any route, and a property coming back IS a forwarder coming back.
     """
     for name in ("log_buffers", "command_counts"):
-        assert name not in manager.__dict__, (
-            f"{name} is an instance attribute on the facade, so the manager "
-            "holds a second reference the registry knows nothing about"
+        assert not hasattr(manager, name), (
+            f"{name} resolves on the facade again; the registry owns it and "
+            "a caller holds the registry"
         )
-        assert isinstance(getattr(type(manager), name), property), (
-            f"{name} is not a property on SessionManager, so the facade "
-            "is not delegating to the registry"
-        )
+    assert manager._registry.log_buffers is not None
 
 
 def test_leg_c_writes_cross_in_both_directions(manager):
@@ -186,15 +185,15 @@ def test_leg_c_writes_cross_in_both_directions(manager):
     value assertion in the rest of this file and fails here.
     """
     manager._registry.log_buffers["ses_from_registry"] = []
-    assert "ses_from_registry" in manager.log_buffers
+    assert "ses_from_registry" in manager._registry.log_buffers
 
-    manager.log_buffers["ses_from_facade"] = []
+    manager._registry.log_buffers["ses_from_facade"] = []
     assert "ses_from_facade" in manager._registry.log_buffers
 
     manager._registry.command_counts["ses_from_registry"] = 7
-    assert manager.command_counts["ses_from_registry"] == 7
+    assert manager._registry.command_counts["ses_from_registry"] == 7
 
-    manager.command_counts["ses_from_facade"] = 3
+    manager._registry.command_counts["ses_from_facade"] = 3
     assert manager._registry.command_counts["ses_from_facade"] == 3
 
 
@@ -235,7 +234,7 @@ def test_leg_e_an_injected_registry_is_the_one_the_facade_uses(
     manager = SessionManager(registry=injected)
 
     assert manager._registry is injected
-    assert manager.log_buffers is injected.log_buffers
+    assert manager._registry.log_buffers is injected.log_buffers
 
     _register(manager, "ses_inject", tmp_path)
     manager.add_log_entry("via the facade", session_id="ses_inject")
@@ -281,12 +280,12 @@ def test_the_cap_is_re_read_per_append_not_captured(stub_settings, manager, tmp_
     _register(manager, "ses_recap", tmp_path)
     for i in range(6):
         manager.add_log_entry(f"line {i}", session_id="ses_recap")
-    assert len(manager.log_buffers["ses_recap"]) == 6
+    assert len(manager._registry.log_buffers["ses_recap"]) == 6
 
     stub_settings.log_buffer_size = 2
     manager.add_log_entry("line 6", session_id="ses_recap")
 
-    kept = [e.content for e in manager.log_buffers["ses_recap"]]
+    kept = [e.content for e in manager._registry.log_buffers["ses_recap"]]
     assert kept == ["line 5", "line 6"]
 
 

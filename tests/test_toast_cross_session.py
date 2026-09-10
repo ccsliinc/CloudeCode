@@ -56,6 +56,9 @@ from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
 import src.api.toast_routes as toast_routes_mod
+from src.core import toast_auto_ack
+from src.core.composition import build_services
+
 from src.api.auth import require_auth
 from src.core import toast_history
 from src.core.session_manager import SessionManager
@@ -117,6 +120,10 @@ def _app(monkeypatch, tmp_path: Path):
     mgr = _manager(monkeypatch, tmp_path)
     app = FastAPI()
     app.state.session_manager = mgr
+    # The routes read their collaborator off ``app.state.services`` now.
+    # ``build_services(session_manager=...)`` WRAPS this manager rather
+    # than building a second one, so both entries name one application.
+    app.state.services = build_services(session_manager=mgr)
     app.include_router(routes_mod.router, prefix="/api/v1")
     app.include_router(toast_routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
@@ -160,7 +167,7 @@ def test_global_list_defaults_to_unacked_and_can_include_acked(monkeypatch, tmp_
     _session(mgr, "ses_a", tmp_path / "a")
     open_toast = mgr.record_toast("ses_a", "PermissionRequest", "still open")
     done = mgr.record_toast("ses_a", "Notification", "already handled")
-    assert mgr.ack_toast("ses_a", done.id) is True
+    assert mgr._toast_inbox.ack("ses_a", done.id, toast_auto_ack.ACK_REASON_DISMISSED) is True
 
     default_ids = {t["id"] for t in client.get("/api/v1/toasts").json()["toasts"]}
     assert open_toast.id in default_ids
@@ -204,7 +211,7 @@ def test_ack_is_scoped_to_the_toasts_own_session(monkeypatch, tmp_path):
     # NOT touched by a request naming A.
     assert wrong.status_code == 200, wrong.text
     assert wrong.json()["message"] == "No-op"
-    assert mgr.get_toasts("ses_b")[0].acknowledged is False, (
+    assert mgr._toast_inbox.get("ses_b")[0].acknowledged is False, (
         "a toast id that is not in the named session's bucket must not be "
         "acked from it"
     )
@@ -213,7 +220,7 @@ def test_ack_is_scoped_to_the_toasts_own_session(monkeypatch, tmp_path):
 
     right = client.post(f"/api/v1/toasts/{b.id}/ack?session_id=ses_b")
     assert right.status_code == 200, right.text
-    assert mgr.get_toasts("ses_b")[0].acknowledged is True
+    assert mgr._toast_inbox.get("ses_b")[0].acknowledged is True
 
 
 def test_ack_is_idempotent_and_survives_the_same_click_twice(monkeypatch, tmp_path):
@@ -227,7 +234,7 @@ def test_ack_is_idempotent_and_survives_the_same_click_twice(monkeypatch, tmp_pa
     second = client.post(f"/api/v1/toasts/{t.id}/ack?session_id=ses_a")
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
-    assert [x.acknowledged for x in mgr.get_toasts("ses_a")] == [True]
+    assert [x.acknowledged for x in mgr._toast_inbox.get("ses_a")] == [True]
 
 
 def test_dismissed_toast_does_not_come_back_on_the_next_poll(monkeypatch, tmp_path):
@@ -297,7 +304,7 @@ def test_history_returns_dismissed_and_open_newest_first(monkeypatch, tmp_path):
     new = mgr.record_toast("ses_b", "PermissionRequest", "newer")
     # Force a strict ordering rather than relying on clock resolution.
     old.created_at = datetime.utcnow() - timedelta(minutes=5)
-    mgr.ack_toast("ses_a", old.id)
+    mgr._toast_inbox.ack("ses_a", old.id, toast_auto_ack.ACK_REASON_DISMISSED)
 
     body = client.get("/api/v1/toasts/history").json()
     ids = [t["id"] for t in body["toasts"]]
@@ -406,11 +413,24 @@ def test_collect_filters_acked_when_asked():
     assert len(toast_history.collect_toasts(buckets)) == 2
 
 
-def test_buckets_from_manager_tolerates_an_unmounted_manager():
-    """A request arriving before the manager is mounted must render as
-    'no toasts', never as a 500 that stops the client's poll loop."""
-    assert toast_history.buckets_from_manager(None) == {}
-    assert toast_history.buckets_from_manager(object()) == {}
+def test_buckets_from_inbox_tolerates_an_unmounted_inbox_and_nothing_else():
+    """None is the only thing that renders as 'no toasts'.
+
+    Description: a request arriving before the services are mounted must
+      render as 'no toasts', never as a 500 that stops the client's poll
+      loop. That much is unchanged.
+
+      **WHAT CHANGED IS THE SECOND LEG, AND IT IS THE POINT OF S1.** The
+      old reader answered ``{}`` for ANY object without the attribute, so
+      deleting the facade's ``_pending_toasts`` would have emptied every
+      toast history view while raising nowhere and failing no test. That
+      tolerance is gone: a real object whose container is missing or
+      renamed now raises here, at the one call site, loudly.
+    """
+    assert toast_history.buckets_from_inbox(None) == {}
+
+    with pytest.raises(AttributeError):
+        toast_history.buckets_from_inbox(object())
 
 
 def test_page_reports_total_independently_of_the_slice():

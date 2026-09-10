@@ -222,7 +222,7 @@ def test_toast_is_suppressed_while_subagents_are_running(
     assert payload["ok"] is True
     assert "toast_id" not in payload
     assert payload["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     mock_bcast.assert_not_called()
 
 
@@ -234,7 +234,7 @@ def test_suppression_holds_at_a_depth_greater_than_one(monkeypatch, tmp_path):
     resp, _ = _post_event(app, mgr, "Notification")
 
     assert resp.json()["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
 
 
 def test_a_suppressed_stop_still_records_its_activity(monkeypatch, tmp_path):
@@ -274,7 +274,7 @@ def test_toast_still_raised_when_no_subagents_are_running(
     payload = resp.json()
     assert "toast_id" in payload
     assert "toast_suppressed" not in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -288,7 +288,7 @@ def test_toast_returns_after_the_last_subagent_finishes(monkeypatch, tmp_path):
     resp, _ = _post_event(app, mgr, "Stop")
 
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
 
 
 # =========================================================================== #
@@ -315,7 +315,7 @@ def test_permission_request_always_raises_a_toast(monkeypatch, tmp_path, depth):
     payload = resp.json()
     assert "toast_id" in payload
     assert "toast_suppressed" not in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -342,7 +342,7 @@ def test_an_unreadable_depth_still_notifies(monkeypatch, tmp_path):
 
     assert resp.status_code == 200, resp.text
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -385,7 +385,7 @@ def test_a_subagent_stop_arriving_after_stop_does_not_suppress_it(
 
     # The straggler lands afterwards and changes nothing already decided.
     mgr.record_hook_event("ses_hook", "SubagentStop", {})
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     assert mgr.subagent_depth("ses_hook") == 0
 
 

@@ -148,12 +148,14 @@ def test_a_write_through_the_services_side_is_visible_on_the_facade():
     services.sidecars.adopt_fifo_offsets["ses_from_services"] = 41
     services.sidecars.pending_terminal_commands["ses_from_services"] = "cmd_1"
 
-    assert manager.pinned_themes["cloude_from_services"] == "matrix"
-    assert "ses_from_services" in manager._pending_toasts
-    assert manager.log_buffers["ses_from_services"] == []
-    assert manager.command_counts["ses_from_services"] == 3
-    assert manager.adopt_fifo_offsets["ses_from_services"] == 41
-    assert manager.pending_terminal_commands["ses_from_services"] == "cmd_1"
+    assert manager._theme_store.pinned_themes["cloude_from_services"] == "matrix"
+    assert "ses_from_services" in manager._toast_inbox.pending
+    assert manager._registry.log_buffers["ses_from_services"] == []
+    assert manager._registry.command_counts["ses_from_services"] == 3
+    assert manager._sidecars.adopt_fifo_offsets["ses_from_services"] == 41
+    assert (
+        manager._sidecars.pending_terminal_commands["ses_from_services"] == "cmd_1"
+    )
 
 
 def test_a_write_through_the_facade_is_visible_on_the_services_side():
@@ -161,9 +163,9 @@ def test_a_write_through_the_facade_is_visible_on_the_services_side():
     services = build_services()
     manager = services.session_manager
 
-    manager.pinned_themes["cloude_from_facade"] = "amber"
-    manager.log_buffers["ses_from_facade"] = []
-    manager.idle_watchers["ses_from_facade"] = object()  # type: ignore[assignment]
+    manager._theme_store.pinned_themes["cloude_from_facade"] = "amber"
+    manager._registry.log_buffers["ses_from_facade"] = []
+    manager._sidecars.idle_watchers["ses_from_facade"] = object()  # type: ignore[assignment]
 
     assert services.themes.pinned_themes["cloude_from_facade"] == "amber"
     assert "ses_from_facade" in services.registry.log_buffers
@@ -176,7 +178,7 @@ def test_probe_health_records_once_and_both_sides_read_it():
 
     services.probe_health.record_failure(reason="socket_missing", detail="x")
 
-    health = services.session_manager.last_probe_health()
+    health = services.session_manager._probe_health.health
     assert health.ok is False
     assert health.reason == "socket_missing"
 
@@ -190,7 +192,7 @@ def test_an_injected_collaborator_is_the_one_the_manager_gets():
     assert services.toasts is inbox
     assert services.session_manager._toast_inbox is inbox
     inbox.pending["ses_injected"] = []
-    assert "ses_injected" in services.session_manager._pending_toasts
+    assert "ses_injected" in services.session_manager._toast_inbox.pending
     # and the other four are still real, freshly built objects
     assert isinstance(services.themes, ThemeStore)
     assert isinstance(services.registry, SessionRegistry)
@@ -233,7 +235,7 @@ def test_wrapping_an_existing_manager_mints_no_sixth_object():
 
     assert services.session_manager is manager
     assert services.themes is manager._theme_store
-    manager.command_counts["ses_wrapped"] = 9
+    manager._registry.command_counts["ses_wrapped"] = 9
     assert services.registry.command_counts["ses_wrapped"] == 9
 
 
@@ -319,4 +321,4 @@ def test_the_conftest_fixture_hands_back_a_real_application(app_services):
     assert isinstance(app_services, AppServices)
     assert app_services.themes is app_services.session_manager._theme_store
     app_services.registry.command_counts["ses_fixture"] = 1
-    assert app_services.session_manager.command_counts["ses_fixture"] == 1
+    assert app_services.session_manager._registry.command_counts["ses_fixture"] == 1

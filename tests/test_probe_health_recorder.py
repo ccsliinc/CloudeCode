@@ -269,11 +269,11 @@ def test_a_write_on_the_recorder_is_visible_through_the_facade():
 
     rec = ProbeHealthRecorder()
     mgr = SessionManager(probe_health=rec)
-    assert mgr.last_probe_health().ok is None
+    assert mgr._probe_health.health.ok is None
 
     rec.record_failure(reason=REASON_TIMEOUT, detail="tmux busy")
 
-    health = mgr.last_probe_health()
+    health = mgr._probe_health.health
     assert health.ok is False, "the facade must READ THROUGH, not cache"
     assert health.reason == REASON_TIMEOUT
     assert health.detail == "tmux busy"
@@ -318,7 +318,7 @@ def test_the_real_failed_probe_path_writes_through_to_the_injected_recorder(
     assert rec.health.ok is False, "the real probe path must record on the recorder"
     assert rec.health.reason == REASON_TIMEOUT
     assert rec.socket == "cloude-test-s1", "the bound socket must be recorded too"
-    assert mgr.last_probe_health() == rec.health
+    assert mgr._probe_health.health == rec.health
 
 
 def test_the_real_successful_probe_path_writes_through_to_the_injected_recorder(
@@ -361,8 +361,8 @@ def test_session_manager_still_constructs_with_no_arguments():
 
     mgr = SessionManager()
 
-    assert isinstance(mgr.last_probe_health(), ProbeHealth)
-    assert mgr.last_probe_health().ok is None
+    assert isinstance(mgr._probe_health.health, ProbeHealth)
+    assert mgr._probe_health.health.ok is None
 
 
 def test_every_collaborator_argument_is_keyword_only_and_optional():

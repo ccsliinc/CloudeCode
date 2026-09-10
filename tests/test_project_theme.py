@@ -46,6 +46,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+from src.core.composition import build_services
+
 from src.api.auth import require_auth
 from src.core.session_manager import SessionManager
 from src.models import Session, SessionStatus
@@ -112,12 +114,12 @@ def test_set_and_get_cc_theme_roundtrip(monkeypatch, tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     assert dotfile.is_file()
     assert dotfile.read_text(encoding="utf-8") == "metal\n"
-    assert mgr.get_project_theme(project) == "metal"
+    assert mgr._theme_store.get_project_theme(project) == "metal"
 
 
 def test_set_project_theme_creates_mode_0644(monkeypatch, tmp_path):
@@ -126,7 +128,7 @@ def test_set_project_theme_creates_mode_0644(monkeypatch, tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     mode = dotfile.stat().st_mode & 0o777
@@ -144,7 +146,7 @@ def test_get_cc_theme_returns_none_when_missing(monkeypatch, tmp_path):
     project = tmp_path / "fresh"
     project.mkdir()
 
-    assert mgr.get_project_theme(project) is None
+    assert mgr._theme_store.get_project_theme(project) is None
 
 
 def test_get_cc_theme_strips_whitespace(monkeypatch, tmp_path):
@@ -154,7 +156,7 @@ def test_get_cc_theme_strips_whitespace(monkeypatch, tmp_path):
     project.mkdir()
     (project / ".cc.theme").write_text("  hermes\n\n", encoding="utf-8")
 
-    assert mgr.get_project_theme(project) == "hermes"
+    assert mgr._theme_store.get_project_theme(project) == "hermes"
 
 
 def test_get_cc_theme_returns_none_when_empty(monkeypatch, tmp_path):
@@ -164,7 +166,7 @@ def test_get_cc_theme_returns_none_when_empty(monkeypatch, tmp_path):
     project.mkdir()
     (project / ".cc.theme").write_text("\n", encoding="utf-8")
 
-    assert mgr.get_project_theme(project) is None
+    assert mgr._theme_store.get_project_theme(project) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -179,12 +181,12 @@ def test_resolve_project_theme_falls_back_to_pinned_themes_json(
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "legacy"
     project.mkdir()
-    mgr.pinned_themes["cloude_legacy"] = "lovecraft"
+    mgr._theme_store.pinned_themes["cloude_legacy"] = "lovecraft"
 
     # Dotfile takes precedence when both exist — confirm fallback only
     # fires when no dotfile is present.
-    assert mgr.get_project_theme(project) is None
-    assert mgr.resolve_project_theme(project, "cloude_legacy") == "lovecraft"
+    assert mgr._theme_store.get_project_theme(project) is None
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_legacy") == "lovecraft"
 
 
 def test_resolve_project_theme_dotfile_beats_json(monkeypatch, tmp_path):
@@ -192,10 +194,10 @@ def test_resolve_project_theme_dotfile_beats_json(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "both"
     project.mkdir()
-    mgr.set_project_theme(project, "metal")
-    mgr.pinned_themes["cloude_both"] = "lovecraft"
+    mgr._theme_store.set_project_theme(project, "metal")
+    mgr._theme_store.pinned_themes["cloude_both"] = "lovecraft"
 
-    assert mgr.resolve_project_theme(project, "cloude_both") == "metal"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_both") == "metal"
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +210,7 @@ def test_migrate_pinned_theme_writes_dotfile(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "migrateme"
     project.mkdir()
-    mgr.pinned_themes["cloude_migrateme"] = "metal"
+    mgr._theme_store.pinned_themes["cloude_migrateme"] = "metal"
 
     sess = Session(
         id="ses_test123",
@@ -222,7 +224,7 @@ def test_migrate_pinned_theme_writes_dotfile(monkeypatch, tmp_path):
     assert migrated is True
     assert (project / ".cc.theme").read_text(encoding="utf-8") == "metal\n"
     # Old map entry intentionally preserved this release.
-    assert mgr.pinned_themes.get("cloude_migrateme") == "metal"
+    assert mgr._theme_store.pinned_themes.get("cloude_migrateme") == "metal"
 
 
 def test_migrate_pinned_theme_noop_when_dotfile_exists(monkeypatch, tmp_path):
@@ -230,8 +232,8 @@ def test_migrate_pinned_theme_noop_when_dotfile_exists(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "nomigrate"
     project.mkdir()
-    mgr.set_project_theme(project, "hermes")  # dotfile wins
-    mgr.pinned_themes["cloude_nomigrate"] = "metal"
+    mgr._theme_store.set_project_theme(project, "hermes")  # dotfile wins
+    mgr._theme_store.pinned_themes["cloude_nomigrate"] = "metal"
 
     sess = Session(
         id="ses_test456",
@@ -269,7 +271,7 @@ def test_migrate_pinned_theme_swallows_exceptions(monkeypatch, tmp_path):
     # Working dir that DOESN'T exist — set_project_theme would raise
     # FileNotFoundError; the migration helper must swallow and return False.
     bogus = tmp_path / "does" / "not" / "exist"
-    mgr.pinned_themes["ghost"] = "metal"
+    mgr._theme_store.pinned_themes["ghost"] = "metal"
 
     sess = Session(
         id="ses_ghost",
@@ -294,7 +296,7 @@ def test_set_cc_theme_is_atomic(monkeypatch, tmp_path):
     project = tmp_path / "atomic"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     assert dotfile.is_file()
@@ -309,10 +311,10 @@ def test_set_cc_theme_overwrites_existing(monkeypatch, tmp_path):
     project = tmp_path / "overwrite"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
-    mgr.set_project_theme(project, "hermes")
+    mgr._theme_store.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "hermes")
 
-    assert mgr.get_project_theme(project) == "hermes"
+    assert mgr._theme_store.get_project_theme(project) == "hermes"
     assert (project / ".cc.theme").read_text(encoding="utf-8") == "hermes\n"
 
 
@@ -321,13 +323,13 @@ def test_set_cc_theme_clears_dotfile(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "clearme"
     project.mkdir()
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
     assert (project / ".cc.theme").exists()
 
-    mgr.set_project_theme(project, None)
+    mgr._theme_store.set_project_theme(project, None)
 
     assert not (project / ".cc.theme").exists()
-    assert mgr.get_project_theme(project) is None
+    assert mgr._theme_store.get_project_theme(project) is None
 
 
 def test_set_cc_theme_raises_for_missing_working_dir(monkeypatch, tmp_path):
@@ -336,7 +338,7 @@ def test_set_cc_theme_raises_for_missing_working_dir(monkeypatch, tmp_path):
     bogus = tmp_path / "gone"  # never created
 
     with pytest.raises(FileNotFoundError):
-        mgr.set_project_theme(bogus, "metal")
+        mgr._theme_store.set_project_theme(bogus, "metal")
 
 
 # --------------------------------------------------------------------------- #
@@ -368,10 +370,10 @@ def test_two_sessions_same_cwd_share_theme(monkeypatch, tmp_path):
     )
 
     # Writer #1 pins via the helper as if on machine A.
-    mgr.set_project_theme(sess_a.working_dir, "metal")
+    mgr._theme_store.set_project_theme(sess_a.working_dir, "metal")
 
     # Reader #2 (machine B) sees the same value.
-    assert mgr.get_project_theme(sess_b.working_dir) == "metal"
+    assert mgr._theme_store.get_project_theme(sess_b.working_dir) == "metal"
 
 
 # --------------------------------------------------------------------------- #
@@ -447,6 +449,7 @@ def _build_route_app(monkeypatch, tmp_path):
 
     app = FastAPI()
     app.state.session_manager = sm
+    app.state.services = build_services(session_manager=sm)
     app.include_router(routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
     return app, sm, project, sess
@@ -471,7 +474,7 @@ def test_patch_new_theme_endpoint_writes_dotfile(monkeypatch, tmp_path):
 def test_patch_new_theme_endpoint_clears_with_null(monkeypatch, tmp_path):
     """PATCH with ``theme_id=null`` deletes the dotfile."""
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
-    sm.set_project_theme(project, "metal")
+    sm._theme_store.set_project_theme(project, "metal")
     assert (project / ".cc.theme").exists()
 
     client = TestClient(app)

@@ -324,7 +324,7 @@ def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, even
     assert "toast_id" not in payload  # no toast for activity-only events
 
     # No toast recorded.
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     # No WS broadcast fired.
     mock_bcast.assert_not_called()
 
@@ -373,7 +373,7 @@ def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tm
     assert resp.status_code == 200
     payload = resp.json()
     assert "toast_id" in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
     assert mgr._is_unread("cloude_hook_proj") is True
 

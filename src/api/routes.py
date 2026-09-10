@@ -1314,7 +1314,7 @@ async def destroy_external_session(request: Request, name: str):
 
 
 async def _apply_session_theme(
-    session_manager, session_name: str, theme_id: Optional[str]
+    session_manager, themes, session_name: str, theme_id: Optional[str]
 ) -> SessionInfo:
     """Shared implementation for both ``/theme`` and the deprecated
     ``/pinned-theme`` alias.
@@ -1322,8 +1322,10 @@ async def _apply_session_theme(
     v0.7.0 behavior:
       * Validates the tmux name against the known-sessions set (same
         rules as the legacy route - owned ∪ active ∪ attachable probe).
-      * Writes ``<session.working_dir>/.cc.theme`` via
-        ``session_manager.set_project_theme`` (atomic tmp+rename).
+      * Writes ``<session.working_dir>/.cc.theme`` via the
+        ``ThemeStore`` handed in as ``themes`` (atomic tmp+rename).
+        Taken as an argument rather than reached through the manager,
+        because the manager no longer forwards to it.
         Empty/None ``theme_id`` clears the dotfile.
       * Mirrors onto the live ``Session.pinned_theme`` so a follow-up
         ``get_session_info`` reflects the change without re-reading.
@@ -1393,7 +1395,7 @@ async def _apply_session_theme(
     # path where pinned_themes.json is still the source of truth).
     if matched_working_dir:
         try:
-            session_manager.set_project_theme(matched_working_dir, theme_id)
+            themes.set_project_theme(matched_working_dir, theme_id)
         except FileNotFoundError as exc:
             logger.warning(
                 "session_theme_working_dir_missing",
@@ -1496,7 +1498,10 @@ async def set_session_theme(
     """
     session_manager = request.app.state.session_manager
     return await _apply_session_theme(
-        session_manager, session_name, body.theme_id
+        session_manager,
+        request.app.state.services.themes,
+        session_name,
+        body.theme_id,
     )
 
 
@@ -1561,7 +1566,10 @@ async def set_pinned_theme(
         )
     session_manager = request.app.state.session_manager
     return await _apply_session_theme(
-        session_manager, session_name, body.pinned_theme
+        session_manager,
+        request.app.state.services.themes,
+        session_name,
+        body.pinned_theme,
     )
 
 
@@ -1900,10 +1908,13 @@ async def list_session_toasts(
     list (NOT 404) when the session has no toasts - the launchpad polls
     speculatively and an empty array is the right success shape.
     """
-    session_manager = request.app.state.session_manager
-    if hasattr(session_manager, "get_toasts"):
-        return session_manager.get_toasts(session_id, unacked_only=unacked)
-    return []
+    # THE ``hasattr`` GUARD THAT USED TO BE HERE IS GONE, DELIBERATELY.
+    # It answered ``[]`` for a manager without the attribute, which is
+    # indistinguishable from a session with no toasts - so deleting the
+    # forwarder it guarded would have emptied this endpoint on every
+    # session while raising nowhere and failing no test. A missing inbox
+    # is now a 500, which is a bug report rather than a silent lie.
+    return request.app.state.services.toasts.get(session_id, unacked)
 
 
 @router.post(
@@ -1997,8 +2008,8 @@ async def ack_toast(request: Request, toast_id: str, session_id: str):
     # from the hook-driven ``answered`` path in toast_auto_ack.py. A
     # reason inferred at read time would be a guess on a page whose whole
     # job is to be trusted about what happened.
-    changed = session_manager.ack_toast(
-        session_id, toast_id, reason=toast_auto_ack.ACK_REASON_DISMISSED
+    changed = request.app.state.services.toasts.ack(
+        session_id, toast_id, toast_auto_ack.ACK_REASON_DISMISSED
     )
     if not changed:
         # Either not found OR already acked. We can't distinguish without
@@ -3889,7 +3900,7 @@ async def list_recent_sessions(
     )
 
     session_manager = request.app.state.session_manager
-    health = session_manager.last_probe_health()
+    health = request.app.state.services.probe_health.health
 
     if health.ok is not True:
         state = "never_probed" if health.ok is None else "probe_unavailable"

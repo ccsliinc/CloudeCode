@@ -584,9 +584,9 @@ def test_manager_reports_awaiting_and_toasts_exactly_once(
     assert verdicts == [GATE_AWAITING, GATE_AWAITING, GATE_AWAITING]
     # Three detections, ONE toast. The detection repeats for as long as
     # the user leaves the prompt unanswered; the toast must not.
-    assert len(mgr._pending_startup_toasts) == 1
-    assert len(mgr.get_toasts("ses1")) == 1
-    assert mgr.get_toasts("ses1")[0].title == "needs a keypress"
+    assert len(mgr._toast_inbox.pending_startup) == 1
+    assert len(mgr._toast_inbox.get("ses1")) == 1
+    assert mgr._toast_inbox.get("ses1")[0].title == "needs a keypress"
 
 
 def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
@@ -611,7 +611,7 @@ def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
         )
         == GATE_READY
     )
-    assert mgr._pending_startup_toasts == []
+    assert mgr._toast_inbox.pending_startup == []
 
 
 def test_manager_refuses_to_guess_when_liveness_is_unknown(
@@ -636,8 +636,8 @@ def test_manager_refuses_to_guess_when_liveness_is_unknown(
         )
         == GATE_UNKNOWN
     )
-    assert mgr._pending_startup_toasts == []
-    assert mgr.get_toasts("ses1") == []
+    assert mgr._toast_inbox.pending_startup == []
+    assert mgr._toast_inbox.get("ses1") == []
 
 
 def test_manager_never_captures_a_tail_for_a_session_with_a_hook(

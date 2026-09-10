@@ -267,10 +267,16 @@ def _recent(client, query=""):
     from types import SimpleNamespace
 
     class _Manager:
-        def last_probe_health(self):
-            return SimpleNamespace(ok=True, reason=None)
+        """Nothing of the manager is read by this route any more."""
 
     client.app.state.session_manager = _Manager()
+    # ``/sessions/recent`` reads ``services.probe_health.health`` since S1
+    # of the decomposition, so the double is shaped like the recorder.
+    client.app.state.services = SimpleNamespace(
+        probe_health=SimpleNamespace(
+            health=SimpleNamespace(ok=True, reason=None)
+        )
+    )
     resp = client.get(f"/api/v1/sessions/recent{query}")
     assert resp.status_code == 200
     return resp.json()

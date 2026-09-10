@@ -253,7 +253,7 @@ def _manager_with_pending(monkeypatch, command, backend):
     # is a property that writes THROUGH to this object, so the assignment
     # below reaches the one owner rather than shadowing it.
     sm._sidecars = AttachmentSidecars()
-    sm.pending_terminal_commands = {"s1": "top"}
+    sm._sidecars.pending_terminal_commands = {"s1": "top"}
     sm.backends = {"s1": backend}
     # Patch on the CLASS: Settings is a pydantic BaseSettings and rejects
     # setting an unknown attribute on an instance.
@@ -271,7 +271,7 @@ def test_flush_types_the_command_and_pops_it(monkeypatch):
     asyncio.run(sm.flush_pending_terminal_command("s1"))
     assert backend.writes == [b"htop\n"]
     # Popped: a reconnect to the same session must not re-run it.
-    assert sm.pending_terminal_commands == {}
+    assert sm._sidecars.pending_terminal_commands == {}
 
     asyncio.run(sm.flush_pending_terminal_command("s1"))
     assert backend.writes == [b"htop\n"]
@@ -281,7 +281,7 @@ def test_flush_is_a_noop_without_a_pending_command(monkeypatch):
     backend = _FakeBackend()
     cmd = TerminalCommand(id="top", label="top", command="htop")
     sm = _manager_with_pending(monkeypatch, cmd, backend)
-    sm.pending_terminal_commands = {}
+    sm._sidecars.pending_terminal_commands = {}
 
     asyncio.run(sm.flush_pending_terminal_command("s1"))
     assert backend.writes == []

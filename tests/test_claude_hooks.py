@@ -366,7 +366,7 @@ def test_hook_endpoint_creates_toast_for_stop(monkeypatch, tmp_path):
     assert payload["ok"] is True
     assert "toast_id" in payload
 
-    stored = mgr.get_toasts("ses_hook")
+    stored = mgr._toast_inbox.get("ses_hook")
     assert len(stored) == 1
     assert stored[0].kind == "Stop"
     assert stored[0].title == "Your turn"
@@ -396,7 +396,7 @@ def test_hook_endpoint_handles_empty_payload_gracefully(monkeypatch, tmp_path):
         )
 
     assert resp.status_code == 200, resp.text
-    stored = mgr.get_toasts("ses_hook")
+    stored = mgr._toast_inbox.get("ses_hook")
     assert len(stored) == 1
     assert stored[0].kind == "Notification"
     # Title is the generic fallback even with no message in body.
@@ -427,7 +427,7 @@ def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_pa
         )
 
     assert resp.status_code == 200
-    stored = mgr.get_toasts("ses_hook")
+    stored = mgr._toast_inbox.get("ses_hook")
     assert stored[0].kind == "PermissionRequest"
     assert stored[0].title == "needs your permission"
     # Body should mention the tool name and command.

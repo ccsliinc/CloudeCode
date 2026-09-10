@@ -32,6 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ruff: noqa: E402
+from src.core import toast_auto_ack
 from src.core.session_manager import SessionManager
 from src.models import Session, SessionStatus
 
@@ -88,7 +89,7 @@ def test_twelve_unacked_stops_leave_exactly_one_record(mgr):
     for i in range(12):
         mgr.record_toast("ses_a", "Stop", "Your turn", body=f"turn {i}")
 
-    stored = mgr.get_toasts("ses_a")
+    stored = mgr._toast_inbox.get("ses_a")
     assert len(stored) == 1, f"expected 1 record, got {len(stored)}"
     assert stored[0].kind == "Stop"
 
@@ -105,7 +106,7 @@ def test_superseding_keeps_the_original_id(mgr):
     later = mgr.record_toast("ses_a", "Stop", "Your turn", body="two")
 
     assert later.id == first.id
-    assert [t.id for t in mgr.get_toasts("ses_a")] == [first.id]
+    assert [t.id for t in mgr._toast_inbox.get("ses_a")] == [first.id]
 
 
 def test_surviving_record_carries_the_newest_content(mgr):
@@ -113,7 +114,7 @@ def test_surviving_record_carries_the_newest_content(mgr):
     mgr.record_toast("ses_a", "Stop", "Your turn", body="middle")
     mgr.record_toast("ses_a", "Stop", "Your turn", body="newest")
 
-    stored = mgr.get_toasts("ses_a")
+    stored = mgr._toast_inbox.get("ses_a")
     assert len(stored) == 1
     assert stored[0].body == "newest"
 
@@ -131,39 +132,39 @@ def test_superseded_record_timestamp_advances(mgr):
 def test_acked_stop_is_never_superseded(mgr):
     """Superseding an acked record would resurrect a dismissed toast."""
     first = mgr.record_toast("ses_a", "Stop", "Your turn", body="dismissed")
-    assert mgr.ack_toast("ses_a", first.id) is True
+    assert mgr._toast_inbox.ack("ses_a", first.id, toast_auto_ack.ACK_REASON_DISMISSED) is True
 
     second = mgr.record_toast("ses_a", "Stop", "Your turn", body="fresh")
 
-    stored = mgr.get_toasts("ses_a")
+    stored = mgr._toast_inbox.get("ses_a")
     assert len(stored) == 2
     assert second.id != first.id
     acked = [t for t in stored if t.id == first.id]
     assert len(acked) == 1
     assert acked[0].acknowledged is True
     assert acked[0].body == "dismissed", "the acked record was mutated"
-    assert mgr.get_toasts("ses_a", unacked_only=True)[0].body == "fresh"
+    assert mgr._toast_inbox.get("ses_a", unacked_only=True)[0].body == "fresh"
 
 
 def test_notification_is_never_superseded(mgr):
     """Each Notification body is a distinct thing to read."""
     for i in range(4):
         mgr.record_toast("ses_a", "Notification", "Waiting", body=f"msg {i}")
-    assert len(mgr.get_toasts("ses_a")) == 4
+    assert len(mgr._toast_inbox.get("ses_a")) == 4
 
 
 def test_identical_notifications_are_never_superseded(mgr):
     """Even byte-identical Notifications stay distinct records."""
     for _ in range(3):
         mgr.record_toast("ses_a", "Notification", "Waiting", body="same")
-    assert len(mgr.get_toasts("ses_a")) == 3
+    assert len(mgr._toast_inbox.get("ses_a")) == 3
 
 
 def test_permission_request_is_never_superseded(mgr):
     """Each is a distinct decision about a distinct command."""
     for cmd in ("rm -rf /tmp/x", "curl example.com", "git push"):
         mgr.record_toast("ses_a", "PermissionRequest", "Allow?", body=cmd)
-    stored = mgr.get_toasts("ses_a")
+    stored = mgr._toast_inbox.get("ses_a")
     assert len(stored) == 3
     assert {t.body for t in stored} == {
         "rm -rf /tmp/x",
@@ -176,7 +177,7 @@ def test_stop_with_a_different_title_does_not_supersede(mgr):
     """Supersession keys on title, exactly like the client coalesce key."""
     mgr.record_toast("ses_a", "Stop", "Your turn", body="a")
     mgr.record_toast("ses_a", "Stop", "Something else", body="b")
-    assert len(mgr.get_toasts("ses_a")) == 2
+    assert len(mgr._toast_inbox.get("ses_a")) == 2
 
 
 def test_supersession_does_not_cross_sessions(mgr):
@@ -184,10 +185,10 @@ def test_supersession_does_not_cross_sessions(mgr):
     mgr.record_toast("ses_b", "Stop", "Your turn", body="b1")
     mgr.record_toast("ses_a", "Stop", "Your turn", body="a2")
 
-    assert len(mgr.get_toasts("ses_a")) == 1
-    assert len(mgr.get_toasts("ses_b")) == 1
-    assert mgr.get_toasts("ses_a")[0].body == "a2"
-    assert mgr.get_toasts("ses_b")[0].body == "b1"
+    assert len(mgr._toast_inbox.get("ses_a")) == 1
+    assert len(mgr._toast_inbox.get("ses_b")) == 1
+    assert mgr._toast_inbox.get("ses_a")[0].body == "a2"
+    assert mgr._toast_inbox.get("ses_b")[0].body == "b1"
 
 
 # --- ordering + growth -----------------------------------------------------
@@ -199,7 +200,7 @@ def test_superseded_stop_moves_to_the_front(mgr):
     mgr.record_toast("ses_a", "Notification", "Waiting", body="note")
     mgr.record_toast("ses_a", "Stop", "Your turn", body="stop-2")
 
-    stored = mgr.get_toasts("ses_a")
+    stored = mgr._toast_inbox.get("ses_a")
     assert [t.kind for t in stored] == ["Stop", "Notification"]
     assert stored[0].body == "stop-2"
 
@@ -208,4 +209,4 @@ def test_long_session_unacked_stops_stay_bounded(mgr):
     """200 turns used to be 200 records. The unacked list has no cap."""
     for i in range(200):
         mgr.record_toast("ses_a", "Stop", "Your turn", body=f"t{i}")
-    assert len(mgr.get_toasts("ses_a", unacked_only=True)) == 1
+    assert len(mgr._toast_inbox.get("ses_a", unacked_only=True)) == 1

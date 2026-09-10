@@ -13,7 +13,7 @@ the naive wrong implementation (assigning ``self.pinned_themes =
 store.pinned_themes`` in ``__init__``) satisfies it perfectly on a fresh
 manager and forks the moment anything rebinds either name. The four:
 
-(a) IDENTITY. ``manager.pinned_themes is store.pinned_themes``, and the
+(a) IDENTITY. ``manager._theme_store.pinned_themes is store.pinned_themes``, and the
     same for the accent cache down its two hops. Catches a defensive
     ``dict(...)`` copy.
 (b) NO FIELD ON THE FACADE. The names must not appear in the manager's
@@ -142,8 +142,8 @@ def manager(monkeypatch, tmp_path: Path) -> SessionManager:
 
 def test_leg_a_the_facade_maps_are_the_store_maps(manager: SessionManager):
     """LEG (a). One dict per cluster, reached through three spellings."""
-    assert manager.pinned_themes is manager._theme_store.pinned_themes
-    assert manager._theme_accent_cache is manager._theme_store.accent_cache
+    assert manager._theme_store.pinned_themes is manager._theme_store.pinned_themes
+    assert manager._theme_store.accent_cache is manager._theme_store.accent_cache
     # ...and the accent cache's second hop, into the composed object.
     assert (
         manager._theme_store.accent_cache
@@ -152,35 +152,35 @@ def test_leg_a_the_facade_maps_are_the_store_maps(manager: SessionManager):
 
 
 def test_leg_b_the_facade_holds_no_field_of_its_own(manager: SessionManager):
-    """LEG (b). The names resolve through the CLASS, not the instance.
+    """LEG (b), REWRITTEN BY S1. There is no second door at all now.
 
-    A ``self.pinned_themes = store.pinned_themes`` in ``__init__`` would
-    pass leg (a) on a fresh object and put a real entry in ``__dict__``
-    that shadows the property forever after. This is the leg that sees
-    it.
+    Description: this used to assert the names were PROPERTIES on the
+      class rather than fields on the instance, which was the right check
+      while the facade forwarded: a ``self.pinned_themes = ...`` in
+      ``__init__`` would pass leg (a) on a fresh object and shadow the
+      property forever after. S1 deleted the forwarders, so the invariant
+      is stronger and simpler - the manager resolves none of these names
+      by any route, and a property coming back IS a forwarder coming back.
     """
     moved = ["pinned_themes", "_theme_accent_cache"]
-    leftovers = [name for name in moved if name in vars(manager)]
+
+    leftovers = [name for name in moved if hasattr(manager, name)]
     assert leftovers == [], (
-        f"{leftovers} are instance attributes on the facade; the theme "
-        "cluster must live on the store only"
+        f"{leftovers} resolve on the facade again; the theme cluster is "
+        "reached through the store and nothing else"
     )
-    for name in moved:
-        assert isinstance(getattr(type(manager), name), property), (
-            f"{name} is not a property on SessionManager, so the facade "
-            "is not delegating"
-        )
+    assert manager._theme_store.pinned_themes is not None
 
 
 def test_leg_c_writes_cross_in_both_directions(manager: SessionManager):
     """LEG (c). Mutation either way is visible from the other side."""
-    manager.pinned_themes["via_facade"] = "matrix"
+    manager._theme_store.pinned_themes["via_facade"] = "matrix"
     assert manager._theme_store.pinned_themes["via_facade"] == "matrix"
 
     manager._theme_store.pinned_themes["via_store"] = "metal"
-    assert manager.pinned_themes["via_store"] == "metal"
+    assert manager._theme_store.pinned_themes["via_store"] == "metal"
 
-    manager._theme_accent_cache["fake_theme"] = "#123456"
+    manager._theme_store.accent_cache["fake_theme"] = "#123456"
     assert manager._theme_store.accents.cache["fake_theme"] == "#123456"
 
 
@@ -193,10 +193,10 @@ def test_leg_c_a_whole_dict_rebind_lands_on_the_store(manager: SessionManager):
     keeps one dict.
     """
     replacement = {"cloude_Test": "matrix"}
-    manager.pinned_themes = replacement
+    manager._theme_store.pinned_themes = replacement
 
     assert manager._theme_store.pinned_themes is replacement
-    assert manager.pinned_themes is replacement
+    assert manager._theme_store.pinned_themes is replacement
 
 
 def test_leg_d_a_real_public_method_persists_through_the_store(

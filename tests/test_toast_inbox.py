@@ -151,23 +151,28 @@ def _store(inbox: ToastInbox, session_id: str, *, kind: str, title: str,
 
 def test_leg_a_the_facade_containers_are_the_inbox_containers(manager):
     """LEG (a). One dict and one list, reached through two spellings each."""
-    assert manager._pending_toasts is manager._toast_inbox.pending
-    assert manager._pending_startup_toasts is manager._toast_inbox.pending_startup
+    assert manager._toast_inbox.pending is manager._toast_inbox.pending
+    assert manager._toast_inbox.pending_startup is manager._toast_inbox.pending_startup
 
 
-def test_leg_b_the_facade_holds_no_field_of_its_own(manager):
-    """LEG (b). The names resolve through the CLASS, not the instance."""
+def test_leg_b_the_facade_holds_no_door_onto_the_cluster(manager):
+    """LEG (b), REWRITTEN BY S1. There is no second name at all now.
+
+    Description: this used to assert the two names were PROPERTIES on the
+      class rather than fields on the instance, which was the right check
+      while the facade forwarded. S1 deleted the forwarders, so the
+      invariant is stronger and simpler: the manager has no such
+      attribute, by either route. A property coming back would be a
+      forwarder coming back.
+    """
     moved = ["_pending_toasts", "_pending_startup_toasts"]
-    leftovers = [name for name in moved if name in vars(manager)]
+
+    leftovers = [name for name in moved if hasattr(manager, name)]
     assert leftovers == [], (
-        f"{leftovers} are instance attributes on the facade; the toast "
-        "cluster must live on the inbox only"
+        f"{leftovers} resolve on the facade again; the toast cluster is "
+        "reached through the inbox and nothing else"
     )
-    for name in moved:
-        assert isinstance(getattr(type(manager), name), property), (
-            f"{name} is not a property on SessionManager, so the facade "
-            "is not delegating"
-        )
+    assert manager._toast_inbox.pending is not None
 
 
 def test_leg_c_writes_cross_in_both_directions(manager, tmp_path):
@@ -178,10 +183,10 @@ def test_leg_c_writes_cross_in_both_directions(manager, tmp_path):
     assert list(manager._toast_inbox.pending) == ["ses_x"]
 
     manager._toast_inbox.pending.setdefault("ses_direct", [])
-    assert "ses_direct" in manager._pending_toasts
+    assert "ses_direct" in manager._toast_inbox.pending
 
-    manager._toast_inbox.queue_startup("ses_x", manager.get_toasts("ses_x")[0])
-    assert len(manager._pending_startup_toasts) == 1
+    manager._toast_inbox.queue_startup("ses_x", manager._toast_inbox.get("ses_x")[0])
+    assert len(manager._toast_inbox.pending_startup) == 1
 
 
 def test_leg_d_the_public_methods_read_and_write_the_inbox(manager, tmp_path):
@@ -191,35 +196,43 @@ def test_leg_d_the_public_methods_read_and_write_the_inbox(manager, tmp_path):
     toast = manager.record_toast("ses_d", "PermissionRequest", "may i")
     assert manager._toast_inbox.pending["ses_d"][0] is toast
 
-    assert manager.get_toasts("ses_d", unacked_only=True) == [toast]
-    assert manager.ack_toast("ses_d", toast.id) is True
+    assert manager._toast_inbox.get("ses_d", unacked_only=True) == [toast]
+    assert manager._toast_inbox.ack("ses_d", toast.id, toast_auto_ack.ACK_REASON_DISMISSED) is True
     assert manager._toast_inbox.pending["ses_d"][0].acknowledged is True
-    assert manager.get_toasts("ses_d", unacked_only=True) == []
+    assert manager._toast_inbox.get("ses_d", unacked_only=True) == []
 
 
-def test_leg_e_the_defensive_reader_still_sees_the_records(manager, tmp_path):
-    """LEG (e). THE ONE THIS CLUSTER ADDS, and the one that fails quietly.
+def test_leg_e_the_history_reader_sees_the_records_and_no_longer_guesses(
+    manager, tmp_path
+):
+    """LEG (e). THE ONE THIS CLUSTER ADDS, and it used to fail quietly.
 
-    ``toast_history.buckets_from_manager`` reads the attribute with a
-    tolerant ``getattr(..., None)`` and answers ``{}`` for a non-Mapping.
-    Drop the facade property and every history view goes empty while
-    nothing raises and no existing test fails. So this asserts the reader
-    gets the REAL dict, not merely that it does not explode.
+    ``toast_history`` read the manager's ``_pending_toasts`` through a
+    tolerant ``getattr(..., None)`` that answered ``{}`` for anything
+    unrecognised. Drop the facade property and every history view went
+    empty while nothing raised and no existing test failed. That is the
+    characteristic failure of this refactor, named in CLAUDE.md.
+
+    S1 repointed the reader at the inbox and REMOVED the tolerance, so
+    this asserts both halves: the reader gets the real dict, and a wrong
+    object now raises instead of answering emptily.
     """
     _register(manager, "ses_h", tmp_path)
     toast = manager.record_toast("ses_h", "Stop", "Your turn")
 
-    buckets = toast_history.buckets_from_manager(manager)
+    buckets = toast_history.buckets_from_inbox(manager._toast_inbox)
 
     assert buckets is manager._toast_inbox.pending, (
         "toast_history is reading something other than the inbox's records"
     )
     assert toast_history.collect_toasts(buckets) == [toast]
 
-    # NEGATIVE CONTROL that the assertion above can fail: an object with
-    # no such attribute really does yield the empty mapping, which is the
-    # silent answer a dropped property would produce.
-    assert toast_history.buckets_from_manager(object()) == {}
+    # NEGATIVE CONTROL, INVERTED BY S1. This used to assert that an
+    # unrecognised object yields {} - the silent answer a dropped property
+    # produced. It must now RAISE, which is what makes the next such move
+    # a crash rather than an empty page.
+    with pytest.raises(AttributeError):
+        toast_history.buckets_from_inbox(object())
 
 
 # --------------------------------------------------------------------------- #
@@ -453,12 +466,12 @@ def test_a_duplicated_stop_acks_by_kind_and_not_the_toast_it_just_raised(
     assert your_turn.id not in first, (
         "the Stop acked the toast it had just raised"
     )
-    assert manager.get_toasts("ses_e", unacked_only=True) == [your_turn]
+    assert manager._toast_inbox.get("ses_e", unacked_only=True) == [your_turn]
 
     # THE DUPLICATE. Same event again: nothing changed state, so the
     # caller broadcasts nothing, and the "your turn" is still standing.
     assert manager.auto_ack_toasts("ses_e", "Stop", cutoff=cutoff) == []
-    assert manager.get_toasts("ses_e", unacked_only=True) == [your_turn]
+    assert manager._toast_inbox.get("ses_e", unacked_only=True) == [your_turn]
 
 
 def test_a_stop_does_not_ack_a_permission_raised_after_it(manager, tmp_path):
@@ -481,4 +494,4 @@ def test_wiping_a_session_clears_its_records_through_the_inbox(
     manager._wipe_session_state("ses_w")
 
     assert manager._toast_inbox.has("ses_w") is False
-    assert manager.get_toasts("ses_w") == []
+    assert manager._toast_inbox.get("ses_w") == []

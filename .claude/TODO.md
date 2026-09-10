@@ -7101,3 +7101,92 @@ this lane on the strength of #5 being free-but-his; it is now formally
 taken, which confirms rather than changes the plan. #28 and #32 remain
 free, both still labelled `blocked`. No new issue touches
 `session_manager.py`, `composition`, or the ports.
+
+---
+
+## 2026-09-10 - backend decomposition v2, slice S1: retro-fit the five shipped slices, delete the 291 lines of forwarders
+
+**THE GO/NO-GO SLICE, AND IT PASSES.** Plan v2 says: if retro-fitting the
+five shipped slices does not drop `session_manager.py` by roughly 291
+lines plus the migrated readers, the premise is wrong and the honest move
+is to revert to v1's permanent facade.
+
+`src/core/session_manager.py`: **8,239 -> 7,894, a drop of 345 lines.**
+291 of forwarder bodies, 21 blank separators, 33 of comment blocks that
+existed only to explain the forwarders. Zero pure forwarders to a shipped
+collaborator remain, enforced by `tests/test_no_cluster_forwarders.py`
+rather than remembered. Contrast the five slices before this one, which
+moved 101 lines NET between them.
+
+**THE PREDICTION HELD.** The plan predicted 22 test files. Actual: 23
+pre-existing test files, plus my own two S0 files that assert through the
+facade, plus 2 new files. The one the plan's name-grep missed is
+`test_session_kind_listing.py`, which reaches `/sessions/recent` through a
+hand-rolled `_Manager` double and so carries none of the 21 names.
+
+**FOUR DEFENSIVE READERS, and every one of them would have failed
+SILENTLY.** This is the characteristic failure CLAUDE.md names, and it was
+sitting in four places at once:
+- `toast_history.buckets_from_manager` answered `{}` for anything without
+  `_pending_toasts`. Every toast history view empties, nothing raises.
+- `routes.py` guarded `get_toasts` with `hasattr`. The reattach backfill
+  endpoint returns `[]` on every session.
+- `away_routes.py` used `getattr(..., None)` plus a `callable` check on
+  the same method. The away report shows no toasts.
+- `websocket.py` did `getattr(sm, "idle_watchers", {}).get(...)`. No idle
+  watcher, on every session, forever.
+All four were repointed AND their tolerance removed, so the next such
+move is a crash rather than an empty page.
+
+**A GREEN MUTATION FOUND A TEST THAT DID NOT EXIST.** Replacing the
+websocket watcher lookup with a literal `None` broke nothing in 5,900
+tests. The one path guaranteed to fail quietly had no coverage at all,
+which is the worst possible pairing. `tests/test_ws_idle_watcher_lookup.py`
+drives the real `send_pty_output` over a fake socket and a one-item queue;
+the `None` mutation now goes red, and so does a lookup that ignores
+`session_id`.
+
+**`test_route_names_resolve.py` earned its keep.** The first draft of the
+theme migration wrote `request.app.state...` inside `_apply_session_theme`,
+which takes no `request`. That is a NameError and a bare 500 on the first
+click, and no other test in the suite would have caught it. The helper now
+takes the `ThemeStore` as an argument and its two callers pass it.
+
+**One argument reshape, on purpose.** `SessionManager.ack_toast` defaulted
+`reason` to `ACK_REASON_DISMISSED`; `ToastInbox.ack` requires it. 13 test
+call sites now say why the ack happened. An ack that does not record its
+reason is what makes a toast history unreadable, and the route already
+passed it explicitly.
+
+**Mutations, all eight measured, every revert verified byte-identical by
+sha256.**
+1. A forwarder comes back -> 2 red (shape leg and name leg).
+2. The tolerant `getattr` returns to `toast_history` -> 2 red.
+3. `buckets_from_inbox` returns a COPY -> 1 red.
+4. The `/toasts` backfill route answers `[]` -> 2 red.
+5. The websocket watcher lookup answers None -> GREEN first time. Test
+   written, then 1 red.
+6. The watcher lookup ignores `session_id` -> 1 red.
+7. The away report stops reading toasts -> 1 red.
+8. The theme route stops writing the dotfile -> 3 red.
+
+**Patch sweep: clean.** Zero `patch(` or `patch.object(` in the suite aims
+at any of the 21 deleted names, checked before and after.
+
+**Verification.** 5,928 passed / 2 failed / 19 skipped, 5,949 collected,
+against the S0 baseline of 5,902 / 2 / 19 and 5,923 collected. Delta +26,
+accounted by collection diff as 23 in `test_no_cluster_forwarders.py` and
+3 in `test_ws_idle_watcher_lookup.py`. FOUR ids left the listing and all
+four are RENAMES with a matching new id in the same file - the leg (b) and
+leg (e) tests whose old names described the forwarder they no longer test.
+ZERO tests removed. The two failures are the known environmental pair.
+Node 200/200. The three listing cost ceilings pass. `scan_secrets.py` exit
+0, pre-commit hook left enabled.
+
+**What is NOT done, said out loud.** Six pure forwarders remain on the
+class, 81 lines, pointing at `_hook_tokens`, `_unread_store`,
+`_activity_tracker`, the two notification handles and `_tmux_socket_name`.
+Those belong to S7 and later and are deliberately outside
+`test_no_cluster_forwarders.py`'s list, which grows one entry per slice. A
+list that failed for work nobody has done would be a countdown, not an
+invariant.

@@ -169,35 +169,35 @@ def _register(manager: SessionManager, session_id: str, work: Path) -> Session:
 
 def test_leg_a_the_facade_containers_are_the_sidecar_containers(manager):
     """LEG (a). One object per container, not two that agree today."""
-    assert manager.idle_watchers is manager._sidecars.idle_watchers
-    assert manager.adopt_fifo_offsets is manager._sidecars.adopt_fifo_offsets
+    assert manager._sidecars.idle_watchers is manager._sidecars.idle_watchers
+    assert manager._sidecars.adopt_fifo_offsets is manager._sidecars.adopt_fifo_offsets
     assert (
-        manager.pending_terminal_commands
+        manager._sidecars.pending_terminal_commands
         is manager._sidecars.pending_terminal_commands
     )
 
 
 def test_leg_b_the_facade_holds_no_field_of_its_own(manager):
-    """LEG (b). All three names are properties, not instance attributes.
+    """LEG (b), REWRITTEN BY S1. There is no second door at all now.
 
-    The leg that fails on an ``__init__`` which assigns
-    ``self.idle_watchers = sidecars.idle_watchers``. Leg (a) stays GREEN
-    on that mutation - measured in S2 and again in S4 - because on the day
-    it is written the two names are the same object.
+    Description: this used to assert the names were PROPERTIES on the
+      class rather than fields on the instance, which was the right check
+      while the facade forwarded: a ``self.idle_watchers = ...`` in
+      ``__init__`` would pass leg (a) on a fresh object and shadow the
+      property forever after. S1 deleted the forwarders, so the invariant
+      is stronger and simpler - the manager resolves none of these names
+      by any route, and a property coming back IS a forwarder coming back.
     """
     for name in (
         "idle_watchers",
         "adopt_fifo_offsets",
         "pending_terminal_commands",
     ):
-        assert name not in manager.__dict__, (
-            f"{name} is an instance attribute on the facade, so the manager "
-            "holds a second reference the sidecars know nothing about"
+        assert not hasattr(manager, name), (
+            f"{name} resolves on the facade again; the sidecars own it and "
+            "a caller holds the sidecars"
         )
-        assert isinstance(getattr(type(manager), name), property), (
-            f"{name} is not a property on SessionManager, so the facade "
-            "is not delegating to the sidecars"
-        )
+    assert manager._sidecars.idle_watchers is not None
 
 
 def test_leg_c_writes_cross_in_both_directions(manager):
@@ -208,19 +208,19 @@ def test_leg_c_writes_cross_in_both_directions(manager):
     """
     watcher = _FakeWatcher("w1")
     manager._sidecars.set_watcher("ses_from_sidecars", watcher)
-    assert manager.idle_watchers["ses_from_sidecars"] is watcher
+    assert manager._sidecars.idle_watchers["ses_from_sidecars"] is watcher
 
-    manager.idle_watchers["ses_from_facade"] = watcher
+    manager._sidecars.idle_watchers["ses_from_facade"] = watcher
     assert manager._sidecars.watcher("ses_from_facade") is watcher
 
     manager._sidecars.set_fifo_offset("ses_from_sidecars", 512)
-    assert manager.adopt_fifo_offsets["ses_from_sidecars"] == 512
+    assert manager._sidecars.adopt_fifo_offsets["ses_from_sidecars"] == 512
 
-    manager.adopt_fifo_offsets["ses_from_facade"] = 1024
+    manager._sidecars.adopt_fifo_offsets["ses_from_facade"] = 1024
     assert manager._sidecars.peek_fifo_offset("ses_from_facade") == 1024
 
     manager._sidecars.set_pending_command("ses_from_sidecars", "top")
-    assert manager.pending_terminal_commands["ses_from_sidecars"] == "top"
+    assert manager._sidecars.pending_terminal_commands["ses_from_sidecars"] == "top"
 
 
 def test_leg_c2_a_whole_map_rebind_reaches_the_sidecars(manager):
@@ -231,26 +231,38 @@ def test_leg_c2_a_whole_map_rebind_reaches_the_sidecars(manager):
     there; a plain attribute shadows the property and forks the two
     objects while every value assertion still passes.
     """
-    manager.pending_terminal_commands = {"ses_1": "top"}
+    manager._sidecars.pending_terminal_commands = {"ses_1": "top"}
 
     assert manager._sidecars.pending_terminal_commands == {"ses_1": "top"}
     assert (
-        manager.pending_terminal_commands
+        manager._sidecars.pending_terminal_commands
         is manager._sidecars.pending_terminal_commands
     )
     assert "pending_terminal_commands" not in manager.__dict__
 
 
 def test_the_other_two_names_are_read_only(manager):
-    """NEGATIVE CONTROL on the setter rule. A setter nothing needs is a
-    second way to write a container that must have exactly one owner.
+    """NEGATIVE CONTROL, REWRITTEN BY S1. The names are gone, so an
+    assignment to one is a NEW attribute rather than a refused write.
 
-    Nothing in ``src/`` or ``tests/`` rebinds either of these, so an
-    assignment should fail loudly rather than be quietly absorbed.
+    Description: while the facade forwarded, a read-only property made
+      ``manager.idle_watchers = {}`` raise, which is what kept a second
+      container from being created. With the property deleted, the same
+      line silently creates an instance attribute - and that attribute
+      would be a second container nothing reads, which is a different
+      failure with the same cause. So the control is now that the name
+      does not resolve BEFORE such an assignment, and that the sidecars'
+      own container is untouched by one.
     """
     for name in ("idle_watchers", "adopt_fifo_offsets"):
-        with pytest.raises(AttributeError):
-            setattr(manager, name, {})
+        assert not hasattr(manager, name)
+
+    real = manager._sidecars.idle_watchers
+    manager.idle_watchers = {}  # type: ignore[attr-defined]
+
+    assert manager._sidecars.idle_watchers is real, (
+        "a stray assignment on the facade reached the sidecars' container"
+    )
 
 
 def test_leg_d_the_public_surface_reads_and_writes_the_sidecars(
@@ -278,21 +290,31 @@ def test_leg_d_the_teardown_clears_the_sidecars(manager, tmp_path):
     assert "ses_wipe" not in manager._sidecars.adopt_fifo_offsets
 
 
-def test_leg_e_the_defensive_reader_still_finds_the_watcher(manager):
-    """LEG (e). ``src/api/websocket.py`` reads through a tolerant getattr.
+def test_leg_e_the_websocket_reader_finds_the_watcher_without_guessing(manager):
+    """LEG (e), REWRITTEN BY S1. The tolerant getattr is gone.
 
-    NECESSARY AND NOT SUFFICIENT, said plainly: a property returning a
-    COPY passes this leg, because ``.get()`` on a copy answers correctly.
-    What this leg catches is the facade no longer exposing the name at
-    all, which the getattr default would turn into "no watcher, on every
-    session, forever" with nothing raised anywhere.
+    Description: ``src/api/websocket.py`` used to read
+    ``getattr(sm, "idle_watchers", {}).get(session_id)``. That default
+    turned a missing name into "no watcher, on every session, forever",
+    with nothing raised anywhere - which is exactly what deleting the
+    facade property would have caused. S1 repointed it at
+    ``services.sidecars.watcher(session_id)``, so the lookup now goes
+    through the owner and a missing container raises instead of
+    answering None.
+
+    Both halves are asserted, because the second is the one that used to
+    be impossible: a real watcher is found, AND an unknown session
+    answers None as a REAL answer rather than as a swallowed failure.
     """
     watcher = _FakeWatcher("w1")
     manager._sidecars.set_watcher("ses_1", watcher)
 
-    found = getattr(manager, "idle_watchers", {}).get("ses_1")
+    assert manager._sidecars.watcher("ses_1") is watcher
+    assert manager._sidecars.watcher("ses_unknown") is None
 
-    assert found is watcher
+    # NEGATIVE CONTROL: the old spelling can no longer answer at all, so a
+    # reader that kept it would have been reading a name that is gone.
+    assert not hasattr(manager, "idle_watchers")
 
 
 def test_leg_f_injected_sidecars_are_the_ones_the_facade_uses(stub_settings):
@@ -301,10 +323,10 @@ def test_leg_f_injected_sidecars_are_the_ones_the_facade_uses(stub_settings):
     manager = SessionManager(sidecars=injected)
 
     assert manager._sidecars is injected
-    assert manager.idle_watchers is injected.idle_watchers
+    assert manager._sidecars.idle_watchers is injected.idle_watchers
 
     injected.set_fifo_offset("ses_1", 77)
-    assert manager.adopt_fifo_offsets["ses_1"] == 77
+    assert manager._sidecars.adopt_fifo_offsets["ses_1"] == 77
 
 
 def test_the_constructor_still_takes_no_arguments(stub_settings):
@@ -329,7 +351,7 @@ def test_the_fifo_offset_is_consumed_exactly_once(manager, tmp_path):
 
     assert manager.consume_adopt_fifo_offset("ses_1") == 4096
     assert manager.consume_adopt_fifo_offset("ses_1") is None
-    assert "ses_1" not in manager.adopt_fifo_offsets
+    assert "ses_1" not in manager._sidecars.adopt_fifo_offsets
 
 
 def test_reading_the_offset_property_does_not_consume_it(manager, tmp_path):
@@ -370,7 +392,7 @@ def test_a_restart_cannot_replay_a_pending_terminal_command(
     assert manager._sidecars.take_pending_command("ses_1") is None
 
     restarted = SessionManager()
-    assert restarted.pending_terminal_commands == {}
+    assert restarted._sidecars.pending_terminal_commands == {}
 
 
 def test_the_flush_pops_before_it_resolves_or_types(manager, tmp_path):
@@ -386,7 +408,7 @@ def test_the_flush_pops_before_it_resolves_or_types(manager, tmp_path):
 
     asyncio.run(manager.flush_pending_terminal_command("ses_1"))
 
-    assert manager.pending_terminal_commands == {}
+    assert manager._sidecars.pending_terminal_commands == {}
 
 
 # --------------------------------------------------------------------------- #

@@ -593,7 +593,11 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 if sm is not None:
                     if session_id and hasattr(sm, "get_backend"):
                         _backend = sm.get_backend(session_id)
-                        _idle_watcher = getattr(sm, "idle_watchers", {}).get(session_id)
+                        _idle_watcher = (
+                            websocket.app.state.services.sidecars.watcher(
+                                session_id
+                            )
+                        )
                     else:
                         _backend = getattr(sm, "backend", None)
                         _idle_watcher = getattr(sm, "idle_watcher", None)

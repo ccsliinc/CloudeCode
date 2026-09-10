@@ -257,7 +257,7 @@ def _build_app(toasts=None, signal=None, alt_screen=None, session_id="s1"):
     """A FastAPI app carrying a SessionManager stocked for this route."""
     sm = MagicMock()
     sm.sessions = {session_id: object()}
-    sm.get_toasts = MagicMock(return_value=list(toasts or []))
+    sm._toast_inbox.get = MagicMock(return_value=list(toasts or []))
     sm._activity_tracker = SimpleNamespace(
         _signals={session_id: signal} if signal is not None else {}
     )
@@ -266,6 +266,8 @@ def _build_app(toasts=None, signal=None, alt_screen=None, session_id="s1"):
 
     app = FastAPI()
     app.state.session_manager = sm
+    # The away report reads the toast inbox off ``app.state.services``.
+    app.state.services = SimpleNamespace(toasts=sm._toast_inbox)
     app.include_router(away_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
     return app, sm

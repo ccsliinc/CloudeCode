@@ -562,198 +562,31 @@ class SessionManager:
         # is what the pin path callable resolves to.
         self._theme_store.load()
 
-    # ---- S2: the theme cluster, owned by ``self._theme_store`` ----------
+    # ---- the five collaborators have NO forwarders here any more --------
     #
-    # THESE TWO ARE PROPERTIES, NOT FIELDS, AND THAT IS THE WHOLE RULE.
-    # Assigning ``self.pinned_themes = store.pinned_themes`` in
-    # ``__init__`` would ALSO make every read agree today, and would fork
-    # the two the first time anything rebound either name - which
-    # ``tests/test_tmux_listing_consumers.py`` does, with a whole-dict
-    # assignment through the facade. A property with a setter makes the
-    # rebind land on the store, so there is exactly one dict however it
-    # is reached. See ``tests/test_theme_store.py`` for the four legs
-    # that prove it.
-
-    @property
-    def pinned_themes(self) -> dict[str, str]:
-        """The durable per-tmux-name pinned-theme map.
-
-        Description: the SAME dict object the theme store holds, not a
-          copy. Kept as a public attribute because 14 external call
-          sites read and write it directly.
-        Inputs: none.
-        Output: dict[str, str] - tmux name to theme id.
-        Example: mgr.pinned_themes is mgr._theme_store.pinned_themes  # True
-        """
-        return self._theme_store.pinned_themes
-
-    @pinned_themes.setter
-    def pinned_themes(self, value: dict[str, str]) -> None:
-        """Rebind the whole map, on the store rather than on this object.
-
-        Description: exists so a caller replacing the map wholesale
-          (several tests do) moves the STORE's map. Without the setter
-          the assignment would create a facade-local attribute that
-          shadows this property, and from then on the two objects would
-          hold different dicts while every value assertion still passed.
-        Inputs: value (dict[str, str]) - the replacement map.
-        Output: None.
-        Example: mgr.pinned_themes = {"cloude_x": "matrix"}
-        """
-        self._theme_store.pinned_themes = value
-
-    @property
-    def _theme_accent_cache(self) -> dict[str, Optional[str]]:
-        """The memoized theme-manifest accent colours.
-
-        Description: aliases the store's cache, which itself aliases the
-          composed ``ThemeAccents`` cache. Three names, one dict.
-        Inputs: none.
-        Output: dict[str, str | None] - theme id to accent, where a
-          stored None means "this theme declares no accent".
-        Example: mgr._theme_accent_cache["matrix"]  # '#00ff41'
-        """
-        return self._theme_store.accent_cache
-
-    # ---- S3: the toast cluster, owned by ``self._toast_inbox`` ---------
+    # S1 of plan v2 deleted 23 pure forwarding members costing 291 lines.
+    # ``pinned_themes``, ``_pending_toasts``, ``log_buffers``,
+    # ``idle_watchers``, ``get_toasts``, ``ack_toast``,
+    # ``last_probe_health`` and the rest are GONE from this class. A
+    # caller reaches the one collaborator it needs, off
+    # ``app.state.services`` in a route or off ``self._theme_store`` and
+    # its siblings in here.
     #
-    # READ-ONLY properties, unlike S2's ``pinned_themes``. Nothing assigns
-    # either container wholesale, so there is no rebind to write through
-    # and a future assignment should fail LOUDLY rather than quietly
-    # shadow the property with a second container.
-
-    @property
-    def _pending_toasts(self) -> dict[str, list[Toast]]:
-        """Session id to that session's toast records, newest-first.
-
-        Description: the SAME dict the inbox holds, not a copy.
-          ``src/core/toast_history.py`` reads it through a deliberately
-          tolerant ``getattr(manager, "_pending_toasts", None)`` that
-          answers ``{}`` for anything that is not a Mapping, so removing
-          this property would empty every history view without raising
-          anywhere. That is the failure this property exists to prevent.
-        Inputs: none.
-        Output: dict[str, list[Toast]].
-        Example: mgr._pending_toasts is mgr._toast_inbox.pending  # True
-        """
-        return self._toast_inbox.pending
-
-    @property
-    def _pending_startup_toasts(self) -> list[tuple[str, Toast]]:
-        """The startup-prompt toasts waiting for an async broadcast.
-
-        Description: the SAME list the inbox holds. Filled by
-          ``_startup_gate_for`` (sync) and emptied by
-          ``_flush_startup_toasts`` (async) through
-          ``ToastInbox.drain_startup``, which is why nothing rebinds this
-          name any more.
-        Inputs: none.
-        Output: list[tuple[str, Toast]] - (session_id, Toast) pairs.
-        Example: mgr._pending_startup_toasts == []
-        """
-        return self._toast_inbox.pending_startup
-
-    # ---- S4: log buffers and command counts, owned by ``self._registry`` -
+    # THE FORWARDERS WERE NOT NEUTRAL, WHICH IS WHY THEY WENT. Measured on
+    # the branch head: 23 members, 291 lines, 12.7 lines each to forward
+    # one call, which is why two of the five extraction slices GREW this
+    # file. See ``.claude/notes/backend-decomposition-plan.md`` section 4.
     #
-    # READ-ONLY properties, like S3's toast pair and unlike S2's
-    # ``pinned_themes``. The rule across these slices is evidence, not
-    # taste: a write-through SETTER exists where a whole-map rebind is
-    # MEASURED in the tree, and nowhere else. Nothing in src or in tests
-    # assigns either of these names, so a future assignment should fail
-    # LOUDLY rather than shadow the property with a second container the
-    # registry knows nothing about.
-
-    @property
-    def log_buffers(self) -> dict[str, list[LogEntry]]:
-        """Per-session log lines, oldest first.
-
-        Description: the SAME dict the registry holds, not a copy. A copy
-          would be correct on the day it was written and would fork the
-          first time anything appended through either spelling.
-        Inputs: none.
-        Output: dict[str, list[LogEntry]] - keyed by session id.
-        Example: mgr.log_buffers is mgr._registry.log_buffers  # True
-        """
-        return self._registry.log_buffers
-
-    @property
-    def command_counts(self) -> dict[str, int]:
-        """How many commands have been sent to each session.
-
-        Description: the SAME dict the registry holds, not a copy.
-        Inputs: none.
-        Output: dict[str, int] - keyed by session id.
-        Example: mgr.command_counts is mgr._registry.command_counts  # True
-        """
-        return self._registry.command_counts
-
-    # ---- S5: the per-session sidecars, owned by ``self._sidecars`` ------
-    #
-    # THE SETTER POSTURE IS EVIDENCE, NOT SYMMETRY, and this cluster is
-    # where it earns the rule. ``pending_terminal_commands`` gets a
-    # write-through setter because ``tests/test_terminal_commands.py``
-    # REBINDS it wholesale, twice. The other two are read-only, because
-    # nothing in src or tests assigns either name and a future assignment
-    # should fail LOUDLY rather than shadow the property with a second
-    # container the collaborator knows nothing about.
-    #
-    # ``idle_watchers`` is also read through a DEFENSIVE ACCESSOR in
-    # another module: ``src/api/websocket.py`` does
-    # ``getattr(sm, "idle_watchers", {}).get(session_id)``. Drop the
-    # property and that reader silently finds no watcher, on every
-    # session, raising nowhere. It is S3's shape and it has now appeared
-    # in three of the first five slices.
-
-    @property
-    def idle_watchers(self) -> dict[str, IdleWatcher]:
-        """Live idle watchers, keyed by session id.
-
-        Description: the SAME dict the sidecars hold, not a copy.
-        Inputs: none.
-        Output: dict[str, IdleWatcher].
-        Example: mgr.idle_watchers is mgr._sidecars.idle_watchers  # True
-        """
-        return self._sidecars.idle_watchers
-
-    @property
-    def adopt_fifo_offsets(self) -> dict[str, int]:
-        """Pipe-pane FIFO offsets awaiting their one WS tailer, by session id.
-
-        Description: the SAME dict the sidecars hold, not a copy. Reading
-          this does not consume anything; ``consume_adopt_fifo_offset``
-          is the one-shot take.
-        Inputs: none.
-        Output: dict[str, int].
-        Example: mgr.adopt_fifo_offsets is mgr._sidecars.adopt_fifo_offsets
-        """
-        return self._sidecars.adopt_fifo_offsets
-
-    @property
-    def pending_terminal_commands(self) -> dict[str, str]:
-        """Terminal-command IDs awaiting their session's first attach.
-
-        Description: the SAME dict the sidecars hold, not a copy. Holds
-          IDs, never command strings.
-        Inputs: none.
-        Output: dict[str, str].
-        Example: mgr.pending_terminal_commands is mgr._sidecars.pending_terminal_commands
-        """
-        return self._sidecars.pending_terminal_commands
-
-    @pending_terminal_commands.setter
-    def pending_terminal_commands(self, value: dict[str, str]) -> None:
-        """Rebind the whole map, on the sidecars rather than on the facade.
-
-        Description: writes THROUGH to the one owner. This setter exists
-          because a rebind is MEASURED - ``tests/test_terminal_commands.py``
-          assigns this name wholesale to arrange and then to clear. Without
-          it the assignment raises; with a plain attribute it would shadow
-          the property and the two objects would fork silently.
-        Inputs: value (dict[str, str]).
-        Output: None.
-        Example: mgr.pending_terminal_commands = {}
-        """
-        self._sidecars.pending_terminal_commands = value
+    # AND FOUR READERS OF THEM WERE DEFENSIVE, so deleting a forwarder
+    # without repointing its caller would have produced a silent wrong
+    # answer rather than a crash: ``toast_history`` answered ``{}`` for a
+    # missing ``_pending_toasts`` (every toast history view empty),
+    # ``routes.py`` guarded ``get_toasts`` with ``hasattr`` (the backfill
+    # endpoint empty on every session), ``away_routes`` used a callable
+    # check on the same method, and ``websocket.py`` did
+    # ``getattr(sm, "idle_watchers", {})`` (no watcher found, on every
+    # session). All four were repointed in the same commit and their
+    # tolerance removed, so the next such move fails loudly.
 
     # ---- multi-session accessors / back-compat shims --------------------
 
@@ -2008,31 +1841,6 @@ class SessionManager:
         except Exception as e:
             logger.error("failed_to_save_session_metadata", error=str(e))
 
-    # ---- pinned-themes persistence (SESSION-IDENTITY-V2) ---------------
-
-    def _load_pinned_themes(self) -> None:
-        """Load the per-tmux-name pinned-theme map from disk.
-
-        Description: delegates to the S2 theme store, which owns both
-          the map and the file. Kept on the facade because the name is
-          reached from outside.
-        Inputs: none.
-        Output: None.
-        Example: mgr._load_pinned_themes()
-        """
-        self._theme_store.load()
-
-    def _save_pinned_themes(self) -> None:
-        """Persist the pinned-theme map atomically.
-
-        Description: delegates to the S2 theme store, which carries the
-          temp-then-``os.replace`` protocol.
-        Inputs: none.
-        Output: None.
-        Example: mgr._save_pinned_themes()
-        """
-        self._theme_store.save()
-
     # ---- read/unread persistence (feat/hook-driven-status) ---------------
     #
     # Storage itself lives in ``src/core/unread_store.py`` (own file, own
@@ -2137,16 +1945,6 @@ class SessionManager:
             # exactly the claim that answers.
             session_view_clears.clear_view_state(self, tmux_name=tmux_name)
 
-    def get_pinned_theme(self, tmux_name: str) -> Optional[str]:
-        """Return the persisted pin for a tmux session name, or None.
-
-        Inputs: tmux_name (str) - a bare tmux session name.
-        Output: str | None - the theme id, None when unset or the name
-          is empty.
-        Example: mgr.get_pinned_theme("cloude_demo")  # 'matrix'
-        """
-        return self._theme_store.get_pin(tmux_name)
-
     def set_pinned_theme(
         self, tmux_name: str, theme_id: Optional[str]
     ) -> None:
@@ -2176,15 +1974,6 @@ class SessionManager:
                     self._save_session_metadata(sess)
                 break
 
-    def discard_pinned_theme(self, tmux_name: str) -> None:
-        """Drop a name's pin entry entirely. No-op if not present.
-
-        Called on explicit destroy paths (``destroy_session`` /
-        ``destroy_external_session``) so a tmux name that's truly gone
-        doesn't accumulate dead pins forever.
-        """
-        self._theme_store.discard_pin(tmux_name)
-
     # ---- project-scoped theme (v0.7.0 - .cc.theme dotfile) -------------
     #
     # The source of truth for a project's theme is ``<working_dir>/.cc.theme``
@@ -2213,40 +2002,6 @@ class SessionManager:
         """
         return theme_dotfile.project_theme_path(working_dir)
 
-    def get_project_theme(self, working_dir) -> Optional[str]:
-        """Read ``<working_dir>/.cc.theme``.
-
-        Description: the DOTFILE ONLY, which is the v0.7.0+ source of
-          truth for a project's theme. It cannot perform the legacy
-          ``pinned_themes.json`` fallback, which is keyed by tmux name
-          and needs an argument this does not take;
-          ``resolve_project_theme`` is the combined lookup.
-        Inputs: working_dir (str | Path | None).
-        Output: str | None - the theme id, None when nothing is pinned
-          or the file is unreadable.
-        Example: mgr.get_project_theme(project)  # 'metal'
-        """
-        return self._theme_store.get_project_theme(working_dir)
-
-    def set_project_theme(self, working_dir, theme_id: Optional[str]) -> None:
-        """Atomically write or clear ``<working_dir>/.cc.theme``.
-
-        Description: an empty or None ``theme_id`` deletes the dotfile.
-          RAISES on failure, unlike the pin-map save: this is reached
-          from a user action with a response to fail, so a write that
-          did not happen must not report success.
-        Inputs: working_dir (str | Path) - must exist and be a
-          directory. theme_id (str | None).
-        Output: None.
-        Raises:
-            FileNotFoundError: ``working_dir`` does not exist.
-            NotADirectoryError: ``working_dir`` is not a directory.
-            OSError: ``working_dir`` is not writable.
-            ValueError: ``working_dir`` resolves to None (caller bug).
-        Example: mgr.set_project_theme(project, "metal")
-        """
-        self._theme_store.set_project_theme(working_dir, theme_id)
-
     def migrate_pinned_theme_to_dotfile(self, session) -> bool:
         """Ferry a v0.6.x ``pinned_themes.json`` entry into ``.cc.theme``.
 
@@ -2272,22 +2027,6 @@ class SessionManager:
             tmux_session=getattr(session, "tmux_session", None),
             session_id=getattr(session, "id", None),
         )
-
-    def resolve_project_theme(
-        self, working_dir, tmux_name: Optional[str] = None
-    ) -> Optional[str]:
-        """The effective theme: dotfile first, then the legacy JSON map.
-
-        Description: the single call the create and adopt paths make, so
-          neither writes fallback glue. The ORDER is the contract - a
-          dotfile beats a JSON pin, because the dotfile is what a second
-          machine can see.
-        Inputs: working_dir (str | Path | None). tmux_name (str | None) -
-          the legacy key, omitted when there is none.
-        Output: str | None.
-        Example: mgr.resolve_project_theme(work, "cloude_demo")
-        """
-        return self._theme_store.resolve_project_theme(working_dir, tmux_name)
 
     # ---- toast notifications (v0.7.0 Part 2) ----------------------------
     #
@@ -2326,19 +2065,6 @@ class SessionManager:
         """
         return ThemeAccents.themes_dir()
 
-    def _get_theme_accent_color(self, theme_id: Optional[str]) -> Optional[str]:
-        """Resolve the ``--color-accent`` string for a theme id, memoized.
-
-        Description: delegates to the S2 theme store's composed accent
-          memo. A cached None is a real answer ("this theme declares no
-          accent") and is not re-read.
-        Inputs: theme_id (str | None).
-        Output: str | None - None when the id is falsy, the manifest is
-          missing or malformed, or ``cssVars`` lacks the var.
-        Example: mgr._get_theme_accent_color("matrix")  # '#00ff41'
-        """
-        return self._theme_store.accent_for_theme(theme_id)
-
     def _get_session_accent_color(
         self, session: Optional[Session]
     ) -> Optional[str]:
@@ -2359,18 +2085,6 @@ class SessionManager:
             getattr(session, "working_dir", None),
             getattr(session, "tmux_session", None),
         )
-
-    def _prune_toasts(self, session_id: str) -> None:
-        """Trim the acked-toasts tail past the inbox's cap.
-
-        Description: delegates to the S3 toast inbox, which owns the
-          records and the asymmetry - every unacked record survives, only
-          the oldest acked ones fall off.
-        Inputs: session_id (str).
-        Output: None.
-        Example: mgr._prune_toasts("ses_1")
-        """
-        self._toast_inbox.prune(session_id)
 
     # v0.7.0 Part 4 - Map the WS toast ``kind`` string (the wire-level
     # vocabulary used by the Claude hook endpoint) to a typed EventType
@@ -2988,38 +2702,6 @@ class SessionManager:
                 except Exception:
                     pass
 
-    def ack_toast(
-        self,
-        session_id: str,
-        toast_id: str,
-        reason: str = toast_auto_ack.ACK_REASON_DISMISSED,
-    ) -> bool:
-        """Mark a toast acknowledged, recording WHY. Idempotent.
-
-        Returns True when the toast was found AND state actually changed
-        (i.e. wasn't already acked). Returns False when not found OR
-        already acked - useful for the route layer to skip the WS
-        broadcast on a no-op double-click.
-
-        ``reason`` defaults to ``dismissed`` so every pre-existing caller
-        records exactly what it always meant: a human cleared this. The
-        hook-driven path passes ``answered``. The reason is stamped ONLY
-        on the transition, never on a record that was already acked, so a
-        duplicate event cannot rewrite the history of an act the user
-        performed.
-
-        Inputs:
-            session_id: the session whose bucket to walk. The scoping is
-                real - a toast id from another session is simply not
-                found here, which is what keeps dismissal per session.
-            toast_id: the record to acknowledge.
-            reason: one of ``toast_auto_ack.ACK_REASON_*``.
-        Output: bool - True only when this call changed state.
-        Example:
-            >>> mgr.ack_toast("ses_1", "abc", reason="answered")
-        """
-        return self._toast_inbox.ack(session_id, toast_id, reason)
-
     def auto_ack_toasts(
         self,
         session_id: str,
@@ -3074,8 +2756,8 @@ class SessionManager:
         changed = [
             toast_id
             for toast_id in candidates
-            if self.ack_toast(
-                session_id, toast_id, reason=toast_auto_ack.ACK_REASON_ANSWERED
+            if self._toast_inbox.ack(
+                session_id, toast_id, toast_auto_ack.ACK_REASON_ANSWERED
             )
         ]
         if changed:
@@ -3085,16 +2767,6 @@ class SessionManager:
                 **toast_auto_ack.describe(event_kind, changed),
             )
         return changed
-
-    def get_toasts(
-        self, session_id: str, unacked_only: bool = False
-    ) -> list[Toast]:
-        """Return toasts for a session, optionally filtered to unacked.
-
-        Newest-first. Returns an empty list (NOT None) when the session
-        has no recorded toasts - callers can iterate without a None check.
-        """
-        return self._toast_inbox.get(session_id, unacked_only)
 
     # ---- output fan-out (per session) -----------------------------------
 
@@ -3527,7 +3199,9 @@ class SessionManager:
             # legacy ``pinned_themes.json`` for the tmux name when no
             # dotfile exists). New projects without a pin yield None,
             # which is the original behavior.
-            prior_pin = self.resolve_project_theme(work_path, tmux_session_name)
+            prior_pin = self._theme_store.resolve_project_theme(
+                work_path, tmux_session_name
+            )
             new_session = Session(
                 id=session_id,
                 pty_pid=pid,
@@ -3883,7 +3557,7 @@ class SessionManager:
                 self.owned_tmux_sessions.discard(owned_name)
                 # SESSION-IDENTITY-V2 - explicit destroy means this name is
                 # dead; drop its pin too.
-                self.discard_pinned_theme(owned_name)
+                self._theme_store.discard_pin(owned_name)
 
             if backend is not None:
                 await backend.stop()
@@ -5994,25 +5668,6 @@ class SessionManager:
         # here so there is one place the preference is expressed.
         return self._probe_health.socket_name(configured=configured)
 
-    def last_probe_health(self) -> "ProbeHealth":
-        """Report whether the most recent tmux listing probe succeeded.
-
-        Description: read by ``GET /sessions/recent`` (S9) to decide
-          whether the stored RECENT rows may be shown as fact. Reuses
-          whichever call to :meth:`list_attachable_sessions` most
-          recently ran - normally the home screen's own poll - rather
-          than triggering a fresh probe of its own, so viewing RECENT
-          never adds tmux load on top of what the launcher already pays.
-        Inputs: none.
-        Output: ProbeHealth - ``ok`` is None when no probe has run yet
-          this process's lifetime (a real third state, distinct from
-          both True and False - see
-          ``src/core/sessions/probe_health.py``), True/False otherwise,
-          with ``reason``/``detail`` populated only on a known failure.
-        Example: mgr.last_probe_health().ok
-        """
-        return self._probe_health.health
-
     def tmux_socket_name(self) -> str:
         """The tmux socket this manager probes and keys its rows on.
 
@@ -7084,7 +6739,7 @@ class SessionManager:
         # is the source of truth. ``pinned_themes.json`` is read as a
         # back-compat fallback only when no dotfile exists; the
         # migration helper below ferries old entries into the new format.
-        prior_pin = self.resolve_project_theme(working_dir, name)
+        prior_pin = self._theme_store.resolve_project_theme(working_dir, name)
         # fix/adopt-response-pid - ``_session_info_for`` still resolves
         # ``pty_pid`` LIVE on every subsequent read (a tmux pane's
         # foreground pid changes over the session's life, so any value
@@ -7302,7 +6957,7 @@ class SessionManager:
         # SESSION-IDENTITY-V2 - drop any pinned theme for this name so
         # killing a session also evicts its preference. No-op if no pin
         # was set.
-        self.discard_pinned_theme(name)
+        self._theme_store.discard_pin(name)
 
         if rc == 0:
             logger.info("external_session_destroyed", name=name)

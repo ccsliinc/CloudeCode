@@ -140,7 +140,7 @@ async def test_failed_probe_does_not_prune_owned_sessions(monkeypatch, tmp_path,
     mgr = _manager(monkeypatch, tmp_path)
     owned = {"cloude_Test", "cloude_asd", "cloude_fs2", "cloude_ses_ec5bf2a3"}
     mgr.owned_tmux_sessions = set(owned)
-    mgr.pinned_themes = {"cloude_Test": "matrix"}
+    mgr._theme_store.pinned_themes = {"cloude_Test": "matrix"}
 
     monkeypatch.setattr(
         "src.core.session_manager.build_backend",
@@ -152,7 +152,7 @@ async def test_failed_probe_does_not_prune_owned_sessions(monkeypatch, tmp_path,
         "a probe that could not evaluate pruned ownership records; an "
         "unanswered question was treated as an answer of zero"
     )
-    assert mgr.pinned_themes == {"cloude_Test": "matrix"}, (
+    assert mgr._theme_store.pinned_themes == {"cloude_Test": "matrix"}, (
         "pinned themes were pruned against an unavailable listing too"
     )
 
@@ -167,7 +167,7 @@ async def test_successful_empty_probe_still_prunes(monkeypatch, tmp_path):
     """
     mgr = _manager(monkeypatch, tmp_path)
     mgr.owned_tmux_sessions = {"cloude_gone"}
-    mgr.pinned_themes = {"cloude_gone": "matrix"}
+    mgr._theme_store.pinned_themes = {"cloude_gone": "matrix"}
 
     monkeypatch.setattr(
         "src.core.session_manager.build_backend",
@@ -181,7 +181,7 @@ async def test_successful_empty_probe_still_prunes(monkeypatch, tmp_path):
         "tmux answered 'no server running', which is a real zero - the "
         "stale ownership record should have been pruned"
     )
-    assert mgr.pinned_themes == {}
+    assert mgr._theme_store.pinned_themes == {}
 
 
 @pytest.mark.asyncio

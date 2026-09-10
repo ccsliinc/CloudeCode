@@ -237,8 +237,11 @@ async def away_summary(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Bad since: {exc}")
 
-    getter = getattr(session_manager, "get_toasts", None)
-    toasts = getter(session_id) if callable(getter) else []
+    # Reached off the collaborator, not through a tolerant ``getattr``.
+    # The old spelling answered an empty list for a manager without the
+    # method, which reads on the page exactly like a session that has had
+    # no toasts - a silent wrong answer rather than a failure.
+    toasts = request.app.state.services.toasts.get(session_id)
 
     permission_open, notice_open, last_activity_at = read_activity_signal(
         session_manager, session_id

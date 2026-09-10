@@ -55,29 +55,39 @@ DEFAULT_HISTORY_LIMIT = 100
 MAX_HISTORY_LIMIT = 500
 
 
-def buckets_from_manager(manager: object) -> Mapping[str, Sequence[Toast]]:
-    """Return the live per-session toast buckets held by a session manager.
+def buckets_from_inbox(inbox: object) -> Mapping[str, Sequence[Toast]]:
+    """Return the live per-session toast buckets held by a toast inbox.
 
-    Description: the ONE place that reaches for the storage attribute, so
-        a future public accessor on ``SessionManager`` is a one-line
-        change here rather than a hunt through route modules. It is
-        deliberately tolerant: a manager that has not initialised the
-        attribute yet (or a test double that never will) yields an empty
-        mapping, which the callers render as "no toasts", never as an
-        error. Nothing downstream can distinguish a manager with no
-        toasts from one with no bucket dict, and nothing needs to - both
-        mean there is nothing to show.
+    Description: the ONE place that reaches for the storage container,
+        so a change of owner is a one-line change here rather than a hunt
+        through route modules. It used to take the SessionManager and
+        read ``_pending_toasts`` off it through a tolerant ``getattr``
+        that answered ``{}`` for anything unrecognised.
+
+        **THAT TOLERANCE IS GONE ON PURPOSE, AND IT IS THE POINT OF THIS
+        CHANGE.** A missing container and a session with no toasts
+        rendered identically, so deleting the attribute would have
+        emptied every toast history view while raising nowhere and
+        failing no test. That is the characteristic failure of this
+        refactor, named in CLAUDE.md, and this function was the clearest
+        instance of it in the tree. A real inbox whose container is
+        renamed now raises here, loudly, at the one call site.
+
+        ``None`` is still tolerated, and only ``None``: a request that
+        arrives before the inbox is mounted yields empty buckets rather
+        than a 500, because an empty notification list is the correct
+        answer for a server with no sessions.
     Inputs:
-        manager: the process's ``SessionManager``, or any object.
+        inbox: the process's ``ToastInbox``, or None when nothing is
+            mounted yet.
     Output: Mapping[str, Sequence[Toast]] - session id to its records.
     Example:
-        >>> buckets_from_manager(object())
+        >>> buckets_from_inbox(None)
         {}
     """
-    buckets = getattr(manager, "_pending_toasts", None)
-    if isinstance(buckets, Mapping):
-        return buckets
-    return {}
+    if inbox is None:
+        return {}
+    return inbox.pending
 
 
 def collect_toasts(

@@ -168,13 +168,13 @@ async def test_rename_repins_themes(monkeypatch, tmp_path):
     _register(mgr, "ses_t", work, "cloude_themed", owned=True)
 
     # Seed a pin under the old name.
-    mgr.pinned_themes["cloude_themed"] = "matrix"
-    mgr._save_pinned_themes()
+    mgr._theme_store.pinned_themes["cloude_themed"] = "matrix"
+    mgr._theme_store.save()
 
     await mgr.rename_session("ses_t", "themed2")
 
-    assert "cloude_themed" not in mgr.pinned_themes
-    assert mgr.pinned_themes.get("themed2") == "matrix"
+    assert "cloude_themed" not in mgr._theme_store.pinned_themes
+    assert mgr._theme_store.pinned_themes.get("themed2") == "matrix"
 
 
 # --------------------------------------------------------------------------- #
