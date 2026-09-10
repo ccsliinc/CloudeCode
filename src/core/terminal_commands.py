@@ -54,6 +54,8 @@ from typing import Dict, List, Optional
 import structlog
 from pydantic import BaseModel, Field, field_validator
 
+from src.core import config_writer
+
 logger = structlog.get_logger()
 
 #: Config.json key holding the list. Top-level (a sibling of ``agents`` /
@@ -213,11 +215,10 @@ def replace_terminal_commands(config_path: Path, raw: List[dict]) -> List[dict]:
     """Persist a whole new terminal-command list to config.json.
 
     Description: validates first (nothing malformed ever reaches disk),
-      backs the pre-write bytes up to ``config.json.bak`` and writes via
-      tmp-file + fsync + os.replace - the same one-generation backup and
-      atomic-write convention ``Settings.update_settings_config`` and
-      ``Settings._write_wrappers`` already use. Whole-list replace covers
-      add, edit, delete AND reorder with one code path.
+      then writes through the ONE serialization boundary in
+      ``config_writer``, which backs the pre-write bytes up to
+      ``config.json.bak`` and replaces atomically. Whole-list replace
+      covers add, edit, delete AND reorder with one code path.
     Inputs:
       config_path (Path) - path to config.json.
       raw (list[dict]) - the complete new list, in display order.
@@ -232,27 +233,12 @@ def replace_terminal_commands(config_path: Path, raw: List[dict]) -> List[dict]:
 
     validated = validate_command_list(raw)
 
-    with open(config_path) as f:
-        existing_raw = f.read()
-    try:
-        data = json.loads(existing_raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {config_path}: {e}")
+    def merge(data: dict) -> dict:
+        data = dict(data)
+        data[TERMINAL_COMMANDS_KEY] = validated
+        return data
 
-    data[TERMINAL_COMMANDS_KEY] = validated
-
-    try:
-        backup_path = config_path.with_suffix(config_path.suffix + ".bak")
-        backup_path.write_text(existing_raw)
-    except OSError as e:
-        logger.warning("terminal_commands_backup_failed", error=str(e))
-
-    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, config_path)
+    config_writer.commit(config_path, merge)
 
     logger.info("terminal_commands_replaced", count=len(validated))
     return validated

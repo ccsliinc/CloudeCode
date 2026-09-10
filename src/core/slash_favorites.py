@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Tuple
 
 import structlog
 
+from src.core import config_writer
 from src.core import slash_command_labels
 
 logger = structlog.get_logger()
@@ -180,9 +181,9 @@ def write(config_path: Path, entries: List[Any]) -> None:
     Description: backs the pre-write bytes up to ``config.json.bak`` and
       writes via tmp-file + fsync + os.replace - the same one-generation
       backup and atomic-write convention
-      ``terminal_commands.replace_terminal_commands`` and
-      ``Settings._write_wrappers`` already use, so a crash mid-write can
-      never leave a truncated config.
+      every other config.json writer uses, through the ONE serialization
+      boundary in ``config_writer`` - so a favorites save arriving beside
+      a settings save can no longer discard it.
       NORMALIZED ON EVERY SAVE, NOT ONCE BY A MIGRATION. Entries go
       through ``slash_command_labels.storage_form``, which emits a BARE
       STRING for any entry with no real description and keeps the object
@@ -204,27 +205,12 @@ def write(config_path: Path, entries: List[Any]) -> None:
 
     entries = slash_command_labels.storage_form(entries)
 
-    with open(config_path) as f:
-        existing_raw = f.read()
-    try:
-        data = json.loads(existing_raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {config_path}: {e}")
+    def merge(data: dict) -> dict:
+        data = dict(data)
+        data[FAVORITES_KEY] = entries
+        return data
 
-    data[FAVORITES_KEY] = entries
-
-    try:
-        backup_path = config_path.with_suffix(config_path.suffix + ".bak")
-        backup_path.write_text(existing_raw)
-    except OSError as e:
-        logger.warning("slash_favorites_backup_failed", error=str(e))
-
-    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, config_path)
+    config_writer.commit(config_path, merge)
 
     logger.info("slash_favorites_written", count=len(entries))
 
