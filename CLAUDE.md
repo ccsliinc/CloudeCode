@@ -565,6 +565,61 @@ seconds was queueing. The control that proves the mechanism is
 `GET /sessions/records`, which does its work in a threadpool: its own cost is
 5.8 ms and its p99 was 161 ms, all of it spent waiting to be served.
 
+**THE FILE DRAWER'S TREE SCAN WAS THE SAME DEFECT ON A SECOND PATH, AND IT
+WAS NOT A SUBPROCESS OR A SQLITE PROBLEM.** `GET /config-files/tree` was an
+`async def` calling `config_files.list_tree` directly, a recursive filesystem
+walk, so opening the file drawer stalled every terminal in the app for the
+length of the walk. The cost is `stat` SYSCALLS and nothing else: measured
+2026-09-10 against this repository's own working directory, **1621 nodes,
+6501 `stat` calls against 93 directory reads** - about four `stat`s per node,
+because `_build_node` asked `is_dir()` three times and the sort key asked
+`is_file()` once. Against `~/.claude`: 1112 nodes, 4551 `stat`s. Warm wall
+time 264 to 477 ms per open. **A subprocess count or a connection count would
+have passed before the fix and proved nothing**, which is the sibling
+listing's lesson applied in the other direction.
+
+The fix is two halves and the ORDER matters. First
+`await asyncio.to_thread(config_files.list_subtree, ...)`, which is what
+actually stops the stall; second an optional `depth`, so the levels nobody
+expands are never walked. Interleaved A/B in one process, so the same load
+hit both arms: the walk ON the loop stalled a concurrent coroutine for
+**372.8 ms p50, tracking its own 374.1 ms wall time almost exactly** - the
+handler's duration IS the stall - while in a thread the same walk's wall time
+was unchanged and the stall fell to **101.5 ms p50 against a 50.0 ms idle
+control on a box at load average 33**, no longer tracking the wall time at
+all. THE RESIDUAL IS NOT SETTLED: that box was heavily contended and the
+control's own noise floor is half the post-fix figure, so re-measure on a
+quiet machine before quoting 101.5 ms as this path's cost.
+
+The second half is measured in SYSCALLS, which do not care what else the box
+is doing. One open of the drawer, both roots: **8363 `stat` calls and 365
+directory reads before, 245 and 2 after**, a 34x reduction, because a client
+sending `depth=1` never asks for a level nobody expanded. Expanding five
+directories by hand still costs only **1667**, 20 percent of what a single
+open used to cost unconditionally. The offload removed the STALL and the
+shallow read removed the WORK: shipping only the second would still block the
+loop for whatever the shallow read costs, which is why that order is the one
+the issue specified.
+
+**`children_loaded` IS THE THREE-OUTCOME RULE REACHING `children`.** An empty
+`children` list used to mean BOTH "read, genuinely empty" AND "stopped at the
+depth cap" - a conflation that predates shallow reads and that shallow reads
+would have made routine. `TreeNode.children_loaded` is True only when the
+directory was actually enumerated, and a client tests `=== false`, never
+falsiness, so a server that omits the field reads as loaded and an old client
+sending no `depth` still gets the whole tree. **CONTAINMENT IS RE-CHECKED ON
+EVERY EXPANSION**, through the same `resolve_safe_path` that `read_file` uses:
+component-wise `Path.relative_to` after `resolve()`, never a string prefix,
+so `/Users/jsugamelevil` is not inside `/Users/jsugamele`. That makes a
+per-level read STRICTER than the recursive walk, which descends through a
+symlink without re-resolving it. See `src/core/config_files_tree_request.py`
+(the pure request rules), `client/js/config-editor-lazy.js` (the expansion and
+its three outcomes) and `tests/test_config_files_shallow.py`, whose
+loop-blocking test is STRUCTURAL rather than timed - a stand-in walk parks
+until a coroutine beside it releases it, so it can only pass off the loop and
+cannot flake on load - and which carries the negative control proving that
+harness detects a walk that IS on the loop.
+
 **A SECOND SUBPROCESS MUST NEVER ASK WHAT THE BULK ROW ALREADY SAYS, BUT ONLY
 THE POSITIVE HALF OF THAT ROW IS EVIDENCE.** `backend.is_alive()` is
 `tmux has-session`, and `list-panes -a` in the same pass already enumerates

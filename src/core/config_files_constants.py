@@ -115,3 +115,12 @@ EXECUTABLE_EXTENSIONS = frozenset({".py", ".cjs", ".js", ".sh"})
 EXECUTABLE_DIRS = frozenset({"hooks", "scripts"})
 
 MAX_READ_BYTES = 2 * 1024 * 1024  # 2MB - a config file bigger than this is not what this editor is for.
+
+# Recursion cap for the file tree, expressed as a DEPTH: a root's direct
+# children sit at depth 0, so this permits TREE_MAX_DEPTH + 1 LEVELS of
+# nodes. Deep enough for skills/<name>/SKILL.md, shallow enough to bound one
+# request. It lives here rather than as a default argument because
+# config_files.list_subtree and config_files_tree_request both need it, and
+# two copies of a cap is how a shallow read and a full read come to disagree
+# about how deep "the whole tree" is.
+TREE_MAX_DEPTH = 6

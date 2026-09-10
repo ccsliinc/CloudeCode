@@ -292,7 +292,15 @@ class ConfigEditorPanelController {
     async _buildRootEl(rootDef, projectPath) {
         let nodes;
         try {
-            const resp = await window.API.getConfigFileTree(rootDef.id, projectPath);
+            // ONE LEVEL ONLY. The rest arrives per directory as the user
+            // expands it (config-editor-lazy.js). The server walked every
+            // level of every root on open until 2026-09-10, on its own event
+            // loop, which stalled every terminal websocket in the app for the
+            // length of the walk - see that module's docstring for the
+            // measurement. Rendering was already lazy; the SCAN was not.
+            const resp = await window.API.getConfigFileTree(rootDef.id, projectPath, {
+                depth: window.ConfigEditorLazy.FETCH_DEPTH,
+            });
             nodes = resp.tree || [];
         } catch (err) {
             // A project working directory with no .claude/ subdirectory
@@ -382,28 +390,45 @@ class ConfigEditorPanelController {
             childList.hidden = collapsed;
             let built = false;
 
-            // Populate `childList` exactly once. Lazy-render is about
-            // deferring the cost until a node is EXPANDED, not until it is
-            // CLICKED - a node that starts expanded (the `~/.claude` and
+            // Populate `childList` exactly once, fetching the level from the
+            // server when it was not sent with the parent. Lazy-render is
+            // about deferring the cost until a node is EXPANDED, not until it
+            // is CLICKED - a node that starts expanded (the `~/.claude` and
             // project `.claude` roots do) has to be built here at render
             // time, or it shows an open disclosure over an empty list and
-            // needs two clicks to reveal anything.
-            const buildChildren = () => {
+            // needs two clicks to reveal anything. `built` is set BEFORE the
+            // await so a double-click cannot start two requests; the loading
+            // row is what the user sees in the gap.
+            const buildChildren = async () => {
                 if (built) return;
                 built = true;
-                // THREE-OUTCOME RULE: node.list_error means this
-                // directory's own contents could not be enumerated
-                // (server-side OSError, see config_files.py) - render
-                // that explicitly instead of leaving an empty <ul> that
-                // is visually identical to a directory that really has
-                // nothing in it.
-                if (node.list_error) {
-                    childList.appendChild(this._noticeLi(
-                        window.ConfigEditorRoots.listErrorNotice(node.list_error),
-                    ));
+                const projectPath = rootId === 'user' ? null : this._currentProjectPath();
+                let loadingLi = null;
+                if (window.ConfigEditorLazy.needsFetch(node)) {
+                    loadingLi = this._noticeLi('loading...');
+                    childList.appendChild(loadingLi);
+                }
+                const verdict = await window.ConfigEditorLazy.childrenFor(rootId, node, projectPath);
+                if (loadingLi) loadingLi.remove();
+                // THREE-OUTCOME RULE, per directory. `list_error` is the
+                // server saying it could not enumerate this one; `failed` is
+                // the expansion request itself not producing an answer.
+                // Either way, say so - an empty <ul> is visually identical to
+                // a directory that really has nothing in it, and rendering
+                // "I could not find out" as "there is nothing here" is this
+                // project's most repeated defect.
+                if (verdict.status === 'list_error' || verdict.status === 'failed') {
+                    childList.appendChild(this._noticeLi(verdict.message));
                     return;
                 }
-                (node.children || []).forEach(
+                // Cache the fetched level on the node so a collapse and a
+                // re-expand does not re-ask, and so `needsFetch` stops
+                // answering true for it.
+                if (verdict.status === 'loaded') {
+                    node.children = verdict.nodes;
+                    node.children_loaded = true;
+                }
+                (verdict.nodes || []).forEach(
                     (child) => childList.appendChild(this._buildNodeEl(rootId, child, depth + 1)),
                 );
             };
@@ -411,6 +436,9 @@ class ConfigEditorPanelController {
 
             toggle.addEventListener('click', () => {
                 const nowExpanded = toggle.getAttribute('aria-expanded') !== 'true';
+                // Not awaited: the disclosure must respond to the tap now,
+                // and buildChildren paints its own loading row and its own
+                // failure row into the list that is already on screen.
                 if (nowExpanded) buildChildren();
                 toggle.setAttribute('aria-expanded', String(nowExpanded));
                 toggle.querySelector('.config-editor-toggle-glyph').textContent = nowExpanded ? '-' : '+';

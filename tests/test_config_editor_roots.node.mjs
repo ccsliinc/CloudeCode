@@ -324,15 +324,40 @@ test('REGRESSION: an unreadable node and a genuinely empty node render different
         'an unreadable directory must never render identically to an empty one');
 });
 
-test('the panel renders list_error through the shared notice builder, not an inline string', () => {
-    const panel = fs.readFileSync(
-        path.join(__dirname, '..', 'client', 'js', 'config-editor-panel.js'),
+test('list_error is rendered through the shared notice builder, not an inline string', () => {
+    // The check moved out of config-editor-panel.js and into
+    // config-editor-lazy.js when directory contents started being fetched on
+    // expand: `list_error` is now one of the outcomes that module resolves,
+    // alongside "fetched" and "the fetch failed". The contract asserted here
+    // is unchanged - the wording comes from the tested pure function - only
+    // the file that calls it moved.
+    const lazy = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'config-editor-lazy.js'),
         'utf8',
     );
-    assert.ok(panel.includes('node.list_error'),
-        'the panel must check TreeNode.list_error before rendering a directory\'s children');
-    assert.ok(panel.includes('window.ConfigEditorRoots.listErrorNotice(node.list_error)'),
+    assert.ok(lazy.includes('node.list_error'),
+        'the expansion path must check TreeNode.list_error before rendering children');
+    assert.ok(lazy.includes('window.ConfigEditorRoots.listErrorNotice(node.list_error)'),
         'the wording must come from the tested pure function, not a second inline copy');
+});
+
+test('an expansion that could not be answered says so, and not "empty"', () => {
+    // The third outcome that lazy expansion ADDS. When the whole tree
+    // arrived in one response there were only two answers for a directory:
+    // its contents, or list_error. Fetching on expand means the answer can
+    // fail to arrive after the user has already clicked, and an expansion
+    // that quietly reveals nothing reads as "this directory is empty".
+    const failed = Roots.expandFailedNotice('locked could not be read: Permission denied');
+    assert.ok(failed.length > 0, 'there must be a sentence at all');
+    // Only OUR words are held to lowercase. The interpolated detail is the
+    // server's own strerror and keeps its capitalisation, exactly as
+    // listErrorNotice already does - rewriting it would misquote the reason.
+    const ours = failed.replace('locked could not be read: Permission denied', '');
+    assert.equal(ours, ours.toLowerCase(), 'ui copy is lowercase');
+    assert.ok(!/empty/i.test(failed),
+        'a could-not-load sentence must never claim the directory is empty');
+    assert.notEqual(failed, Roots.listErrorNotice('Permission denied'),
+        'a failed request and a server-reported list_error are different facts');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

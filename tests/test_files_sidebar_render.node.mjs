@@ -182,6 +182,11 @@ function loadPanel() {
     vm.runInContext(read('config-editor-tree-state.js'), context);
     vm.runInContext(read('session-status-ui.js'), context);
     vm.runInContext(read('config-editor-roots.js'), context);
+    // config-editor-lazy.js is real too: the panel expands a directory
+    // through it, so stubbing it here would leave the rendering path this
+    // suite exists to check running against something production does not
+    // use. It touches nothing but window.API and window.ConfigEditorRoots.
+    vm.runInContext(read('config-editor-lazy.js'), context);
     vm.runInContext(read('config-editor-panel.js'), context);
     fakeWindow.document = context.document;
     return { ConfigEditorPanel: fakeWindow.ConfigEditorPanel, window: fakeWindow };
