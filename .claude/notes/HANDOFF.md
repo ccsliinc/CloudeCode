@@ -999,3 +999,13 @@ its correction beats a clean lie.
   archives holding 24,790 records; and a token-minting shell quoting bug made
   both endpoints return 401 while the parser read the error body as an empty
   list, producing a false zero.
+
+## a fake test failure trap in a fresh worktree (2026-09-10)
+
+`config.json` is gitignored, so a brand new `git worktree add` checkout has
+none. Running `venv/bin/python3 -m pytest -q` in that fresh worktree reports
+roughly 19 failures and 26 errors, all `FileNotFoundError`, and every one of
+them is fake - it is the missing `config.json`, not a real regression. Copy
+the main repo's `config.json` into the new worktree before trusting any test
+count out of it. Found by the rebase worker who hit this baseline mismatch
+first.

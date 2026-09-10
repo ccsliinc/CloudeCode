@@ -6901,3 +6901,15 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 `macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
 would want the same ruling.
 
+
+## 2026-09-09 - 1.2 merge decisions (owner), adamdev/master at 887b8fc
+
+Comparison reports: `.claude/notes/compare-1.2/{status-led,sidebar,toasts-launchpad-terminal,backend,non-overlap}.md`.
+Owner's answers, verbatim: "1. his. 2. keep, make a setting. 3. mine. 4. yes. 5. yes you can. make sure you use his latest."
+1. Unread rides the OUTER ring as a still green ring (HIS model); the `done` bucket and his status-key legend come with it. Supersedes the 2026-09-09 "ring means activity only" paragraph in CLAUDE.md, which must be rewritten, not left contradicting.
+2. Manual mark-unread control is KEPT, behind a setting (config toggle, default on).
+3. Sidebar row controls: OURS (kebab menu with restart). His inline pin/close icons and his removal of restart from live rows are NOT taken.
+4. Dead rows go to Recent (ours). His dead-row restart surface on the live list is not taken.
+5. His CI hardening, skip audit and pytest.ini changes are taken; re-baseline the test counts in CLAUDE.md afterwards.
+6. Version: 1.2 must sort above his v1.0.36.
+- [ ] Merge on `release/1.2` (worktree off `v1.1`), then validate, deploy live, tag.
