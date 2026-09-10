@@ -64,7 +64,7 @@ not read all 27.
 | `docs/LESSONS.md` | Before you debug something that feels familiar. Defect shapes that have bitten this project more than once, with the evidence. Add one when a pattern REPEATS; once is an incident, twice is a pattern. |
 | `docs/session-status.md` | Anything about the status lights. The single source of truth for the state model, the two rings, the five colours and where each fact is stored. |
 | `docs/session-status-model.md` | You need the transition-by-transition derivation. Four independent state machines, every state citing the symbol it was read out of, drift-tested by `tests/test_status_model_chart_drift.py`. |
-| `docs/notifications.md` | Anything about toasts. Raising is global, dismissing is per session, and those are independent axes. |
+| `docs/notifications.md` | Anything about toasts. Raising is global, dismissing is per session, and those are independent axes. Also the external push channels: the queue stays sequential, the three channels inside one entry go out at once under a per-channel bound. |
 | `docs/alert-state-model.md` | You are designing alerting. DESIGN ONLY, nothing in it is built, and it deliberately disagrees with `docs/session-status-model.md` in two places. Read that one first. |
 | `docs/session-project-operations.md` | You need to know what an operation does to a session row, a project row and the tmux session underneath. Every node cites the symbol it came from. |
 | `docs/project-reconcile.md` | The project list looks wrong after an upgrade. Written after a round trip actually lost rows. |
