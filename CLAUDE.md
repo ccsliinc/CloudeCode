@@ -433,6 +433,67 @@ on a hash mismatch). Do not add a host to the CSP, do not weaken
 `frame-ancestors 'none'`, do not introduce inline script or `eval`, and do not
 read `style-src 'unsafe-inline'` as license to widen anything further.
 
+**A THEME CAN SHIP A SCRIPT, AND THE CSP IS NOT WHAT GATES IT.** A theme's
+optional `effects.js` is served same-origin, from `/static/css/themes/<id>/`
+for a bundled theme and from the `/themes/<id>/` mount for a user-authored
+one, and is loaded by dynamic `import()`. `script-src 'self'` therefore
+PERMITS it, correctly and unchanged - the policy's job is to stop code
+arriving from somewhere else, not to decide which of our own origin's files
+the user wants running. The gate is the app's own, it lives in
+`client/js/theme-consent.js` (the ladder and the record) and
+`src/core/theme_script_consent.py` (the same ladder, server side), and
+`client/js/themes/registry.js` keeps only the modal and the execution.
+**Nothing in #45 changed the CSP, and nothing in it may.**
+
+**SIX OUTCOMES, ONE OF WHICH RUNS, AND THE ORDER IS THE CLAIM.** No script
+declared; a recorded `never`; a record that could not be READ; a bundled
+theme; a script whose bytes could not be digested; a grant naming DIFFERENT
+bytes; a grant naming THESE bytes; nothing on record. Only the last-but-two
+executes. **DENY WINS OVER EVERYTHING**, including the bundled bypass and
+including a newer grant, whichever was written last - that is the property
+that makes sharing a restriction safe. An UNREADABLE record refuses a cached
+grant rather than honouring it, because a client that cannot read the record
+cannot show that no newer `never` exists, which is exactly the "a cached
+approval cannot outrank a newer global Never" this was asked for. The cost of
+that refusal is an animation that does not play.
+
+**CONSENT IS SHARED, AND WHAT MAKES A SHARED GRANT SAFE IS A DIGEST.** The
+record moved out of this browser's `cloude.themeJsAllowlist` and into the
+server-owned `ui_preferences.theme_script_consent`, so a `never` set anywhere
+binds everywhere. `docs/ui-preferences-inventory.md` had recommended against
+sharing it, and it was right about the shape it was describing: a grant keyed
+on a theme ID alone is a standing yes for whatever that file later becomes,
+and a theme directory is a folder anything with write access can edit. So an
+`always` stores the sha256 of the exact `effects.js` it was granted for. The
+server stamps that onto the manifest as `effectsDigest` from the bytes it is
+about to serve, a manifest cannot declare its own, and editing the file makes
+the grant stop matching so the user is asked again about the script that now
+exists. **THE USER APPROVES AN ARTIFACT, NOT A NAME.**
+`ui_preferences.validate_changes` REFUSES an `always` carrying no digest and
+refuses the word `once` outright, so an unbounded grant and a persisted
+temporary allowance are both unexpressible rather than merely unwritten.
+
+**`ALLOW ONCE` IS NEVER STORED AND NEVER SENT**, and the legacy local key is
+read for its REFUSALS ONLY. A `false` in `cloude.themeJsAllowlist` still
+refuses, for free, because honouring an existing restriction can only reduce
+what runs. Every `true` in it is IGNORED: it names no digest, so there is
+nothing to bind a grant to, and those users are asked exactly once more. That
+same reasoning is why the #46 settings import refuses that key by name.
+
+**THE GATE IS A SEPARATE FILE SO ITS REFUSALS CAN BE MEASURED.**
+`ThemeConsent.gateEffects` takes the injector as a CALLBACK and calls it on
+exactly one path, so `tests/test_theme_script_consent.node.mjs` hands it a spy
+and proves an unconsented theme never executes - against the real callback
+registry.js passes in, not against an internal flag that correlates with it
+today. Eleven of its twenty-one cases are refusals. **A suite that only drove
+the consented path would pass against a gate that never refuses**, which is
+this project's own "a matcher that always finds something is worse than
+useless" one layer up. A revocation arriving from another device runs the
+module's `destroy()`, drops the loader cache, cancels an on-screen prompt and
+is re-checked mid-`import()` before `init()` runs - and it SAYS that anything
+the script already did to the page stands until a reload, because claiming
+otherwise would be the false green this project keeps paying to remove.
+
 **THE ATTACH CAPTURE CARRIES THE CURSOR, BECAUSE `capture-pane`
 SERIALISES CELLS AND NEVER CURSOR STATE.** `capture_visible_screen()`
 (`src/core/tmux_backend.py`) appends an explicit `ESC[row;colH` read from

@@ -32,6 +32,21 @@ and every close from any width, including a phone tapping the bar shut,
 so it records what one device is doing rather than what the user
 prefers. Sharing it lets a phone close a desktop's sidebar.
 
+ONE FIELD HERE IS IN THE INVENTORY'S PER-VIEWER COLUMN, AND THE
+OVERRULING IS DELIBERATE. ``theme_script_consent`` is the server-side
+home of ``cloude.themeJsAllowlist``, which the inventory recommended stay
+local on the grounds that "syncing a consent grant would let a yes
+clicked on one device silently authorize script execution on every other
+device". That objection is correct about a grant keyed on a THEME ID,
+and it is not correct about the shape stored here: an ``always`` names
+the sha256 of the exact ``effects.js`` it was given for, so it authorises
+one artifact rather than one name, and editing that file revokes it
+automatically. The direction the inventory did not weigh is the other
+one - a ``never`` that binds only on the device it was clicked on is a
+refusal the user has to repeat on every machine they own, which is the
+worse failure. See ``src/core/theme_script_consent.py`` for the ladder
+and for why every way of not knowing refuses.
+
 UNKNOWN FIELDS ARE PRESERVED, NOT DROPPED. A newer client writing a
 preference this server has never heard of must not lose it, and
 downgrading must not destroy data, so an unrecognised key inside
@@ -50,6 +65,8 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from src.core import theme_script_consent
 
 UI_PREFERENCES_KEY = "ui_preferences"
 """The top-level config.json key this block lives under."""
@@ -166,6 +183,7 @@ class UiPreferenceValues(BaseModel):
     config_editor_pinned: Optional[bool] = None
     config_editor_collapsed: Optional[Dict[str, bool]] = None
     launchpad_collapsed: Optional[Dict[str, bool]] = None
+    theme_script_consent: Optional[Dict[str, Any]] = None
 
     @field_validator("theme")
     @classmethod
@@ -226,6 +244,20 @@ class UiPreferenceValues(BaseModel):
                     f"launchpad_collapsed only covers {list(LAUNCHPAD_SECTION_IDS)}"
                 )
         return value
+
+    @field_validator("theme_script_consent")
+    @classmethod
+    def _script_consent(cls, value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        # THE ONE PREFERENCE THAT IS A SECURITY DECISION, NOT A TASTE.
+        # It is here rather than in localStorage so a ``never`` set on one
+        # device binds on another, which is the direction of sharing that
+        # can only reduce what executes. The direction that can increase
+        # it - an ``always`` - is bounded by a digest, and the rules for
+        # that live in ``theme_script_consent`` rather than here so the
+        # server's check and the client's gate cannot drift apart.
+        if value is None:
+            return None
+        return theme_script_consent.validate_consent_map(value)
 
 
 def known_fields() -> frozenset:

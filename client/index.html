@@ -1144,6 +1144,11 @@
     <!-- The shared CSS-var diff writer registry.js calls into for both
          :root and #terminal-screen. Must load BEFORE themes/registry.js. -->
     <script src="/static/js/theme-var-writer.js"></script>
+    <!-- Whether a theme's effects.js may run, and where that answer is
+         kept. Must load AFTER preferences.js (it subscribes to the shared
+         record on load) and BEFORE themes/registry.js, which refuses to
+         run any theme script at all when this module is absent. -->
+    <script src="/static/js/theme-consent.js"></script>
     <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
          App.init() can call Themes.init() / ThemeSelector.mount(). -->
     <script src="/static/js/themes/registry.js"></script>

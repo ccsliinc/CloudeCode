@@ -64,7 +64,7 @@ by design.
 | Classification | Count | Keys |
 |---|---|---|
 | Shared preference (candidate for `ui_preferences`) | 8 | `cloude.theme`, `cloude.audio.enabled`, `cloude.audio.master`, `cloude.audio.volume` (legacy source for the same logical value), `cloude_provider_last_model`, `cloude.session.sidebar.density`, `cloude.session.sidebar.arrangement`, `cloude.configEditor.collapsed` |
-| Per-viewer convenience (must NOT sync) | 10 | `cloude.launchpad.deletedSessionsVisible`, `cloude.launchpad.archivedVisible`, `cloude.statusKey.open`, `cloude.away.lastChoice`, `cloude.archive.projectOrder`, `cloude.archive.panes.v1`, `cloude.themeJsAllowlist`, `cloude.theme.vars`, `cloude.audio.settingsVersion`, `cloude.audio.muted` (retired) |
+| Per-viewer convenience (must NOT sync) | 10 | `cloude.launchpad.deletedSessionsVisible`, `cloude.launchpad.archivedVisible`, `cloude.statusKey.open`, `cloude.away.lastChoice`, `cloude.archive.projectOrder`, `cloude.archive.panes.v1`, `cloude.themeJsAllowlist` (SUPERSEDED - see its entry), `cloude.theme.vars`, `cloude.audio.settingsVersion`, `cloude.audio.muted` (retired) |
 | Ambiguous - record both readings (issue's own instruction; the four dock/fold controls that behave differently by viewport) | 4 | `cloude.configEditor.pinned`, `cloude.session.sidebar.pinned`, `cloude.session.sidebar`, `cloude.launchpad.collapsed` |
 | SECRET (never in `ui_preferences`, never printed) | 2 | `claude_tunnel_token`, `claude_refresh_token` |
 
@@ -294,17 +294,41 @@ about itself.
   pixel numbers. If a future spec wants to share ratios instead of pixels,
   that is a different value shape, not this key.
 
-### `cloude.themeJsAllowlist`
-- `client/js/themes/registry.js:316` (write) / `:303` (read).
+### `cloude.themeJsAllowlist` (SUPERSEDED 2026-09-10 by #45, read for refusals only)
+- `client/js/theme-consent.js` reads it. Nothing writes it any more.
 - Value: `{"<themeId>": <boolean>, ...}` - a SECURITY CONSENT decision, not a
   cosmetic preference. A theme's optional `effects.js` runs same-origin with
   page access, so the first time a theme with effects is applied the user is
-  prompted (Allow once / Always / Never) and the answer is recorded here per
-  theme id. Recommending this stay per-viewer even though it is technically
-  a "preference": syncing a consent grant would let a "yes" clicked on one
-  device silently authorize script execution on every other device logged
-  into the same account, which is a materially different security posture
-  than what the user agreed to.
+  prompted (Allow once / Always / Never) and the answer used to be recorded
+  here per theme id.
+- **The original recommendation here was that this stay per-viewer**, on the
+  grounds that syncing a consent grant would let a "yes" clicked on one device
+  silently authorize script execution on every other device. #45 overruled
+  that, and the reasoning is worth keeping in full because half of it stands.
+  - The objection is CORRECT about a grant keyed on a theme ID, which is what
+    this key stores. A theme directory is a folder anything with write access
+    can edit afterwards, so `{"matrix": true}` is a standing authorization for
+    whatever `matrix/effects.js` later becomes.
+  - It is NOT correct about the shape that replaced it. The server-owned
+    `theme_script_consent` preference stores
+    `{"<themeId>": {"decision": "always", "digest": "<sha256>"}}`, and the
+    server stamps that digest onto the manifest as `effectsDigest` from the
+    bytes it is about to serve. **The user approves an artifact, not a name.**
+    Edit the file and the grant stops matching, so the prompt fires again for
+    the script that now exists.
+  - And the direction this entry did not weigh is the expensive one: a
+    `never` that binds only on the device it was clicked on is a refusal the
+    user has to repeat on every machine they own. Sharing a RESTRICTION can
+    only reduce what executes.
+- **Migration is one-directional and deliberate.** `theme-consent.js` still
+  reads this key for its `false` entries, because honouring an existing
+  refusal is free and strictly restrictive. It IGNORES every `true`: that
+  value names no digest, so there is nothing to bind a grant to, and those
+  users are asked once more. **This key is refused by the #46 settings
+  import for the same reason** - see
+  `SETTINGS_IMPORT_REFUSED` in `src/core/settings_import.py`.
+- Full model: `src/core/theme_script_consent.py` and
+  `client/js/theme-consent.js`. Six outcomes, one of which runs.
 
 ### `cloude.theme.vars`
 - `client/js/themes/registry.js:152` (write, `cacheThemeVars()`) / `:168`

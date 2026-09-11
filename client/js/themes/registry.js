@@ -34,9 +34,12 @@
 
     var STORAGE_KEY = 'cloude.theme';
     var DEFAULT_THEME_ID = 'claude';
-    // Phase 9: 3-state allowlist for theme effects.js scripts.
-    // Shape: { [themeId]: true | false }. Missing key = "ask".
-    var JS_ALLOWLIST_KEY = 'cloude.themeJsAllowlist';
+    // The theme effects.js consent record used to live here, as
+    // `cloude.themeJsAllowlist` in this browser. It is now the server-owned
+    // `theme_script_consent` preference and the key name lives in exactly
+    // one place, client/js/theme-consent.js, which still reads the old key
+    // for its REFUSALS. A second copy of a security key name here would be
+    // the one somebody edits.
     // Last-applied palette, cached so the PRE-AUTH login screen can paint
     // the user's theme. `GET /api/v1/themes` is behind require_auth, so
     // before login there is no manifest to read and `data-theme` alone
@@ -307,18 +310,27 @@
     }
 
     // -----------------------------------------------------------------------
-    // Phase 9 - theme effects.js loader + consent prompt
+    // Theme effects.js loader + consent prompt
     //
-    // User-authored effects.js is loaded same-origin per the LAN-only threat
-    // model - see spec section "Context" (Architecture F: Pluggability
-    // Surface) for the security reasoning. Bundled themes ALSO go through
-    // this gate (belt-and-suspenders) so a malicious diff that ships a
-    // bundled effects.js still requires explicit user consent on first run.
+    // THE DECISION IS NOT MADE HERE. client/js/theme-consent.js owns the
+    // ladder and the record; this file owns the modal and the execution.
+    // That split is what lets a test prove the gate REFUSES without
+    // standing up a document and a dynamic import - see that file's
+    // header, and tests/test_theme_script_consent.node.mjs.
     //
-    // 3-state localStorage allowlist (key: cloude.themeJsAllowlist):
-    //   true  → load and run silently
-    //   false → skip silently
-    //   missing → prompt the user (Allow once / Always / Never)
+    // Two things this comment used to get wrong, kept here because a
+    // stale comment about a security gate is worse than none:
+    //
+    //   * Bundled themes do NOT go through the prompt. They ship in this
+    //     repo, so they are our code, and an attacker who can ship a
+    //     malicious bundled effects.js can ship a malicious registry.js
+    //     too. A recorded "never" still refuses one, because a refusal
+    //     outranks every rung below it.
+    //   * The record is no longer `cloude.themeJsAllowlist` in this
+    //     browser. It is the server-owned `theme_script_consent`
+    //     preference, so a refusal set on one device binds on every
+    //     other, and an "always" names the sha256 of the exact
+    //     effects.js it was granted for.
     // -----------------------------------------------------------------------
 
     // Track scripts we've already injected so a re-applyGlobal() of the same
@@ -336,25 +348,6 @@
     var pendingConsentForTheme = null;      // themeId currently awaiting click
     var consentResolveQueue = [];           // pending Promises for the same theme
 
-    function readJsAllowlist() {
-        try {
-            var raw = localStorage.getItem(JS_ALLOWLIST_KEY);
-            if (!raw) return {};
-            var parsed = JSON.parse(raw);
-            return (parsed && typeof parsed === 'object') ? parsed : {};
-        } catch (_) {
-            return {};
-        }
-    }
-
-    function writeJsAllowlistEntry(themeId, value) {
-        try {
-            var current = readJsAllowlist();
-            current[themeId] = !!value;
-            localStorage.setItem(JS_ALLOWLIST_KEY, JSON.stringify(current));
-        } catch (_) { /* localStorage full or disabled - non-fatal */ }
-    }
-
     /**
      * Build + render the consent modal. Returns a Promise<'once'|'always'|'never'>.
      * Modal is theme-styled via existing .modal-* classes (uses --color-bg,
@@ -363,12 +356,24 @@
      *
      * Coalesces: if a prompt is already on-screen for the same themeId, the
      * caller piggybacks on it rather than stacking another modal.
+     *
+     * A PENDING PROMPT IS NOT A NEUTRAL STATE. `cancelPendingConsent` closes
+     * this from the outside and answers 'never' when a refusal is committed
+     * on another device while the question is on screen - otherwise the user
+     * could grant, on this machine, something they had just revoked on
+     * another, which is the race #45 names.
+     *
+     * @param {object} manifest
+     * @param {{changed: boolean}} [info] - `changed` means a grant exists but
+     *   names different bytes, so the wording says the script was edited
+     *   rather than implying this is the first time it has been seen.
      */
-    function showConsentModal(manifest) {
+    function showConsentModal(manifest, info) {
         if (pendingConsentForTheme === manifest.id) {
             return new Promise(function (resolve) { consentResolveQueue.push(resolve); });
         }
         pendingConsentForTheme = manifest.id;
+        var changed = !!(info && info.changed);
 
         return new Promise(function (resolve) {
             var overlay = document.createElement('div');
@@ -382,25 +387,29 @@
             var safeName = String(manifest.name || manifest.id).replace(/[<>&"']/g, function (c) {
                 return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[c];
             });
+            var message = changed
+                ? ('the script in theme &ldquo;' + safeName + '&rdquo; has changed '
+                    + 'since you allowed it. this is a different <code>effects.js</code> '
+                    + 'to the one you approved.')
+                : ('theme &ldquo;' + safeName + '&rdquo; ships a javascript module '
+                    + '(<code>effects.js</code>) that will run in this page.');
             overlay.innerHTML = (
                 '<div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="theme-fx-title">' +
                 '  <div class="modal-header" id="theme-fx-title">' +
-                '    Theme effects script' +
+                '    theme effects script' +
                 '  </div>' +
                 '  <div class="modal-body">' +
-                '    <div class="modal-message">' +
-                '      Theme &ldquo;' + safeName + '&rdquo; ships a JavaScript module ' +
-                '      (<code>effects.js</code>) that will run in this page.' +
-                '    </div>' +
+                '    <div class="modal-message">' + message + '</div>' +
                 '    <div class="modal-description">' +
-                '      Allow it to run? This choice can be revoked by clearing ' +
-                '      the <code>cloude.themeJsAllowlist</code> entry in localStorage.' +
+                '      allow it to run? always allow covers this exact script and ' +
+                '      applies on every device. never applies everywhere too, and ' +
+                '      allow once lasts until you reload.' +
                 '    </div>' +
                 '  </div>' +
                 '  <div class="modal-footer">' +
-                '    <button class="modal-btn modal-btn-secondary" data-action="never">Never</button>' +
-                '    <button class="modal-btn modal-btn-secondary" data-action="once">Allow once</button>' +
-                '    <button class="modal-btn modal-btn-primary" data-action="always">Always allow</button>' +
+                '    <button class="modal-btn modal-btn-secondary" data-action="never">never</button>' +
+                '    <button class="modal-btn modal-btn-secondary" data-action="once">allow once</button>' +
+                '    <button class="modal-btn modal-btn-primary" data-action="always">always allow</button>' +
                 '  </div>' +
                 '</div>'
             );
@@ -408,6 +417,7 @@
             function finish(decision) {
                 try { document.body.removeChild(overlay); } catch (_) {}
                 pendingConsentForTheme = null;
+                cancelPendingConsent = noopCancel;
                 resolve(decision);
                 // Drain any queued resolvers waiting on the same prompt.
                 var pending = consentResolveQueue.slice();
@@ -423,12 +433,31 @@
                 finish(btn.getAttribute('data-action'));
             });
 
+            cancelPendingConsent = function (themeId) {
+                if (themeId && themeId !== manifest.id) return false;
+                finish('never');
+                return true;
+            };
+
             document.body.appendChild(overlay);
-            // Default focus on the safest option ("Allow once" - no persistence).
+            // Default focus on the safest option ("allow once" - no persistence).
             var onceBtn = overlay.querySelector('button[data-action="once"]');
             if (onceBtn) { try { onceBtn.focus(); } catch (_) {} }
         });
     }
+
+    /**
+     * Close an on-screen consent prompt and answer it 'never'.
+     *
+     * Rebound while a modal is up; a no-op the rest of the time. Called by
+     * revokeEffects so a refusal committed on another device settles the
+     * question here instead of leaving it open for the user to say yes to.
+     *
+     * @param {string} [themeId] - only cancel a prompt for this theme.
+     * @returns {boolean} whether a prompt was actually cancelled.
+     */
+    function noopCancel() { return false; }
+    var cancelPendingConsent = noopCancel;
 
     /**
      * Resolve the URL for a theme asset. Bundled themes live under the static
@@ -479,6 +508,23 @@
                 console.warn('Themes: effects module for', manifest.id, 'has no init() export');
                 return;
             }
+            // IN-FLIGHT REFUSAL. A dynamic import is a network round trip,
+            // and a "never" committed on another device can land inside it.
+            // The consent that was checked before the fetch is therefore
+            // re-checked here, BEFORE init() runs, because a script that has
+            // not started is the last moment refusing costs nothing.
+            var stillAllowed = true;
+            var consent = globalThis.ThemeConsent;
+            if (consent && typeof consent.entryFor === 'function') {
+                var entry = consent.entryFor(manifest.id);
+                if (entry && entry.decision === consent.DECISION_NEVER) stillAllowed = false;
+            }
+            if (!stillAllowed) {
+                console.warn('Themes: effects refused mid-load for', manifest.id,
+                    '- it was revoked before it started');
+                loadedEffectsScripts.delete(manifest.id);
+                return;
+            }
             try {
                 initFn({ themeContext: { id: manifest.id, manifest: manifest } });
                 // Race guard: by the time import() resolves, the user may have
@@ -518,51 +564,70 @@
      * Decide whether to load a manifest's effects.js, prompting the user on
      * first encounter. Returns a Promise<void>; never throws to caller - any
      * failure degrades to "skip the script" so the CSS theme still applies.
+     *
+     * THE DECISION IS ThemeConsent's, NOT THIS FILE'S. Everything this
+     * function contributes is the two callbacks: how to ask, and how to run.
+     * `gateEffects` calls the second one on exactly one path, which is what
+     * makes "without consent the script does not execute" a property a test
+     * can measure rather than a claim about how this code reads.
+     *
+     * A MISSING ThemeConsent REFUSES. A browser that loaded a partial page
+     * gets no effects rather than ungated effects: the whole gate being
+     * absent is the one situation where running anyway is least defensible.
      */
     async function maybeLoadEffects(manifest) {
         if (!manifest || !manifest.effects) return;
         if (loadedEffectsScripts.has(manifest.id)) return;
 
-        // Bundled themes ship with the app - they ARE our code, not third-party.
-        // The consent prompt exists to gate user-authored themes dropped into
-        // the /themes mount. Forcing users to click through a modal for a
-        // theme we shipped in the repo is friction with no security upside
-        // (an attacker who can ship a malicious bundled effects.js can also
-        // ship a malicious registry.js). Per DAR + spec, bypass for builtins.
-        if (manifest.source === 'builtin') {
-            injectEffectsScript(manifest);
+        var consent = globalThis.ThemeConsent;
+        if (!consent || typeof consent.gateEffects !== 'function') {
+            console.warn('Themes: consent gate unavailable, skipping effects for', manifest.id);
             return;
         }
+        await consent.gateEffects({
+            manifest: manifest,
+            inject: injectEffectsScript,
+            prompt: showConsentModal,
+        });
+    }
 
-        var allowlist = readJsAllowlist();
-        var entry = allowlist[manifest.id];
-        if (entry === true) {
-            injectEffectsScript(manifest);
-            return;
+    /**
+     * Tear down a running effects module because consent was withdrawn.
+     *
+     * WHAT THIS CAN AND CANNOT DO, SAID PLAINLY. It calls the module's own
+     * destroy(), drops the loader cache so the script is re-gated on any
+     * future apply, and cancels a consent prompt that is on screen for the
+     * same theme. It CANNOT undo what an already-executed script did:
+     * listeners it attached outside its own teardown, globals it set,
+     * timers it did not register. Claiming otherwise would be the false
+     * green this project keeps paying to remove, so the log line says
+     * which half happened. A reload is the only clean slate.
+     *
+     * @param {string} themeId
+     * @returns {{destroyed: boolean, promptCancelled: boolean}}
+     */
+    function revokeEffects(themeId) {
+        if (!themeId) return { destroyed: false, promptCancelled: false };
+        var promptCancelled = cancelPendingConsent(themeId);
+        var destroyed = false;
+        if (activeEffectsThemeId === themeId && activeEffectsModule) {
+            try {
+                if (typeof activeEffectsModule.destroy === 'function') {
+                    activeEffectsModule.destroy();
+                    destroyed = true;
+                }
+            } catch (e) {
+                console.warn('Themes: revoked effects destroy() threw for', themeId, e);
+            }
+            activeEffectsModule = null;
+            activeEffectsThemeId = null;
         }
-        if (entry === false) {
-            console.log('Themes: effects.js skipped per user allowlist for', manifest.id);
-            return;
-        }
-
-        // Unknown - prompt.
-        var decision;
-        try {
-            decision = await showConsentModal(manifest);
-        } catch (e) {
-            console.warn('Themes: consent modal failed, skipping effects', e);
-            return;
-        }
-        if (decision === 'always') {
-            writeJsAllowlistEntry(manifest.id, true);
-            injectEffectsScript(manifest);
-        } else if (decision === 'once') {
-            // Don't persist. Inject this run only.
-            injectEffectsScript(manifest);
-        } else {
-            // 'never' (or unknown - fail-closed)
-            writeJsAllowlistEntry(manifest.id, false);
-        }
+        loadedEffectsScripts.delete(themeId);
+        console.warn('Themes: effects revoked for ' + themeId
+            + (destroyed
+                ? ' - its teardown ran, but anything it already did to this page stands until a reload'
+                : ' - nothing of it was running here'));
+        return { destroyed: destroyed, promptCancelled: promptCancelled };
     }
 
     /**
@@ -1074,6 +1139,9 @@
         applySessionScope: applySessionScope,
         clearSession: clearSession,
         setReplayInProgress: setReplayInProgress,
+        // Withdraw consent for a running effects module. Called by
+        // theme-consent.js when a refusal is committed on another device.
+        revokeEffects: revokeEffects,
         getActiveGlobal: getActiveGlobal,
         // Which theme the TERMINAL should be showing - the resolved session
         // theme, or the global theme when none applies. terminal.js seeds a
