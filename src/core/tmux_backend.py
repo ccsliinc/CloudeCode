@@ -57,6 +57,7 @@ from src.core.pane_locale import apply_pane_locale
 from src.core.pipe_rotation import rotation_reason, truncate_in_place
 from src.core.pipe_wakeup import PipeWaiter
 from src.core.tmux_command_batch import environment_commands, run_optional_batch
+from src.core.tmux_server_config import write_server_config
 from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
 from src.core.tmux_listing_parse import (
     LISTING_FORMAT,
@@ -373,6 +374,67 @@ class TmuxBackend(SessionBackend):
         """
         return ("set-option", "-wg", "remain-on-exit", "on")
 
+    def _server_config_argv(self) -> List[str]:
+        """Build the ``-f <conf>`` server option a cold socket needs.
+
+        THIS IS THE ONLY THING THAT CAN GIVE THE FIRST PANE ITS FULL
+        SCROLLBACK DEPTH. A pane's depth is fixed into its grid when the
+        pane is created and no later ``set-option`` moves it (measured on
+        tmux 3.6a against a global set, a session-scoped set and
+        ``respawn-pane -k``), while ``set-option`` cannot run before the
+        pane exists on a cold socket because it does not start a server.
+        tmux reads a ``-f`` file when it STARTS the server, which on a
+        cold socket happens inside the ``new-session`` invocation itself
+        and strictly before the session is created.
+
+        It costs NO EXTRA TMUX PROCESS: these are two more argv elements
+        on a call that was being made anyway. On a warm socket tmux
+        ignores ``-f`` entirely, because the server is already up, so the
+        common path is unaffected.
+
+        The commands are the SAME argv fragments the pre-spawn and
+        post-spawn batches send, so all three places that state these two
+        options read one definition.
+
+        Returns:
+            list[str]: ``["-f", "<path>"]``, or ``[]`` when the file could
+            not be written. An empty list means the launch proceeds
+            exactly as it did before this existed, which is the required
+            degradation: losing scrollback depth is survivable, refusing a
+            session is not.
+
+        Example:
+            >>> backend._server_config_argv()
+            ['-f', '/Users/x/Library/Application Support/CloudeCode/cloude-tmux.conf']
+        """
+        # Lazy import for the same reason as _resolve_pipe_path: src.config
+        # pulls env vars and may not be importable in every test context.
+        try:
+            from src.config import settings
+
+            state_dir = settings.get_state_dir()
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - see below
+            # Deliberately broad, and deliberately not swallowed silently.
+            # src.config builds a pydantic Settings at import time and can
+            # raise OR call sys.exit on a machine with no .env - which is
+            # why SystemExit is named here, since it is not an Exception -
+            # and there is no narrower type that covers "this module would
+            # not load". The launch must go ahead regardless, so this
+            # degrades rather than propagates, and says so.
+            logger.warning(
+                "tmux_server_config_state_dir_unavailable",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return []
+
+        path = write_server_config(
+            state_dir,
+            [self._history_limit_command(), self._remain_on_exit_command()],
+        )
+        if path is None:
+            return []
+        return ["-f", str(path)]
+
     async def _apply_pre_spawn_options(self) -> None:
         """Set scrollback depth and ``remain-on-exit`` in ONE tmux process.
 
@@ -684,7 +746,14 @@ class TmuxBackend(SessionBackend):
         if command:
             args.append(command)
 
-        argv = self._tmux_base() + args
+        # ``-f <conf>`` goes among the SERVER options, before the command
+        # word, which is where tmux requires it. It is the one thing that
+        # can make this pane be born at HISTORY_LIMIT on a cold socket -
+        # see _server_config_argv. Note what this is NOT: the spawn is
+        # still its own invocation, still carries its own return code, and
+        # nothing has been batched into it. Two extra argv elements, zero
+        # extra processes.
+        argv = self._tmux_base() + self._server_config_argv() + args
         # DEBUG TRACE. The stale-environment bug lived exactly here and was
         # invisible: the spawn succeeded, the variable was set, and its
         # VALUE belonged to a different session. Recording the argv and the
