@@ -1456,8 +1456,11 @@ per server process and no subprocess at all.
 - **New logic goes in new focused modules.** These files are already past the
   500-line guideline and should not grow: `client/js/terminal.js`,
   `client/js/app.js`, `client/css/styles.css`,
-  `src/api/routes.py`, `src/core/session_manager.py`. Edit them when the change
+  `src/core/session_manager.py`. Edit them when the change
   belongs there; do not use them as the default landing spot.
+  `src/api/routes.py` CAME OFF THIS LIST: decomposition slice S6 took it from
+  4,397 lines to 106 across 29 siblings, so it is an aggregator now and adding
+  a router line to it is the correct move rather than a thing to avoid.
 - **`src/config/` is a package**, not a module: one typed block of `config.json`
   per file, `settings.py` holding only the env-backed fields and the two caches,
   and the behaviour in named siblings (`auth_loader`, `state_paths`,

@@ -15,6 +15,8 @@ WHAT THIS PROVES, AND WHAT IT DOES NOT
 THE CITATION GRAMMAR, WHICH THE DOCUMENT DECLARES IN ITS OWN HEADER
     path/to/file.py::symbol   - that file defines that symbol
     path/to/file.js::symbol   - that file defines that function or method
+    web/src/.../file.ts::sym  - likewise, after the svelte migration moved
+                                the launchpad's actions out of client/js
     METHOD /route             - some router under src/api/ declares it
 
     A citation with no double colon and no leading method is not a
@@ -76,12 +78,14 @@ ROUTER_FILES: Tuple[str, ...] = _router_files()
 
 #: `path::symbol`, inside backticks so prose cannot accidentally enrol.
 _SYMBOL_CITATION = re.compile(
-    r"(?<![\w/.])((?:src|client|tests|macOS)/[\w./-]+\.(?:py|js))::([A-Za-z_]\w*)"
+    r"(?<![\w/.])((?:src|client|tests|macOS|web)/[\w./-]+\.(?:py|js|ts|svelte))"
+    r"::([A-Za-z_]\w*)"
 )
 
 #: A bare module citation - a path with no `::`. Held only to file existence.
 _MODULE_CITATION = re.compile(
-    r"(?<![\w/.])((?:src|client|tests|macOS)/[\w./-]+\.(?:py|js))(?!::)(?![\w/.])"
+    r"(?<![\w/.])((?:src|client|tests|macOS|web)/[\w./-]+\.(?:py|js|ts|svelte))"
+    r"(?!::)(?![\w/.])"
 )
 
 #: `METHOD /route`. The chart writes path parameters as bare words
@@ -157,7 +161,7 @@ def _js_symbols(path: Path) -> Set[str]:
       a JavaScript parser; the failure it must catch is "someone renamed
       deleteSessionRecord and the chart still says deleteSessionRecord",
       and a loose matcher catches that without pulling in a JS toolchain.
-    Inputs: path (Path) - a .js file.
+    Inputs: path (Path) - a .js, .ts or .svelte file.
     Output: set[str] - candidate defined names.
     """
     text = path.read_text(encoding="utf-8")
