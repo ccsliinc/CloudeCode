@@ -1976,6 +1976,20 @@ class ThemeManifest(BaseModel):
     source: Literal["builtin", "user"] = Field(
         ..., description="Where the manifest was discovered - server-stamped"
     )
+    effectsDigest: Optional[str] = Field(
+        None,
+        description=(
+            "Server-stamped sha256 hex of the ``effects`` file's bytes, or "
+            "null when the theme declares no script or the file could not be "
+            "read. SCRIPT CONSENT IS BOUND TO THIS VALUE: an 'always allow' "
+            "records the digest it was granted for, so editing effects.js "
+            "revokes the grant instead of inheriting it. A null here is "
+            "therefore not a neutral absence - for a user theme that DOES "
+            "declare a script it means the bytes could not be named, and "
+            "``theme_script_consent.decide`` refuses to run it. Client-supplied "
+            "values are ignored; the server overwrites this field on every scan."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

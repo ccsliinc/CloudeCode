@@ -81,6 +81,7 @@ from src.core import claude_hooks
 from src.core import claude_title_sync_apply
 from src.core import toast_auto_ack
 from src.core import debug_trace
+from src.core import theme_script_digest
 from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 
 # MODULE SCOPE, DELIBERATELY. This was imported inside two individual
@@ -3141,6 +3142,16 @@ def _load_manifest(theme_dir: Path, source: str) -> Optional[ThemeManifest]:
     # Server stamps `source`. Reject any client-supplied source value to keep
     # the contract one-way.
     raw["source"] = source
+
+    # Server stamps `effectsDigest` for the same reason, and the stamp is
+    # unconditional: a theme.json that carries one of its own is naming
+    # bytes nobody measured, which is precisely what a consent grant must
+    # never be able to match against. A theme with no script, or one whose
+    # script cannot be read, gets None, and the consent ladder reads that
+    # as unverifiable rather than as permission.
+    raw["effectsDigest"] = theme_script_digest.digest_effects(
+        theme_dir, raw.get("effects")
+    )
 
     try:
         manifest = ThemeManifest(**raw)

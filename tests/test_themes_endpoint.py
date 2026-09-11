@@ -656,3 +656,69 @@ def test_every_bundled_theme_declares_and_ships_effects_js():
     assert declared_but_missing == [], (
         f"effects declared but missing on disk: {declared_but_missing}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# effectsDigest - the server stamps it, and a manifest cannot supply its own.
+#
+# WHY THIS MATTERS HERE RATHER THAN ONLY IN test_theme_script_consent.py.
+# A shared "always allow" for a theme script is bound to this value, so a
+# manifest able to declare its own digest could name bytes nobody measured
+# and carry a stale grant onto an edited script. The stamp is what makes
+# the grant a statement about an artifact instead of about a name.
+# --------------------------------------------------------------------------- #
+
+
+def test_effects_digest_is_stamped_from_the_file_on_disk(themes_app, patched_roots):
+    import hashlib
+
+    _, user = patched_roots
+    _write_manifest(user, "withfx", effects="effects.js")
+    body = b"export function init() {}\n"
+    (user / "withfx" / "effects.js").write_bytes(body)
+
+    client = TestClient(themes_app)
+    data = client.get("/api/v1/themes").json()
+
+    assert data[0]["effectsDigest"] == hashlib.sha256(body).hexdigest()
+
+
+def test_a_manifest_cannot_declare_its_own_effects_digest(themes_app, patched_roots):
+    import hashlib
+
+    _, user = patched_roots
+    _write_manifest(user, "liar", effects="effects.js", effectsDigest="f" * 64)
+    body = b"export function init() {}\n"
+    (user / "liar" / "effects.js").write_bytes(body)
+
+    client = TestClient(themes_app)
+    data = client.get("/api/v1/themes").json()
+
+    assert data[0]["effectsDigest"] == hashlib.sha256(body).hexdigest()
+
+
+def test_a_declared_script_that_is_missing_digests_as_none(themes_app, patched_roots):
+    """The theme still lists; the consent ladder is what refuses to run it.
+
+    Skipping the whole manifest would take the theme's COLOURS away over a
+    missing animation, which is a worse answer than serving the colours and
+    declining the script.
+    """
+    _, user = patched_roots
+    _write_manifest(user, "nofile", effects="effects.js")
+
+    client = TestClient(themes_app)
+    data = client.get("/api/v1/themes").json()
+
+    assert data[0]["id"] == "nofile"
+    assert data[0]["effectsDigest"] is None
+
+
+def test_a_theme_with_no_script_digests_as_none(themes_app, patched_roots):
+    bundled, _ = patched_roots
+    _write_manifest(bundled, "plain")
+
+    client = TestClient(themes_app)
+    data = client.get("/api/v1/themes").json()
+
+    assert data[0]["effectsDigest"] is None

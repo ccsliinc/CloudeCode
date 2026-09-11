@@ -480,6 +480,67 @@ on a hash mismatch). Do not add a host to the CSP, do not weaken
 `frame-ancestors 'none'`, do not introduce inline script or `eval`, and do not
 read `style-src 'unsafe-inline'` as license to widen anything further.
 
+**A THEME CAN SHIP A SCRIPT, AND THE CSP IS NOT WHAT GATES IT.** A theme's
+optional `effects.js` is served same-origin, from `/static/css/themes/<id>/`
+for a bundled theme and from the `/themes/<id>/` mount for a user-authored
+one, and is loaded by dynamic `import()`. `script-src 'self'` therefore
+PERMITS it, correctly and unchanged - the policy's job is to stop code
+arriving from somewhere else, not to decide which of our own origin's files
+the user wants running. The gate is the app's own, it lives in
+`client/js/theme-consent.js` (the ladder and the record) and
+`src/core/theme_script_consent.py` (the same ladder, server side), and
+`client/js/themes/registry.js` keeps only the modal and the execution.
+**Nothing in #45 changed the CSP, and nothing in it may.**
+
+**SIX OUTCOMES, ONE OF WHICH RUNS, AND THE ORDER IS THE CLAIM.** No script
+declared; a recorded `never`; a record that could not be READ; a bundled
+theme; a script whose bytes could not be digested; a grant naming DIFFERENT
+bytes; a grant naming THESE bytes; nothing on record. Only the last-but-two
+executes. **DENY WINS OVER EVERYTHING**, including the bundled bypass and
+including a newer grant, whichever was written last - that is the property
+that makes sharing a restriction safe. An UNREADABLE record refuses a cached
+grant rather than honouring it, because a client that cannot read the record
+cannot show that no newer `never` exists, which is exactly the "a cached
+approval cannot outrank a newer global Never" this was asked for. The cost of
+that refusal is an animation that does not play.
+
+**CONSENT IS SHARED, AND WHAT MAKES A SHARED GRANT SAFE IS A DIGEST.** The
+record moved out of this browser's `cloude.themeJsAllowlist` and into the
+server-owned `ui_preferences.theme_script_consent`, so a `never` set anywhere
+binds everywhere. `docs/ui-preferences-inventory.md` had recommended against
+sharing it, and it was right about the shape it was describing: a grant keyed
+on a theme ID alone is a standing yes for whatever that file later becomes,
+and a theme directory is a folder anything with write access can edit. So an
+`always` stores the sha256 of the exact `effects.js` it was granted for. The
+server stamps that onto the manifest as `effectsDigest` from the bytes it is
+about to serve, a manifest cannot declare its own, and editing the file makes
+the grant stop matching so the user is asked again about the script that now
+exists. **THE USER APPROVES AN ARTIFACT, NOT A NAME.**
+`ui_preferences.validate_changes` REFUSES an `always` carrying no digest and
+refuses the word `once` outright, so an unbounded grant and a persisted
+temporary allowance are both unexpressible rather than merely unwritten.
+
+**`ALLOW ONCE` IS NEVER STORED AND NEVER SENT**, and the legacy local key is
+read for its REFUSALS ONLY. A `false` in `cloude.themeJsAllowlist` still
+refuses, for free, because honouring an existing restriction can only reduce
+what runs. Every `true` in it is IGNORED: it names no digest, so there is
+nothing to bind a grant to, and those users are asked exactly once more. That
+same reasoning is why the #46 settings import refuses that key by name.
+
+**THE GATE IS A SEPARATE FILE SO ITS REFUSALS CAN BE MEASURED.**
+`ThemeConsent.gateEffects` takes the injector as a CALLBACK and calls it on
+exactly one path, so `tests/test_theme_script_consent.node.mjs` hands it a spy
+and proves an unconsented theme never executes - against the real callback
+registry.js passes in, not against an internal flag that correlates with it
+today. Eleven of its twenty-one cases are refusals. **A suite that only drove
+the consented path would pass against a gate that never refuses**, which is
+this project's own "a matcher that always finds something is worse than
+useless" one layer up. A revocation arriving from another device runs the
+module's `destroy()`, drops the loader cache, cancels an on-screen prompt and
+is re-checked mid-`import()` before `init()` runs - and it SAYS that anything
+the script already did to the page stands until a reload, because claiming
+otherwise would be the false green this project keeps paying to remove.
+
 **THE ATTACH CAPTURE CARRIES THE CURSOR, BECAUSE `capture-pane`
 SERIALISES CELLS AND NEVER CURSOR STATE.** `capture_visible_screen()`
 (`src/core/tmux_backend.py`) appends an explicit `ESC[row;colH` read from
@@ -674,6 +735,92 @@ Hydration runs BEFORE any preference-dependent control initialises, through
 `App._initAuthenticatedState()` - ONE function called by both post-auth paths,
 because two copies of that sequence is how one of them acquires a step the other
 never gets (gotcha 7's shape).
+
+**THE EIGHT EXISTING CONTROLS ARE MIGRATED ONE AT A TIME, THROUGH ONE SEAM,
+AND ONLY WITH THE USER'S PRESS.** #43 and #44 built the block and the client
+layer and deliberately rewired NOTHING, because moving each control is a
+behaviour change with its own question about the value already sitting in that
+browser. #46 answers that question in two halves.
+`client/js/preference-bridge.js` is the seam: `read` prefers the shared value
+and falls through to the control's own local reader, `write` MIRRORS to
+localStorage AND the server. So a control becomes shared by changing its read
+and its write, not by growing a preference layer inside itself. FOUR of the
+eight are on it - the global theme (`themes/registry.js`), the sidebar density,
+the global audio toggle and the last model chosen (`providers.js`) - each
+having exactly one read function and one write function to move. The other four
+(the sidebar arrangement, the two dock pins, the two fold maps) are collected
+and importable but their controls still read local only; that is a known gap,
+not an oversight, and the bridge is what closes it when somebody picks it up.
+
+**MIRRORED, NEVER MOVED, AND THE LOCAL COPY IS NEVER CLEARED.** Three reasons
+and the third is the one that matters: the local value is what answers when the
+server is unreachable, it is what the pre-hydration paint reads (which is how
+`applyStoredThemeIdSync` still kills the flash of the default), and #46's own
+rule is that the local source is RETAINED until the server confirms. There is
+no tidy-up step, because the tidying is what loses a user's settings on exactly
+the request that failed. **ABSENT IS NOT A DEFAULT** here either: a field the
+server does not hold falls THROUGH to local rather than reading as the
+control's default, or every control would snap to its default the first time a
+browser hydrated against a fresh install and the next change would save that
+default over every other device. **AND THE BRIDGE NEVER SAVES ON ITS OWN** - no
+read-then-write, no write-back-on-hydrate, no upload of a value the server has
+not got.
+
+**THE IMPORT IS EXPLICIT, PREVIEWED, AND ONE-TIME PER INSTALL.**
+`src/core/settings_import.py` is the pure rules, `settings_import_store.py` the
+one commit, `src/api/settings_routes.py` the three endpoints
+(`GET /settings/import/state`, `POST /settings/import/preview`,
+`POST /settings/import`), `client/js/settings-import-collect.js` the reader and
+`client/js/settings-import.js` the panel, mounted as a slot on the settings
+screen's general tab. **NOTHING IS UPLOADED WITHOUT A PRESS, ON ANY PATH** -
+there is no import-on-load, no import-on-reconnect and none inside hydration.
+The failure that buys: an automatic migration means the LAST browser to connect
+wins, so a machine nobody has opened in three months uploads its stale snapshot
+and silently reverts every setting changed since.
+
+**THE PREVIEW AND THE IMPORT ARE THE SAME PLAN, BY CONSTRUCTION.**
+`build_plan` is called by both endpoints and `changes_from` derives the write
+from its output, so the preview cannot describe one thing and the commit
+perform another. A preview that lies is worse than no preview: it is a safety
+control telling the user they are safe. `tests/test_settings_import.py` proves
+it by previewing, committing and comparing what landed, rather than by reading
+two code paths and agreeing they look similar. The plan is REBUILT INSIDE THE
+WRITE LOCK against the document the write will merge into, and a changed
+selection re-fetches the preview from the server rather than being adjusted in
+the browser - a second implementation of the plan is the one thing that could
+make the two differ. Six per-field outcomes, and **SERVER VALUES WIN BY
+DEFAULT**: a conflict is `conflict_kept` unless the user ticked that specific
+field, which makes it `conflict_overridden`. There is no import-everything.
+
+**THE MARKER AND THE VALUES LAND IN ONE COMMIT.** `ui_preferences_import` is a
+sibling key in config.json, written by `apply_import` in the same
+`config_writer.commit` as the preference merge, because both half-failures are
+bad and both are silent: settings without the marker leave the install
+re-offering the import to the next stale browser, and the marker without the
+settings closes the offer having changed nothing. An import that writes NO
+values still writes the marker - "everything here already matched" is a
+completed import.
+
+**THE ALLOWLIST IS A PROJECTION AND THE COLLECTOR NEVER ITERATES STORAGE.**
+`importable_fields()` is `ui_preferences.known_fields()` minus
+`REFUSED_FIELDS`, so a field added to the block is importable the day it lands.
+The client reads only literal keys from its own table - there is no
+`for (i = 0; i < localStorage.length; i++)` and there may never be one - which
+is what keeps `claude_tunnel_token` and `claude_refresh_token` out of the
+payload BY CONSTRUCTION rather than by a denylist one forgotten entry away from
+uploading a credential. `tests/test_settings_import_collect.node.mjs` measures
+that two ways: a recording storage proving neither token was ever READ, and the
+serialised payload searched for the token VALUE.
+
+**AND `theme_script_consent` IS REFUSED DESPITE BEING A PREFERENCE**, which is
+the interesting half. #45 made it a known field, which would otherwise make it
+importable. A browser's local record of "I allowed this theme's script" is the
+pre-#45 `cloude.themeJsAllowlist` shape: a theme id and no digest, so importing
+it would mint exactly the unbounded standing grant #45 exists to make
+unexpressible. The issue's rule is "never infer theme-script approval from a
+theme selection"; this is that rule one step further - never carry an approval
+at all. Refused by NAME on the server and absent from the client's table, so
+neither end depends on the other remembering.
 
 **THE LOCAL SERVER DETECTOR IS FULLY WIRED, HAS NO CLIENT, AND IS KEPT ON
 PURPOSE.** `LocalServersTracker` (`src/core/local_servers.py`) scrapes a port

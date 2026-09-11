@@ -1,0 +1,71 @@
+/*
+ * The one-time settings import panel (#46).
+ *
+ * ITS OWN FILE because client/css/styles.css is past this project's line
+ * budget and is not the default landing spot, and because everything
+ * here describes one panel that most users will see exactly once.
+ *
+ * IT DECLARES LAYOUT AND BORROWS COLOUR. Every colour is an existing
+ * theme token, so the panel inherits whatever theme is applied rather
+ * than carrying a palette of its own that a theme could not reach. The
+ * only thing that is truly this panel's own is the row grid.
+ *
+ * THE CHECKBOX COLUMN IS ALWAYS THERE, EVEN WHEN A ROW HAS NO BOX.
+ * A grid whose first column collapses on rows without a conflict would
+ * leave the field names on two different left edges, which reads as two
+ * lists. One column, sometimes empty, keeps it one list.
+ */
+
+.settings-import-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0.5rem 0 0.75rem;
+}
+
+.settings-import-row {
+    display: grid;
+    grid-template-columns: 1.25rem minmax(8rem, 1fr) auto;
+    align-items: baseline;
+    gap: 0.4rem 0.6rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--color-border, rgba(127, 127, 127, 0.3));
+    border-radius: 4px;
+    background: var(--color-bg-elevated, transparent);
+    font-size: 0.85rem;
+}
+
+/* The name anchors the row; the values and the verdict wrap under it on a
+   phone rather than squeezing the name into an ellipsis. */
+.settings-import-name {
+    font-weight: 600;
+    color: var(--color-text, inherit);
+}
+
+.settings-import-value {
+    color: var(--color-text-muted, inherit);
+    word-break: break-word;
+}
+
+.settings-import-outcome {
+    grid-column: 2 / -1;
+    color: var(--color-accent, inherit);
+    font-size: 0.8rem;
+}
+
+.settings-import-row input[type="checkbox"] {
+    margin: 0;
+    align-self: center;
+}
+
+/* Below the phone breakpoint the three columns become two: the box keeps
+   its column so the names stay aligned, and everything else stacks. */
+@media (max-width: 480px) {
+    .settings-import-row {
+        grid-template-columns: 1.25rem 1fr;
+    }
+
+    .settings-import-value {
+        grid-column: 2 / -1;
+    }
+}
