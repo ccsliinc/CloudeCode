@@ -229,10 +229,12 @@ global values, which is the 403 storm above wearing a plausible face.
 **THE LAUNCH IS SIX TMUX PROCESSES, DOWN FROM FOURTEEN, AND THE RULE FOR
 WHAT MAY SHARE ONE IS COMPATIBLE FAILURE BEHAVIOUR.** Counted by tracing a
 real `TmuxBackend.start()`, not estimated. Two batches: the pre-spawn
-`history-limit` plus `remain-on-exit`, and the eight post-probe
-decorations (extended keys, mouse, the two wheel bindings,
-terminal-features, escape-time, `window-size manual`, aggressive-resize).
-Every command in both was already `check=False`. The three whose outcome
+`history-limit` plus `remain-on-exit`, and the post-probe decorations
+(extended keys, mouse, the two wheel bindings, terminal-features,
+escape-time, `window-size manual`, aggressive-resize), which now carry
+that same pre-spawn pair re-applied at their head and therefore number
+ten rather than eight - see the cold-socket paragraph below. Every
+command in both was already `check=False`. The three whose outcome
 the caller ACTS on - `new-session`, `respawn-pane`, `pipe-pane` - stay in
 processes of their own, because tmux gives no per-command control over a
 list and a batch that reported only "the batch failed" would be a
@@ -260,11 +262,48 @@ COMMENT IN `start()` USED TO CLAIM.** Measured on a cold throwaway
 socket: both pre-spawn `set-option` calls exit 1 with "error connecting",
 batched or separate, and after `new-session` the socket reports
 `history-limit 2000` (tmux's default, not our 50000) and
-`remain-on-exit off`. That is PRE-EXISTING and unrelated to batching - it
-was silent because both calls pass `check=False` - and it means the FIRST
-session on a fresh tmux server gets neither setting. Not fixed here; it
-needs the options re-applied after `new-session`, which is a change to the
-launch ordering this section is otherwise about preserving.
+`remain-on-exit off`. It was silent because both calls pass `check=False`,
+and it reaches the FIRST session created after a reboot, after a tmux
+server restart, or any time the socket's last session closes and the
+server exits under `exit-empty`. The pre-spawn pair still runs and still
+must: it is the ONLY thing that can make a pane be BORN at
+`HISTORY_LIMIT`, and on a warm socket - every session after the first - it
+lands.
+
+**THE TWO OPTIONS ARE RE-APPLIED AT THE HEAD OF THE POST-PROBE DECORATION
+BATCH, WHICH FIXES THE SOCKET AND CANNOT FIX THE FIRST PANE.** Measured
+through a real `TmuxBackend.start()` on a cold socket, before and after:
+the socket's global `history-limit` **2000 to 50000** and its global
+`remain-on-exit` **off to on**. It costs no extra tmux process, because
+that batch is issued either way, and both commands are pure assignments of
+a constant, so they are idempotent and safe under the runner's
+individual-rerun fallback.
+
+**THE FIRST PANE KEEPS 2000 ROWS, AND SAYING SO IS THE POINT.** A pane's
+scrollback depth is fixed into its grid at creation. Measured three ways
+on tmux 3.6a, a pane born under the stock limit still reports
+`#{history_limit} 2000` after a global `set-option`, after a
+session-scoped one, and after `respawn-pane -k`. So the re-application
+cannot hand that session its 48000 missing lines, and a commit message
+claiming it did would be the confidently-wrong-doc failure of gotcha 8.
+`tests/test_cold_socket_options_real_tmux.py` pins the limitation as a
+measured fact rather than a comment. What the first session DOES keep is
+its corpse: the belt-and-braces `set-option -t <session> remain-on-exit
+on` that already ran after `new-session` resolves to that session's
+WINDOW, so the dead-on-arrival probe always had a pane to read - the
+GLOBAL window table was the half that was wrong.
+
+**CLOSING THE REMAINING HALF NEEDS A SERVER BEFORE `new-session`, AND TWO
+WAYS TO GET ONE WERE MEASURED AND NOT TAKEN.** `start-server` ALONE does
+not do it - the batch exits 0 and the server is already gone by the time
+the next tmux process connects, because it has no sessions. Adding
+`set-option -s exit-empty off` to that same list DOES: measured, the
+server survives and the next `new-session` is born at 50000. So does
+`tmux -L <socket> -f <conf> new-session ...`, since the server reads `-f`
+at startup, before it creates the session. Both change the launch, and
+the first also leaves a sessionless tmux server running on our socket for
+the life of the box. Neither was shipped; they are written down so the
+next person starts from the measurement rather than from `start-server`.
 
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
