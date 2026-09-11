@@ -290,7 +290,10 @@ async def websocket_terminal(websocket: WebSocket):
     # registration below because the registration needs the stream: every
     # broadcast into this socket goes through it, and a socket registered
     # without one cannot be written to at all.
-    viewer_stream = session_manager.subscribe_output(target_sid)
+    # THE VIEWER'S BOUNDED OUTBOX, from the registry that owns the
+    # subscriber list on this line. It arrived as
+    # ``session_manager.subscribe_output``; that seam does not exist here.
+    viewer_stream = registry.subscribe(target_sid)
 
     await connection_manager.connect(websocket, viewer_stream)
     # v0.7.0 Part 2 - register the WS in the per-session reverse map so
@@ -312,12 +315,6 @@ async def websocket_terminal(websocket: WebSocket):
                 "mark_session_viewed_failed", session_id=target_sid, error=str(exc)
             )
 
-<<<<<<< HEAD
-    # Subscribe to THIS session's PTY output only.
-    pty_output_queue = registry.subscribe(target_sid)
-
-=======
->>>>>>> 6012467
     # Subscribe to local-server events (replaces the old tunnel queue -
     # carries `local_server_detected` / `local_server_lost` payloads).
     local_servers_queue = local_servers.subscribe()
@@ -557,11 +554,7 @@ async def websocket_terminal(websocket: WebSocket):
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
-<<<<<<< HEAD
-        registry.unsubscribe(pty_output_queue, target_sid)
-=======
-        session_manager.unsubscribe_output(viewer_stream, target_sid)
->>>>>>> 6012467
+        registry.unsubscribe(viewer_stream, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         await release_client_resize(
@@ -637,11 +630,7 @@ async def websocket_terminal(websocket: WebSocket):
     finally:
         # Cleanup - unsubscribe ONLY this session's queue. Do NOT detach or
         # destroy the session: other tabs (or a later reconnect) may want it.
-<<<<<<< HEAD
-        registry.unsubscribe(pty_output_queue, target_sid)
-=======
-        session_manager.unsubscribe_output(viewer_stream, target_sid)
->>>>>>> 6012467
+        registry.unsubscribe(viewer_stream, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         # fix/multiclient-tmux-size - drop this client from size negotiation
@@ -771,89 +760,6 @@ async def _pump_text(queue: asyncio.Queue, stream: BoundedStream) -> None:
     """
     try:
         while True:
-<<<<<<< HEAD
-            # Wait for PTY output (base64 encoded)
-            encoded_data = await queue.get()
-
-            try:
-                # Decode base64 to raw bytes
-                raw_bytes = base64.b64decode(encoded_data)
-
-                # Pattern detection + idle watching, scoped to THIS session.
-                # We skip both when the backend is in replay mode so replayed
-                # scrollback doesn't look like "new" activity downstream.
-                _registry = websocket.app.state.services.registry
-                _backend = None
-                _idle_watcher = None
-                if _registry is not None:
-                    if session_id:
-                        _backend = _registry.get_backend(session_id)
-                        _idle_watcher = (
-                            websocket.app.state.services.sidecars.watcher(
-                                session_id
-                            )
-                        )
-                    else:
-                        _backend = _registry.current_backend()
-                        current = _registry.current_session()
-                        _idle_watcher = (
-                            websocket.app.state.services.sidecars.watcher(
-                                current.id
-                            )
-                            if current is not None
-                            else None
-                        )
-                in_replay = (
-                    _backend is not None
-                    and getattr(_backend, "replay_in_progress", False)
-                )
-                if log_monitor and not in_replay:
-                    try:
-                        text = raw_bytes.decode('utf-8', errors='replace')
-                        # Run pattern detection on the output (Item 6 wiring)
-                        log_monitor._detect_patterns(text)
-                    except Exception as e:
-                        # Don't let pattern detection errors break output streaming
-                        logger.debug("pattern_detection_error", error=str(e))
-
-                # Item 7: feed the per-session IdleWatcher. It buffers the
-                # tail, classifies, and fires PERMISSION_PROMPT synchronously
-                # / TASK_COMPLETE from its background poll. Errors are
-                # swallowed - terminal streaming is load-bearing, notifications
-                # are not.
-                if _idle_watcher is not None and not in_replay:
-                    try:
-                        await _idle_watcher.handle_chunk(raw_bytes)
-                    except Exception as e:
-                        logger.debug("idle_watcher_chunk_error", error=str(e))
-
-                # Send as binary frame directly
-                await websocket.send_bytes(raw_bytes)
-            except Exception as e:
-                logger.error("send_pty_output_error", error=str(e))
-                raise
-
-    except asyncio.CancelledError:
-        # Task was cancelled, exit gracefully
-        pass
-    except Exception as e:
-        logger.error("send_pty_output_error", error=str(e))
-        raise
-
-
-async def send_queue_messages(websocket: WebSocket, queue: asyncio.Queue):
-    """
-    Send messages from a queue to the WebSocket client.
-
-    Args:
-        websocket: WebSocket connection
-        queue: Queue to read messages from
-    """
-    try:
-        while True:
-            # Wait for message in queue
-=======
->>>>>>> 6012467
             message = await queue.get()
             if stream.closed:
                 return
@@ -901,16 +807,35 @@ async def _drain_viewer(
             # Pattern detection + idle watching, scoped to THIS session.
             # We skip both when the backend is in replay mode so replayed
             # scrollback doesn't look like "new" activity downstream.
-            sm = websocket.app.state.session_manager
+            # THROUGH THE COMPOSITION ROOT, NOT THE MANAGER. This arrived
+            # reading ``sm.get_backend`` and ``sm.idle_watchers``, neither
+            # of which exists on this line: the registry owns the backend
+            # map and AttachmentSidecars owns the watchers. Left as it
+            # arrived, ``hasattr`` and ``getattr(..., {})`` would both
+            # have answered falsy rather than raising, so pattern
+            # detection and idle watching would have gone quietly dead on
+            # every session while every test still passed.
+            _services = getattr(websocket.app.state, "services", None)
+            _registry = getattr(_services, "registry", None)
+            _sidecars = getattr(_services, "sidecars", None)
             _backend = None
             _idle_watcher = None
-            if sm is not None:
-                if session_id and hasattr(sm, "get_backend"):
-                    _backend = sm.get_backend(session_id)
-                    _idle_watcher = getattr(sm, "idle_watchers", {}).get(session_id)
+            if _registry is not None:
+                if session_id:
+                    _backend = _registry.get_backend(session_id)
+                    _idle_watcher = (
+                        _sidecars.watcher(session_id)
+                        if _sidecars is not None
+                        else None
+                    )
                 else:
-                    _backend = getattr(sm, "backend", None)
-                    _idle_watcher = getattr(sm, "idle_watcher", None)
+                    _backend = _registry.current_backend()
+                    current = _registry.current_session()
+                    _idle_watcher = (
+                        _sidecars.watcher(current.id)
+                        if current is not None and _sidecars is not None
+                        else None
+                    )
             in_replay = (
                 _backend is not None
                 and getattr(_backend, "replay_in_progress", False)

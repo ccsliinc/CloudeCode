@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from src.api.auth import require_auth
 from src.config import settings
+from src.core import session_change_notice
+from src.core import single_flight
 from src.models import (
     CreateSessionRequest,
     Session,
@@ -133,6 +135,19 @@ async def create_session(request: Request, body: CreateSessionRequest):
             projects_service.touch_project_best_effort(
                 settings, session.working_dir
             )
+
+        # THE SHAPE OF THE LIST CHANGED, so say re-read. The structural
+        # notice carries NO data on purpose - a notice with a payload
+        # becomes a second source of truth for the session list and
+        # drifts from /sessions/list, while one that says re-read cannot.
+        # It never awaits and never raises, and it is an OPTIMISATION
+        # over the five second reconciliation poll, which is untouched:
+        # a session someone starts by hand on the cloude socket produces
+        # no notice at all and is still picked up on the next pass.
+        session_change_notice.publish(
+            request.app.state,
+            session_change_notice.build_structural_notice("created"),
+        )
 
         return session
 
@@ -275,7 +290,18 @@ async def list_sessions(request: Request):
     """
     session_manager = request.app.state.session_manager
     if hasattr(session_manager, "list_session_infos"):
-        return await session_manager.list_session_infos()
+        # COALESCED, because fifteen pollers were each paying for a full
+        # synchronous pass to receive an identical answer and the passes
+        # overlapped almost continuously. A caller arriving while a pass
+        # is in flight awaits THAT pass; a caller arriving after one
+        # finishes gets a fresh one, because a cached list would paint a
+        # dead session alive. See src/core/single_flight.py.
+        flight = single_flight.flight_on(
+            session_manager,
+            single_flight.SESSION_LIST_FLIGHT_ATTR,
+            single_flight.SESSION_LIST_FLIGHT_NAME,
+        )
+        return await flight.run(session_manager.list_session_infos)
     # Defensive: a single-session manager shim.
     one = await session_manager.get_session_info()
     return [one] if one else []
@@ -387,6 +413,14 @@ async def destroy_session(request: Request, session_id: Optional[str] = None):
         # tell the user a teardown failed that did not. The reconciler
         # still covers the row on its own schedule.
         await _mark_closed_in_datastore(active_socket, active_name)
+
+        # Same structural notice as the create path, same reasoning: the
+        # list lost a row, so every screen holding one re-reads now
+        # rather than on its next poll boundary.
+        session_change_notice.publish(
+            request.app.state,
+            session_change_notice.build_structural_notice("destroyed"),
+        )
 
         return SuccessResponse(message="Session destroyed successfully")
 

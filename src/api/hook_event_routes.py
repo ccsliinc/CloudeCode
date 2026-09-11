@@ -23,11 +23,13 @@ carry inline are pure modules with their own tests:
 ``src/core/hook_toast_gate.py`` for whether the toast may interrupt.
 """
 
+import json
 import structlog
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from src.api.websocket import connection_manager
 from src.core import claude_hooks, claude_title_sync_apply, debug_trace
+from src.core import session_change_notice
 from src.core.hook_event_presentation import hook_event_presentation
 from src.core.hook_toast_gate import resolve_toast_gate
 from src.core.hook_token_recovery import (
@@ -190,8 +192,19 @@ async def claude_event_hook(request: Request):
     # droppable - CLAUDE.md), or a read that threw. A missed "your turn"
     # is a worse failure than a spurious one, so silence is only ever
     # bought with evidence.
+    #
+    # THE LATCH IS THE OTHER HALF OF THE SAME EVIDENCE, and it is read
+    # here for the same reason: ``Stop`` resets the depth to 0, so the
+    # depth alone covers only the FIRST event of a background wait. The
+    # trailing idle ``Notification`` claude fires about 60s later, and any
+    # second ``Stop`` behind it, find a depth of 0 and would be raised.
+    # ``subagent_wait_active`` answers for a bounded window after a
+    # ``Stop`` that was itself suppressed at a positive depth. It is read
+    # BEFORE ``record_hook_event`` so this event cannot stamp the latch it
+    # is then judged by.
     try:
         subagent_depth_at_event = session_manager.subagent_depth(session_id)
+        subagent_wait_at_event = session_manager.subagent_wait_active(session_id)
     except Exception as exc:  # pragma: no cover - defensive, see above
         logger.warning(
             "hook_subagent_depth_unreadable",
@@ -200,6 +213,30 @@ async def claude_event_hook(request: Request):
             error=str(exc),
         )
         subagent_depth_at_event = 0
+        subagent_wait_at_event = False
+
+    # THE IDLE NUDGE, A SEPARATE SIGNAL FROM THE SUB-AGENT ONE ABOVE, read
+    # BEFORE ``record_hook_event`` for the same reason as the depth. Even
+    # though a ``Notification`` does not itself mutate what this read
+    # inspects today, reading first keeps the event free to change that
+    # later without this gate silently starting to judge its own effect.
+    # See ``session_activity.idle_notification_should_suppress``.
+    #
+    # FAIL TOWARD NOTIFYING. An unreadable session, one that never saw a
+    # Stop, or a read that threw all leave this False and the toast is
+    # raised exactly as before.
+    try:
+        idle_notification_suppressed_at_event = (
+            session_manager.should_suppress_idle_notification(session_id)
+        )
+    except Exception as exc:  # pragma: no cover - defensive, see above
+        logger.warning(
+            "hook_idle_notification_signal_unreadable",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+        idle_notification_suppressed_at_event = False
 
     # feat/hook-driven-status - EVERY valid event kind updates the
     # activity-status state machine, not just the toast-worthy ones.
@@ -216,6 +253,20 @@ async def claude_event_hook(request: Request):
             event_kind=event_kind,
             error=str(exc),
         )
+
+    # THE LIGHT MOVED, SO SAY SO WITHOUT WAITING FOR A POLL. A compact
+    # status notice on /ws/events reaches a browser sitting on the home
+    # screen or looking at a different session, which the per-session
+    # terminal socket cannot. It is published HERE, before the gates
+    # below, because a mute suppresses the INTERRUPTION and never what a
+    # row is allowed to say: a muted session's light updates on the poll
+    # today and would be visibly stale if this refused to report it. The
+    # TOAST notice is the gated one, and it is published past the gate.
+    # Never awaits, never raises, and publishes nothing when no browser
+    # is connected - see src/core/session_change_notice.py.
+    session_change_notice.publish_hook_status(
+        request.app.state, session_manager, session_id
+    )
 
     # THE USER TURNED UP, SO THE SESSION'S NOTIFICATIONS ARE ANSWERED.
     # The owner's ask: a toast that is waiting on him should clear when
@@ -399,6 +450,8 @@ async def claude_event_hook(request: Request):
         policy_store_attached=policy_store_attached,
         policy=policy,
         subagent_depth=subagent_depth_at_event,
+        subagent_wait_active=subagent_wait_at_event,
+        idle_notification_suppressed=idle_notification_suppressed_at_event,
     )
     if not gate.raises_toast:
         logger.info(
@@ -438,5 +491,17 @@ async def claude_event_hook(request: Request):
             session_id=session_id,
             error=str(exc),
         )
+
+    # AND THE SAME TOAST ONTO THE PER-BROWSER CHANNEL, so a client that
+    # holds no terminal socket for this session still sees the card. The
+    # MUTE GATE IS SATISFIED BY CONSTRUCTION rather than by a second copy
+    # of the rule: a suppressed toast returns above and never reaches this
+    # line, so this cannot disagree with the notification policy. The
+    # frame is the SAME ``toast.new`` shape the terminal socket carries,
+    # so the client has one handler and not two.
+    session_change_notice.publish(
+        request.app.state,
+        json.loads(ToastNewMessage(toast=toast).model_dump_json()),
+    )
 
     return {"ok": True, "toast_id": toast.id}

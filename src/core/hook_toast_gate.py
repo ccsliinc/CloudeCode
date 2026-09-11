@@ -54,7 +54,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from src.core.session_activity import EVENT_NOTIFICATION, EVENT_STOP
+from src.core.session_activity import (
+    EVENT_NOTIFICATION,
+    EVENT_STOP,
+    IDLE_NOTIFICATION_SUPPRESSION_REASON,
+)
 
 #: The ``toast_suppressed`` value returned when the user muted the session.
 SUPPRESSED_NOTIFICATIONS_MUTED = "notifications_muted"
@@ -67,6 +71,7 @@ SUPPRESSED_SUBAGENTS_RUNNING = "subagents_running"
 #: string a grep looks for cannot drift from the branch that produces it.
 LOG_MUTED = "hook_toast_suppressed_notifications_muted"
 LOG_SUBAGENTS = "hook_toast_suppressed_subagents_running"
+LOG_TURN_CLOSED = "hook_toast_suppressed_turn_closed"
 
 #: The kinds the sub-agent gate may silence. ``PermissionRequest`` is
 #: absent deliberately; see the module docstring.
@@ -106,6 +111,8 @@ def resolve_toast_gate(
     policy_store_attached: bool,
     policy: Optional[Any],
     subagent_depth: int,
+    subagent_wait_active: bool = False,
+    idle_notification_suppressed: bool = False,
 ) -> ToastGateVerdict:
     """Decide whether a toast-worthy hook event may interrupt the user.
 
@@ -144,11 +151,42 @@ def resolve_toast_gate(
             },
         )
 
-    if event_kind in SUBAGENT_GATE_KINDS and subagent_depth > 0:
+    # TWO SOURCES OF ONE FACT, and the session is waiting on itself if
+    # EITHER says so: the live depth covers the FIRST event of a
+    # background wait, and the bounded latch covers the ones trailing it.
+    # ``Stop`` resets the depth to 0, so the trailing idle
+    # ``Notification`` about 60s later, and any second ``Stop`` behind
+    # it, would find a depth of 0 and be raised. Both fail toward
+    # notifying.
+    if event_kind in SUBAGENT_GATE_KINDS and (
+        subagent_depth > 0 or subagent_wait_active
+    ):
         return ToastGateVerdict(
             suppressed_by=SUPPRESSED_SUBAGENTS_RUNNING,
             log_event=LOG_SUBAGENTS,
-            log_fields={"subagent_depth": subagent_depth},
+            log_fields={
+                "subagent_depth": subagent_depth,
+                "subagent_wait_latched": subagent_wait_active,
+            },
+        )
+
+    # A CLEAN, UNANSWERED-FOR NUDGE, not a sub-agent wait. claude fires an
+    # idle ``Notification`` about 60s after a turn that already ended
+    # cleanly, with no sub-agent involved at all - measured live
+    # 2026-09-10 on ses_63beb976, twelve consecutive Stop-then-
+    # Notification pairs at plus 60.1s, every one rendered as a toast
+    # summoning the user to a session that had nothing to ask. Same
+    # false-urgency shape as the sub-agent gate, one layer broader.
+    # ``PermissionRequest`` is deliberately absent from this branch too,
+    # at any depth, for the same hard-block reason the module docstring
+    # gives. The activity state machine is untouched: the session still
+    # recorded the Notification and still resolves to ``notice``; only
+    # the interruption is skipped.
+    if event_kind == EVENT_NOTIFICATION and idle_notification_suppressed:
+        return ToastGateVerdict(
+            suppressed_by=IDLE_NOTIFICATION_SUPPRESSION_REASON,
+            log_event=LOG_TURN_CLOSED,
+            log_fields={},
         )
 
     return ToastGateVerdict()

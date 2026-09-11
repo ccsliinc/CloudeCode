@@ -18,6 +18,8 @@ point the scan at the wrong directory.
 import json
 import os
 import structlog
+
+from src.core import theme_script_digest
 from fastapi import APIRouter, Depends
 from pathlib import Path
 from src.api.auth import require_auth
@@ -88,6 +90,16 @@ def _load_manifest(theme_dir: Path, source: str) -> Optional[ThemeManifest]:
     # Server stamps `source`. Reject any client-supplied source value to keep
     # the contract one-way.
     raw["source"] = source
+
+    # Server stamps `effectsDigest` for the same reason, and the stamp is
+    # unconditional: a theme.json that carries one of its own is naming
+    # bytes nobody measured, which is precisely what a consent grant must
+    # never be able to match against. A theme with no script, or one whose
+    # script cannot be read, gets None, and the consent ladder reads that
+    # as unverifiable rather than as permission.
+    raw["effectsDigest"] = theme_script_digest.digest_effects(
+        theme_dir, raw.get("effects")
+    )
 
     try:
         manifest = ThemeManifest(**raw)

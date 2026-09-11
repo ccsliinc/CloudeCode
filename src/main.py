@@ -67,20 +67,12 @@ from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
-<<<<<<< HEAD
+from src.api.events_routes import router as events_ws_router
 from src.api.auth import limiter as auth_limiter, require_auth
 # The auth-side router is assembled in auth_routes, not in auth: auth is
 # the authority every route module on that side imports require_auth
 # from, so a router there would point the dependency arrow both ways.
 from src.api.auth_routes import router as auth_router
-=======
-from src.api.events_routes import router as events_ws_router
-from src.api.auth import (
-    router as auth_router,
-    limiter as auth_limiter,
-    require_auth,
-)
->>>>>>> 6012467
 from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
 from src.api.imported_restart_routes import router as imported_restart_router

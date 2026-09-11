@@ -50,23 +50,34 @@ async def _apply_session_theme(
     """Shared implementation for both ``/theme`` and the deprecated
     ``/pinned-theme`` alias.
 
-    v0.7.0 behavior:
-      * Validates the tmux name against the known-sessions set (same
-        rules as the legacy route - owned ∪ active ∪ attachable probe).
-      * Writes ``<session.working_dir>/.cc.theme`` via the
-        ``ThemeStore`` handed in as ``themes`` (atomic tmp+rename).
-        Taken as an argument rather than reached through the manager,
-        because the manager no longer forwards to it. ``owned_tmux`` is
-        the ``OwnedTmuxLedger`` and arrives the same way for the same
-        reason: it is what knows which tmux names this app created, and
-        ``registry`` is the ``SessionRegistry``, which is what knows
-        which sessions are live.
-        Empty/None ``theme_id`` clears the dotfile.
-      * Mirrors onto the live ``Session.pinned_theme`` so a follow-up
-        ``get_session_info`` reflects the change without re-reading.
-      * Retains the ``pinned_themes.json`` mirror for ONE release so
-        downgrades to v0.6.x stay coherent. Removed when the alias
-        route itself is dropped in v0.8.x.
+    THIS PINS A THEME TO ONE SESSION, AND IT WRITES ONE STORE.
+
+      * Validates the tmux name against the known-sessions set (owned
+        union active union the attachable probe), so this cannot become
+        an arbitrary key-value endpoint. ``owned_tmux`` is the
+        ``OwnedTmuxLedger``, which knows which tmux names this app
+        created, and ``registry`` is the ``SessionRegistry``, which
+        knows which sessions are live; both arrive as arguments because
+        the manager no longer forwards to them.
+      * Writes the per-session pin through
+        ``session_manager.set_pinned_theme``, which persists
+        ``pinned_themes.json`` and mirrors onto the live
+        ``Session.pinned_theme`` so a follow-up ``get_session_info``
+        reflects the change without re-reading.
+      * Empty/None ``theme_id`` clears the pin, dropping this session
+        back to its project's ``.cc.theme`` default.
+
+    IT DELIBERATELY NO LONGER WRITES ``<working_dir>/.cc.theme``. That
+    file is keyed on the DIRECTORY, so writing it from a per-session pin
+    rethemed every sibling session in the same folder, and this app
+    routinely runs several out of one repo. Doing it while
+    ``resolve_project_theme`` reads the pin first (issue #65, taken at
+    the 1.4.0 integration) would be worse than the original bug: the
+    folder's default would silently follow whichever session was themed
+    last, changing what every never-pinned session in it paints. Setting
+    a project default is a separate, deliberate act and goes through
+    ``ThemeStore.set_project_theme``. The ``themes`` argument is kept
+    because the validation path still reads it.
 
     Raises HTTPException for the route layer to surface verbatim.
     """
@@ -117,39 +128,11 @@ async def _apply_session_theme(
                 matched_working_dir = sess_obj.working_dir
             break
 
-    # v0.7.0 - write the project-scoped dotfile. When no live session
-    # carries this name we still update the legacy JSON map below so
-    # downgrades + non-live pins remain functional (this is the one
-    # path where pinned_themes.json is still the source of truth).
-    if matched_working_dir:
-        try:
-            themes.set_project_theme(matched_working_dir, theme_id)
-        except FileNotFoundError as exc:
-            logger.warning(
-                "session_theme_working_dir_missing",
-                session_name=session_name,
-                working_dir=matched_working_dir,
-                error=str(exc),
-            )
-            # working_dir gone (project deleted on disk) - don't crash;
-            # fall through to the JSON mirror so the in-memory + map
-            # update still happens. Caller will see a 200 with the pin
-            # reflected even though the dotfile couldn't be written.
-        except (OSError, ValueError, NotADirectoryError) as exc:
-            logger.error(
-                "session_theme_write_failed",
-                session_name=session_name,
-                working_dir=matched_working_dir,
-                error=str(exc),
-            )
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to persist project theme: {exc}",
-            )
-
-    # Mirror onto the legacy JSON map + the live Session.pinned_theme.
-    # ``set_pinned_theme`` handles BOTH (map write + in-memory mirror) so
-    # we don't have to duplicate the live-backend lookup.
+    # ONE STORE, THE SESSION'S OWN. ``set_pinned_theme`` handles both the
+    # durable map write and the live-backend mirror, so there is no
+    # second lookup to duplicate here and no folder-wide file to write.
+    # ``matched_working_dir`` is still resolved above because the echo
+    # below reports it.
     session_manager.set_pinned_theme(session_name, theme_id)
 
     logger.info(
@@ -209,10 +192,11 @@ async def set_session_theme(
 ):
     """Set (or clear) the project-scoped theme for a session.
 
-    v0.7.0 - supersedes ``PATCH /sessions/{name}/pinned-theme``. The
-    theme id is written to ``<session.working_dir>/.cc.theme`` so two
-    browsers / two machines pointed at the same project converge on
-    the same theme without round-tripping a per-machine cache.
+    Supersedes ``PATCH /sessions/{name}/pinned-theme``. The theme id is
+    recorded against this session's tmux name, so two sessions running
+    out of one folder can hold two different themes and each keeps its
+    own across a server restart. Clearing drops the session back to its
+    project's ``.cc.theme`` default.
 
     Body shape: ``{"theme_id": "<id>"}`` or ``{"theme_id": null}`` (or
     empty string) to clear. The session is validated against the same
@@ -276,9 +260,9 @@ async def set_pinned_theme(
 
     Kept as a routing alias for ONE release so v0.6.x clients keep
     working through an upgrade window. Internally forwards to the same
-    code path as the new endpoint - the theme id is written to
-    ``<session.working_dir>/.cc.theme`` regardless of which route the
-    client hits. The response shape is unchanged.
+    code path as the new endpoint - the theme id is recorded as this
+    session's own pin regardless of which route the client hits. The
+    response shape is unchanged.
 
     Will be REMOVED in v0.8.x. New clients MUST use ``/theme``.
     """
