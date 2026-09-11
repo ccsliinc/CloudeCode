@@ -208,17 +208,26 @@ def test_get_state_dir_uncreatable_does_not_touch_tmp(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------- #
 
 def _configure_dirs(monkeypatch, tmp_path):
-    """Point the new state dir and the old log_directory at two distinct,
-    empty tmp directories, returning both.
+    """Wire an install that NEVER named a state directory, plus an old
+    log_directory, and return both locations.
 
+    Description: the state dir is redirected by patching ``Path.home()``
+      rather than by setting ``state_dir_override``, and that is
+      load-bearing rather than stylistic. Setting ``CLOUDE_STATE_DIR`` IS
+      the operator saying where state lives, and it suppresses the legacy
+      rung - see ``Settings.state_dir_is_explicit()``. Every case below
+      describes an install that PREDATES ``CLOUDE_STATE_DIR`` and is
+      therefore incapable of having set it; declaring one here would have
+      the fixture contradict the scenario each test names.
     Inputs: monkeypatch, tmp_path (pytest fixtures).
-    Output: (new_dir, old_dir) tuple of Path.
+    Output: (new_dir, old_dir) tuple of Path - the default state dir and
+      the legacy log_directory.
     """
-    new_dir = tmp_path / "new_state"
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    new_dir = tmp_path / "Library" / "Application Support" / "CloudeCode"
     old_dir = tmp_path / "old_log_directory"
-    new_dir.mkdir()
+    new_dir.mkdir(parents=True)
     old_dir.mkdir()
-    monkeypatch.setattr(settings, "state_dir_override", str(new_dir))
     monkeypatch.setattr(settings, "log_directory", str(old_dir))
     return new_dir, old_dir
 
@@ -317,3 +326,167 @@ def test_state_file_no_old_log_directory_configured(tmp_path, monkeypatch):
     resolved = settings.get_unread_state_path()
 
     assert resolved == new_dir / "unread_state.json"
+
+
+# ---------------------------------------------------------------------- #
+# An EXPLICIT state directory suppresses the legacy log_directory rung.
+#
+# LOG_DIRECTORY is populated from the install's own .env, so it is set
+# for an operator who never chose it. That made CLOUDE_STATE_DIR alone
+# insufficient to isolate an instance: a throwaway server resolved, held
+# open and in one case WROTE the live user's real state files. A stated
+# location must outrank an inferred one.
+# ---------------------------------------------------------------------- #
+
+PINNED_STATE_FILES = [
+    ("get_refresh_tokens_path", "refresh_tokens.db"),
+    ("get_session_metadata_path", "session_metadata.json"),
+    ("get_pinned_themes_path", "pinned_themes.json"),
+    ("get_unread_state_path", "unread_state.json"),
+]
+
+
+def test_explicit_state_dir_suppresses_the_legacy_pin(tmp_path, monkeypatch):
+    """An operator who NAMED a state directory gets it, for all four
+    pinned filenames, even though a legacy copy exists and
+    LOG_DIRECTORY is non-empty.
+
+    This is the isolation guarantee: setting CLOUDE_STATE_DIR and nothing
+    else is enough to keep a dev or test server off the real files.
+    """
+    state_dir = tmp_path / "throwaway_state"
+    legacy_dir = tmp_path / "legacy"
+    state_dir.mkdir()
+    legacy_dir.mkdir()
+    monkeypatch.setattr(settings, "state_dir_override", str(state_dir))
+    monkeypatch.setattr(settings, "log_directory", str(legacy_dir))
+
+    for _getter, filename in PINNED_STATE_FILES:
+        (legacy_dir / filename).write_text("live user data")
+
+    for getter, filename in PINNED_STATE_FILES:
+        resolved = getattr(settings, getter)()
+        assert resolved == state_dir / filename, (
+            f"{getter}() escaped the explicitly named state directory"
+        )
+        assert settings.get_state_file_location(filename) == "state_dir"
+
+    # Suppressed, never consumed and never removed - the legacy copies
+    # belong to whoever wrote them.
+    for _getter, filename in PINNED_STATE_FILES:
+        assert (legacy_dir / filename).read_text() == "live user data"
+
+
+def test_legacy_pin_still_fires_when_no_state_dir_was_named(tmp_path, monkeypatch):
+    """NEGATIVE CONTROL, and the load-bearing test in this file.
+
+    An install that never set CLOUDE_STATE_DIR and whose state sits under
+    LOG_DIRECTORY must keep reading it. A fix that skipped the legacy
+    rung unconditionally would satisfy
+    ``test_explicit_state_dir_suppresses_the_legacy_pin`` perfectly and
+    silently orphan a real user's refresh tokens and pinned themes on
+    their next upgrade, which is a far worse defect than the one being
+    fixed here. Mutate ``_state_file_pin`` to drop the rung whatever the
+    state dir says and this is the test that goes red.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    legacy_dir = tmp_path / "legacy_only"
+    legacy_dir.mkdir()
+    monkeypatch.setattr(settings, "state_dir_override", None)
+    monkeypatch.setattr(settings, "log_directory", str(legacy_dir))
+    assert not settings.state_dir_is_explicit()
+
+    for _getter, filename in PINNED_STATE_FILES:
+        (legacy_dir / filename).write_text("pre-existing install data")
+
+    for getter, filename in PINNED_STATE_FILES:
+        resolved = getattr(settings, getter)()
+        assert resolved == legacy_dir / filename, (
+            f"{getter}() abandoned an existing install's data - the legacy "
+            "fallback stopped firing for an install that never named a "
+            "state directory"
+        )
+        assert settings.get_state_file_location(filename) == "log_directory"
+
+
+def test_explicit_state_dir_never_resolves_under_the_real_legacy_default(
+    tmp_path, monkeypatch
+):
+    """The measured leak, reproduced: LOG_DIRECTORY carrying the value the
+    repo's own .env ships (``~/cloude-projects``) must not pull any pinned
+    filename out of an explicitly named state directory.
+
+    Nothing here writes to or creates that directory; the assertion is
+    about the resolved paths only, so the test is safe to run on a box
+    where the real one exists with the real user's files in it.
+    """
+    state_dir = tmp_path / "isolated"
+    state_dir.mkdir()
+    monkeypatch.setattr(settings, "state_dir_override", str(state_dir))
+    monkeypatch.setattr(settings, "log_directory", "~/cloude-projects")
+
+    real_legacy = Path("~/cloude-projects").expanduser()
+    for getter, filename in PINNED_STATE_FILES:
+        resolved = getattr(settings, getter)()
+        assert resolved.parent == state_dir
+        assert real_legacy not in resolved.parents, (
+            f"{getter}() resolved inside the real legacy directory "
+            f"{real_legacy} while an explicit state dir was set"
+        )
+
+
+# ---------------------------------------------------------------------- #
+# The memoization key on _state_file_pin() must include state_dir_explicit.
+#
+# Both production callers (get_state_file_location, _resolve_state_file)
+# always pass settings.state_dir_is_explicit() for this filename /
+# state_dir_override / log_directory combination, so this defect cannot
+# fire from them today. It is reachable the moment a second caller
+# passes its OWN flag for the same combination - which is exactly what a
+# cache key is supposed to make impossible.
+# ---------------------------------------------------------------------- #
+
+def test_pin_cache_key_must_include_state_dir_explicit(tmp_path, monkeypatch):
+    """Driving ``_state_file_pin`` with the flag both ways, for the SAME
+    filename/state_dir_override/log_directory, must yield two DIFFERENT
+    answers - not the first call's answer replayed.
+
+    This calls the private method directly, on purpose: its own
+    docstring says the flag is "passed in rather than read here so the
+    legacy rung can be driven both ways by a test". Driving it both ways
+    on ONE Settings instance, with everything else held constant, is the
+    only way to exercise the cache key rather than the resolution logic
+    beside it.
+
+    If the cache key regresses to ``(filename, state_key, log_key)``
+    (dropping ``state_dir_explicit``), the second call below returns the
+    FIRST call's cached ``"log_directory"`` decision and this test goes
+    red.
+    """
+    monkeypatch.setattr(settings, "_state_file_pins", None)
+    state_dir = tmp_path / "state"
+    legacy_dir = tmp_path / "legacy"
+    state_dir.mkdir()
+    legacy_dir.mkdir()
+    filename = "pinned_themes.json"
+    (legacy_dir / filename).write_text("legacy data")
+
+    monkeypatch.setattr(settings, "state_dir_override", str(state_dir))
+    monkeypatch.setattr(settings, "log_directory", str(legacy_dir))
+
+    # explicit=False: the legacy rung is allowed to fire, and since only
+    # the legacy copy exists, it wins.
+    path_a, location_a = settings._state_file_pin(filename, False)
+    assert location_a == "log_directory"
+    assert path_a == legacy_dir / filename
+
+    # explicit=True, everything else UNCHANGED: an explicit state dir
+    # must suppress the legacy rung and resolve fresh into the state
+    # dir, not replay the previous call's cached legacy answer.
+    path_b, location_b = settings._state_file_pin(filename, True)
+    assert location_b == "state_dir", (
+        "the cached pin from the state_dir_explicit=False call leaked "
+        "into the state_dir_explicit=True call - the cache key is "
+        "missing the explicit flag"
+    )
+    assert path_b == state_dir / filename

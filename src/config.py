@@ -848,7 +848,7 @@ class Settings(BaseSettings):
           ``src/main.py``'s module-level call to this method.
         """
         raw = self.state_dir_override
-        if raw:
+        if self.state_dir_is_explicit():
             path = Path(raw).expanduser()
         else:
             path = Path.home() / "Library" / "Application Support" / "CloudeCode"
@@ -857,6 +857,28 @@ class Settings(BaseSettings):
         except OSError as exc:
             raise StateDirUnavailableError(path, exc) from exc
         return path
+
+    def state_dir_is_explicit(self) -> bool:
+        """Did the operator NAME a state directory, or is this the default?
+
+        Description: the one authority for that fact. ``get_state_dir()``
+          branches on it to pick the override over the macOS-native
+          default, and ``_state_file_pin()`` is HANDED it (never asks for
+          itself) to decide whether the legacy ``log_directory`` rung may
+          fire. Deriving it a second time is how the two come to disagree.
+
+          It matters because ``LOG_DIRECTORY`` is populated from the
+          install's own ``.env`` and is therefore set for an operator who
+          never chose it, while ``CLOUDE_STATE_DIR`` is only ever set
+          deliberately. A stated location outranks an inferred one, so an
+          explicit state directory suppresses a legacy pin derived from a
+          variable nobody chose - which is what makes CLOUDE_STATE_DIR
+          alone enough to isolate a dev or test instance.
+        Inputs: none (reads ``self.state_dir_override``).
+        Output: bool - True when ``CLOUDE_STATE_DIR`` was supplied
+          non-empty, False when the default location is in force.
+        """
+        return bool(self.state_dir_override)
 
     def get_log_dir(self) -> Path:
         """Get the absolute path for the application's state directory.
@@ -869,7 +891,7 @@ class Settings(BaseSettings):
         """
         return self.get_state_dir()
 
-    def _state_file_pin(self, filename: str) -> tuple:
+    def _state_file_pin(self, filename: str, state_dir_explicit: bool) -> tuple:
         """Decide ONCE where one name-keyed state file lives, then keep it.
 
         Description: the single authority decision behind
@@ -878,12 +900,17 @@ class Settings(BaseSettings):
           site ever re-derives it - see ``_resolve_state_file``'s
           docstring for why re-deriving was the bug.
         Inputs: filename (str) - bare filename, e.g. "pinned_themes.json".
+          state_dir_explicit (bool) - whether the operator NAMED a state
+          directory, from ``state_dir_is_explicit()``. Passed in rather
+          than read here so the legacy rung can be driven both ways by a
+          test; a guard that asks for its own condition is one whose
+          refusing branch nobody has ever watched run.
         Output: tuple[Path, str] - the resolved path and the location it
           belongs to, one of ``"state_dir"`` or ``"log_directory"``.
         """
         state_key = self.state_dir_override or ""
         log_key = self.log_directory or ""
-        key = (filename, state_key, log_key)
+        key = (filename, state_key, log_key, state_dir_explicit)
 
         if self._state_file_pins is None:
             self._state_file_pins = {}
@@ -893,7 +920,7 @@ class Settings(BaseSettings):
 
         new_path = self.get_state_dir() / filename
         decision = (new_path, "state_dir")
-        if log_key:
+        if log_key and not state_dir_explicit:
             old_path = Path(log_key).expanduser() / filename
             new_exists = new_path.exists()
             old_exists = old_path.exists()
@@ -907,6 +934,16 @@ class Settings(BaseSettings):
                 )
             elif old_exists:
                 decision = (old_path, "log_directory")
+        elif state_dir_explicit and log_key:
+            old_path = Path(log_key).expanduser() / filename
+            if old_path.exists():
+                import structlog
+                structlog.get_logger().info(
+                    "state_file_legacy_copy_left_behind",
+                    filename=filename,
+                    using=str(new_path),
+                    legacy_path=str(old_path),
+                )
 
         self._state_file_pins[key] = decision
         return decision
@@ -924,7 +961,7 @@ class Settings(BaseSettings):
           ``"log_directory"`` (the pre-feat/state-directory location).
         Example: settings.get_state_file_location("session_metadata.json")
         """
-        return self._state_file_pin(filename)[1]
+        return self._state_file_pin(filename, self.state_dir_is_explicit())[1]
 
     def _resolve_state_file(self, filename: str) -> Path:
         """Resolve one name-keyed JSON state file, old-location fallback.
@@ -937,6 +974,15 @@ class Settings(BaseSettings):
           of a given filename, and then STICKS. Precedence on that first
           resolution:
 
+            0. ``CLOUDE_STATE_DIR`` was set - the operator NAMED where
+               state lives, so the old location is not consulted at all
+               and rungs 1 to 3 are skipped. A stated location outranks
+               one inferred from ``LOG_DIRECTORY``, which the install's
+               own ``.env`` supplies whether or not anyone chose it. This
+               is what makes that one variable enough to isolate a dev or
+               test instance; without it a throwaway server resolves, and
+               writes, the real user's files. See
+               ``state_dir_is_explicit()``.
             1. The file exists in BOTH the new state dir and the old
                ``log_directory`` location - ambiguous. Logged as a
                warning naming both paths; the NEW path wins and the OLD
@@ -974,7 +1020,7 @@ class Settings(BaseSettings):
         Inputs: filename (str) - bare filename, e.g. "pinned_themes.json".
         Output: Path - the file path callers should read from / write to.
         """
-        return self._state_file_pin(filename)[0]
+        return self._state_file_pin(filename, self.state_dir_is_explicit())[0]
 
     def get_refresh_tokens_path(self) -> Path:
         """Get the path for the refresh-token revocation database.

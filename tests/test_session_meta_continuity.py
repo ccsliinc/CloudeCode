@@ -200,15 +200,25 @@ def downgrade_verdict(log_directory: Path, live_session_id: str) -> str:
 def dirs(tmp_path: Path, monkeypatch) -> Tuple[Path, Path]:
     """A throwaway (old LOG_DIRECTORY, new state dir) pair, wired live.
 
+    The state dir is redirected by patching ``Path.home()`` rather than by
+    setting ``state_dir_override``, and that is load-bearing. Naming a
+    state directory is the operator saying where state lives, and it
+    suppresses the legacy rung (``Settings.state_dir_is_explicit()``).
+    Every case in this module is an install that PREDATES
+    ``CLOUDE_STATE_DIR`` and is therefore incapable of having set one, so
+    declaring it here would have the fixture contradict the round trip the
+    module is measuring.
+
     Inputs: tmp_path, monkeypatch (pytest fixtures).
     Output: (log_dir, state_dir).
     """
     log_dir = tmp_path / "logs"
-    state_dir = tmp_path / "state"
     log_dir.mkdir()
-    state_dir.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    state_dir = tmp_path / "Library" / "Application Support" / "CloudeCode"
+    state_dir.mkdir(parents=True)
     monkeypatch.setattr(settings, "log_directory", str(log_dir))
-    monkeypatch.setattr(settings, "state_dir_override", str(state_dir))
+    monkeypatch.setattr(settings, "state_dir_override", None)
     return log_dir, state_dir
 
 
@@ -389,14 +399,17 @@ def test_changing_the_configured_locations_invalidates_the_pin(tmp_path, monkeyp
     a different question, and must get a fresh answer rather than a
     remembered one keyed to directories that are no longer configured.
     """
-    a_log, a_state = tmp_path / "a-logs", tmp_path / "a-state"
+    a_log = tmp_path / "a-logs"
     b_log, b_state = tmp_path / "b-logs", tmp_path / "b-state"
-    for d in (a_log, a_state, b_log, b_state):
+    for d in (a_log, b_log, b_state):
         d.mkdir()
     (a_log / "session_metadata.json").write_text("{}")
 
+    # Configuration A names no state directory, so the legacy file is what
+    # the pin lands on. Naming one is the other half of the change below.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr(settings, "log_directory", str(a_log))
-    monkeypatch.setattr(settings, "state_dir_override", str(a_state))
+    monkeypatch.setattr(settings, "state_dir_override", None)
     assert settings.get_session_metadata_path() == a_log / "session_metadata.json"
 
     monkeypatch.setattr(settings, "log_directory", str(b_log))
