@@ -9,7 +9,7 @@
 # Everything else is plain `gh`. Read SKILL.md.
 #
 #   work.sh whoami            which gh account reaches this repo
-#   work.sh free              open issues with no linked PR
+#   work.sh free              open issues with no linked PR, in grab order
 #   work.sh taken             open PRs, ie what is claimed
 #   work.sh mine              your own open PRs
 #   work.sh search TERM       issues and PRs matching, with bodies
@@ -61,9 +61,28 @@ cmd_whoami() {
   echo "base:    $BASE"
 }
 
+# Grab order, ruled 2026-09-11: Adoom666's issues p0 then p1 then p2, THEN
+# ccsliinc's the same way. No priority label sorts after p2 inside its own
+# author's group; any other author sorts after both. No GitHub `sort:`
+# qualifier can express that, so the ordering is done here on the json.
+# Authorship sets ORDER only. It is not ownership and it reserves nothing.
 cmd_free()  { need_token || return 3
-  g issue list -R "$REPO" --state open \
-    --search "-linked:pr sort:created-asc" --limit 50; }
+  g issue list -R "$REPO" --state open --search "-linked:pr" --limit 200 \
+    --json number,title,author,labels \
+  | jq -r '
+      def arank: if   .author.login=="Adoom666" then 0
+                 elif .author.login=="ccsliinc" then 1
+                 else 2 end;
+      def prank: [.labels[].name] as $l
+               | if   $l|index("p0") then 0
+                 elif $l|index("p1") then 1
+                 elif $l|index("p2") then 2
+                 else 3 end;
+      map(. + {ar: arank, pr: prank})
+      | sort_by(.ar, .pr, .number)
+      | .[]
+      | "\(.author.login)\t\(["p0","p1","p2","(none)"][.pr])\t#\(.number)\t\(.title)"
+    ' | column -t -s $'\t'; }
 
 cmd_taken() { need_token || return 3
   g pr list -R "$REPO" --state open --limit 50; }

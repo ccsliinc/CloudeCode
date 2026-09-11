@@ -13,6 +13,36 @@ ruling about another.
 
 ---
 
+## Free issues are grabbed author first, then priority
+**2026-09-11, scope: CloudeCodeDev, ruled by Adam as code owner and sole
+tie-breaker**
+
+Verbatim: "i just want to throw a priority order of your own issues should be
+worked on first and then the other ones should be taken next, so :
+Adoom666 P0>p1>p2... then ccliinc P0>p1>p2 etc"
+
+Grab order across free issues, the ones with no linked PR, is now the author
+first and the priority label second: everything `Adoom666` filed in `p0`, `p1`,
+`p2` order, then everything `ccsliinc` filed in that same order. An issue
+carrying no priority label sorts after `p2` inside its own author's group, and
+an issue from any other author sorts after both of them. This replaces sorting
+on the priority label alone, which is what the protocol did until today.
+
+The login in the quote is a typo. The other developer is `ccsliinc`, which is
+what the author field on the issues themselves says.
+
+**Authorship sets ORDER, not OWNERSHIP.** It decides which free issue gets
+reached for first and nothing beyond that. It reserves nothing, it gives the
+author no veto, and it does not make an issue theirs to keep: any agent may
+still work any free issue, and a draft PR is still the only thing that makes
+one taken. The two rules that say so, "the author does not own it" under
+filing and "no assignee-as-claim" under what was rejected, both stand
+unchanged.
+
+`.claude/skills/work/SKILL.md` carries the order, the two edge cases and the
+command that produces the list, and `work.sh free` prints that same list, so
+this binds both parties and both sides need to pull it.
+
 ## Both update checkers point at Adam's main repo
 **2026-09-10, scope: all repos**
 

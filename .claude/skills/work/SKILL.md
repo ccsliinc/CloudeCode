@@ -44,15 +44,79 @@ file list. A design contradiction is a collision even when you share no file.
 ```bash
 R=Adoom666/CloudeCodeDev
 gh auth status                       # confirm WHICH account is active
-gh issue list -R $R --state open --search "-linked:pr sort:created-asc"   # free
 gh pr list   -R $R --state open                                           # taken
 gh pr list   -R $R --state open --author @me                              # yours
 ```
+
+Free issues are the fourth read, and the order you read them in is a ruling
+rather than a preference. It is the next section, and it carries the command.
 
 Then read `docs/DECISIONS.md`, which is short and binds, and
 `docs/LESSONS.md`, which is the accumulated fixes for defects this project
 has hit more than once. Add to LESSONS.md when a pattern repeats: once is an
 incident, twice is a pattern.
+
+## Grab order: author first, then priority
+
+Adam ruled it on 2026-09-11, verbatim:
+
+> "i just want to throw a priority order of your own issues should be worked
+> on first and then the other ones should be taken next, so :
+> Adoom666 P0>p1>p2... then ccliinc P0>p1>p2 etc"
+
+The login in that quote is a typo. The other developer is **`ccsliinc`**,
+which is what the issue list's own author field says.
+
+So across FREE issues, the ones with no linked PR:
+
+1. everything `Adoom666` filed, `p0` then `p1` then `p2`
+2. then, and only once those are exhausted, everything `ccsliinc` filed, `p0`
+   then `p1` then `p2`
+
+Two edge cases, decided here rather than left to each agent to invent:
+
+- **No priority label sorts AFTER `p2`, inside its own author's group.** It is
+  not unranked work, it is work nobody has ranked yet, and putting it first
+  would let filing an unlabelled issue jump the queue.
+- **An issue from any other author sorts after both of them**, `p0` / `p1` /
+  `p2` / unlabelled inside. Nobody else files here today. Stating it means the
+  first person who does is not a coin toss.
+
+Inside one bucket the lowest issue number goes first, which is the oldest: the
+same `created-asc` tie-break the free list used before this ruling.
+
+**Authorship sets ORDER, never OWNERSHIP.** It decides which free issue you
+reach for FIRST. It reserves nothing, it gives the author no veto, and it does
+not make an issue theirs to keep. Any agent may still work any free issue, a
+draft PR is still the only thing that makes one taken, and an author whose
+issue somebody else picked up has no claim to it back. Order, not exclusivity.
+
+No `sort:` qualifier can express this: GitHub sorts on dates, comments and
+reactions, not on author and not on label. So the sort happens locally, on the
+json.
+
+```bash
+gh issue list -R $R --state open --search "-linked:pr" --limit 200 \
+  --json number,title,author,labels \
+| jq -r '
+    def arank: if   .author.login=="Adoom666" then 0
+               elif .author.login=="ccsliinc" then 1
+               else 2 end;
+    def prank: [.labels[].name] as $l
+             | if   $l|index("p0") then 0
+               elif $l|index("p1") then 1
+               elif $l|index("p2") then 2
+               else 3 end;
+    map(. + {ar: arank, pr: prank})
+    | sort_by(.ar, .pr, .number)
+    | .[]
+    | "\(.author.login)\t\(["p0","p1","p2","(none)"][.pr])\t#\(.number)\t\(.title)"
+  ' | column -t -s $'\t'
+```
+
+Run against the live repo on 2026-09-11 it returned 16 free issues: Adoom666's
+eleven first (one `p0`, eight `p1`, two `p2`), then ccsliinc's five (three
+`p2`, two unlabelled). `work.sh free` runs exactly this.
 
 ## Before starting any distinct piece of work
 
@@ -79,7 +143,9 @@ titles.
 ## Filing an issue
 
 An issue is a spec a clean-context agent can implement without asking. The
-author does not own it.
+author does not own it. Authorship sets the grab ORDER above and nothing else:
+it puts the issue earlier in the queue, it does not reserve it, and it does not
+make the author the one who has to work it.
 
 Use `.github/ISSUE_TEMPLATE/task.yml`. Sections, all of them:
 
@@ -218,7 +284,10 @@ coordination.
 
 **No assignee-as-claim.** One accountable owner per issue optimises for
 blame. This optimises for availability: any agent picks up any issue. The
-signal is "is there a PR", not "whose is it".
+signal is "is there a PR", not "whose is it". The 2026-09-11 grab order does
+not weaken that. It decides which free issue you reach for first; it never
+decides who is allowed to reach for it, and it creates no reservation a draft
+PR has not already created.
 
 **No size labels.** Stale the moment a different agent picks it up.
 
@@ -227,7 +296,9 @@ is help-wanted, so they carry no information.
 
 **Priority labels stay** (`p0`/`p1`/`p2`). With no assignees, grab order IS
 the coordination decision, and it has to be visible without reading forty
-bodies.
+bodies. Since 2026-09-11 they are the SECOND sort key, under "Grab order:
+author first, then priority", which is where that order is stated. They are
+not a second, competing statement of it.
 
 ## Rules that carry over from the old protocol
 
