@@ -211,16 +211,22 @@ test('the resize is ANNOUNCED through the one pipeline, never a second one', () 
     }
 });
 
-test('the refit waits for the docking transition to settle', () => {
-    // A fit measured mid-transition measures the wrong box. The CSS says
-    // 160ms; the module must wait longer than that.
-    const declared = pinJs.match(/LAYOUT_SETTLE_MS = (\d+)/);
-    assert.ok(declared, 'the settle delay must be a named constant');
-    const cssMs = drawer.match(/transition: padding-right (\d+)ms/);
-    assert.ok(cssMs, 'the docking transition duration must be declared in CSS');
+test('the docked geometry settles immediately - no transition to wait out, no fixed-delay guess', () => {
+    // The docking padding used to animate (160ms) and the module wrapped
+    // its refit in a fixed setTimeout guessed to outlast it - real latency
+    // on every dock/undock, for a box that now changes in the same frame
+    // the class toggles. Neither half of that may come back: no
+    // transition on the padding this module measures, and no artificial
+    // delay in front of the call that measures it. requestFit's own
+    // debounce (terminal-layout.js, untouched) is what still coalesces a
+    // rapid toggle.
     assert.ok(
-        Number(declared[1]) >= Number(cssMs[1]),
-        `settle ${declared[1]}ms must not be shorter than the ${cssMs[1]}ms transition`);
+        !/body\.config-drawer-docked \.screen\s*\{[^}]*transition/s.test(drawer),
+        'the docked .screen rule must not animate the box the refit measures');
+    assert.ok(!pinJs.includes('LAYOUT_SETTLE_MS'),
+        'no fixed-delay settle constant should remain once nothing animates');
+    assert.ok(!pinJs.includes('setTimeout'),
+        'the refit must fire synchronously from apply(), not behind a guessed delay');
 });
 
 test('the refit fires only when the docked state actually changed', () => {

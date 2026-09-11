@@ -1096,6 +1096,9 @@
          BEFORE app.js, whose show*() methods call ScreenChrome.apply(). -->
     <script src="/static/js/screen-chrome.js"></script>
 
+    <!-- The shared CSS-var diff writer registry.js calls into for both
+         :root and #terminal-screen. Must load BEFORE themes/registry.js. -->
+    <script src="/static/js/theme-var-writer.js"></script>
     <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
          App.init() can call Themes.init() / ThemeSelector.mount(). -->
     <script src="/static/js/themes/registry.js"></script>

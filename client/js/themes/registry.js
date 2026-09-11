@@ -103,12 +103,18 @@
     var activeSessionName = null;
     var xtermListeners = [];
     var initialized = false;
-    var appliedCssVarNames = [];        // tracked so we can cleanly unset on :root swap
-    // Phase 4-5: track which CSS var names are currently set INLINE on
-    // #terminal-screen via applySession(). Cleared on clearSession() so
-    // we don't leak orphaned vars across session swaps. Use a Set so the
-    // keys are unique even if a theme accidentally lists a var twice.
-    var sessionAppliedVarNames = new Set();
+    // name -> value last painted onto :root by paintCssVars, through
+    // ThemeVarWriter. Tracked as VALUES, not just names, so a re-apply of
+    // the SAME theme (or the same value under a different theme id) can
+    // skip the setProperty call entirely rather than only skipping the
+    // removal loop; see theme-var-writer.js's own header for why removal
+    // itself is never gated on this.
+    var appliedCssVarValues = {};
+    // Phase 4-5: name -> value currently set INLINE on #terminal-screen
+    // via paintTerminalScope(). Cleared (to {}) on clearSession() so we
+    // don't leak orphaned vars across session swaps. Tracked as values
+    // for the same reason as appliedCssVarValues above.
+    var sessionAppliedVarValues = {};
     // Phase 4-5: replay gate. While `replay_in_progress` is true (set by
     // the WS replay path elsewhere), terminal-scope paints are deferred
     // and run once the flag clears. Prevents mid-replay theme flicker when
@@ -147,11 +153,23 @@
      *   optimisation and its absence is a supported state.
      * Example: cacheThemeVars('terminal', {'--color-bg': '#000000'})
      */
+    // The exact bytes this tab last wrote to VARS_CACHE_KEY, so a
+    // re-apply of a theme already cached (routine: applyTheme() runs on
+    // every navigation, not only on a real switch) skips the write
+    // entirely rather than paying a redundant localStorage.setItem for
+    // bytes already sitting there. Scoped to this tab only: a change
+    // written by ANOTHER tab in between is not something this variable
+    // can see, but that is the pre-existing cross-tab behaviour of a
+    // best-effort pre-auth cache (last write always wins regardless),
+    // not something this skip makes any worse.
+    var lastCachedThemeVarsJson = null;
+
     function cacheThemeVars(themeId, cssVars) {
         try {
-            localStorage.setItem(VARS_CACHE_KEY, JSON.stringify({
-                id: themeId, cssVars: cssVars || {}
-            }));
+            var json = JSON.stringify({ id: themeId, cssVars: cssVars || {} });
+            if (json === lastCachedThemeVarsJson) return;
+            localStorage.setItem(VARS_CACHE_KEY, json);
+            lastCachedThemeVarsJson = json;
         } catch (_) { /* quota or private mode - not fatal */ }
     }
 
@@ -249,17 +267,37 @@
      */
     function paintCssVars(cssVars) {
         var rootStyle = document.documentElement.style;
-        // Unset previously-applied vars that the new theme doesn't define.
-        var nextNames = Object.keys(cssVars || {});
+        // ThemeVarWriter removes every stale name unconditionally and
+        // sets only the names whose VALUE actually changed - a re-apply
+        // of a theme already on screen (routine: applyGlobal() runs on
+        // every navigation, not only on a real switch) costs zero
+        // setProperty calls instead of a full ~30-variable palette
+        // reapplied unchanged, which is real recalculation for a change
+        // that never happened.
+        var applied = window.ThemeVarWriter
+            ? window.ThemeVarWriter.applyVarDiff(rootStyle, appliedCssVarValues, cssVars)
+            : null;
+        if (applied) {
+            appliedCssVarValues = applied.values;
+            return;
+        }
+        // Missing dependency: degrade to the old always-write behaviour
+        // rather than silently painting nothing.
+        console.error('[Themes] MISSING DEPENDENCY: window.ThemeVarWriter. ' +
+            'Load client/js/theme-var-writer.js BEFORE this file.');
+        var nextVars = cssVars || {};
+        var nextNames = Object.keys(nextVars);
         var nextSet = new Set(nextNames);
-        appliedCssVarNames.forEach(function (name) {
+        Object.keys(appliedCssVarValues).forEach(function (name) {
             if (!nextSet.has(name)) rootStyle.removeProperty(name);
         });
-        // Apply the new set.
+        var values = {};
         nextNames.forEach(function (name) {
-            try { rootStyle.setProperty(name, cssVars[name]); } catch (_) { /* ignore bad vars */ }
+            var v = String(nextVars[name]);
+            try { rootStyle.setProperty(name, v); } catch (_) { /* ignore bad vars */ }
+            values[name] = v;
         });
-        appliedCssVarNames = nextNames;
+        appliedCssVarValues = values;
     }
 
     function fireXtermChange(xtermPalette) {
@@ -823,19 +861,38 @@
             //    documentElement is untouched. THE DIFF IS WHAT REMOVES A
             //    PREVIOUS OWNER'S VARIABLES: when the pin takes the scope
             //    off the agent, every var the agent set and the pin does
-            //    not define is removed here rather than left orphaned.
+            //    not define is removed here rather than left orphaned -
+            //    ThemeVarWriter's removal loop is UNCONDITIONAL, never
+            //    gated on whether any value also changed, so a "skip the
+            //    unchanged sets" optimisation cannot reintroduce this
+            //    bug. Only a value that is IDENTICAL to what is already
+            //    inline skips its setProperty call.
             var nextVars = (m && m.cssVars) || {};
-            var nextNames = Object.keys(nextVars);
-            var nextSet = new Set(nextNames);
-            sessionAppliedVarNames.forEach(function (name) {
-                if (!nextSet.has(name)) {
-                    try { el.style.removeProperty(name); } catch (_) { /* ignore */ }
-                }
-            });
-            nextNames.forEach(function (name) {
-                try { el.style.setProperty(name, nextVars[name]); } catch (_) { /* ignore bad var */ }
-            });
-            sessionAppliedVarNames = nextSet;
+            var applied = window.ThemeVarWriter
+                ? window.ThemeVarWriter.applyVarDiff(el.style, sessionAppliedVarValues, nextVars)
+                : null;
+            var nextNames;
+            if (applied) {
+                sessionAppliedVarValues = applied.values;
+                nextNames = Object.keys(applied.values);
+            } else {
+                console.error('[Themes] MISSING DEPENDENCY: window.ThemeVarWriter. ' +
+                    'Load client/js/theme-var-writer.js BEFORE this file.');
+                nextNames = Object.keys(nextVars);
+                var nextSet = new Set(nextNames);
+                Object.keys(sessionAppliedVarValues).forEach(function (name) {
+                    if (!nextSet.has(name)) {
+                        try { el.style.removeProperty(name); } catch (_) { /* ignore */ }
+                    }
+                });
+                var values = {};
+                nextNames.forEach(function (name) {
+                    var v = String(nextVars[name]);
+                    try { el.style.setProperty(name, v); } catch (_) { /* ignore bad var */ }
+                    values[name] = v;
+                });
+                sessionAppliedVarValues = values;
+            }
             console.log('Themes: terminal theme ' + themeId + ' (' + nextNames.length + ' inline vars)');
         } else {
             // The screen is not in the DOM yet. That costs the CSS scope,
@@ -870,11 +927,14 @@
             // Wipe every inline cssVar we put there. Track-and-remove
             // (vs. style.cssText = '') so we don't clobber any inline
             // styles that other code may legitimately set on the element.
-            sessionAppliedVarNames.forEach(function (name) {
+            // Unconditional, same as ThemeVarWriter's own removal loop -
+            // stripping the scope entirely is not a "value unchanged"
+            // case that could ever be skipped.
+            Object.keys(sessionAppliedVarValues).forEach(function (name) {
                 try { el.style.removeProperty(name); } catch (_) { /* ignore */ }
             });
         }
-        sessionAppliedVarNames = new Set();
+        sessionAppliedVarValues = {};
         activeTerminalThemeId = null;
         var g = manifests.get(activeGlobalId);
         if (g && g.xterm) fireXtermChange(g.xterm);
