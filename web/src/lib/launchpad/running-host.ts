@@ -31,6 +31,9 @@
  */
 import { hostWindow } from '../sessions/env';
 import type { ThemeColors } from './running-row';
+import { t } from '../i18n/index.svelte';
+import { attachRunningSession, returnToActiveSession } from './navigation';
+import { browserNavHost } from './nav-host';
 
 /** One destructive-or-restart control, as the shared module names it. */
 export interface RowActionDescriptor {
@@ -458,20 +461,23 @@ export function browserRunningHost(): RunningHost {
             await fn(tmuxName);
         },
         async returnToActive(sessionId: string | null): Promise<void> {
-            const lp = legacy().Launchpad;
-            if (!lp || typeof lp._returnToActiveRunningSession !== 'function') {
-                missing('Launchpad._returnToActiveRunningSession');
-                return;
-            }
-            await lp._returnToActiveRunningSession(sessionId);
+        // THE COMPILED PATH, NOT THE DELETED LEGACY METHOD. This reached
+        // for ``window.Launchpad._returnToActiveRunningSession`` until the
+        // 1.4.0 integration, and slice 7 deleted that method with
+        // client/js/launchpad.js while ``shim.ts`` republished eight
+        // members that do not include it. So the guard below always took
+        // its ``missing()`` branch and CLICKING A RUNNING SESSION ROW ON
+        // THE HOME SCREEN DID NOTHING - logged, never thrown, invisible to
+        // every unit test because the test hands in a recorder and asserts
+        // what the list ASKED FOR. The other party's browser-driven perf
+        // harness is what caught it. ``navigation.ts`` already carries the
+        // full port of both paths, unit tested, called by the deep-link
+        // resolver; these two surfaces were simply never pointed at it.
+            await returnToActiveSession(sessionId, browserNavHost(), t);
         },
         async attachSession(name: string): Promise<void> {
-            const lp = legacy().Launchpad;
-            if (!lp || typeof lp._handleAttachRunningSession !== 'function') {
-                missing('Launchpad._handleAttachRunningSession');
-                return;
-            }
-            await lp._handleAttachRunningSession(name);
+            // Same rewire as returnToActive above, same reason.
+            await attachRunningSession(name, browserNavHost(), t);
         },
         async refresh(): Promise<void> {
             const web = legacy().CloudeWeb;

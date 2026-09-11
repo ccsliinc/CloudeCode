@@ -35,6 +35,8 @@ import {
     editProjectFlow,
     unarchiveProjectFlow,
 } from './project-actions';
+import { attachRunningSession, returnToActiveSession } from './navigation';
+import { browserNavHost } from './nav-host';
 
 /** The legacy launchpad singleton, as this file uses it. */
 interface LegacyLaunchpad {
@@ -165,20 +167,16 @@ export function browserProjectTreeHost(): ProjectTreeHost {
             await unarchiveProjectFlow(browserCreateHost(), t, name);
         },
         async returnToActive(sessionId: string | null): Promise<void> {
-            const lp = legacy();
-            if (!lp || typeof lp._returnToActiveRunningSession !== 'function') {
-                missing('_returnToActiveRunningSession');
-                return;
-            }
-            await lp._returnToActiveRunningSession(sessionId);
+            // THE COMPILED PATH, NOT THE DELETED LEGACY METHOD. See the
+            // same two members in running-host.ts for the full account:
+            // slice 7 deleted these off `window.Launchpad` and `shim.ts`
+            // never republished them, so both guards below always took
+            // their `missing()` branch and a click on a session row went
+            // nowhere. `navigation.ts` carries the ported paths.
+            await returnToActiveSession(sessionId, browserNavHost(), t);
         },
         async attachSession(name: string): Promise<void> {
-            const lp = legacy();
-            if (!lp || typeof lp._handleAttachRunningSession !== 'function') {
-                missing('_handleAttachRunningSession');
-                return;
-            }
-            await lp._handleAttachRunningSession(name);
+            await attachRunningSession(name, browserNavHost(), t);
         },
         async restartEnded(row: TreeSessionRow): Promise<void> {
             // THE SAME IMPLEMENTATION THE RECENT ROWS USE. Slice 2 moved

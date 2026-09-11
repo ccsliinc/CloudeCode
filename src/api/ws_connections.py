@@ -25,7 +25,7 @@ import structlog
 from fastapi import WebSocket
 
 from src.core import viewer_fanout
-from src.core.bounded_stream import BoundedStream
+from src.core.bounded_stream import OFFER_ACCEPTED, BoundedStream
 
 logger = structlog.get_logger()
 
