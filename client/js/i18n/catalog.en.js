@@ -485,6 +485,134 @@ export default {
     // silently does nothing.
     'session.api.unavailable': 'the page did not finish loading, so nothing was sent',
 
+    // ---- slice 6: the modals and the create flows -------------------------
+    // THE SEVEN REFUSALS A PROJECT NAME CAN GET. A name is REFUSED and
+    // never rewritten: a sanitiser turning `a/b` into `a-b` makes a folder
+    // the user did not ask for and cannot find, and `sessions.working_dir`
+    // keeps that folder forever. These values are byte-identical to the
+    // ones src/core/project_directory.py returns, so the answer the client
+    // gives without a round trip and the answer the server gives with one
+    // read the same. Spaces are LEGAL and are not on this list.
+    'project.name.refused.required': 'a project name is required',
+    'project.name.refused.illegal_char': "a project name cannot contain '{char}'",
+    'project.name.refused.illegal_null': 'a project name cannot contain a null character',
+    'project.name.refused.control_chars': 'a project name cannot contain control characters',
+    'project.name.refused.reserved': "a project name cannot be '.' or '..'",
+    'project.name.refused.leading_dot': 'a project name cannot start with a dot',
+    'project.name.refused.too_long': 'a project name cannot be longer than {max} bytes',
+
+    // ---- the name step ----------------------------------------------------
+    'project.name.modal.title': 'name this project',
+    'project.name.modal.title_for_agent': 'name this {agent} project',
+    'project.name.modal.title_add': 'add project',
+    'project.name.modal.name_label': 'project name',
+    'project.name.modal.name_placeholder': 'e.g., My Awesome Project',
+    'project.name.modal.name_hint': 'give your project a memorable name. you can reconnect to it later from the launcher.',
+    'project.name.modal.description_label': 'description (optional)',
+    'project.name.modal.description_placeholder': 'e.g., Building an AI-powered chatbot',
+    'project.name.modal.description_hint': 'add a short description to help remember what this project is about.',
+    'project.name.modal.folder_label': 'folder',
+    'project.name.modal.confirm_create': 'create session',
+    'project.name.modal.confirm_open': 'open project',
+    'project.modal.cancel': 'cancel',
+
+    // ---- the folder step, which "start empty" once did not have -----------
+    // The bug: nothing asked where the project should live, so the server
+    // fell back to naming the directory after a generated session id and a
+    // project the user named landed at `.../ses_5a756046`. The preview IS
+    // the feature - the user is told the path before anything is created.
+    'project.folder.modal.title': 'where should it live',
+    'project.folder.modal.parent_label': 'parent folder',
+    'project.folder.modal.parent_hint': 'the project folder is created inside this one.',
+    'project.folder.modal.parent_loading': 'loading...',
+    // CANNOT DETERMINE, not "there is no default": the browse endpoint
+    // could not be asked, so the field stays empty rather than guessing.
+    'project.folder.modal.parent_unavailable': 'type or browse to a folder',
+    'project.folder.modal.full_path': 'full path',
+    'project.folder.modal.no_path': '(choose a folder)',
+    'project.folder.modal.choose_prompt': 'choose a folder to create the project in',
+    'project.folder.modal.picker_unavailable': 'the folder picker is unavailable; type a path instead',
+    'project.folder.modal.browse': 'browse',
+
+    // ---- the one-of-N picker ----------------------------------------------
+    'project.choice.default_title': 'choose',
+    'project.choice.hint': 'up/down to move . enter to choose . esc to cancel',
+    'project.choice.empty_hint': 'esc to close',
+    'project.choice.empty_fallback': 'nothing to choose from',
+    'project.choice.ok': 'ok',
+
+    // ---- new claude project, and its three starting points ----------------
+    'project.new.title': 'new claude project',
+    'project.new.empty': 'start empty',
+    'project.new.empty.sub': 'a fresh working folder',
+    'project.new.clone': 'clone from github',
+    'project.new.clone.sub': 'start from an existing repository',
+    'project.new.folder': 'open an existing folder',
+    'project.new.folder.sub': 'a folder already on this machine',
+
+    // ---- new session in a project that already exists ---------------------
+    // THREE OUTCOMES, KEPT DISTINCT. An unread list is not an empty one,
+    // and saying "you have no projects" after a failed fetch is a claim
+    // nothing measured.
+    'project.session.title': 'new session',
+    'project.session.pick_title': 'new session in which project',
+    'project.session.cannot_determine': 'the project list could not be read, so CANNOT DETERMINE which projects you have. this is not a claim that you have none.',
+    'project.session.none': 'no claude projects yet. use "new claude project" to make one first.',
+
+    // ---- editing a project's label ----------------------------------------
+    'project.edit.modal.title': 'edit project',
+    'project.edit.modal.folder_hint': 'the folder on disk is never renamed - only the launcher label changes.',
+    'project.edit.modal.save': 'save',
+    'project.edit.status.updating': 'updating {name}...',
+    'project.edit.status.done': 'project updated',
+    'project.edit.failed': 'failed to update project: {reason}',
+
+    // ---- archive and restore ----------------------------------------------
+    // Archiving takes something off the screen, so it asks. Restoring only
+    // ever adds a row back, so it does not: a confirm on a harmless,
+    // instantly reversible action teaches people to click through dialogs.
+    'project.archive.confirm.title': 'archive project',
+    'project.archive.confirm.message': 'archive "{name}"?',
+    'project.archive.confirm.details': 'it leaves this list but is kept in full. its sessions are NOT archived and keep working. the folder on disk is not touched. turn on "show archived" to bring it back.',
+    'project.archive.confirm.primary': 'archive',
+    'project.archive.failed': 'failed to archive project: {reason}',
+    'project.restore.failed': 'failed to restore project: {reason}',
+
+    // ---- clone from github ------------------------------------------------
+    // The six failures are mapped from the SERVER's own detail text, which
+    // is a wire protocol in all but name. What is matched on is not
+    // translated; what is returned always is.
+    'project.clone.modal.title': 'clone from github',
+    'project.clone.modal.url_label': 'github repo url',
+    'project.clone.modal.url_placeholder': 'https://github.com/owner/repo or owner/repo',
+    'project.clone.modal.url_hint': 'paste the full url or use gh shorthand (owner/repo). the server runs gh repo clone, so gh must be authenticated.',
+    'project.clone.modal.parent_label': 'parent directory',
+    'project.clone.modal.parent_hint': 'the cloned folder will be created inside this directory.',
+    'project.clone.modal.description_placeholder': "e.g., upstream library i'm patching",
+    'project.clone.modal.confirm': 'clone & open',
+    'project.clone.status.busy': 'cloning... (may take a minute)',
+    'project.clone.status.needs_url': 'paste a github url first.',
+    'project.clone.error.auth': 'gh CLI not authenticated. run `gh auth login` in a terminal on the server.',
+    'project.clone.error.not_found': 'repo not found or no access. check the url and your gh auth scopes.',
+    'project.clone.error.exists': 'folder or project name already exists.',
+    'project.clone.error.no_gh': 'gh CLI not installed on server. install with `brew install gh`.',
+    'project.clone.error.timeout': 'clone timed out after 5 minutes.',
+    'project.clone.error.failed': 'clone failed.',
+
+    // ---- creating ---------------------------------------------------------
+    'project.create.status': 'creating new project...',
+    'project.create.status_for_agent': 'creating new {agent} project...',
+    'project.create.console.status': 'creating new console...',
+    // STORED, not only shown: this becomes the console project's
+    // description in config.json. A locale switch does not retranslate a
+    // description already written, which is the server-strings gap
+    // .claude/notes/i18n-design.md section 7 names.
+    'project.create.console.description': 'console session',
+    'project.create.failed': 'failed to create session: {reason}',
+    'project.create.folder_failed': 'failed to open folder: {reason}',
+    // WAS A THROWN ENGLISH SENTENCE. The error now carries this key.
+    'project.create.unique_name_failed': 'could not find a unique name for this project',
+
     // ---- generic failure reasons --------------------------------------
     // The `{reason}` slot's value when an error carried no message.
     'error.server_unreachable': 'the server could not be reached',

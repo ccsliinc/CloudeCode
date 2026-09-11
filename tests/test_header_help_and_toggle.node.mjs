@@ -163,13 +163,16 @@ ok(!/data-action="open-folder"/.test(js),
     '"open from folder" is still a top-level add-menu item');
 ok(!/'open-folder':/.test(js),
     'the dead open-folder dispatch key is still in the action table');
-ok(/key: 'folder', label: 'open an existing folder'/.test(js),
-    'the new-claude-project chooser has no "open an existing folder" option');
-ok(/if \(how === 'folder'\) return this\.openProjectFromFolder\(\);/.test(js),
-    'the folder choice does not route into the existing handler');
-ok(/async openProjectFromFolder\(\)/.test(js),
-    'openProjectFromFolder was removed; the fold-in must reuse it, not '
-    + 'reimplement launch logic');
+// SLICE 6 MOVED THE CHOOSER ITSELF. `startNewClaudeProject` and
+// `openProjectFromFolder` are `web/src/lib/launchpad/entry-flows.ts` and
+// `open-folder-flow.ts` now, so the three assertions that used to live
+// here - that the chooser offers "open an existing folder", that the
+// choice routes into the existing handler, and that the handler was not
+// reimplemented - are asserted as BEHAVIOUR in
+// web/src/lib/launchpad/entry-flows.test.ts, which runs the chooser and
+// reads back which flow it ran. What stays here is the half that is
+// still about this file: no top-level add-menu item and no dead dispatch
+// key for the folder option.
 
 // Order of what remains, and the first item's real icon (do-not-regress).
 const fabOrder = [...js.matchAll(/data-action="([a-z-]+)"/g)].map((m) => m[1]);

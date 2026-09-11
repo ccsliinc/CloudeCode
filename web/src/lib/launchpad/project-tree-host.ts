@@ -26,15 +26,20 @@
  */
 import type { ProjectRow } from '../sessions/types';
 import { sessionDisplayLabel } from '../sessions/session-label';
+import { t } from '../i18n/index.svelte';
 import type { TreeSessionRow } from './project-groups';
+import { browserCreateHost } from './create-host';
+import { browserModals } from './modals';
+import {
+    archiveProjectFlow,
+    editProjectFlow,
+    unarchiveProjectFlow,
+} from './project-actions';
 
 /** The legacy launchpad singleton, as this file uses it. */
 interface LegacyLaunchpad {
     selectProject?: (project: ProjectRow) => unknown;
     _explainRefusedProject?: (project: ProjectRow, el: Element | null) => unknown;
-    editProject?: (project: ProjectRow) => unknown;
-    archiveProject?: (name: string) => Promise<unknown>;
-    unarchiveProject?: (name: string) => Promise<unknown>;
     _returnToActiveRunningSession?: (sessionId: string | null) => Promise<unknown>;
     _handleAttachRunningSession?: (name: string) => Promise<unknown>;
     loadProjects?: () => Promise<unknown>;
@@ -144,29 +149,20 @@ export function browserProjectTreeHost(): ProjectTreeHost {
             }
             lp._explainRefusedProject(project, el);
         },
+        // SLICE 6 MOVED THESE THREE INTO THIS TREE. They used to be
+        // methods on the legacy singleton and are now
+        // `project-actions.ts`, so the tree calls them directly instead
+        // of bouncing out to `window.Launchpad` and back. The host
+        // members stay, because the tree's tests drive this seam and
+        // because a later surface may want to inject a recorder.
         editProject(project: ProjectRow): void {
-            const lp = legacy();
-            if (!lp || typeof lp.editProject !== 'function') {
-                missing('editProject');
-                return;
-            }
-            lp.editProject(project);
+            void editProjectFlow(browserCreateHost(), browserModals(), t, project);
         },
         async archiveProject(name: string): Promise<void> {
-            const lp = legacy();
-            if (!lp || typeof lp.archiveProject !== 'function') {
-                missing('archiveProject');
-                return;
-            }
-            await lp.archiveProject(name);
+            await archiveProjectFlow(browserCreateHost(), t, name);
         },
         async unarchiveProject(name: string): Promise<void> {
-            const lp = legacy();
-            if (!lp || typeof lp.unarchiveProject !== 'function') {
-                missing('unarchiveProject');
-                return;
-            }
-            await lp.unarchiveProject(name);
+            await unarchiveProjectFlow(browserCreateHost(), t, name);
         },
         async returnToActive(sessionId: string | null): Promise<void> {
             const lp = legacy();

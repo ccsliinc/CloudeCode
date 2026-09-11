@@ -71,6 +71,25 @@ const SLICE_FILES = [
     'web/src/lib/launchpad/running-actions.ts',
     'web/src/lib/launchpad/running-host.ts',
     'web/src/lib/launchpad/running-chrome.ts',
+    // Slice 6, the modals and the create flows. A modal is the surface
+    // most able to break the total function by accident, because it is
+    // the one that opens OVER a session and closes back onto it - a
+    // theme applied on mount would move the theme at a moment
+    // `applyForTarget` knows nothing about, and move it back never.
+    'web/src/lib/launchpad/ModalShell.svelte',
+    'web/src/lib/launchpad/ChoiceModal.svelte',
+    'web/src/lib/launchpad/CloneModal.svelte',
+    'web/src/lib/launchpad/EditProjectModal.svelte',
+    'web/src/lib/launchpad/ProjectFolderModal.svelte',
+    'web/src/lib/launchpad/ProjectNameModal.svelte',
+    'web/src/lib/launchpad/project-folder.ts',
+    'web/src/lib/launchpad/create-flow.ts',
+    'web/src/lib/launchpad/create-host.ts',
+    'web/src/lib/launchpad/entry-flows.ts',
+    'web/src/lib/launchpad/open-folder-flow.ts',
+    'web/src/lib/launchpad/project-actions.ts',
+    'web/src/lib/launchpad/modals.ts',
+    'web/src/lib/launchpad/modal-types.ts',
 ];
 
 /**
@@ -184,7 +203,7 @@ describe('no component reaches into another component\'s DOM', () => {
 describe('the list itself stays honest', () => {
     test('every listed file exists, and the list is not empty', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(SLICE_FILES.length).toBeGreaterThanOrEqual(25);
+        expect(SLICE_FILES.length).toBeGreaterThanOrEqual(39);
         for (const rel of SLICE_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }

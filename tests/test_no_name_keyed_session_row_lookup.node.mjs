@@ -252,10 +252,12 @@ const ALLOWED_MATCHES = {
     // same round trip for a PROJECT; same fix, and it was never a session
     // identity lookup anyway. A dead entry here is worse than no entry,
     // because it tells the next reader a call site exists that does not.
-    'client/js/launchpad.js::.find((p) => p.name === chosen': [
-        'NOT a session identity lookup: same projects-by-name lookup as',
-        'the entry above, a second call site.',
-    ].join(' '),
+    // A THIRD RETIRED IN SLICE 6, for the same reason:
+    // `.find((p) => p.name === chosen)` was `startSessionInExistingProject`
+    // resolving the PICKED project by name, and that method is now
+    // `web/src/lib/launchpad/entry-flows.ts`. It was never a session
+    // lookup either - projects ARE named entities in this data model, and
+    // the name is what the picker resolves with.
     'client/js/session-sidebar-fetch.js::.find((r) => r.name === tmuxName': [
         'KNOWN BUG, unfixed by this guard. This is mergeLiveRow(), and',
         'its own module docstring names this exact function as the',

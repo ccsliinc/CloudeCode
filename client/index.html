@@ -926,18 +926,22 @@
          session-sidebar-rows.js, both of which call
          window.SessionStartupGate. No dependencies of its own. -->
     <script src="/static/js/session-startup-gate.js"></script>
-    <!-- Folder picker modal, extracted from launchpad.js. Must load BEFORE
-         launchpad.js, whose showFolderPickerModal() is now a delegate to
-         window.FolderPickerModal.open(). It reads no controller state -
-         the escaper is passed in - so it has no ordering constraint on
-         anything else. -->
+    <!-- Folder picker modal, extracted from launchpad.js. It is NOT
+         migrated by the svelte slices and stays a classic script; the
+         compiled tree opens it through window.FolderPickerModal.open()
+         from the project folder step. SLICE 6 STOPPED INJECTING AN
+         ESCAPER into it - it has carried its own default since it was
+         extracted, and the launchpad copy that used to be passed in is
+         gone - so it now reads no state from anything and has no ordering
+         constraint beyond being present before the bundle runs a flow. -->
     <script src="/static/js/folder-picker-modal.js"></script>
-    <!-- The folder step for a NEW project ("start empty"), which had none
-         and so let every project land at ".../ses_<hex>". Must load AFTER
-         folder-picker-modal.js, whose picker its browse button opens, and
-         BEFORE launchpad.js, which calls window.ProjectCreateFolder
-         .validateName / .choose during the create flow. -->
-    <script src="/static/js/project-create-folder.js"></script>
+    <!-- SLICE 6 DELETED project-create-folder.js, which used to load
+         here. It held two pure rules and a modal that drew itself with
+         innerHTML: the rules are web/src/lib/launchpad/project-folder.ts
+         and the modal is ProjectFolderModal.svelte. The folder step
+         itself did not go anywhere and must never go anywhere - without
+         it "start empty" asks for no folder and every project lands at
+         ".../ses_<hex>". -->
     <!-- SLICE 5 DELETED TWO SCRIPTS THAT USED TO LOAD HERE, and both are
          worth naming so nobody re-adds them. launchpad-wrapper-pill.js
          drew the launch-wrapper pill and had exactly one caller, so it

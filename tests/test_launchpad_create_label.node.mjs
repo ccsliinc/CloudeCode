@@ -77,21 +77,15 @@ function allPayloads(text) {
 const payloads = allPayloads(source);
 
 // ---------------------------------------------------------------------
-// The positive: the two claude-launching create paths send a label.
+// SLICE 6 MOVED TWO OF THE THREE PAYLOADS OUT OF THIS FILE. The "start
+// empty" payload (the one carrying project_parent_dir) and the shell
+// console payload now live in web/src/lib/launchpad/create-flow.ts, and
+// they are asserted BEHAVIOURALLY there - the flow is run and the posted
+// payload is read back - in web/src/lib/launchpad/create-flow.test.ts,
+// which is a stronger test than a regex over a literal. What is left
+// here is the payload that is still a literal in launchpad.js: "open an
+// existing project", which belongs to selectProject and is slice 7's.
 // ---------------------------------------------------------------------
-
-const newProject = payloads.find((p) => p.includes('project_parent_dir'));
-assert.ok(
-    newProject,
-    'the "start empty" payload (the one carrying project_parent_dir) was not found - ' +
-        'if that flow was restructured, this test needs re-pointing, not deleting'
-);
-assert.match(
-    newProject,
-    /\blabel:\s*projectDetails\.name\b/,
-    'the new-project payload must send the project name as the session label, ' +
-        'or claude launches with no --name and the TUI shows the directory'
-);
 
 const openProject = payloads.find(
     (p) => p.includes('working_dir: project.path')
@@ -107,29 +101,16 @@ assert.match(
 );
 
 // ---------------------------------------------------------------------
-// The negative control. A shell console is NOT a claude launch, so it
-// deliberately sends no label - `--name` is a claude-family flag and the
-// server drops it for other families anyway. Asserting its ABSENCE here
-// is what proves the two assertions above are reading real per-payload
-// keys rather than matching the file at large.
-// ---------------------------------------------------------------------
-
-const consolePayload = payloads.find((p) => p.includes("agent_type: 'shell'"));
-assert.ok(consolePayload, 'the console payload was not found');
-assert.ok(
-    !/\blabel:/.test(consolePayload),
-    'the shell console payload should not carry a label - if this is now ' +
-        'deliberate, update this test and say why in the same change'
-);
-
-// ---------------------------------------------------------------------
 // And the label must not have been folded into project_name, which is a
-// different thing: a project is a folder shared by many sessions.
+// different thing: a project is a folder shared by many sessions. The
+// NEGATIVE CONTROL that a shell console sends no label is now in
+// web/src/lib/launchpad/create-flow.test.ts, asserted against the payload
+// the flow actually posts.
 // ---------------------------------------------------------------------
 
 assert.match(
-    newProject,
-    /\bproject_name:\s*projectDetails\.name\b/,
+    openProject,
+    /\bproject_name:\s*project\.name\b/,
     'project_name must still be sent alongside label, not replaced by it'
 );
 

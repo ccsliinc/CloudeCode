@@ -74,6 +74,13 @@ import {
     workAttrs,
 } from '../launchpad/project-node';
 import { summaryLabel } from '../session-summary-label';
+import {
+    PROJECT_CREATE_KEYS,
+    cloneFailure,
+    nameRefusal,
+    uniqueNameFailure,
+} from '../../../../client/js/labels/project-create.js';
+import { validateName } from '../launchpad/project-folder';
 
 /** Repo root, three levels up from web/src/lib/i18n. */
 const repoRoot = fileURLToPath(new URL('../../../..', import.meta.url));
@@ -153,6 +160,29 @@ const PORTED_FILES = [
     'web/src/lib/launchpad/WrapperPill.svelte',
     'web/src/lib/sessions/session-label.ts',
     'web/src/lib/plugins/mark-unread/index.ts',
+    // Slice 6, the modals and the create flows. The assembler first, then
+    // every module and component the flows are built from. The MODALS are
+    // on the list for the reason slice 2 gave about templates, and the
+    // FLOWS are on it for a reason of their own: `create-flow.ts` and
+    // `open-folder-flow.ts` both raise sentences the user reads on a
+    // failure path, and one of them used to THROW its English rather than
+    // render it - the exact shape slice 5's guard caught one surface over.
+    'client/js/labels/project-create.js',
+    'web/src/lib/launchpad/project-folder.ts',
+    'web/src/lib/launchpad/create-flow.ts',
+    'web/src/lib/launchpad/create-host.ts',
+    'web/src/lib/launchpad/entry-flows.ts',
+    'web/src/lib/launchpad/open-folder-flow.ts',
+    'web/src/lib/launchpad/project-actions.ts',
+    'web/src/lib/launchpad/modals.ts',
+    'web/src/lib/launchpad/modal-types.ts',
+    'web/src/lib/modal.ts',
+    'web/src/lib/launchpad/ModalShell.svelte',
+    'web/src/lib/launchpad/ChoiceModal.svelte',
+    'web/src/lib/launchpad/CloneModal.svelte',
+    'web/src/lib/launchpad/EditProjectModal.svelte',
+    'web/src/lib/launchpad/ProjectFolderModal.svelte',
+    'web/src/lib/launchpad/ProjectNameModal.svelte',
 ];
 
 interface I18nLike {
@@ -266,6 +296,14 @@ describe('the pseudo locale proves the surface really reads the catalog', () => 
  *   the ones in this migration quote the copy they are explaining - so
  *   `"I retired this"` inside a comment about two badges was reported as
  *   untranslated copy. A comment is not copy whichever syntax it wears.
+ *
+ *   `class="..."` VALUES ARE STRIPPED, and slice 6 is what forced that.
+ *   A multi-class attribute like `class="modal-btn modal-btn-primary"` is
+ *   two space-separated words of two-plus letters, which is exactly what
+ *   `looksLikeCopy` looks for, and it is a contract with a stylesheet
+ *   rather than something a human reads. ONLY `class` is stripped:
+ *   `title`, `aria-label` and `placeholder` all carry real copy and stay
+ *   in the scan, which the negative control below asserts.
  * Inputs: src (string) - a source file.
  * Output: string - the same source with comments and diagnostics removed.
  * Example: scannable("console.log('a b'); const x = 'c d';")
@@ -275,7 +313,8 @@ function scannable(src: string): string {
     let out = src
         .replace(/<!--[\s\S]*?-->/g, ' ')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')
-        .replace(/^[ \t]*\/\/.*$/gm, ' ');
+        .replace(/^[ \t]*\/\/.*$/gm, ' ')
+        .replace(/\bclass=("[^"]*"|'[^']*')/g, 'class=""');
     let index = out.indexOf('console.');
     while (index !== -1) {
         const open = out.indexOf('(', index);
@@ -321,8 +360,38 @@ function stringLiterals(src: string): string[] {
  */
 function looksLikeCopy(literal: string): boolean {
     if (literal.includes('.') && !literal.includes(' ')) return false;
+    if (WIRE_LITERALS.has(literal)) return false;
     return /[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(literal);
 }
+
+/**
+ * Fragments of the SERVER's own error text, matched but never rendered.
+ *
+ * SLICE 6 FORCED THIS LIST AND IT IS DELIBERATELY SHORT AND EXPLICIT.
+ * `cloneFailure` and the create flow decide which of their own catalog
+ * sentences to show by looking for a signature substring the backend
+ * embeds in its detail text - `already exists`, `not authenticated`, and
+ * so on. Those substrings are a wire protocol in all but name: they are
+ * what the server SAYS, they are never shown to anyone, and translating
+ * them would break the match rather than translate anything.
+ *
+ * Every sentence those matchers RETURN is a catalog message, which is the
+ * half that matters. Adding to this list is a decision to be reviewed,
+ * not a way around the guard: nothing here may be a sentence, and the
+ * negative control below asserts the list has not started swallowing one.
+ */
+const WIRE_LITERALS = new Set([
+    'already exists',
+    'already running',
+    'not authenticated',
+    'not found',
+    'repo not found',
+    'repository not found',
+    'gh auth login',
+    'gh cli not',
+    'install with `brew install gh`',
+    'timed out',
+]);
 
 describe('a ported file may not carry a hardcoded sentence', () => {
     test.each(PORTED_FILES)('%s holds no user-visible literal', (rel) => {
@@ -336,7 +405,7 @@ describe('a ported file may not carry a hardcoded sentence', () => {
 
     test('the list of ported files is not empty and the files exist', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(39);
+        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(55);
         for (const rel of PORTED_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }
@@ -356,6 +425,24 @@ describe('a ported file may not carry a hardcoded sentence', () => {
         // components explain themselves.
         expect(stringLiterals(scannable('<!-- it says \'the folder is gone\' -->'))
             .filter(looksLikeCopy)).toEqual([]);
+        // ...and a multi-class attribute, which is a stylesheet contract.
+        expect(stringLiterals(scannable('<button class="modal-btn modal-btn-primary">'))
+            .filter(looksLikeCopy)).toEqual([]);
+        // ...while EVERY OTHER ATTRIBUTE still carries real copy and is
+        // still scanned. Without this, stripping `class` would have
+        // quietly stopped covering the accessible names.
+        expect(stringLiterals(scannable('<span title="folder not found">'))
+            .filter(looksLikeCopy)).toEqual(['folder not found']);
+        expect(stringLiterals(scannable('<span aria-label="archive project">'))
+            .filter(looksLikeCopy)).toEqual(['archive project']);
+        expect(stringLiterals(scannable('<input placeholder="paste your url here">'))
+            .filter(looksLikeCopy)).toEqual(['paste your url here']);
+        // ...and the wire-literal list is NOT a hole big enough to hide a
+        // sentence in: every entry is a fragment, none is copy.
+        for (const literal of WIRE_LITERALS) {
+            expect(literal.split(/\s+/).length, literal).toBeLessThanOrEqual(5);
+            expect(literal, literal).not.toMatch(/[.!?]$/);
+        }
     });
 });
 
@@ -778,5 +865,94 @@ describe('the RUNNING SESSIONS surface really reads the catalog too', () => {
     test('and the surface asks for more than a handful of them', () => {
         // A guard over an empty key set would pass forever.
         expect(Object.keys(RUNNING_SESSION_KEYS).length).toBeGreaterThanOrEqual(40);
+    });
+});
+
+// ---- guard 1, applied to slice 6's surface ---------------------------
+
+describe('the MODALS and the CREATE flows really read the catalog', () => {
+    /** A pseudo-locale translator over the derived pseudo catalog. */
+    function pseudoT(): (k: string, p?: Record<string, unknown> | null) => string {
+        const i18n = createI18n({ locale: PSEUDO_LOCALE }) as I18nLike;
+        return (k, p) => i18n.t(k, p);
+    }
+
+    /**
+     * Every sentence this surface can say, with HOW MANY catalog
+     * messages each is built from.
+     *
+     * ONE MESSAGE EACH, INCLUDING THE REFUSALS. The seven ways a project
+     * name can be refused are seven WHOLE messages with a `{char}` or a
+     * `{max}` hole, not one message with the rule glued in. That matters
+     * more here than anywhere else on this screen: the refusal is the
+     * only thing between a user and a folder they did not ask for, so it
+     * has to be a sentence a translator can move as a sentence.
+     */
+    const CASES: Array<[string, string, number]> = (() => {
+        const t = pseudoT();
+        return [
+            ['refused: required', nameRefusal(validateName(''), t), 1],
+            ['refused: slash', nameRefusal(validateName('a/b'), t), 1],
+            ['refused: backslash', nameRefusal(validateName('a\\b'), t), 1],
+            ['refused: null byte',
+                nameRefusal(validateName(`a${String.fromCharCode(0)}b`), t), 1],
+            ['refused: control', nameRefusal(validateName('a\nb'), t), 1],
+            ['refused: reserved', nameRefusal(validateName('..'), t), 1],
+            ['refused: leading dot', nameRefusal(validateName('.hidden'), t), 1],
+            ['refused: too long', nameRefusal(validateName('x'.repeat(300)), t), 1],
+            ['folder step title', t(PROJECT_CREATE_KEYS.folderTitle), 1],
+            ['folder step prompt', t(PROJECT_CREATE_KEYS.folderChoosePrompt), 1],
+            ['folder step no default', t(PROJECT_CREATE_KEYS.folderParentUnavailable), 1],
+            ['folder step no picker', t(PROJECT_CREATE_KEYS.folderPickerUnavailable), 1],
+            ['new project menu', t(PROJECT_CREATE_KEYS.newProjectTitle), 1],
+            ['new session cannot determine',
+                t(PROJECT_CREATE_KEYS.newSessionCannotDetermine), 1],
+            ['new session none', t(PROJECT_CREATE_KEYS.newSessionNone), 1],
+            ['archive confirm', t(PROJECT_CREATE_KEYS.archiveMessage, { name: 'api' }), 1],
+            ['archive details', t(PROJECT_CREATE_KEYS.archiveDetails), 1],
+            ['archive failed',
+                t(PROJECT_CREATE_KEYS.archiveFailed, { reason: 'boom' }), 1],
+            ['create failed', t(PROJECT_CREATE_KEYS.createFailed, { reason: 'boom' }), 1],
+            ['clone: auth', cloneFailure(new Error('gh auth login required'), t), 1],
+            ['clone: not found', cloneFailure(new Error('repository not found'), t), 1],
+            ['clone: exists', cloneFailure(new Error('already exists'), t), 1],
+            ['clone: no gh', cloneFailure(new Error('gh cli not installed'), t), 1],
+            ['clone: timeout', cloneFailure(new Error('timed out'), t), 1],
+            ['clone: nothing said', cloneFailure(new Error(''), t), 1],
+            ['THE THROWN SENTENCE',
+                uniqueNameFailure({ cloudeKey: PROJECT_CREATE_KEYS.uniqueNameFailed }, t), 1],
+        ] as Array<[string, string, number]>;
+    })();
+
+    test.each(CASES)('%s is fully pseudo-localised', (_name, rendered) => {
+        expect(isPseudo(rendered), rendered).toBe(true);
+    });
+
+    test.each(CASES)('%s is built from exactly its own messages', (_name, rendered, count) => {
+        expect(pseudoCount(rendered), rendered).toBe(count);
+    });
+
+    test('an ACCEPTED name says nothing at all', () => {
+        // A validator that always found something to say would pass every
+        // assertion above and refuse every project on the machine.
+        expect(nameRefusal(validateName('Punchlist Test'), pseudoT())).toBe(null);
+    });
+
+    test("the SERVER's own detail is passed through verbatim, not translated", () => {
+        // The clone mapper falls back to what the server said, because
+        // this client has never seen that text and cannot have a key for
+        // it. So it is deliberately NOT pseudo, and that is the rule
+        // rather than a gap: `attentionReason` does the same thing for
+        // the same reason.
+        const t = pseudoT();
+        expect(cloneFailure(new Error('HTTP 500: the disk is on fire'), t)).toBe(
+            'the disk is on fire',
+        );
+    });
+
+    test('a thrown error with no key keeps its own message', () => {
+        // An error from the API is the server talking; only the error
+        // this app throws itself carries a key.
+        expect(uniqueNameFailure(new Error('disk is full'), pseudoT())).toBe('disk is full');
     });
 });

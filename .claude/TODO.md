@@ -7729,3 +7729,73 @@ can keep the voice rule.
   several - registering it would be a dead entry failing the test the other
   way. Named in that file's prose instead. The real fix is a durable key on the
   live row, which is its own change.
+
+## 2026-09-10 - svelte slice 6: the modals and the create flows (#98, PR #99)
+
+`client/js/launchpad.js` 3,023 -> 1,866 lines. Seventeen methods gone (1,210
+lines of legacy removed), plus `client/js/project-create-folder.js` (312)
+deleted outright. Two survive as one-line forwards because their callers are
+slice 7's: `showConfirmModal` (providers.js:476) and `createConsoleSession`
+(terminal-commands-panel.js:256). `_escapeHtml` stays for providers.js:83 and
+now has NO caller in its own file; the three modal-local copies and the one
+injected into `folder-picker-modal.js` are gone, so that picker runs on its
+own default escaper for the first time.
+
+THE FIVE FOLDER RULES, each held and tested by name.
+1. The folder step cannot be skipped. `create-flow.ts` asks provider, name,
+   FOLDER, then creates, and a cancel at any step creates NOTHING. The
+   generated-id fallback in `SessionManager.create_session` is untouched and
+   stays for an old client.
+2. `realpath`, never `expanduser`. Unchanged on the server, where it belongs.
+3. Containment is component-wise, never `str.startswith`. Also unchanged.
+4. `project_parent_dir`, never `working_dir`. The clone, the console and
+   open-from-folder still post `working_dir` with a folder from anywhere.
+5. A name is REFUSED, never rewritten. `validateName` returns a CODE and
+   `client/js/labels/project-create.js` renders the sentence, so the rule and
+   the copy are two things and the en values stay byte-identical to
+   `src/core/project_directory.py`.
+
+Four mutations, all RED, all reverted byte-identical (sha256 compared, no
+`git checkout --`): expanduser for realpath (2 python tests), startswith
+containment (1), sanitise a slash (8 vitest), skip the folder step (4 vitest).
+None came back green.
+
+The intermediate-publish audit found NONE on any path this slice touches.
+`loadProjects`, `loadProjectPresence` and `loadProjectAuthority` each assign
+once, after their await. The two in-flight pairs in this slice (`placeholder`
+loading -> unavailable, and the clone's `status` busy -> error) are a state
+machine rather than a clear-and-restore, which is the shape slices 4 and 5
+each found.
+
+`openProjectFromFolder` was NOT in the slice plan and moved anyway: it is the
+only caller of `saveProjectWithUniqueName` and `showFolderPickerModal`, both of
+which were, so leaving it would have left one method reaching across the seam
+four times for a flow whose every step had gone.
+
+- [x] Slice 6 shipped: 1236 vitest (was 995), 176 node files 0 failures (was
+  180; four ported and deleted), svelte-check 0 errors 0 warnings.
+- [x] Browser proof under the real CSP on 127.0.0.1:5057, via
+  `tests/manual/create-flow-modal-harness.html`: the create flow asks for a
+  folder and posts `project_parent_dir` with no `working_dir` and no `ses_`
+  shape; `punch/list test` is refused with a visible sentence and comes back
+  still typed; the clone modal collects its parent and sends it as `parentDir`;
+  cancelling the folder step performs no write at all.
+- [ ] EVERY BROWSER PHASE MEASURED `visibilityState: hidden` while
+  `document.hasFocus()` was true - the extension drives a Brave window that is
+  not the foreground OS window. The flows all completed anyway, which is the
+  harder case given gotcha 9, but nothing here is a measurement of a PAINTED
+  modal. A repeat with a foreground window would be worth one run.
+- [ ] `project.create.console.description` ("console session") goes through the
+  catalog and is then STORED as the console project's description. A locale
+  switch does not retranslate a description already written. That is the
+  server-strings gap `.claude/notes/i18n-design.md` section 7 names, and this
+  is the first place in the client that writes a translated string into
+  durable data.
+- [ ] `cloneFailure` no longer renders the word "Error" for an Error with an
+  empty message. The hand-written mapper did (`(e && e.message) || e` falls
+  through to the object), and the pseudo-locale case is what caught it.
+- [ ] The i18n source guard learned two things it did not know: `class="a b"`
+  is a stylesheet contract and not copy, and a short list of SERVER error
+  fragments (`already exists`, `not authenticated`, ...) are matched but never
+  rendered. Both are asserted by negative controls; `title`, `aria-label` and
+  `placeholder` are still scanned.

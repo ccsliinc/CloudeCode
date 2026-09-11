@@ -27,6 +27,21 @@ import * as led from './lib/led';
 import { ledHtmlForStatus, labelFor, labelWithSource, normalizeStatus } from './lib/status-dot';
 import type { StatusSignals } from './lib/status-dot';
 import { ensurePanel, mountPanel, unmountPanel } from './lib/mount';
+import { browserCreateHost, type CreateHost } from './lib/launchpad/create-host';
+import { browserModals } from './lib/launchpad/modals';
+import { createConsoleFlow, createProjectFlow } from './lib/launchpad/create-flow';
+import {
+    cloneFromGithubFlow,
+    startNewClaudeProject as startNewClaudeProjectFlow,
+    startSessionInExistingProject as startSessionInExistingProjectFlow,
+} from './lib/launchpad/entry-flows';
+import { openProjectFromFolderFlow } from './lib/launchpad/open-folder-flow';
+import {
+    archiveProjectFlow,
+    editProjectFlow,
+    unarchiveProjectFlow,
+} from './lib/launchpad/project-actions';
+import type { ProjectRow } from './lib/sessions/types';
 import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
 import RecentSessions from './lib/launchpad/RecentSessions.svelte';
 import ProjectTree from './lib/launchpad/ProjectTree.svelte';
@@ -433,6 +448,149 @@ function renderProbe(status?: string | null, signals?: StatusSignals | null): st
     return html;
 }
 
+
+// ---- slice 6: the modals and the create flows ------------------------
+//
+// EVERY ONE OF THESE IS A WRITE, which is why they are forwarders rather
+// than components: the legacy FAB, the terminal-commands panel and
+// `providers.js` each call one of them at the exact line their old method
+// ran, and slice 7 deletes those call sites along with `launchpad.js`.
+// The host and the openers are resolved PER CALL, never captured, because
+// `window.API` and `window.Launchpad` may not exist when this bundle
+// evaluates.
+
+/** The seam these flows reach the running app through. */
+function createHost(): CreateHost {
+    return browserCreateHost();
+}
+
+/**
+ * Ask how a new claude project should start, then run that flow.
+ *
+ * Inputs: none. Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.startNewClaudeProject();
+ */
+async function startNewClaudeProjectForLegacy(): Promise<void> {
+    await startNewClaudeProjectFlow(createHost(), browserModals(), t);
+}
+
+/**
+ * Add a session to a project that already exists, never creating one.
+ *
+ * Inputs: none. Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.startSessionInExistingProject();
+ */
+async function startSessionInExistingProjectForLegacy(): Promise<void> {
+    await startSessionInExistingProjectFlow(createHost(), browserModals(), t);
+}
+
+/**
+ * Create a new project: provider, name, FOLDER, then create.
+ *
+ * Description: `agentType` null lets the provider picker and then the
+ *   server's own fallback chain decide, which is what the default
+ *   "+ new project" action has always done.
+ * Inputs: agentType (string|null).
+ * Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.createNewSession();
+ */
+async function createNewSessionForLegacy(agentType: string | null = null): Promise<void> {
+    await createProjectFlow(createHost(), browserModals(), t, agentType);
+}
+
+/**
+ * Create a bare shell console in `~`, with no name and no folder step.
+ *
+ * Description: `client/js/terminal-commands-panel.js` calls this through
+ *   the launchpad shim to run a configured command in a fresh pane. Only
+ *   the command ID travels; the text is read from config.json
+ *   server-side and is never accepted from the client.
+ * Inputs: options ({terminalCommandId}).
+ * Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.createConsoleSession({});
+ */
+async function createConsoleSessionForLegacy(
+    options: { terminalCommandId?: string | null } | null = null,
+): Promise<void> {
+    await createConsoleFlow(createHost(), t, options?.terminalCommandId ?? null);
+}
+
+/**
+ * Clone a github repo into a new project and open it.
+ *
+ * Inputs: none. Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.cloneFromGithub();
+ */
+async function cloneFromGithubForLegacy(): Promise<void> {
+    await cloneFromGithubFlow(createHost(), browserModals(), t);
+}
+
+/**
+ * Add a folder already on this machine as a project, and open it.
+ *
+ * Inputs: none. Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.openProjectFromFolder();
+ */
+async function openProjectFromFolderForLegacy(): Promise<void> {
+    await openProjectFromFolderFlow(createHost(), browserModals(), t);
+}
+
+/**
+ * Archive a project after asking, then refresh the list.
+ *
+ * Inputs: projectName (string). Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.archiveProject('api');
+ */
+async function archiveProjectForLegacy(projectName: string): Promise<void> {
+    await archiveProjectFlow(createHost(), t, projectName);
+}
+
+/**
+ * Put an archived project back in the default list. No confirm.
+ *
+ * Inputs: projectName (string). Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.unarchiveProject('api');
+ */
+async function unarchiveProjectForLegacy(projectName: string): Promise<void> {
+    await unarchiveProjectFlow(createHost(), t, projectName);
+}
+
+/**
+ * Rename a project's label and description.
+ *
+ * Inputs: project (ProjectRow). Output: Promise<void>.
+ * Example: await window.CloudeWeb.launchpad.editProject(project);
+ */
+async function editProjectForLegacy(project: ProjectRow): Promise<void> {
+    await editProjectFlow(createHost(), browserModals(), t, project);
+}
+
+/**
+ * Ask a yes/no, through the app's ONE confirmation modal.
+ *
+ * Description: this does NOT implement a dialog. `App.showConfirmModal`
+ *   owns the escaping, the escape key, the click-outside and the focus,
+ *   and this forwards to it. `providers.js:476` still calls
+ *   `Launchpad.showConfirmModal`, whose body is now a one-line forward to
+ *   this, so there is one path from this screen to that dialog and slice
+ *   7 deletes it with the file.
+ *
+ *   CANCEL IS ALWAYS A NO-OP. A caller must never map false onto a
+ *   destructive action.
+ * Inputs: title, message, details, primaryLabel, secondaryLabel.
+ * Output: Promise<boolean> - true only when confirmed.
+ * Example: await window.CloudeWeb.launchpad.confirm('archive project', 'sure?');
+ */
+function confirmForLegacy(
+    title: string,
+    message: string,
+    details: string | null = null,
+    primaryLabel = 'confirm',
+    secondaryLabel = 'cancel',
+): Promise<boolean> {
+    return createHost().confirm(title, message, details, primaryLabel, secondaryLabel);
+}
+
 /** The namespace the legacy tree may call into. */
 const CloudeWeb = {
     /**
@@ -513,6 +671,24 @@ const CloudeWeb = {
         archiveSessionRecord: archiveSessionRecordForLegacy,
         forkSession: forkSessionForLegacy,
         restartRecentSession: restartRecentSessionForLegacy,
+        /**
+         * SLICE 6: THE MODALS AND THE CREATE FLOWS. Seventeen methods
+         * left `launchpad.js` for these eleven entry points. The ORDER
+         * inside `createNewSession` is the load-bearing part: provider,
+         * name, FOLDER, create - and a cancel at any step creates
+         * nothing at all. See web/src/lib/launchpad/create-flow.ts for
+         * the four rules it exists to keep.
+         */
+        startNewClaudeProject: startNewClaudeProjectForLegacy,
+        startSessionInExistingProject: startSessionInExistingProjectForLegacy,
+        createNewSession: createNewSessionForLegacy,
+        createConsoleSession: createConsoleSessionForLegacy,
+        cloneFromGithub: cloneFromGithubForLegacy,
+        openProjectFromFolder: openProjectFromFolderForLegacy,
+        archiveProject: archiveProjectForLegacy,
+        unarchiveProject: unarchiveProjectForLegacy,
+        editProject: editProjectForLegacy,
+        confirm: confirmForLegacy,
     },
     /**
      * THE `session-card-action` SURFACE, as the legacy row menu sees it.

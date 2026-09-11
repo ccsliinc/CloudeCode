@@ -228,6 +228,17 @@ await test('ITEMS 51/52/53: the menu items, in order, as rendered', async () => 
         'ITEM 51: the old unexplained name must be gone');
 });
 
+// SLICE 6 MOVED SIX CASES OUT OF THIS FILE. `startSessionInExistingProject`
+// and `_showChoiceModal` are no longer methods on this class: they are
+// web/src/lib/launchpad/entry-flows.ts and ChoiceModal.svelte, and their
+// assertions live in web/src/lib/launchpad/entry-flows.test.ts and
+// web/src/lib/launchpad/modals.dom.test.ts. Every one is stronger there -
+// the choice-modal case asserted `overlay.innerHTML.includes(...)`
+// against a mini-DOM that does not parse innerHTML into a tree, and now
+// queries real elements. The three outcomes it guarded (CANNOT DETERMINE,
+// genuinely empty, and a list whose refused rows stay visible) are all
+// still guarded.
+
 await test('ITEM 51: the top item uses the real app icon FILE, and no mark is redrawn', async () => {
     const start = LAUNCHPAD_SRC.indexOf('data-action="new-claude-project"');
     const item = LAUNCHPAD_SRC.slice(start, LAUNCHPAD_SRC.indexOf('</button>', start));
@@ -237,43 +248,6 @@ await test('ITEM 51: the top item uses the real app icon FILE, and no mark is re
     assert.ok(fs.existsSync(path.join(ROOT, 'client', 'assets', 'icons', 'header-icon.png')),
         'the asset it points at has to exist');
     assert.ok(fs.existsSync(path.join(ROOT, 'client', 'assets', 'icons', 'header-icon@2x.png')));
-});
-
-await test('ITEM 53: clone from github is reachable from INSIDE the new claude project flow', async () => {
-    const start = LAUNCHPAD_SRC.indexOf('async startNewClaudeProject() {');
-    assert.ok(start !== -1);
-    const body = LAUNCHPAD_SRC.slice(start, LAUNCHPAD_SRC.indexOf('\n    }', start));
-    assert.ok(body.includes("key: 'clone'") && body.includes('showCloneFromGithubModal()'),
-        'the clone flow must be an option of this one, routed into the existing handler');
-    assert.ok(body.includes('createNewSession()'), 'and "start empty" into the existing create flow');
-});
-
-await test('ITEM 52: with ZERO projects, new session says so instead of opening an empty picker', async () => {
-    const { lp } = loadLaunchpad();
-    lp.projects = [];
-    lp.projectsListingOk = true;
-    let opts = null;
-    lp._showChoiceModal = async (o) => { opts = o; return null; };
-    let selected = false;
-    lp.selectProject = async () => { selected = true; };
-    await lp.startSessionInExistingProject();
-    assert.ok(opts, 'something must be shown');
-    assert.equal(opts.items.length, 0, 'there is nothing to pick from');
-    assert.match(opts.emptyMessage, /no claude projects yet/i);
-    assert.equal(selected, false, 'and nothing may be launched');
-});
-
-await test('ITEM 52: a FAILED project fetch is never reported as "you have no projects"', async () => {
-    const { lp } = loadLaunchpad();
-    lp.projects = [];
-    lp.projectsListingOk = false;
-    let opts = null;
-    lp._showChoiceModal = async (o) => { opts = o; return null; };
-    await lp.startSessionInExistingProject();
-    assert.match(opts.emptyMessage, /CANNOT DETERMINE/,
-        'an unread list is a third outcome, not an empty one');
-    assert.equal(opts.emptyKind, 'unknown');
-    assert.ok(!/no claude projects yet/i.test(opts.emptyMessage));
 });
 
 await test('a FAILED GET /projects latches the listing as unread, so nothing can call it empty', async () => {
@@ -301,63 +275,6 @@ await test('a FAILED GET /projects latches the listing as unread, so nothing can
     second.lp.renderProjectList = () => {};
     await second.lp.loadProjects();
     assert.equal(second.lp.projectsListingOk, true);
-});
-
-await test('ITEM 52: new session offers existing projects and refuses the unusable ones', async () => {
-    const { lp } = loadLaunchpad();
-    lp.projects = [
-        { name: 'good', path: '/good' },
-        { name: 'gone', path: '/gone' },
-        { name: 'unknown', path: '/unknown' },
-    ];
-    lp.projectsListingOk = true;
-    lp.projectPresence = new Map([
-        ['/good', { id: 1, raw_path: '/good', presence: 'present' }],
-        ['/gone', { id: 2, raw_path: '/gone', presence: 'missing' }],
-        ['/unknown', { id: 3, raw_path: '/unknown', presence: 'unreachable', presence_detail: 'volume asleep' }],
-    ]);
-    let opts = null;
-    lp._showChoiceModal = async (o) => { opts = o; return 'good'; };
-    let opened = null;
-    lp.selectProject = async (p) => { opened = p; };
-    await lp.startSessionInExistingProject();
-    assert.equal(opts.items.length, 3, 'every project stays VISIBLE, including the broken ones');
-    const byKey = Object.fromEntries(opts.items.map((i) => [i.key, i]));
-    assert.equal(byKey.good.disabled, false);
-    assert.equal(byKey.gone.disabled, true);
-    assert.match(byKey.gone.reason, /MISSING/);
-    assert.equal(byKey.unknown.disabled, true);
-    assert.match(byKey.unknown.reason, /CANNOT DETERMINE - volume asleep/);
-    assert.equal(opened.name, 'good', 'choosing a usable one opens it');
-});
-
-await test('ITEM 52: new session NEVER creates a project', async () => {
-    const start = LAUNCHPAD_SRC.indexOf('async startSessionInExistingProject() {');
-    const body = LAUNCHPAD_SRC.slice(start, LAUNCHPAD_SRC.indexOf('\n    }\n', start));
-    assert.ok(!body.includes('createNewSession(') && !body.includes('showProjectNameModal('),
-        'it adds a session to an existing project and nothing else');
-});
-
-await test('the choice modal renders its rows and its empty state as real markup', async () => {
-    const { lp, body } = loadLaunchpad();
-    lp._showChoiceModal({
-        title: 'new claude project',
-        items: [
-            { key: 'empty', label: 'start empty', sub: 'a fresh working folder' },
-            { key: 'clone', label: 'clone from github', sub: 'from an existing repository' },
-        ],
-    });
-    const overlay = body.children[body.children.length - 1];
-    assert.ok(overlay.innerHTML.includes('start empty'));
-    assert.ok(overlay.innerHTML.includes('clone from github'));
-    assert.ok(overlay.innerHTML.includes('data-choice-index="0"'));
-    assert.ok(overlay.innerHTML.includes('folder-picker-item'));
-
-    lp._showChoiceModal({ title: 'new session', items: [], emptyMessage: 'nothing here', emptyKind: 'unknown' });
-    const empty = body.children[body.children.length - 1];
-    assert.ok(empty.innerHTML.includes('folder-picker-empty--unknown'));
-    assert.ok(empty.innerHTML.includes('nothing here'));
-    assert.ok(!empty.innerHTML.includes('folder-picker-item'), 'no rows may be drawn when there are none');
 });
 
 // =====================================================================
