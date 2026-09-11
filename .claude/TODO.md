@@ -7883,3 +7883,83 @@ three rules). The two failures are the known environmental pair. Node
 ``validate_hook_token`` / ``_hook_tmux_names`` reference in a docstring or
 comment now names the authority. A stale doc sends the next agent to write
 a bug.
+
+---
+
+## 2026-09-11 - CORRECTION: 22 of S6's new skips were a coverage hole
+
+Raised in review: skips went 20 to 76 across the round and the S6 report
+accounted for every ADDED test and not one skipped one. A skip is a test
+that does not run, and this round had already been bitten once by exactly
+that shape.
+
+**The full breakdown, from a run taken for this purpose (`pytest -q -rs`),
+before the fix. 76 total.**
+
+| count | reason | new? |
+|---|---|---|
+| 33 | `<module> does not use run_in_threadpool` | NEW, S6 |
+| 22 | `<module> is mounted onto the app by src/main.py` | NEW, S6 |
+| 9 | `CLOUDE_REAL_HOOK_TESTS` not set | pre-existing |
+| 4 | a non-object jsonl line has no key order | pre-existing |
+| 4 | corpus fidelity, no `CLOUDE_FIDELITY_DB` on this box | pre-existing |
+| 1 | `rsvg-convert` not installed | pre-existing |
+| 1 | playwright/chromium absent | pre-existing |
+| 1 | the root is allowed to be the root | pre-existing |
+| 1 | `routes.py` IS the aggregator | NEW, S6 |
+
+Pre-existing total is 20, which is the baseline figure exactly. S6 added
+56 and S7 added none.
+
+**THE 22 WERE A COVERAGE HOLE WEARING A SKIP, and it is the SAME defect I
+had already fixed once in this round, one layer out.** The first version
+of `test_every_router_a_sibling_declares_reaches_the_application` INFERRED
+"mounted elsewhere" from a module having no routes in the aggregator,
+which is what a deleted include looks like; mutation caught it and I
+replaced the inference with an explicit register. The register was still
+wrong: it turned "I decided not to check this one" into 22 silent
+non-assertions covering every archive route, the whole auth side, the
+projects routes, the clone flow and the settings write. Fixing the
+inference and keeping the exemption fixed the symptom.
+
+**The fix removes the exemption rather than justifying it.** The test now
+asserts against the ASSEMBLED APPLICATION (`src.main.app`) instead of this
+package's aggregator. A sibling reaches the app three ways - through
+`src/api/routes.py`, mounted directly by `src/main.py`, or through another
+sibling's router such as `auth_routes` or `archive_routes` - and only the
+application knows about all three, so no register and no exemption is
+needed. The only remaining conditional is `ARCHIVE_GATED`, six modules
+`src/main.py` mounts behind `MESSAGE_ARCHIVE.enabled`, named WITH THEIR
+CONDITION; `conftest.py` sets `CLOUDE_MESSAGE_ARCHIVE=1`, so under pytest
+they are mounted and DO assert.
+
+**Mutation-proved on all three mounting paths**, the way the first one
+was. (1) `src/main.py` drops `toast_router`: RED on `[toast_routes.py]`.
+(2) `auth_routes.py` drops `projects_routes.router`: RED on
+`[projects_routes.py]`. (3) the main aggregator drops `themes_routes`: RED
+on `[themes_routes.py]` AND on the fleet count. Every revert byte-identical
+by sha256. Note (1) was ALSO caught by the pre-existing
+`test_client_called_routes_exist.py`, but only because the client happens
+to call that route; nothing covered a router the client never calls.
+
+**THE REMAINING 33 ARE NOT A HOLE, and that was proved rather than
+argued.** `test_run_in_threadpool_is_available_at_module_scope` asserts
+that a module which USES the name binds it at module scope; a module whose
+source never mentions it has nothing to assert. The skip is keyed on a
+MEASURED PROPERTY OF THE FILE, not on an absent precondition, and its
+companion `test_every_route_handler_resolves_its_helper_names` runs for
+all 46 modules and never skips. Measured: adding an unbound
+`run_in_threadpool` call to `health_routes.py` dropped the skip count 33
+to 32 and turned BOTH tests red. `routes.py IS the aggregator` is the
+cycle test declining to ask whether a file imports itself.
+
+**Question 4, answered plainly: no skip introduced here can hide a real
+failure on the owner's machine.** The 34 remaining new ones are keyed on
+the source text of the file under test, which is the same on every
+machine. The 20 pre-existing ones are honest could-not-evaluates: an
+opt-in variable, a database this box does not have, two absent binaries.
+
+**Verification.** Before: 6,498 passed / 2 failed / 76 skipped, 6,576
+collected. After: **6,520 passed / 2 failed / 54 skipped**, same 6,576
+collected - the 22 skips became 22 passes and nothing else moved. The two
+failures are the known environmental pair.

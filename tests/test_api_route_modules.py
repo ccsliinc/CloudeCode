@@ -61,38 +61,20 @@ PRE_EXISTING_OVER_LIMIT: dict[str, int] = {
     "websocket.py": 675,
 }
 
-#: Modules whose router ``src/main.py`` mounts onto the application
-#: itself rather than through ``src/api/routes.py``. Named explicitly,
-#: because the alternative - inferring it from "none of its routes are in
-#: the aggregated table" - reads a DELETED include as evidence the module
-#: is mounted elsewhere, which excuses the failure this file exists for.
-MOUNTED_DIRECTLY: frozenset[str] = frozenset({
-    "routes.py",
-    "auth_routes.py",
-    "archive_overlay_routes.py",
-    "archive_routes.py",
-    "away_routes.py",
-    "config_files_routes.py",
+#: Routers that ``src/main.py`` mounts only when the message archive is
+#: enabled. Named with their CONDITION, because "not mounted" is a
+#: different answer from "not mounted here" and only one of them is a
+#: defect. ``tests/conftest.py`` sets ``CLOUDE_MESSAGE_ARCHIVE=1``, so
+#: under pytest they ARE mounted and the assertion below still runs; this
+#: register exists so a run with the flag off reports honestly rather
+#: than failing.
+ARCHIVE_GATED: frozenset[str] = frozenset({
     "corpus_routes.py",
-    "imported_restart_routes.py",
-    "restart_routes.py",
-    "session_groups_routes.py",
-    "setup_routes.py",
-    "status_routes.py",
-    "toast_routes.py",
-    "version_routes.py",
-    "websocket.py",
-    # Assembled by auth_routes.py, which main.py mounts. Their absence
-    # from the MAIN aggregator is by design, not a dropped include.
-    "projects_routes.py",
-    "project_clone_routes.py",
-    "config_routes.py",
-    "workspace_settings_routes.py",
-    # Reached through the archive router, not the main one.
+    "archive_routes.py",
+    "archive_overlay_routes.py",
     "archive_export_routes.py",
     "archive_messages_routes.py",
     "archive_search_routes.py",
-    "recreate_routes.py",
 })
 
 #: How many routes the aggregated ``src.api.routes`` router carried when
@@ -169,28 +151,54 @@ def test_no_sibling_imports_the_aggregator(path: Path):
     )
 
 
-def _aggregated_endpoints() -> set[str]:
-    """Endpoint function names on the assembled ``src.api.routes`` router.
+def _flatten(router) -> list:
+    """Every real route under a router, in registration order.
 
-    Inputs: none.
-    Output: set of endpoint ``__name__`` values.
+    Description: fastapi 0.141 wraps an included router in a lazy
+      ``_IncludedRouter`` that keeps the original on ``original_router``,
+      so an assembled table has to be WALKED rather than read.
+    Inputs: a router or the application.
+    Output: list of route objects.
     """
-    import src.api.routes as routes
+    out = []
+    for route in getattr(router, "routes", []) or []:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            out.extend(_flatten(inner))
+        else:
+            out.append(route)
+    return out
 
+
+def _endpoint_names(router) -> set[str]:
+    """The ``__name__`` of every endpoint reachable under a router.
+
+    Inputs: a router or the application.
+    Output: set[str].
+    Example: ``"list_themes" in _endpoint_names(app)``.
+    """
     names: set[str] = set()
-
-    def walk(router) -> None:
-        for route in router.routes:
-            inner = getattr(route, "original_router", None)
-            if inner is not None:
-                walk(inner)
-                continue
-            endpoint = getattr(route, "endpoint", None)
-            if endpoint is not None:
-                names.add(endpoint.__name__)
-
-    walk(routes.router)
+    for route in _flatten(router):
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is not None:
+            names.add(endpoint.__name__)
     return names
+
+
+def _application_endpoints() -> set[str]:
+    """Every endpoint the ASSEMBLED application actually serves.
+
+    Description: the real ``src.main.app``, not the one router this
+      package's aggregator owns. That distinction is the whole point of
+      the test below: a module can be mounted by the aggregator, by
+      ``src/main.py`` directly, or by another sibling's router, and only
+      the application knows about all three.
+    Inputs: none.
+    Output: set[str].
+    """
+    from src.main import app
+
+    return _endpoint_names(app)
 
 
 def test_the_aggregator_actually_serves_what_it_assembles():
@@ -231,41 +239,49 @@ def test_the_aggregator_actually_serves_what_it_assembles():
 def test_every_router_a_sibling_declares_reaches_the_application(path: Path):
     """A declared router that nothing mounts is a resource nobody can reach.
 
-    Checked by ENDPOINT NAME rather than by reading the aggregator's own
-    source, because the aggregator naming a module proves it imported it,
-    not that it included its routes.
+    ASSERTED AGAINST THE ASSEMBLED APPLICATION, not against this
+    package's aggregator. A sibling reaches the app three ways - through
+    ``src/api/routes.py``, mounted directly by ``src/main.py``, or through
+    another sibling's router such as ``auth_routes`` or ``archive_routes``
+    - and only the application knows about all three.
+
+    THIS USED TO SKIP FOR 22 OF THE 46 MODULES, and a skip is a test that
+    does not run. The first version inferred "must be mounted elsewhere"
+    from a module having no routes in the aggregator, which is EXACTLY
+    what a deleted include looks like; that was caught by mutation and
+    replaced with an explicit register. The register was still the wrong
+    shape: it turned "I decided not to check this one" into 22 silent
+    non-assertions covering, among others, every archive route and the
+    entire auth side. Checking the application instead needs no register
+    and no exemption, because every legitimate mounting path ends there.
+
+    Checked by ENDPOINT NAME rather than by reading ``src/main.py``'s
+    source, because a file naming a module proves it imported it, not
+    that it served its routes.
     """
     import importlib
 
     module = importlib.import_module(f"src.api.{path.stem}")
     declared: set[str] = set()
     for attr in vars(module).values():
-        routes_attr = getattr(attr, "routes", None)
-        if routes_attr is None or not hasattr(attr, "include_router"):
+        if not hasattr(attr, "include_router") or not hasattr(attr, "routes"):
             continue
-        for route in routes_attr:
-            endpoint = getattr(route, "endpoint", None)
-            if endpoint is not None:
-                declared.add(endpoint.__name__)
+        declared |= _endpoint_names(attr)
     if not declared:
         pytest.skip(f"{path.name} declares a router with no routes on it")
 
-    if path.name in MOUNTED_DIRECTLY:
-        pytest.skip(f"{path.name} is mounted onto the app by src/main.py")
+    served = _application_endpoints()
+    missing = sorted(declared - served)
+    if missing and path.name in ARCHIVE_GATED:
+        from src.core.message_archive_flag import resolve as resolve_archive
 
-    # NOT "skip when none of its routes are aggregated". That heuristic
-    # was written here first and it EXCUSES THE EXACT FAILURE THIS TEST
-    # EXISTS TO CATCH: a module whose only include_router line is deleted
-    # has zero aggregated routes, so the check would read that as "must
-    # be mounted elsewhere" and skip. Caught by mutating the aggregator:
-    # the parametrised case for the module went green while the fleet
-    # count assertion below went red. The list above is explicit instead.
-    import src.api.routes as routes_mod
-
-    aggregated = _aggregated_endpoints()
-    missing = sorted(declared - aggregated)
+        if not resolve_archive().enabled:
+            pytest.skip(
+                f"{path.name} is mounted only when the message archive is "
+                "enabled, and it is off in this run"
+            )
     assert not missing, (
-        f"{path.name} declares {missing} but the aggregator "
-        f"({routes_mod.__name__}) does not serve them: an include_router "
-        "line is missing and those routes 404."
+        f"{path.name} declares {missing} but the assembled application "
+        "serves none of them: an include_router line is missing and those "
+        "routes 404 for every caller."
     )
