@@ -12,9 +12,18 @@ the one path that would have failed quietly had no test, which is the
 worst possible combination and exactly the pairing CLAUDE.md calls the
 characteristic failure of this refactor.
 
-``send_pty_output`` is driven directly rather than through a real
-socket: it is a plain coroutine over a queue, so a fake websocket and a
-one-item queue exercise the real branch with no transport involved.
+RETARGETED AT THE 1.4.0 INTEGRATION. ``send_pty_output`` is gone, folded
+into ``_drain_viewer``, the one writer per viewer that came with the
+bounded fan out. The hazard is IDENTICAL and if anything larger: the
+version that arrived read the watcher off ``getattr(sm, "idle_watchers",
+{})``, an accessor that answers an empty dict on this line rather than
+raising, so the feature would have died silently on every session with
+the whole suite green. That is exactly the mutation this file was written
+to catch.
+
+``_drain_viewer`` is driven directly rather than through a real socket:
+it is a plain coroutine over a BoundedStream, so a fake websocket and a
+one-frame stream exercise the real branch with no transport involved.
 """
 
 from __future__ import annotations
@@ -41,7 +50,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.api.websocket import send_pty_output  # noqa: E402
+from src.api.websocket import _drain_viewer  # noqa: E402
+from src.core import viewer_fanout  # noqa: E402
 from src.core.sessions.sidecars import AttachmentSidecars  # noqa: E402
 
 
@@ -58,7 +68,7 @@ class _RecordingWatcher:
 
 
 class _FakeSocket:
-    """The two attributes ``send_pty_output`` touches on a websocket."""
+    """The two attributes ``_drain_viewer`` touches on a websocket."""
 
     def __init__(self, app) -> None:
         """Inputs: app - the object carrying ``.state``."""
@@ -71,11 +81,11 @@ class _FakeSocket:
 
 
 async def _pump(sidecars: AttachmentSidecars, session_id: str, payload: bytes):
-    """Run one chunk through the real ``send_pty_output`` branch.
+    """Run one chunk through the real ``_drain_viewer`` branch.
 
     Description: builds the ``app.state`` shape the function reads -
       ``services.registry`` and ``services.sidecars`` - then drives
-      exactly one queue item and cancels.
+      exactly one stream frame and cancels.
     Inputs: sidecars (AttachmentSidecars), session_id (str),
       payload (bytes) - the raw terminal output to deliver.
     Output: the fake socket, so a caller can assert on what was sent.
@@ -90,14 +100,14 @@ async def _pump(sidecars: AttachmentSidecars, session_id: str, payload: bytes):
     )
     socket = _FakeSocket(SimpleNamespace(state=state))
 
-    queue: asyncio.Queue = asyncio.Queue()
-    await queue.put(base64.b64encode(payload).decode())
+    stream = viewer_fanout.new_viewer_stream(session_id or "orphan")
+    viewer_fanout.offer_pty(stream, base64.b64encode(payload).decode())
 
     task = asyncio.create_task(
-        send_pty_output(socket, queue, log_monitor=None, session_id=session_id)
+        _drain_viewer(socket, stream, log_monitor=None, session_id=session_id)
     )
-    # One item, then stand down. The coroutine loops forever on an empty
-    # queue, so it is cancelled rather than awaited to completion.
+    # One frame, then stand down. The coroutine loops forever on an empty
+    # stream, so it is cancelled rather than awaited to completion.
     for _ in range(50):
         await asyncio.sleep(0)
         if socket.sent:

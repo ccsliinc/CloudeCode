@@ -110,7 +110,6 @@ from src.core.session_startup_gate_ledger import (
 from src.core import unread_identity
 from src.core import session_view_clears
 from src.core import toast_auto_ack
-from src.core import viewer_fanout
 from src.core.bounded_stream import OFFER_ACCEPTED, OFFER_OVERFLOWED
 from src.core import session_permission_verify_apply
 from src.core.session_status_source import (
@@ -277,22 +276,6 @@ def _configured_wrappers():
         logger.warning("configured_wrappers_unavailable", error=str(exc))
         return []
 
-
-
-def _close_viewer_stream(candidate) -> None:
-    """Close a viewer outbox, tolerating anything that is not one.
-
-    Description: `subscribe_output` has always been callable by test
-      doubles and older shims that hand back a bare queue, and a teardown
-      that raised on one of those would turn an ordinary disconnect into
-      a 500. So this asks whether the object is a viewer stream rather
-      than assuming, and does nothing when it is not.
-    Inputs: candidate (Any) - whatever `unsubscribe_output` was handed.
-    Output: None.
-    Example: _close_viewer_stream(stream)
-    """
-    if viewer_fanout.is_viewer_stream(candidate):
-        candidate.close()
 
 
 class SessionManager:
@@ -2323,65 +2306,6 @@ class SessionManager:
                 except Exception:
                     pass
 
-<<<<<<< HEAD
-=======
-    def ack_toast(
-        self,
-        session_id: str,
-        toast_id: str,
-        reason: str = toast_auto_ack.ACK_REASON_DISMISSED,
-    ) -> bool:
-        """Mark a toast acknowledged, recording WHY. Idempotent.
-
-        Returns True when the toast was found AND state actually changed
-        (i.e. wasn't already acked). Returns False when not found OR
-        already acked - useful for the route layer to skip the WS
-        broadcast on a no-op double-click.
-
-        ``reason`` defaults to ``dismissed`` so every pre-existing caller
-        records exactly what it always meant: a human cleared this. The
-        hook-driven path passes ``answered``. The reason is stamped ONLY
-        on the transition, never on a record that was already acked, so a
-        duplicate event cannot rewrite the history of an act the user
-        performed.
-
-        Inputs:
-            session_id: the session whose bucket to walk. The scoping is
-                real - a toast id from another session is simply not
-                found here, which is what keeps dismissal per session.
-            toast_id: the record to acknowledge.
-            reason: one of ``toast_auto_ack.ACK_REASON_*``.
-        Output: bool - True only when this call changed state.
-        Example:
-            >>> mgr.ack_toast("ses_1", "abc", reason="answered")
-        """
-        bucket = self._pending_toasts.get(session_id)
-        if not bucket:
-            return False
-        for t in bucket:
-            if t.id == toast_id:
-                if t.acknowledged:
-                    return False
-                t.acknowledged = True
-                t.ack_reason = reason
-                # A REAL TRANSITION, BUMPED ONCE. Guarded by the same
-                # `if t.acknowledged: return False` above that makes this
-                # whole method idempotent - a duplicated ack event for an
-                # already-acked record returns before reaching this line,
-                # so the version cannot move twice for one fact.
-                t.version += 1
-                self._prune_toasts(session_id)
-                logger.info(
-                    "toast_acked",
-                    session_id=session_id,
-                    toast_id=toast_id,
-                    reason=reason,
-                    version=t.version,
-                )
-                return True
-        return False
-
->>>>>>> 6012467
     def auto_ack_toasts(
         self,
         session_id: str,
@@ -2482,42 +2406,15 @@ class SessionManager:
         return changed
 
     # ---- output fan-out (per session) -----------------------------------
+    #
+    # THE CONTAINERS AND THE BOUND ARE THE REGISTRY'S. ``subscribe`` hands
+    # out a BoundedStream, ``publish`` offers into it synchronously and
+    # drops an overflowed viewer, and ``forget`` closes every outbox for a
+    # session. There is no ``subscribe_output`` / ``unsubscribe_output``
+    # seam on this class any more: the websocket endpoint reaches the
+    # registry through the composition root, so there is one owner of the
+    # subscriber list rather than a manager method forwarding to it.
 
-
-<<<<<<< HEAD
-=======
-        ``session_id`` None → the current session (back-compat). The
-        returned queue receives ONLY that session's bytes (base64-encoded
-        strings); a session's output never leaks into another's queue.
-        """
-        sid = self._resolve_session_id(session_id)
-        # Tolerate "no session yet" - return an orphan stream so callers
-        # (e.g. the auth-only WS test) don't have to special-case it.
-        key = sid if sid is not None else "__orphan__"
-        stream = viewer_fanout.new_viewer_stream(key)
-        self._subscribers.setdefault(key, []).append(stream)
-        return stream
-
-    def unsubscribe_output(
-        self, queue: asyncio.Queue, session_id: Optional[str] = None
-    ):
-        """Unsubscribe a queue from a session's output stream.
-
-        ``session_id`` None → search all buckets (covers callers that
-        don't track which session the queue belonged to). Idempotent.
-        """
-        if session_id is not None:
-            subs = self._subscribers.get(session_id)
-            if subs and queue in subs:
-                subs.remove(queue)
-            _close_viewer_stream(queue)
-            return
-        for subs in self._subscribers.values():
-            if queue in subs:
-                subs.remove(queue)
-                break
-        _close_viewer_stream(queue)
->>>>>>> 6012467
 
     # ---- session lifecycle ----------------------------------------------
 
@@ -2563,13 +2460,12 @@ class SessionManager:
             return "none"
         command = settings.get_terminal_command(command_id)
         if command is None:
-<<<<<<< HEAD
-            return
-        backend = self._registry.backends.get(session_id)
-=======
+            # HIS FIX: a bare ``return`` here made this ``-> str`` function
+            # answer None for a configured command id that config.json no
+            # longer carries, and every caller treats that as an unknown
+            # rather than as the measured "nothing was issued".
             return "none"
-        backend = self.backends.get(session_id)
->>>>>>> 6012467
+        backend = self._registry.backends.get(session_id)
         if backend is None:
             return "none"
 
@@ -2927,22 +2823,14 @@ class SessionManager:
             # defense-in-depth for any future backend that omits `.pid`.
             pid = getattr(backend, "pid", None)
 
-<<<<<<< HEAD
-            # v0.7.0 - seed pinned_theme from ``<work_path>/.cc.theme`` (or
-            # legacy ``pinned_themes.json`` for the tmux name when no
-            # dotfile exists). New projects without a pin yield None,
-            # which is the original behavior.
-            prior_pin = self._theme_store.resolve_project_theme(
-                work_path, tmux_session_name
-            )
-=======
             # Seed pinned_theme from this name's own pin in
             # ``pinned_themes.json``, falling back to the folder's
             # ``.cc.theme`` default when the name has never been pinned.
             # A brand new project with neither yields None, which is the
             # original behavior.
-            prior_pin = self.resolve_project_theme(work_path, tmux_session_name)
->>>>>>> 6012467
+            prior_pin = self._theme_store.resolve_project_theme(
+                work_path, tmux_session_name
+            )
             new_session = Session(
                 id=session_id,
                 pty_pid=pid,
@@ -3712,26 +3600,14 @@ class SessionManager:
             self._owned.names.discard(old_name)
             self._owned.names.add(new_name)
 
-<<<<<<< HEAD
-        # Re-key the deprecated pinned-themes map. v0.7.0's project theme
-        # ``.cc.theme`` is keyed by working_dir (unaffected by rename), but
-        # the legacy per-tmux-name JSON map needs to follow the name so a
-        # downgrade-to-v0.6.x doesn't lose the pin. The S2 theme store
-        # owns that map and its file; ``rekey_pin`` moves and saves.
-        self._theme_store.rekey_pin(old_name, new_name)
-=======
         # RE-KEY THE PIN ONTO THE NEW NAME. ``pinned_themes`` is keyed on
-        # the tmux name and is the store ``resolve_project_theme`` reads
-        # FIRST, so leaving the entry under the old name silently demotes
-        # a renamed session to its folder's ``.cc.theme`` default on the
-        # next restart. The dotfile is keyed on working_dir and a rename
-        # does not move it. ``self.pinned_themes`` is the in-memory
-        # mirror of the file.
-        if old_name in self.pinned_themes:
-            theme_id = self.pinned_themes.pop(old_name)
-            self.pinned_themes[new_name] = theme_id
-            self._save_pinned_themes()
->>>>>>> 6012467
+        # the tmux name and, since issue #65, is the store
+        # ``resolve_project_theme`` reads FIRST - so leaving the entry
+        # under the old name silently demotes a renamed session to its
+        # folder's ``.cc.theme`` default on the next restart. The dotfile
+        # is keyed on working_dir and a rename does not move it. The theme
+        # store owns the map and its file; ``rekey_pin`` moves and saves.
+        self._theme_store.rekey_pin(old_name, new_name)
 
         # Mirror the new tmux name onto the Session record so SessionInfo
         # serialization picks it up immediately (and so a restart-rehydrate
@@ -4613,12 +4489,8 @@ class SessionManager:
             # id is not. Same source AttachableSession uses, so the two
             # payloads can never disagree about the same session.
             created_by_cloude=bool(
-<<<<<<< HEAD
                 tmux_session_name
                 and self._owned.is_owned_name(tmux_session_name)
-=======
-                tmux_session_name and self.is_owned_tmux_name(tmux_session_name)
->>>>>>> 6012467
             ),
         )
 
@@ -5590,72 +5462,6 @@ class SessionManager:
         """
         return self._tmux_socket_name()
 
-<<<<<<< HEAD
-=======
-    def owned_tmux_instances(self) -> Optional[set]:
-        """Owned ``(tmux_name, epoch)`` pairs from the datastore, and only those.
-
-        Description: the value handed to the attachable listing, which is
-          the one path that HAS the epoch for every row and can therefore
-          make the identity-correct decision.
-
-          THE LEGACY NAME SET IS DELIBERATELY NOT FOLDED IN HERE. It used
-          to be, as ``(name, None)``, and the backend read a None epoch as
-          a NAME-ONLY WILDCARD. That disabled the epoch tier for every
-          session this app had created since the last restart - which is
-          precisely the population the epoch exists to protect - so a dead
-          ``cloude_work`` replaced by the user's own unrelated
-          ``cloude_work`` badged as ours, exactly as it did before the
-          epoch was introduced. The legacy names still reach the backend,
-          but as the SEPARATE ``owned_names`` argument, so they can be
-          resolved at their own, lower, explicitly name-only tier and can
-          never override a stored epoch. See
-          :func:`src.core.tmux_listing_parse.resolve_ownership`.
-        Inputs: none.
-        Output: set[tuple[str, int]] | None - None when the datastore
-          could not answer at all. An EMPTY SET is a real answer ("the DB
-          knows of no owned instance") and is not the same as None.
-        """
-        from_db = self._owned_instances_from_db()
-        if from_db is None:
-            return None
-        return set(from_db)
-
-    def is_owned_tmux_name(self, name: Optional[str]) -> bool:
-        """Report whether a tmux NAME belongs to a session we own.
-
-        Description: the name-only fallback, for call sites that carry no
-          creation epoch - ``SessionInfo`` is one. Lossy in exactly one
-          way, stated so nobody has to rediscover it: a name owned as one
-          instance and now reused by a different, unowned instance reads
-          as owned here until the epoch reaches this call site. The
-          attachable listing, which does have the epoch, is not lossy.
-
-          BOTH RUNGS ARE READ LIVE, ON THE LOOP, EVERY TIME, AND THE
-          DATASTORE RUNG IS THE REASON. An ADOPTION never touches
-          ``owned_tmux_sessions`` - ``adopt_external_session`` says so
-          itself, and the only three ``.add`` sites are the boot
-          backfill, create and rename - so the datastore is the ONLY rung
-          an adoption moves. The listing pass now frees the loop while it
-          gathers, which is precisely what lets an adoption land
-          mid-pass, so a gathered datastore answer would report a freshly
-          adopted session unowned for one poll cycle. This reader is
-          therefore deliberately excluded from the listing prefetch; see
-          ``src/core/listing_gather.py``.
-        Inputs: name (str | None) - a tmux session name.
-        Output: bool - False for None or an empty name.
-        Example: mgr.is_owned_tmux_name('cloude_a')
-        """
-        if not name:
-            return False
-        if name in self.owned_tmux_sessions:
-            return True
-        from_db = self._owned_instances_from_db()
-        if from_db is None:
-            return False
-        return any(owned_name == name for owned_name, _epoch in from_db)
-
->>>>>>> 6012467
     def _fingerprint_agent_type_for_listing(
         self, *, socket: str, name: str, epoch: Optional[int]
     ) -> Optional[str]:
@@ -6057,12 +5863,13 @@ class SessionManager:
             outcome = reconcile_from_listing(
                 conn,
                 listing=listing,
-<<<<<<< HEAD
-                socket=self._tmux_socket_name(),
-=======
-                socket=self._last_probe_socket or self._tmux_socket_name(),
+                # THE PROBE'S OWN SOCKET WHEN IT HAS ONE. A row keyed on
+                # the configured socket while the listing came from
+                # another is the cross-socket claim this project already
+                # paid for once; the recorder is where that reading lives
+                # on this line.
+                socket=self._probe_health.socket or self._tmux_socket_name(),
                 pane_status=pane_status,
->>>>>>> 6012467
             )
             if outcome.changed:
                 # PROVABLY REDUNDANT TODAY, KEPT ANYWAY. src.core.db.connect
@@ -6183,7 +5990,6 @@ class SessionManager:
         # S9 - a successful listing is this process's evidence that tmux
         # answered just now, independent of what rows it returned (an
         # empty tmux server is still a successful probe).
-<<<<<<< HEAD
         self._probe_health.record_success()
         # THE REAPER. This listing is a complete enumeration of the
         # socket, so it is the one moment the app can tell that a stored
@@ -6192,13 +5998,17 @@ class SessionManager:
         # writes only when something actually died. The ok / complete
         # gate lives inside reconcile_from_listing, not here, so no
         # caller can bypass it. Never raises.
+        #
+        # IT REAPS ON ABSENCE AND, SINCE THE 1.4.0 INTEGRATION, ON A
+        # MEASURED ``#{pane_dead}`` TOO. Absence alone left the husk of a
+        # ``remain-on-exit`` pane in the listing forever, so its row left
+        # the live list without ever arriving in Recent - the open item
+        # CLAUDE.md has carried since 2026-09-08. The pane-state reading
+        # is ``src/core/session_pane_death.py`` and it is passed down as
+        # ``pane_status``; an UNREADABLE pane is never reaped, because a
+        # reading that did not happen is not a reading of death.
         self.reconcile_lifecycle(listing)
         rows = listing.sessions
-=======
-        self._last_probe_ok = True
-        self._last_probe_reason = None
-        self._last_probe_detail = None
->>>>>>> 6012467
         # Status lights: one extra bulk tmux call (list-panes -a), reused
         # via the same probe backend / socket. This is the ONLY place a
         # dead-but-still-in-tmux session (remain-on-exit) gets its state
@@ -6234,7 +6044,7 @@ class SessionManager:
         # yields an empty map stating neither completeness nor socket,
         # which every consumer already reads as "cannot vouch".
         status_map = status_map_from_listing(
-            status_listing, socket=self._last_probe_socket
+            status_listing, socket=self._probe_health.socket
         )
         # THE REAPER. This listing is a complete enumeration of the
         # socket, so it is the one moment the app can tell that a stored
@@ -6698,19 +6508,11 @@ class SessionManager:
                 )
 
         # Step 5 - register.
-<<<<<<< HEAD
-        # v0.7.0 - project-scoped theme lookup: ``<working_dir>/.cc.theme``
-        # is the source of truth. ``pinned_themes.json`` is read as a
-        # back-compat fallback only when no dotfile exists; the
-        # migration helper below ferries old entries into the new format.
-        prior_pin = self._theme_store.resolve_project_theme(working_dir, name)
-=======
         # This name's own pin in ``pinned_themes.json`` first, then the
         # folder's ``.cc.theme`` default when it has never been pinned.
         # Re-adopting a session must return the theme it was pinned to,
         # which is exactly what the old dotfile-first order threw away.
-        prior_pin = self.resolve_project_theme(working_dir, name)
->>>>>>> 6012467
+        prior_pin = self._theme_store.resolve_project_theme(working_dir, name)
         # fix/adopt-response-pid - ``_session_info_for`` still resolves
         # ``pty_pid`` LIVE on every subsequent read (a tmux pane's
         # foreground pid changes over the session's life, so any value
