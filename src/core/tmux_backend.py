@@ -385,8 +385,19 @@ class TmuxBackend(SessionBackend):
         Without the fallback, one socket that refused ``history-limit``
         would silently take ``remain-on-exit`` down with it.
 
-        A single ``set-option`` invocation still starts the tmux server on
-        a cold socket, which is the ordering this call is relied on for.
+        **THIS CALL DOES NOTHING AT ALL ON A COLD SOCKET, AND THAT IS
+        TMUX, NOT A BUG HERE.** ``set-option`` does NOT start a tmux
+        server. Measured on tmux 3.6a against a socket with no server:
+        both commands exit 1 with ``error connecting to
+        /private/tmp/tmux-<uid>/<socket> (No such file or directory)``,
+        batched or separate, and ``check=False`` makes that silent. This
+        call is still the ONLY thing that can make a pane be BORN at
+        :data:`HISTORY_LIMIT`, which is why it stays: a pane's scrollback
+        depth is fixed into its grid at creation and no later
+        ``set-option`` moves it. On a warm socket - the common case, every
+        session after the first - it lands and the pane is born correct.
+        The post-spawn re-application in :meth:`start` is what stops a
+        cold socket carrying tmux's stock defaults onward.
 
         Returns:
             None.
@@ -565,11 +576,15 @@ class TmuxBackend(SessionBackend):
         use_rows = initial_rows if (initial_cols and initial_rows) else INITIAL_ROWS
 
         # Scrollback depth and remain-on-exit BEFORE the pane exists - see
-        # HISTORY_LIMIT and _apply_remain_on_exit. Both travel in ONE tmux
+        # HISTORY_LIMIT and _remain_on_exit_command. Both travel in ONE tmux
         # process; both still complete before new-session, which is the
-        # only ordering that matters here. ``set-option`` also starts the
-        # tmux server when none is running, which is exactly the ordering
-        # we want on a cold socket.
+        # only ordering that matters here.
+        #
+        # ON A COLD SOCKET THIS SILENTLY DOES NOTHING: ``set-option`` does
+        # not start a tmux server, so both commands exit 1 with "error
+        # connecting" and ``check=False`` swallows it. See
+        # _apply_pre_spawn_options, and the re-application in the
+        # decoration batch further down that limits what that costs.
         await self._apply_pre_spawn_options()
 
         # Build the session. ``new-session -d -s <name> -c <cwd> [command]``.
@@ -803,9 +818,12 @@ class TmuxBackend(SessionBackend):
                 )
 
         # ---- Session decoration, ONE tmux process ---------------------------
-        # Eight commands that all DECORATE a pane that already exists and
-        # whose failures are all tolerated (they were eight separate
-        # ``check=False`` calls). They share a batch because they share a
+        # Ten commands that all act on a pane that already exists and
+        # whose failures are all tolerated (eight of them were eight
+        # separate ``check=False`` calls; the two socket options at the
+        # head of the list are the pre-spawn pair re-applied, and cost no
+        # extra process because this batch is issued either way). They
+        # share a batch because they share a
         # failure behaviour, which is the only thing that makes a batch
         # legal here. Nothing in this group is ordered against anything in
         # it, none of them is the spawn, and none of them is read by the
@@ -820,6 +838,36 @@ class TmuxBackend(SessionBackend):
         await run_optional_batch(
             self._run_tmux,
             [
+                # The two pre-spawn options, re-applied. THIS IS THE ONLY
+                # THING THAT SETS THEM ON A COLD SOCKET, because
+                # ``set-option`` does not start a tmux server and the
+                # pre-spawn batch therefore exits 1 with "error
+                # connecting" when this is the first session since the
+                # last one closed, since a reboot, or since a tmux server
+                # restart. By here ``new-session`` has started the server
+                # and created the window, so both forms resolve.
+                #
+                # WHAT THIS REACHES, MEASURED ON tmux 3.6a, AND WHAT IT
+                # DOES NOT. It reaches the socket's global tables, so
+                # every pane born afterwards gets the full scrollback
+                # depth and every window gets ``remain-on-exit``. It does
+                # NOT reach THIS pane's scrollback: a pane's depth is
+                # fixed into its grid by ``window_pane_create`` and stays
+                # there - measured, a pane born under the stock 2000
+                # still reports ``#{history_limit} 2000`` after a global
+                # set, after a session-scoped set, and after
+                # ``respawn-pane -k``. So the first session on a cold
+                # socket keeps 2000 rows and only its successors get
+                # 50000. Closing that needs a tmux server to exist BEFORE
+                # ``new-session``, which is a change to the launch
+                # ordering and is not this.
+                #
+                # Both are pure assignments of a constant, so they are
+                # idempotent and safe in a batch whose failure path
+                # re-runs every command individually. Re-running them on
+                # a warm socket writes the value they already hold.
+                self._history_limit_command(),
+                self._remain_on_exit_command(),
                 # Extended keys (tmux 3.2+) so modifier+key sequences like
                 # Shift+Enter arrive as CSI u (`\x1b[13;2u`) at the pane
                 # intact, instead of being collapsed to bare CR. Required
