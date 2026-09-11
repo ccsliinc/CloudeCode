@@ -58,6 +58,8 @@ from typing import Any, Callable, Optional
 
 import structlog
 
+from src.core.unique_tmp_path import unique_tmp_path
+
 from src.core.sessions.ports import SessionRecordStore
 
 logger = structlog.get_logger()
@@ -182,7 +184,10 @@ class OwnedTmuxLedger:
     def write_atomic(self, data: dict) -> None:
         """Durable, crash-consistent metadata write.
 
-        Description: write to a sibling ``.tmp`` file, ``flush``,
+        Description: write to a UNIQUELY NAMED sibling temp file (see
+          :mod:`src.core.unique_tmp_path` - atomic and serialized are
+          different properties, and a fixed ``.tmp`` name only ever
+          had the first), ``flush``,
           ``os.fsync`` the descriptor, then ``os.replace``.
           ``os.replace`` is the only rename primitive guaranteed atomic
           across POSIX and Windows, and the ``fsync`` before it is what
@@ -200,19 +205,30 @@ class OwnedTmuxLedger:
         """
         path = self.path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp = unique_tmp_path(path)
 
-        with tmp.open("w") as f:
-            json.dump(data, f, indent=2, default=str)
-            f.flush()
+        try:
+            with tmp.open("w") as f:
+                json.dump(data, f, indent=2, default=str)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError as exc:
+                    # tmpfs and some network filesystems do not support
+                    # fsync; log and continue - the rename is still atomic
+                    # per POSIX.
+                    logger.debug("metadata_fsync_unsupported", error=str(exc))
+
+            os.replace(str(tmp), str(path))
+        except OSError:
+            # The temp name is unique per write, so a failure that left it
+            # behind would litter the state directory with one orphan per
+            # failure instead of reusing a single dead file.
             try:
-                os.fsync(f.fileno())
-            except OSError as exc:
-                # tmpfs and some network filesystems do not support fsync;
-                # log and continue - the rename is still atomic per POSIX.
-                logger.debug("metadata_fsync_unsupported", error=str(exc))
-
-        os.replace(str(tmp), str(path))
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def load(self) -> MetadataLoad:
         """Read the metadata file and apply its owned-set half.

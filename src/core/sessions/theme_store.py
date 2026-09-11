@@ -9,14 +9,22 @@ over the package's 500-line rule and they are genuinely three jobs:
 ``theme_accents`` answers "what colour is this theme" over a cache, and
 ``theme_dotfile`` is the stateless read and write of the file format.
 
-**TWO SOURCES, AND THE DOTFILE WINS.** ``<working_dir>/.cc.theme`` is the
-v0.7.0+ source of truth for a project's theme: it is keyed by directory,
-so two browsers and two machines pointed at the same checkout converge
-without round-tripping a per-machine cache. ``pinned_themes.json`` is
-keyed by TMUX NAME and is retained only as a read-time back-compat
-fallback for sessions pinned under v0.6.x. ``migrate_to_dotfile`` ferries
-old entries forward on attach and adopt; it deliberately does NOT delete
-the legacy entry, which decays as users re-pin.
+**TWO SOURCES, AND THE SESSION'S OWN PIN WINS.** ``pinned_themes.json``
+is keyed by TMUX NAME and records the theme the user chose for THIS
+conversation. ``<working_dir>/.cc.theme`` is keyed by DIRECTORY and
+records the default that FOLDER carries, which is what lets two browsers
+and two machines pointed at one checkout converge without round-tripping
+a per-machine cache. The dotfile used to outrank the pin, and a default
+that outranks an explicit choice is not a default: every restart threw
+the pin away and two sessions in one folder could never hold two themes.
+That is issue #65, inverted at the 1.4.0 integration, and the order lives
+in :mod:`src.core.session_theme_resolution` rather than here.
+
+**THERE IS NO MIGRATION FROM THE MAP INTO THE DOTFILE ANY MORE.** It
+existed to decay the legacy map while the dotfile was the winner; with
+the pin winning, ferrying one session's pin into a folder-wide default
+would set every OTHER session in that folder to a theme nobody chose for
+it. See docs/DECISIONS.md, 2026-09-11.
 
 **THE PIN PATH IS INJECTED, AND THAT IS NOT CEREMONY.** Every theme test
 in this repo redirects state away from the developer's real
@@ -38,7 +46,9 @@ from typing import Callable, Optional
 
 import structlog
 
+from src.core.session_theme_resolution import resolve_theme
 from src.core.sessions import theme_dotfile
+from src.core.unique_tmp_path import unique_tmp_path
 from src.core.sessions.theme_accents import ThemeAccents
 
 logger = structlog.get_logger()
@@ -160,21 +170,54 @@ class ThemeStore:
             logger.warning("failed_to_load_pinned_themes", error=str(exc))
 
     def save(self) -> None:
-        """Persist the pinned-theme map atomically.
+        """Persist the pinned-theme map: backup, then atomic replace.
 
-        Description: the same temp-then-``os.replace`` protocol
-          ``_save_session_metadata`` and ``unread_store`` use, so a crash
-          mid-write can never leave a half-written file at the canonical
-          path. The ``fsync`` is best-effort; a filesystem that refuses
-          it still gets an atomic rename.
+        Description: the pre-write bytes go to ``pinned_themes.json.bak``
+          (one generation, overwritten each call) BEFORE anything else,
+          then a UNIQUELY NAMED temp file, ``fsync``, ``os.replace``.
+
+          THE BACKUP IS NOT DECORATION HERE, and it is the half this
+          store was missing until the 1.4.0 integration. This file is the
+          durable record of every session's theme, and :meth:`load`
+          deliberately starts from an EMPTY map when it cannot parse what
+          is on disk. Without a backup, one corrupt read followed by one
+          pin writes that empty map over the user's entire set of pins
+          with nothing left to recover from. A reading that did not
+          happen is not a reading of nothing.
+
+          THE TEMP NAME IS UNIQUE for the reason
+          :mod:`src.core.unique_tmp_path` exists: a fixed
+          ``pinned_themes.json.tmp`` is two writers streaming into one
+          descriptor the moment a second one arrives, and neither errors.
+          A failure unlinks it rather than leaving one orphan per failure
+          beside the file the next reader has to guess about.
+
+          The ``fsync`` is best-effort; a filesystem that refuses it
+          still gets an atomic rename. Every failure is logged and
+          swallowed: a preferences file that will not write must not take
+          a session pin, an adopt or a destroy down with it.
         Inputs: none.
         Output: None.
         Example: store.save()
         """
         path = self._pin_path()
+        tmp: Optional[Path] = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
+            if path.exists():
+                try:
+                    path.with_suffix(path.suffix + ".bak").write_bytes(
+                        path.read_bytes()
+                    )
+                except OSError as exc:
+                    # A backup we could not take is worth saying out loud,
+                    # but it must not block the write the user asked for.
+                    logger.warning(
+                        "pinned_themes_backup_failed",
+                        path=str(path),
+                        error=str(exc),
+                    )
+            tmp = unique_tmp_path(path)
             with tmp.open("w") as f:
                 json.dump(self.pinned_themes, f, indent=2)
                 f.flush()
@@ -188,6 +231,11 @@ class ThemeStore:
             # regression, and raising here would break the destroy and
             # rename paths that call this for cleanup.
             logger.error("failed_to_save_pinned_themes", error=str(exc))
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     # ---- the legacy per-tmux-name map ----------------------------------
 
@@ -325,23 +373,33 @@ class ThemeStore:
     def resolve_project_theme(
         self, working_dir, tmux_name: Optional[str] = None
     ) -> Optional[str]:
-        """The effective theme: dotfile first, then the legacy map.
+        """The effective theme for a session: its own pin, else the folder's.
 
-        Description: the one call the create and adopt paths make, so
-          neither has to write fallback glue. The ORDER is the whole
-          contract - a dotfile beats a JSON pin, because the dotfile is
-          what a second machine can see.
+        Description: THE PER-SESSION PIN WINS, and that is the inversion
+          issue #65 asked for, taken at the 1.4.0 integration over this
+          line's dotfile-first order. ``pinned_themes.json`` records a
+          theme the user chose for THIS conversation;
+          ``<working_dir>/.cc.theme`` records the default the FOLDER
+          carries. A default that outranks an explicit choice is not a
+          default, it is an override - and dotfile-first meant every
+          server restart and every boot re-adopt threw away a per-session
+          pin that was sitting on disk the whole time, while two sessions
+          in one folder could never hold two different themes.
+
+          THE ORDERING ITSELF IS NOT SPELLED OUT HERE. It is the pure
+          function in :mod:`src.core.session_theme_resolution`, so the
+          three seeding call sites (create, adopt, boot re-adopt) and this
+          store cannot drift into four orderings.
         Inputs: working_dir (str | Path | None). tmux_name (str | None) -
-          the legacy key, omitted when there is none.
-        Output: str | None.
+          the pin key, omitted when there is none, which skips that rung.
+        Output: str | None - the theme id to paint, or None when neither
+          store holds one.
         Example: store.resolve_project_theme(work, "cloude_demo")
         """
-        dotfile = self.get_project_theme(working_dir)
-        if dotfile is not None:
-            return dotfile
-        if tmux_name:
-            return self.get_pin(tmux_name)
-        return None
+        return resolve_theme(
+            pinned=self.get_pin(tmux_name) if tmux_name else None,
+            project_default=self.get_project_theme(working_dir),
+        ).theme_id
 
     @staticmethod
     def legacy_pin_key(
@@ -364,76 +422,6 @@ class ThemeStore:
         if sid.startswith("adopted:"):
             return sid[len("adopted:"):] or None
         return sid or None
-
-    def migrate_to_dotfile(
-        self,
-        *,
-        working_dir,
-        tmux_session: Optional[str],
-        session_id: Optional[str],
-    ) -> bool:
-        """Ferry a v0.6.x JSON pin into ``.cc.theme``. Best effort.
-
-        Description: runs on attach and adopt, and writes only when the
-          dotfile is ABSENT and a legacy pin exists for the resolved key.
-          The legacy entry is intentionally left in place: this release
-          still reads it as a fallback, and it decays as users re-pin.
-          Every failure is logged and swallowed, because a failed theme
-          migration must never break the attach path a user is waiting
-          on; the comment is the reason the swallow is deliberate.
-        Inputs: working_dir (str | Path | None) - the session's directory.
-          tmux_session (str | None) and session_id (str | None) - the two
-          halves of the legacy key, keyword-only so they cannot be
-          swapped.
-        Output: bool - True only on a completed migration.
-        Example: store.migrate_to_dotfile(
-            working_dir=w, tmux_session="cloude_x", session_id="ses_1")
-        """
-        if not working_dir:
-            return False
-        try:
-            path = self.project_theme_path(working_dir)
-            if path is None:
-                return False
-            # The dotfile is the newer format, so its presence means
-            # there is nothing to migrate.
-            if path.exists():
-                return False
-            # The directory must actually exist before we would write.
-            if not path.parent.is_dir():
-                logger.debug(
-                    "migrate_pinned_theme_skipped_no_dir",
-                    working_dir=str(working_dir),
-                )
-                return False
-            tmux_name = self.legacy_pin_key(tmux_session, session_id)
-            if not tmux_name:
-                return False
-            legacy_pin = self.pinned_themes.get(tmux_name)
-            if not legacy_pin:
-                return False
-            self.set_project_theme(working_dir, legacy_pin)
-            logger.info(
-                "theme_migrated_to_dotfile",
-                session_id=session_id,
-                working_dir=str(working_dir),
-                tmux_name=tmux_name,
-                theme_id=legacy_pin,
-            )
-            return True
-        except (OSError, ValueError, TypeError) as exc:
-            # Deliberately tolerant: set_project_theme raises four
-            # different errors for an unwritable directory, and none of
-            # them is worth failing an attach over.
-            logger.warning(
-                "theme_migration_failed",
-                session_id=session_id,
-                working_dir=str(working_dir),
-                error=str(exc),
-            )
-            return False
-
-    # ---- theme manifest accents, composed from ThemeAccents ------------
 
     def accent_for_theme(self, theme_id: Optional[str]) -> Optional[str]:
         """The ``--color-accent`` value for a theme id, memoized.

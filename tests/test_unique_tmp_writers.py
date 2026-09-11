@@ -1,9 +1,18 @@
 """Tests for the four durable writers widened to a unique temp name.
 
-Covers ``SessionManager._write_metadata_atomic`` (session_metadata.json),
-``SessionManager._save_pinned_themes`` (pinned_themes.json),
-``SessionManager.set_project_theme`` (``<working_dir>/.cc.theme``) and
-``config_files_io.atomic_write`` (the file editor's write chokepoint).
+Covers ``OwnedTmuxLedger.write_atomic`` (session_metadata.json),
+``ThemeStore.save`` (pinned_themes.json), ``ThemeStore.set_project_theme``
+(``<working_dir>/.cc.theme``) and ``config_files_io.atomic_write`` (the
+file editor's write chokepoint).
+
+RETARGETED AT THE 1.4.0 INTEGRATION, and that retarget is the point of
+keeping this file. The three manager methods this arrived asserting
+(``_write_metadata_atomic``, ``_save_pinned_themes``,
+``set_project_theme``) do not exist on this line: the decomposition moved
+them onto ``SessionManager._owned`` and ``SessionManager._theme_store``.
+The writers are reached through those seams instead, so the property is
+still measured against the code that actually performs the write rather
+than against a method name that merged cleanly and was gone.
 
 Every one of these used to compose its temp sibling as
 ``path.with_suffix(path.suffix + ".tmp")`` - a name shared by every
@@ -138,7 +147,7 @@ def test_unique_tmp_path_two_calls_differ(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# 1. SessionManager._write_metadata_atomic (session_metadata.json)
+# 1. OwnedTmuxLedger.write_atomic (session_metadata.json)
 # --------------------------------------------------------------------------- #
 
 
@@ -148,8 +157,8 @@ def test_metadata_two_writes_use_distinct_temp_paths(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     seen = _record_replace_sources(monkeypatch)
 
-    mgr._write_metadata_atomic({"id": "one"})
-    mgr._write_metadata_atomic({"id": "two"})
+    mgr._owned.write_atomic({"id": "one"})
+    mgr._owned.write_atomic({"id": "two"})
 
     assert len(seen) == 2
     assert seen[0] != seen[1]
@@ -157,7 +166,7 @@ def test_metadata_two_writes_use_distinct_temp_paths(monkeypatch, tmp_path):
 
 def test_metadata_write_leaves_a_valid_complete_file(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
-    mgr._write_metadata_atomic({"id": "ses_abc", "owned_tmux_sessions": ["a"]})
+    mgr._owned.write_atomic({"id": "ses_abc", "owned_tmux_sessions": ["a"]})
 
     path = tmp_path / "logs" / "session_metadata.json"
     assert path.is_file()
@@ -170,13 +179,13 @@ def test_metadata_failed_write_leaves_no_orphan_temp_file(monkeypatch, tmp_path)
     _force_replace_failure(monkeypatch)
 
     with pytest.raises(OSError):
-        mgr._write_metadata_atomic({"id": "wont-land"})
+        mgr._owned.write_atomic({"id": "wont-land"})
 
     assert _tmp_orphans(tmp_path / "logs") == []
 
 
 # --------------------------------------------------------------------------- #
-# 2. SessionManager._save_pinned_themes (pinned_themes.json)
+# 2. ThemeStore.save (pinned_themes.json)
 # --------------------------------------------------------------------------- #
 
 
@@ -185,10 +194,10 @@ def test_pinned_themes_two_saves_use_distinct_temp_paths(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     seen = _record_replace_sources(monkeypatch)
 
-    mgr.pinned_themes["cloude_a"] = "metal"
-    mgr._save_pinned_themes()
-    mgr.pinned_themes["cloude_b"] = "matrix"
-    mgr._save_pinned_themes()
+    mgr._theme_store.pinned_themes["cloude_a"] = "metal"
+    mgr._theme_store.save()
+    mgr._theme_store.pinned_themes["cloude_b"] = "matrix"
+    mgr._theme_store.save()
 
     assert len(seen) == 2
     assert seen[0] != seen[1]
@@ -196,8 +205,8 @@ def test_pinned_themes_two_saves_use_distinct_temp_paths(monkeypatch, tmp_path):
 
 def test_pinned_themes_save_leaves_a_valid_complete_file(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
-    mgr.pinned_themes["cloude_proj"] = "hermes"
-    mgr._save_pinned_themes()
+    mgr._theme_store.pinned_themes["cloude_proj"] = "hermes"
+    mgr._theme_store.save()
 
     path = tmp_path / "pinned_themes.json"
     assert json.loads(path.read_text()) == {"cloude_proj": "hermes"}
@@ -205,12 +214,12 @@ def test_pinned_themes_save_leaves_a_valid_complete_file(monkeypatch, tmp_path):
 
 def test_pinned_themes_failed_save_leaves_no_orphan_temp_file(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
-    mgr.pinned_themes["cloude_proj"] = "hermes"
+    mgr._theme_store.pinned_themes["cloude_proj"] = "hermes"
     _force_replace_failure(monkeypatch)
 
-    # _save_pinned_themes swallows the failure (logged, never raised) -
+    # ThemeStore.save swallows the failure (logged, never raised) -
     # the cleanup must still have run.
-    mgr._save_pinned_themes()
+    mgr._theme_store.save()
 
     assert _tmp_orphans(tmp_path) == []
 
@@ -222,13 +231,13 @@ def test_pinned_themes_bak_behaviour_is_unchanged(monkeypatch, tmp_path):
     path = tmp_path / "pinned_themes.json"
     bak = tmp_path / "pinned_themes.json.bak"
 
-    mgr.pinned_themes["cloude_a"] = "metal"
-    mgr._save_pinned_themes()
+    mgr._theme_store.pinned_themes["cloude_a"] = "metal"
+    mgr._theme_store.save()
     assert not bak.exists()  # nothing to back up on the first save
 
     first_write_bytes = path.read_bytes()
-    mgr.pinned_themes["cloude_b"] = "matrix"
-    mgr._save_pinned_themes()
+    mgr._theme_store.pinned_themes["cloude_b"] = "matrix"
+    mgr._theme_store.save()
 
     assert bak.exists()
     assert bak.read_bytes() == first_write_bytes
@@ -239,7 +248,7 @@ def test_pinned_themes_bak_behaviour_is_unchanged(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# 3. SessionManager.set_project_theme (<working_dir>/.cc.theme)
+# 3. ThemeStore.set_project_theme (<working_dir>/.cc.theme)
 # --------------------------------------------------------------------------- #
 
 
@@ -250,8 +259,8 @@ def test_project_theme_two_writes_use_distinct_temp_paths(monkeypatch, tmp_path)
     project.mkdir()
     seen = _record_replace_sources(monkeypatch)
 
-    mgr.set_project_theme(project, "metal")
-    mgr.set_project_theme(project, "matrix")
+    mgr._theme_store.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "matrix")
 
     assert len(seen) == 2
     assert seen[0] != seen[1]
@@ -262,7 +271,7 @@ def test_project_theme_write_leaves_a_valid_complete_file(monkeypatch, tmp_path)
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     assert dotfile.read_text(encoding="utf-8") == "metal\n"
@@ -275,7 +284,7 @@ def test_project_theme_failed_write_leaves_no_orphan_temp_file(monkeypatch, tmp_
     _force_replace_failure(monkeypatch)
 
     with pytest.raises(OSError):
-        mgr.set_project_theme(project, "metal")
+        mgr._theme_store.set_project_theme(project, "metal")
 
     assert _tmp_orphans(project) == []
 

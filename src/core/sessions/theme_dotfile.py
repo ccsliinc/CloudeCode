@@ -28,6 +28,8 @@ from typing import Optional
 
 import structlog
 
+from src.core.unique_tmp_path import unique_tmp_path
+
 logger = structlog.get_logger()
 
 #: The single file name this module owns. Named once so a caller cannot
@@ -121,7 +123,10 @@ def write_project_theme(working_dir, theme_id: Optional[str]) -> None:
                 raise
         return
 
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # UNIQUE PER WRITE. A fixed ``.cc.theme.tmp`` is two writers
+    # streaming into one descriptor the moment a second one arrives,
+    # and neither errors. See src/core/unique_tmp_path.py.
+    tmp = unique_tmp_path(path)
     try:
         with tmp.open("w", encoding="utf-8") as f:
             f.write(f"{theme_id}\n")
