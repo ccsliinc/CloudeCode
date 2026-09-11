@@ -910,7 +910,7 @@ class Settings(BaseSettings):
         """
         state_key = self.state_dir_override or ""
         log_key = self.log_directory or ""
-        key = (filename, state_key, log_key)
+        key = (filename, state_key, log_key, state_dir_explicit)
 
         if self._state_file_pins is None:
             self._state_file_pins = {}
@@ -934,6 +934,16 @@ class Settings(BaseSettings):
                 )
             elif old_exists:
                 decision = (old_path, "log_directory")
+        elif state_dir_explicit and log_key:
+            old_path = Path(log_key).expanduser() / filename
+            if old_path.exists():
+                import structlog
+                structlog.get_logger().info(
+                    "state_file_legacy_copy_left_behind",
+                    filename=filename,
+                    using=str(new_path),
+                    legacy_path=str(old_path),
+                )
 
         self._state_file_pins[key] = decision
         return decision

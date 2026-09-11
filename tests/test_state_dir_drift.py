@@ -352,9 +352,19 @@ def test_drift_state_file_only_old(tmp_path, monkeypatch, filename):
 @pytest.mark.parametrize("filename", STATE_FILE_CASES)
 def test_drift_state_file_in_both(tmp_path, monkeypatch, filename):
     """Case 1: present in both - ambiguous, the NEW path wins in both
-    resolvers, and the old file is left on disk untouched."""
+    resolvers, and the old file is left on disk untouched.
+
+    ``declare_state_dir=False``, deliberately: an explicitly declared
+    state dir suppresses the legacy rung entirely on the Python side
+    (see ``state_dir_is_explicit()``), so ``_resolve_state_file()`` would
+    return the new path regardless of what sits in the old one and this
+    case would prove nothing about the ambiguity it names. Without a
+    declared state dir both ladders still walk the legacy rung, and the
+    new path winning is the fact this test is actually about.
+    """
     s, install_dir, new_dir, old_dir, env = _file_case_setup(
-        tmp_path, monkeypatch, "both" + filename.replace(".", "")
+        tmp_path, monkeypatch, "both" + filename.replace(".", ""),
+        declare_state_dir=False,
     )
     (new_dir / filename).write_text("new")
     (old_dir / filename).write_text("old")

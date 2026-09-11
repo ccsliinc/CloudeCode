@@ -433,3 +433,60 @@ def test_explicit_state_dir_never_resolves_under_the_real_legacy_default(
             f"{getter}() resolved inside the real legacy directory "
             f"{real_legacy} while an explicit state dir was set"
         )
+
+
+# ---------------------------------------------------------------------- #
+# The memoization key on _state_file_pin() must include state_dir_explicit.
+#
+# Both production callers (get_state_file_location, _resolve_state_file)
+# always pass settings.state_dir_is_explicit() for this filename /
+# state_dir_override / log_directory combination, so this defect cannot
+# fire from them today. It is reachable the moment a second caller
+# passes its OWN flag for the same combination - which is exactly what a
+# cache key is supposed to make impossible.
+# ---------------------------------------------------------------------- #
+
+def test_pin_cache_key_must_include_state_dir_explicit(tmp_path, monkeypatch):
+    """Driving ``_state_file_pin`` with the flag both ways, for the SAME
+    filename/state_dir_override/log_directory, must yield two DIFFERENT
+    answers - not the first call's answer replayed.
+
+    This calls the private method directly, on purpose: its own
+    docstring says the flag is "passed in rather than read here so the
+    legacy rung can be driven both ways by a test". Driving it both ways
+    on ONE Settings instance, with everything else held constant, is the
+    only way to exercise the cache key rather than the resolution logic
+    beside it.
+
+    If the cache key regresses to ``(filename, state_key, log_key)``
+    (dropping ``state_dir_explicit``), the second call below returns the
+    FIRST call's cached ``"log_directory"`` decision and this test goes
+    red.
+    """
+    monkeypatch.setattr(settings, "_state_file_pins", None)
+    state_dir = tmp_path / "state"
+    legacy_dir = tmp_path / "legacy"
+    state_dir.mkdir()
+    legacy_dir.mkdir()
+    filename = "pinned_themes.json"
+    (legacy_dir / filename).write_text("legacy data")
+
+    monkeypatch.setattr(settings, "state_dir_override", str(state_dir))
+    monkeypatch.setattr(settings, "log_directory", str(legacy_dir))
+
+    # explicit=False: the legacy rung is allowed to fire, and since only
+    # the legacy copy exists, it wins.
+    path_a, location_a = settings._state_file_pin(filename, False)
+    assert location_a == "log_directory"
+    assert path_a == legacy_dir / filename
+
+    # explicit=True, everything else UNCHANGED: an explicit state dir
+    # must suppress the legacy rung and resolve fresh into the state
+    # dir, not replay the previous call's cached legacy answer.
+    path_b, location_b = settings._state_file_pin(filename, True)
+    assert location_b == "state_dir", (
+        "the cached pin from the state_dir_explicit=False call leaked "
+        "into the state_dir_explicit=True call - the cache key is "
+        "missing the explicit flag"
+    )
+    assert path_b == state_dir / filename
