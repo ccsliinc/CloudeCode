@@ -10069,3 +10069,129 @@ merged tree already carries the ring model and cites the ruling (`6768dcc`,
 "state the shipped led model on first encounter"). The stale text was in the
 1.2.1 base, one of the chains had already fixed it, and re-editing would have
 collided with `docs/handoff-1.3` for nothing.
+
+## 2026-09-11 - RELEASE 1.4.0: the superset, his 1.3.0 absorbed
+
+Owner's ruling, verbatim: "make ours 1.4 thats fine", then "ill wait for the
+superset". Both lines declared 1.3.0 on the same morning, 22 minutes apart,
+neither knowing. His stands; ours is 1.4.0 and CONTAINS his. The separately
+planned 1.3.1 is collapsed into this release. Branch keeps the name
+`integration/1.3.0` - it is already on both remotes and a name is a handle,
+not a declaration.
+
+### Scope, corrected
+
+The round was briefed as "his 17 commits". It is not. Merge base is
+`4d8aa76`; **89 of his non-merge commits were new to this line, 245 files,
++50446 / -3761** - his whole night, not just the five his release names.
+Every risk estimate downstream of the 17 was wrong, which is worth
+remembering: MEASURE THE MERGE BASE BEFORE QUOTING A COMMIT COUNT.
+
+### The verdict that matters: a clean merge proved nothing
+
+Sixteen conflicts out of 245 files. The conflicts were never the risk.
+
+- [x] `src/api/routes.py` was **silently reverted with zero conflicts**.
+      This line carved it 4,387 -> 106 lines (assembly plus registration
+      order); his line kept editing the flat file; the merge resolved to
+      HIS 4,593 and every route would have been declared twice. Nothing
+      throws - FastAPI takes the first match. Restored, and his 15 hunks
+      ported into the siblings that own those routes.
+- [x] `_drain_viewer` read `getattr(sm, "idle_watchers", {})` and
+      `hasattr(sm, "get_backend")`. Both answer FALSY here rather than
+      raising, so pattern detection and idle watching would have gone dead
+      on every session with the suite green.
+- [x] `test_listing_off_the_loop`'s thread tripwire named six live
+      containers; four do not exist on `SessionManager` here, and
+      `setattr` on a name an object lacks SUCCEEDS. It would have wrapped
+      four decoys and passed while measuring two of six.
+- [x] `self._last_probe_socket` in the status-map construction: an
+      AttributeError on the listing hot path. Found by the sweep, not by
+      reading diffs.
+
+### The sweep, encoded
+
+- [x] `tests/test_cross_boundary_references.py`. Found versus verified:
+      **388 package-symbol imports out of `src.config` / `src.models`, 388
+      resolve; 384 `self.<attr>` references over 80 distinct names in
+      `session_manager.py`, all 80 resolve.** Mutation-verified (planting
+      a stale attribute makes it fail, naming the attribute and the line),
+      with a negative control because both real assertions are "nothing
+      was found" - the shape that passes when the collector is broken.
+- [x] The client half added `tests/test_client_cross_references.node.mjs`,
+      2,086 found and 2,086 verified.
+
+### Design collisions, judged on merit, all in docs/DECISIONS.md
+
+- [x] ONE CONFIG WRITER: **his**. Atomic and serialized are different
+      properties and only his had the second.
+- [x] THEME PRECEDENCE: **his** (#65), pin over dotfile, with the pin-to-
+      dotfile migration deleted and the reconcile prune dropped.
+- [x] BOUNDED FAN OUT: **his bound on our registry**, both kept.
+- [x] DEAD-PANE REAPER: ours, WITH his `session_pane_death` reading, which
+      closes the `remain-on-exit` husk gap CLAUDE.md has carried since
+      2026-09-08 - against the owner's 2026-09-08 ruling that dead rows
+      leave the live list and go to Recent.
+- [x] NAVIGATIONGENERATION: lands in this release rather than tracked.
+
+### The bug the merge paid for
+
+- [x] **Clicking a running session row on the home screen did nothing.**
+      Both the running list and the project tree routed through
+      `window.Launchpad._returnToActiveRunningSession` /
+      `._handleAttachRunningSession`; slice 7 deleted both and `shim.ts`
+      never republished them, so all four call sites logged `missing()`
+      and returned. PRE-EXISTING on this line at `acfa49b`, invisible to
+      every unit test (they hand in a recorder and assert what the list
+      ASKED FOR), and caught by HIS browser-driven
+      `tests/test_perf_harness_smoke.py`, which is the first test in the
+      combined tree that drives a real click. Rewired onto the compiled
+      `navigation.ts` paths that were already written and already tested.
+
+### Verification, measured
+
+- [x] pytest **4 failed / 7261 passed / 57 skipped**, against measured
+      parents of 7 (ours, `da1b4ae`) and 4 (his, `6012467`). The four are
+      EXACTLY his four: three real-tmux family plus the shared
+      environmental `test_home_write_guard`. **Zero new failures.**
+- [x] node **195/195** (the client half reported 194/195; the one it left
+      is fixed, it asserted against `src/core/*.py`)
+- [x] vitest **1340/1340**, `svelte-check` **0 errors**
+- [x] `npm run build` then `client/dist` clean; `web-build-check.sh` reads
+      BUNDLE CURRENT **against the combined tree**
+- [x] `check-js-syntax.sh` 268 files clean; `node --check` 221 client/js
+      files, 0 failures
+- [x] `scan_secrets.py` exit 0, 1,777 files
+- [x] Four cost ceilings pass on the merged tree AND on his parent: the
+      `4N+1` datastore bound on `/sessions/list`, the 4-connection bound
+      on the attachable pass, the subprocess count that must not grow with
+      session count, and the socket-scope refusal. His off-the-loop gather
+      composes with this line's decomposition without breaching either.
+- [x] Four cross-chain checks: LED parity + drift guard 8/8, i18n incl.
+      pseudo-locale coverage 324/324, every probed route MOUNTED on the
+      assembled `src.main.app` (0 unmounted, 401/403 not 404), and the
+      SessionInfo two-level field guard passes.
+- [x] gitleaks hook ran on every commit, never `--no-verify`. It refused
+      the merge once, on a credential-shaped literal in his new
+      `tests/test_settings_import_collect.node.mjs`; allowlisted BY VALUE,
+      not by path, so a real credential in that same file is still caught.
+      He never touched `.gitleaks.toml`, so that file would have failed
+      our CI secret scan on arrival.
+
+### Left alone deliberately
+
+- [ ] THREE SETTINGS PANELS NEVER MOUNT. `settings-*-slot` ids queried by
+      `settings-panel.js` and emitted by nothing, plus dead-but-guarded
+      `destroySessionBtn` / `detachSessionBtn`. PRE-EXISTING on both lines
+      AND at the merge base, so it is not merge damage; folding a fix in
+      would make it indistinguishable from merge damage in the blame.
+      Real product bug on live today. NEEDS ITS OWN CHANGE.
+- [ ] `DETACH_SETTLE_MS = 0` in `web/src/lib/launchpad/navigation.ts`
+      stands. This merge did not restructure detach; if a later one does,
+      that constant needs another look. Left as a named constant so it is
+      one edit away.
+- [ ] `tests/test_toast_render_batch.node.mjs` is a known load-sensitive
+      flake on his master (once in 223, then 15/15 in isolation). It
+      passed here. Do NOT widen its budget: a timeout long enough never to
+      flake is long enough to hide a real hang.
+- [ ] Not tagged, not deployed, per the brief.
