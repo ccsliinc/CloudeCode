@@ -119,9 +119,9 @@ def _register(
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    mgr.sessions[sid] = sess
-    mgr.backends[sid] = _FakeBackend(tmux_name)
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = _FakeBackend(tmux_name)
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 
@@ -144,7 +144,7 @@ async def test_created_session_is_reported_owned(monkeypatch, tmp_path):
     """A session whose tmux name is in the owned set reports owned."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register(mgr, "ses_abc", "cloude_ses_abc", tmp_path)
-    mgr.owned_tmux_sessions.add("cloude_ses_abc")
+    mgr._owned.names.add("cloude_ses_abc")
     _stub_status(monkeypatch, mgr, "cloude_ses_abc")
 
     info = await mgr.get_session_info(session_id="ses_abc")
@@ -179,7 +179,7 @@ async def test_owned_session_with_adopted_id_still_reports_owned(
     durable identity; the id is not. Verbatim from the live incident."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register(mgr, "adopted:cloude_ses_ec5bf2a3", "cloude_ses_ec5bf2a3", tmp_path)
-    mgr.owned_tmux_sessions.add("cloude_ses_ec5bf2a3")
+    mgr._owned.names.add("cloude_ses_ec5bf2a3")
     _stub_status(monkeypatch, mgr, "cloude_ses_ec5bf2a3")
 
     info = await mgr.get_session_info(session_id="adopted:cloude_ses_ec5bf2a3")
@@ -210,7 +210,7 @@ async def test_adopting_an_owned_session_does_not_disown_it(monkeypatch, tmp_pat
     """``adopt_external_session`` neither adds to nor removes from the owned
     set. Re-adopting one of our own (what a restart does) leaves it owned."""
     mgr = _bare_manager(monkeypatch, tmp_path)
-    mgr.owned_tmux_sessions.add("cloude_ses_abc")
+    mgr._owned.names.add("cloude_ses_abc")
 
     # Session re-registered under the adopt path's id shape.
     _register(mgr, "adopted:cloude_ses_abc", "cloude_ses_abc", tmp_path)
@@ -218,7 +218,7 @@ async def test_adopting_an_owned_session_does_not_disown_it(monkeypatch, tmp_pat
 
     info = await mgr.get_session_info(session_id="adopted:cloude_ses_abc")
     assert info.created_by_cloude is True
-    assert "cloude_ses_abc" in mgr.owned_tmux_sessions
+    assert "cloude_ses_abc" in mgr._owned.names
 
 
 # ---------------------------------------------------------------------
@@ -231,7 +231,7 @@ def test_owned_set_survives_a_restart(monkeypatch, tmp_path):
     the same metadata file. This is the restart the badge has to survive."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register(mgr, "ses_abc", "cloude_ses_abc", tmp_path)
-    mgr.owned_tmux_sessions.update({"cloude_ses_abc", "cloude_test pause"})
+    mgr._owned.names.update({"cloude_ses_abc", "cloude_test pause"})
     mgr._save_session_metadata()
 
     on_disk = json.loads(
@@ -243,7 +243,7 @@ def test_owned_set_survives_a_restart(monkeypatch, tmp_path):
     ]
 
     reborn = _bare_manager(monkeypatch, tmp_path)
-    assert reborn.owned_tmux_sessions == {"cloude_ses_abc", "cloude_test pause"}
+    assert reborn._owned.names == {"cloude_ses_abc", "cloude_test pause"}
 
 
 @pytest.mark.asyncio
@@ -252,7 +252,7 @@ async def test_badge_unchanged_across_a_restart(monkeypatch, tmp_path):
     that re-attaches it through the adopt path (so the id changes shape)."""
     before = _bare_manager(monkeypatch, tmp_path)
     _register(before, "ses_abc", "cloude_ses_abc", tmp_path)
-    before.owned_tmux_sessions.add("cloude_ses_abc")
+    before._owned.names.add("cloude_ses_abc")
     _stub_status(monkeypatch, before, "cloude_ses_abc")
     before._save_session_metadata()
     pre = await before.get_session_info(session_id="ses_abc")
@@ -272,11 +272,11 @@ async def test_owned_set_is_pruned_when_a_session_dies(monkeypatch, tmp_path):
     dead session cannot leave a permanent ownership record behind."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register(mgr, "ses_alive", "cloude_alive", tmp_path)
-    mgr.owned_tmux_sessions.update({"cloude_alive", "cloude_dead"})
+    mgr._owned.names.update({"cloude_alive", "cloude_dead"})
     mgr._save_session_metadata()
 
     reborn = _bare_manager(monkeypatch, tmp_path)
-    assert reborn.owned_tmux_sessions == {"cloude_alive", "cloude_dead"}
+    assert reborn._owned.names == {"cloude_alive", "cloude_dead"}
 
     class _Probe:
         tmux_session = "cloude_alive"
@@ -294,7 +294,7 @@ async def test_owned_set_is_pruned_when_a_session_dies(monkeypatch, tmp_path):
     monkeypatch.setattr(reborn, "_sweep_orphan_uploads", _noop_async)
     await reborn.lifespan_startup()
 
-    assert reborn.owned_tmux_sessions == {"cloude_alive"}
+    assert reborn._owned.names == {"cloude_alive"}
 
 
 async def _noop_async(*_args, **_kwargs) -> None:

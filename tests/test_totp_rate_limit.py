@@ -111,7 +111,8 @@ def client(patched_auth):
     Build a minimal FastAPI app wired with the auth router + slowapi
     middleware, matching the production wiring in src/main.py.
     """
-    from src.api.auth import router as auth_router, limiter
+    from src.api.auth import limiter
+    from src.api.auth_routes import router as auth_router
 
     app = FastAPI()
     app.state.limiter = limiter
@@ -134,7 +135,8 @@ def client_trust_proxy(monkeypatch, reset_state):
 
     monkeypatch.setattr(type(real_settings), "load_auth_config", fake_loader)
 
-    from src.api.auth import router as auth_router, limiter
+    from src.api.auth import limiter
+    from src.api.auth_routes import router as auth_router
 
     app = FastAPI()
     app.state.limiter = limiter

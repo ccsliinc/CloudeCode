@@ -4,7 +4,7 @@ It was reported on 2026-08-26 as a WSMessageType in src/models.py with no
 sender, and therefore as dead code to delete. Measured, it has all three
 halves:
 
-  * SENDER  - src/api/routes.py, PATCH /sessions/{session_id}/name, calls
+  * SENDER  - src/api/session_rename_routes.py, PATCH /sessions/{session_id}/name, calls
     connection_manager.broadcast_to_session with a SessionRenamedMessage on
     every successful label write.
   * CLIENT  - client/js/terminal.js dispatches on 'session.renamed' and
@@ -42,6 +42,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.session_rename_routes as rename_routes_mod
 from src.api.auth import require_auth
 from src.models import WSMessageType
 
@@ -93,7 +94,7 @@ def recording_app(monkeypatch):
     Outputs: yields (TestClient, _RecordingConnectionManager).
     """
     recorder = _RecordingConnectionManager()
-    monkeypatch.setattr(routes_mod, "connection_manager", recorder)
+    monkeypatch.setattr(rename_routes_mod, "connection_manager", recorder)
 
     app = FastAPI()
     app.state.session_manager = _LabelAcceptingManager()

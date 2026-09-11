@@ -41,6 +41,8 @@ import json
 import pytest
 
 from src.core import claude_title_sync_apply as apply_mod
+from src.core.sessions.hook_token_authority import HookTokenAuthority
+from src.core.sessions.registry import SessionRegistry
 from src.core.claude_title_sync import (
     TITLE_APPLIED,
     TITLE_BASELINE_RECORDED,
@@ -82,12 +84,22 @@ class _FakeManager:
     Output: n/a.
     """
 
-    def __init__(self, conn, tmux_name=TMUX_NAME, working_dir=None):
+    def __init__(self, conn, tmux_name=TMUX_NAME, working_dir=None,
+                 state_dir=None):
         self._conn = conn
-        self.sessions = (
-            {"ses_test": _FakeSession(tmux_name, working_dir)} if tmux_name else {}
-        )
-        self._hook_tmux_names = {}
+        state_dir = Path(state_dir or tempfile.mkdtemp(prefix='cc_title_'))
+        # The live session table lives on the registry since v2 slice S4,
+        # and the seam reads it there.
+        self._registry = SessionRegistry(log_cap=lambda: 1000)
+        if tmux_name:
+            self._registry.sessions["ses_test"] = _FakeSession(
+                tmux_name, working_dir
+            )
+        # The id -> tmux name map moved onto HookTokenAuthority in v2
+        # slice S7, and the seam reads it there. A real authority is
+        # used rather than a hand-rolled stand-in, so this double
+        # cannot quietly disagree with the shape the seam expects.
+        self.hook_tokens = HookTokenAuthority(lambda: state_dir)
         self.connections_opened = 0
 
     def _tmux_socket_name(self):

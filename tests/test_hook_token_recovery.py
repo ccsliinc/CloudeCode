@@ -101,11 +101,11 @@ def _manager_with_superseded_token(state_dir: Path) -> SessionManager:
     Output: SessionManager.
     """
     mgr = SessionManager()
-    mgr._hook_tokens[SESSION_ID] = CARRIED
-    mgr._hook_tmux_names[SESSION_ID] = TMUX_NAME
+    mgr.hook_tokens.tokens[SESSION_ID] = CARRIED
+    mgr.hook_tokens.tmux_names[SESSION_ID] = TMUX_NAME
     # The defect itself, called exactly as the adopt path called it.
-    mgr._mint_hook_token(SESSION_ID, tmux_name=TMUX_NAME)
-    assert mgr.get_hook_token(SESSION_ID) != CARRIED, (
+    mgr.hook_tokens.mint(SESSION_ID, tmux_name=TMUX_NAME)
+    assert mgr.hook_tokens.get(SESSION_ID) != CARRIED, (
         "setup: the mint did not actually replace the token"
     )
     return mgr
@@ -156,17 +156,17 @@ def test_a_superseded_token_is_accepted_and_the_store_is_rebound(state_dir):
     the mint produced.
     """
     mgr = _manager_with_superseded_token(state_dir)
-    minted = mgr.get_hook_token(SESSION_ID)
+    minted = mgr.hook_tokens.get(SESSION_ID)
     app = _hook_app(mgr)
 
     resp = _post_hook(app, SESSION_ID, CARRIED)
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
-    assert mgr.get_hook_token(SESSION_ID) == CARRIED, (
+    assert mgr.hook_tokens.get(SESSION_ID) == CARRIED, (
         "the store was not re-bound to the token the process holds"
     )
-    assert mgr.get_hook_token(SESSION_ID) != minted
+    assert mgr.hook_tokens.get(SESSION_ID) != minted
 
 
 def test_recovery_never_mints_a_replacement(state_dir):
@@ -179,14 +179,14 @@ def test_recovery_never_mints_a_replacement(state_dir):
     """
     mgr = _manager_with_superseded_token(state_dir)
 
-    assert mgr.recover_hook_token(SESSION_ID, CARRIED) == RECOVERY_ACCEPTED
-    after = mgr.get_hook_token(SESSION_ID)
+    assert mgr.hook_tokens.recover(SESSION_ID, CARRIED) == RECOVERY_ACCEPTED
+    after = mgr.hook_tokens.get(SESSION_ID)
     assert after == CARRIED
 
     # And a second, unrelated event does not rotate it either.
     app = _hook_app(mgr)
     assert _post_hook(app, SESSION_ID, CARRIED).status_code == 200
-    assert mgr.get_hook_token(SESSION_ID) == after
+    assert mgr.hook_tokens.get(SESSION_ID) == after
 
 
 def test_the_rebind_survives_a_restart(state_dir):
@@ -198,10 +198,10 @@ def test_the_rebind_survives_a_restart(state_dir):
     can present.
     """
     mgr = _manager_with_superseded_token(state_dir)
-    assert mgr.recover_hook_token(SESSION_ID, CARRIED) == RECOVERY_ACCEPTED
+    assert mgr.hook_tokens.recover(SESSION_ID, CARRIED) == RECOVERY_ACCEPTED
 
     reloaded = SessionManager()
-    assert reloaded.get_hook_token(SESSION_ID) == CARRIED
+    assert reloaded.hook_tokens.get(SESSION_ID) == CARRIED
 
 
 # --------------------------------------------------------------------- #
@@ -217,17 +217,17 @@ def test_a_token_that_matches_nothing_still_rejects(state_dir):
     resp = _post_hook(app, SESSION_ID, "tok_nobody_ever_minted_this")
 
     assert resp.status_code == 403, resp.text
-    assert mgr.get_hook_token(SESSION_ID) != "tok_nobody_ever_minted_this"
+    assert mgr.hook_tokens.get(SESSION_ID) != "tok_nobody_ever_minted_this"
 
 
 def test_an_id_with_no_superseded_token_still_rejects(state_dir):
     """Nothing to search in is not the same as searched and cleared."""
     mgr = SessionManager()
-    mgr._hook_tokens[SESSION_ID] = "tok_live"
-    mgr._hook_tmux_names[SESSION_ID] = TMUX_NAME
+    mgr.hook_tokens.tokens[SESSION_ID] = "tok_live"
+    mgr.hook_tokens.tmux_names[SESSION_ID] = TMUX_NAME
 
     assert (
-        mgr.recover_hook_token(SESSION_ID, CARRIED) == RECOVERY_UNAVAILABLE
+        mgr.hook_tokens.recover(SESSION_ID, CARRIED) == RECOVERY_UNAVAILABLE
     )
     assert _post_hook(_hook_app(mgr), SESSION_ID, CARRIED).status_code == 403
 
@@ -240,14 +240,14 @@ def test_a_superseded_token_from_another_pane_is_refused(state_dir):
     one pane's retired credential authenticate another's hooks.
     """
     mgr = SessionManager()
-    mgr._hook_tokens[SESSION_ID] = CARRIED
-    mgr._hook_tmux_names[SESSION_ID] = "cloude_some_other_pane"
-    mgr._mint_hook_token(SESSION_ID, tmux_name="cloude_some_other_pane")
+    mgr.hook_tokens.tokens[SESSION_ID] = CARRIED
+    mgr.hook_tokens.tmux_names[SESSION_ID] = "cloude_some_other_pane"
+    mgr.hook_tokens.mint(SESSION_ID, tmux_name="cloude_some_other_pane")
     # The id has since moved to the pane under test.
-    mgr._hook_tmux_names[SESSION_ID] = TMUX_NAME
+    mgr.hook_tokens.tmux_names[SESSION_ID] = TMUX_NAME
 
     assert (
-        mgr.recover_hook_token(SESSION_ID, CARRIED) == RECOVERY_UNAVAILABLE
+        mgr.hook_tokens.recover(SESSION_ID, CARRIED) == RECOVERY_UNAVAILABLE
     )
     assert _post_hook(_hook_app(mgr), SESSION_ID, CARRIED).status_code == 403
 
@@ -256,15 +256,15 @@ def test_another_sessions_superseded_token_is_refused(state_dir):
     """The ring is per id. A neighbour's retired token is not evidence."""
     mgr = SessionManager()
     other = "ses_neighbour"
-    mgr._hook_tokens[other] = CARRIED
-    mgr._hook_tmux_names[other] = TMUX_NAME
-    mgr._mint_hook_token(other, tmux_name=TMUX_NAME)
+    mgr.hook_tokens.tokens[other] = CARRIED
+    mgr.hook_tokens.tmux_names[other] = TMUX_NAME
+    mgr.hook_tokens.mint(other, tmux_name=TMUX_NAME)
 
-    mgr._hook_tokens[SESSION_ID] = "tok_live"
-    mgr._hook_tmux_names[SESSION_ID] = TMUX_NAME
+    mgr.hook_tokens.tokens[SESSION_ID] = "tok_live"
+    mgr.hook_tokens.tmux_names[SESSION_ID] = TMUX_NAME
 
     assert (
-        mgr.recover_hook_token(SESSION_ID, CARRIED) == RECOVERY_UNAVAILABLE
+        mgr.hook_tokens.recover(SESSION_ID, CARRIED) == RECOVERY_UNAVAILABLE
     )
 
 
@@ -316,8 +316,8 @@ def test_duplicate_delivery_rebinds_once_and_both_are_accepted(state_dir):
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
-    assert mgr.get_hook_token(SESSION_ID) == CARRIED
-    assert mgr._superseded_hook_tokens.size(SESSION_ID) == 0, (
+    assert mgr.hook_tokens.get(SESSION_ID) == CARRIED
+    assert mgr.hook_tokens.superseded.size(SESSION_ID) == 0, (
         "the accepted entry outlived its one use"
     )
 
@@ -326,11 +326,11 @@ def test_the_accepted_entry_is_consumed_so_it_cannot_fire_twice(state_dir):
     """One-shot. After the re-bind the ordinary path is what validates."""
     mgr = _manager_with_superseded_token(state_dir)
 
-    assert mgr.recover_hook_token(SESSION_ID, CARRIED) == RECOVERY_ACCEPTED
+    assert mgr.hook_tokens.recover(SESSION_ID, CARRIED) == RECOVERY_ACCEPTED
     # Rotate again; the value the agent carries is now the SUPERSEDED one
     # only because of this second mint, not the first.
-    mgr._mint_hook_token(SESSION_ID, tmux_name=TMUX_NAME)
-    assert mgr._superseded_hook_tokens.size(SESSION_ID) == 1
+    mgr.hook_tokens.mint(SESSION_ID, tmux_name=TMUX_NAME)
+    assert mgr.hook_tokens.superseded.size(SESSION_ID) == 1
 
 
 # --------------------------------------------------------------------- #
@@ -370,6 +370,6 @@ def test_recording_the_same_token_twice_does_not_consume_the_ring():
 def test_minting_a_first_token_records_no_superseded_entry(state_dir):
     """There is no credential to recover when nothing was replaced."""
     mgr = SessionManager()
-    mgr._mint_hook_token("ses_brand_new", tmux_name=TMUX_NAME)
+    mgr.hook_tokens.mint("ses_brand_new", tmux_name=TMUX_NAME)
 
-    assert mgr._superseded_hook_tokens.size("ses_brand_new") == 0
+    assert mgr.hook_tokens.superseded.size("ses_brand_new") == 0

@@ -414,7 +414,7 @@ def _build_session_manager_with_session(tmp_path):
         tmux_session=None,
         backend="pty",
     )
-    sm.sessions["sess-abc-123"] = session
+    sm._registry.sessions["sess-abc-123"] = session
     return sm
 
 

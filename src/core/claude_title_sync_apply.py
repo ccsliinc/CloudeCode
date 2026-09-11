@@ -112,12 +112,16 @@ def _tmux_name_for(session_manager: Any, session_id: str) -> Optional[str]:
     Output: str | None - None when nothing can be keyed.
     Example: _tmux_name_for(mgr, 'ses_5a756046') -> 'cloude_Punchlist'
     """
-    sess = getattr(session_manager, "sessions", {}).get(session_id)
+    sess = session_manager._registry.get_session(session_id)
     name = getattr(sess, "tmux_session", None) if sess else None
     if name:
         return str(name)
-    hook_names = getattr(session_manager, "_hook_tmux_names", None) or {}
-    name = hook_names.get(session_id)
+    # THE AUTHORITY OWNS THIS MAP, and the tolerance is kept because a
+    # caller may inject a session-manager double that has no token
+    # collaborator at all. A missing one must answer 'no name' exactly
+    # as the missing attribute used to, never raise.
+    authority = getattr(session_manager, "hook_tokens", None)
+    name = authority.name_for(session_id) if authority is not None else None
     if name:
         return str(name)
     return session_id or None

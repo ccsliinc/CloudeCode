@@ -6536,6 +6536,1433 @@ sorts above 1.0.36, so the visible symptom is a bogus "latest" figure and an
 `upgrade_command` pointing at the forbidden fork's releases page rather than a
 false update prompt. Where the update checker SHOULD point is the owner's call.
 
+## 2026-09-10 - backend decomposition, claim plus plan (no code)
+
+**What this round was.** Measurement and design only. No product code written,
+nothing deployed. Two artifacts: a coordination claim and a plan.
+
+**The claim.** `claims/ccsliinc-backend-decomposition.md` on the orphan `coord`
+branch, committed `dc5db2d`, pushed to `adamdev` and `origin`. Filed BEFORE any
+code, which is what that branch exists for. `scripts/scan_secrets.py` clean
+(1,367 files, exit 0) and `gitleaks protect` clean on the working tree before
+pushing; `gitleaks detect` reports 7 historical findings, all in `THEPROBLEM.md`
+and `worklog.md` from commits dated 2025-10-28 and 2026-04-19/24, files that are
+not in the current tree.
+
+**What Adam has, and where we intersect.** His two active claims are the session
+row menu (client side) and the web UI performance waves
+(`docs/webui-performance-and-session-menu-plan.md`, `scripts/perf/*`,
+`tests/test_perf_*.py`, `client/js/app.js`, `client/js/terminal.js`,
+`src/api/websocket.py`). No path overlap with anything planned here. The
+non-textual overlap is his queued wave 3, "move blocking tmux, SQLite and
+filesystem work off the event loop", which lands in `_session_info_for` and
+`create_session`, our slices 8 and 9. Three files he asked not to have
+rewritten (`session_status_map.py`, `session_instance_index.py`,
+`pipe_wakeup.py`) are READ by slice 8 and rewritten by none of it. His mute work
+(`session_notification_policy.py` 563, `notifications/idle_watcher.py` 513) is
+out of scope even though both are over the 500 guideline. No schema version
+moves.
+
+**Measured, on `release/1.2.1`.** `src/core/session_manager.py` is 8,340 lines,
+one class of 8,055, 136 methods, 68 public, 36 written instance fields, 85 call
+sites from `src/` and 490 from `tests/`, 108 constructions of which 107 are in
+tests, and the constructor takes no arguments. Eleven methods carry 3,045 lines,
+37 percent of the class. By I/O: 43 pure, 62 tmux only, 5 database only, 26
+both. The 36 fields cluster into ten groups with almost no cross traffic;
+`_wipe_session_state` is the only method touching nine at once.
+`src/api/routes.py` is 61 module functions, 51 routes, ZERO instance state.
+`tmux_backend.py` is 38 methods and 12 fields. `config.py` is 14 dataclasses
+plus a 1,426-line `Settings`.
+
+**The design.** Seven collaborator classes (session registry, hook token
+authority, toast inbox, theme store, owned tmux ledger, probe health recorder,
+attachment sidecars), three structural `Protocol`s (tmux reader, session record
+store, clock), and the 71 pure ladder modules left exactly where they are.
+`SessionManager` keeps its name and all 68 public methods as a facade. Two hard
+rules: every slice moves the state and never a copy of it (proved with `is`, not
+by value), and the constructor keeps taking no required arguments.
+
+**Twelve slices**, ordered by how LOUD the failure is rather than how tight the
+cluster is. Probe health first, hook tokens and adoption last, because every
+incident this file has caused was silent from inside the pane. Slices 1 to 7 run
+parallel to Adam; 8 onward waits on `now/adoom666.md`.
+
+**Plan:** `.claude/notes/backend-decomposition-plan.md`, 499 lines, on
+`feat/backend-decomposition`. Force-added, because `.gitignore:183` ignores
+`.claude/*`.
+
+## 2026-09-10 - S1 SHIPPED: ProbeHealthRecorder, the first collaborator
+
+**What moved.** The four probe scalars (`_last_probe_ok`, `_last_probe_reason`,
+`_last_probe_detail`, `_last_probe_socket`) left `SessionManager` for
+`src/core/sessions/probe_health.py`, which now HOLDS a `ProbeHealth` instead of
+re-deriving one from loose fields on every read. `ProbeHealth` itself is defined
+there and re-exported from `session_manager`, so every existing
+`from src.core.session_manager import ProbeHealth` keeps resolving. Delegating
+readers: `last_probe_health`, `_tmux_socket_name`, `tmux_socket_name`,
+`list_attachable_sessions_with_socket`, and the write half of
+`list_attachable_sessions`.
+
+**Line delta.** `src/core/session_manager.py` 8,340 to 8,317 (-23; 53 inserted,
+76 deleted). New: `src/core/sessions/probe_health.py` 194,
+`src/core/sessions/__init__.py` 22. The file grew a docstring-heavy constructor
+while shedding a dataclass and four fields, so the net is smaller than the
+volume moved. Twelve slices, not one.
+
+**A CORRECTION TO THE PLAN, recorded because the next reader will trust it.**
+Section 3 says `ProbeHealth` "is a dataclass nothing constructs". Measured: it
+WAS constructed, at `session_manager.py:6109`, lazily from three loose scalars on
+every call. The seam the plan saw is real; the wording is not. S1 is better
+stated as "the recorder HOLDS a ProbeHealth instead of rebuilding one".
+
+**A DRY defect found and closed in passing.** Three sites read
+`self._last_probe_socket or self._tmux_socket_name()`, but `_tmux_socket_name()`
+already prefers `_last_probe_socket` internally, so `X or f()` where `f()`
+returns X-when-truthy is exactly `f()`. All three collapsed. The probed socket is
+now read in ONE place, which is what makes the no-copy rule structural rather
+than remembered. Also removed the defensive `getattr(self, "_last_probe_socket",
+None)`: left in place it would have returned None silently once the field was
+gone, and the probe-wins-over-settings rule would have died with a green suite.
+
+**HOW THE NO-COPY RULE IS PROVEN, and why it is not the plan's `is` check.**
+Rule A's example (`manager.sessions is registry.sessions`) is for a shared
+mutable dict. This cluster is four SCALARS, and an identity assertion on a value
+proves nothing (rebinding a bool on the facade is invisible through any other
+object, and two equal frozen dataclasses are never `is`). So the proof has three
+legs: (a) the fields DO NOT EXIST on the facade, asserted with `hasattr` over a
+named list; (b) the injected recorder IS the held object, `is`; (c) delegation is
+live in BOTH directions, including through the REAL `list_attachable_sessions`
+path rather than a stubbed method.
+
+**MUTATION RESULTS. Both mutations were run, and both were reverted.**
+1. The named one, the facade keeping its own copy instead of delegating (four
+   fields restored to `__init__`, all readers and writers pointed back at them,
+   recorder still constructed): **6 tests red**, legs (a) and (c) together.
+   Leg (b) alone stayed GREEN, which is exactly why one leg is not enough and
+   the three exist.
+2. False-green, `health` reporting `ok=True` when nothing has been probed:
+   **4 tests red**, including the S1-named "never ran reads cannot_determine and
+   never ok". The PRE-EXISTING `tests/test_s9_recent_and_pills.py` also went red,
+   so the old regression guards still bind through the new indirection.
+   Reverted, 24 green.
+
+**Measured, in this worktree, not quoted.** Control before the change: 5,708
+passed / 2 failed / 19 skipped. After: 5,734 / 2 / 19, the same two
+environmental failures (`test_home_write_guard`, `test_version_probe`). The +26
+is fully accounted by a collection diff: 24 new tests of mine, plus 2 the
+repo-wide `test_no_unresolved_names` guard automatically added for the 2 new
+source modules. ZERO tests removed. Node 200 suites, 0 failures. Listing cost
+ceilings 12 passed. `scan_secrets.py` exit 0.
+
+**New tests.** `tests/test_probe_health_recorder.py` (19) and
+`tests/test_sessions_package_rules.py` (5), the latter enforcing the plan's two
+package-wide rules by AST parse rather than grep, with a guard test that fails
+when the package globs empty (a parametrised test over an empty list passes, so
+a renamed package would otherwise look perfectly compliant).
+
+**Not done, deliberately.** No `Protocol` was added: the plan names three
+(`TmuxReader`, `SessionRecordStore`, `Clock`) and none is a substitution point
+for S1, which does no I/O and calls nothing. No live deploy, so the plan's proof
+by measurement for S1 (`/sessions/list` row count against
+`tmux -L cloude list-sessions | wc -l`) is UNVERIFIED and still owed.
+
+## 2026-09-10 - backend decomposition S2: the theme cluster
+
+Slice S2 of `.claude/notes/backend-decomposition-plan.md`. `pinned_themes`
+and `_theme_accent_cache` left `SessionManager` for `src/core/sessions/`.
+
+- `src/core/sessions/theme_store.py` (466) owns the pin map, its atomic
+  file, and the two-source resolution ladder.
+- `src/core/sessions/theme_accents.py` (116) owns the manifest accent
+  memo. COMPOSED, not inherited.
+- `src/core/sessions/theme_dotfile.py` (144) is the stateless `.cc.theme`
+  format: path, read, atomic write.
+- The plan called S2 "about 250 lines" in one class. It is 726 in three,
+  because the docstring standard roughly doubles the body and one class
+  holding all of it measured 573 lines, over the package's own 500 rule.
+  Split by concern rather than by line count.
+
+`session_manager.py` 8,317 -> 8,207 (-110).
+
+**The no-copy rule, four legs** (`tests/test_theme_store.py`). This
+cluster is dicts, not S1's scalars, so identity is meaningful - and still
+not sufficient on its own, because assigning `self.pinned_themes =
+store.pinned_themes` in `__init__` satisfies it and forks on the first
+rebind. (a) identity across all three spellings; (b) neither name is in
+the facade's instance `__dict__` and both are properties on the class;
+(c) writes cross in both directions INCLUDING a whole-dict rebind, which
+`tests/test_tmux_listing_consumers.py` really does; (d) a real
+`set_pinned_theme` round trip onto real disk, read back by a second store.
+
+**The landmine, and it was not a green-suite one.** Every theme test does
+`monkeypatch.setattr("src.core.session_manager.settings", stub)`. A store
+importing `settings` itself would not see that patch and would read and
+WRITE the owner's real `~/.cloude-sessions/pinned_themes.json` during a
+pytest run. The pin path is therefore an injected zero-argument callable
+resolved at call time, which is what the loose methods did anyway.
+
+**A test that could no longer fail, fixed in the same commit.**
+`tests/test_toast_lifecycle.py` patched `SessionManager._themes_dir` to
+prove the accent cache serves a value after the manifest moves. Once the
+read moved, that patch bound a name nothing consults and the assertion
+would have passed over a manifest that never moved. Repointed at
+`ThemeAccents.themes_dir`, and `test_theme_store.py` carries a negative
+control that the patch actually changes the answer.
+
+**Mutations, all run and all reverted to a byte-identical tree.**
+- facade keeps its own copy of the map, run as TWO variants because the
+  weaker one is the one that matters. A `dict(...)` copy: 8 red across 4
+  files. A REFERENCE copy (`self.pinned_themes = store.pinned_themes`,
+  the naive fix): only 3 red, and leg (a) IDENTITY STAYED GREEN, along
+  with the in-place-write half of leg (c). Only leg (b) (no field on the
+  facade), the whole-dict rebind, and one real behaviour test
+  (`test_successful_empty_probe_still_prunes`) caught it. That is the
+  measurement behind "identity alone proves nothing here".
+- `save()` writes the temp and skips `os.replace`: 4 red.
+- `ThemeStore` imports `settings` instead of taking the provider: 6 red,
+  so the injection is load-bearing rather than ceremony.
+- accent cache reads a cached `None` as a miss: GREEN on the first
+  attempt, which is the useful result. The cache test asserted the return
+  value and the cache contents, and BOTH implementations agree on both:
+  each returns None and each writes None. What separates them is the
+  SECOND call. Test rewritten to publish the manifest after the None is
+  cached and assert the answer does not move; 1 red, reverted, green.
+  A mutation that fails to go red is the point of running it.
+
+**Measured in this worktree, control run by me rather than quoted.**
+Control 5,734 passed / 2 failed / 19 skipped. After: 5,778 / 2 / 19, same
+two environmental failures. Collection 5,755 -> 5,799, +44, ZERO removed:
+35 new in `test_theme_store.py`, 6 from the package-rules parametrisation
+(2 rules x 3 modules), 3 from `test_no_unresolved_names`. Node 200/200.
+Listing cost ceilings hold. `scan_secrets.py` exit 0.
+
+One full run also failed
+`test_session_restart_wrapper_choice.py::test_the_picked_wrapper_is_what_ends_up_in_the_pane`
+in its SETUP ("the pane did not exit" inside a 6s wait). It passes in
+isolation and passed on the immediate re-run of the full suite. Real tmux
+socket, INFRA-49 class, not this change.
+
+No protocol added. The plan names three; none is a substitution point
+here, and the one injection a test needs is a parameter, not a Protocol.
+
+## 2026-09-10 - backend decomposition S3: the toast inbox
+
+Slice S3 of `.claude/notes/backend-decomposition-plan.md`.
+`_pending_toasts` and `_pending_startup_toasts` left `SessionManager` for
+`src/core/sessions/toast_inbox.py` (390 lines), along with the acked-tail
+cap, the supersession rule, the prune and the startup queue.
+
+`session_manager.py` 8,207 -> 8,112 (-95). Cumulative S1+S2+S3: 8,340 ->
+8,112, -228.
+
+**The seam is storage versus everything else.** `record_toast` is 196
+lines, and only the storage half moved. The inbox resolves no session id,
+reads no theme, stamps no label and emits nothing to the notification
+router; those are other clusters and stay on the facade. What DID move is
+every rule about which record wins, which may be rewritten and which may
+be dropped - the three questions a toast store gets wrong.
+
+**A THIRD NO-COPY SHAPE, and it is the one CLAUDE.md warns about.**
+S1 was scalars, S2 was dicts a caller rebinds. This cluster is reached by
+a DEFENSIVE ACCESSOR from another module: `toast_history.py` does
+`getattr(manager, "_pending_toasts", None)` and answers `{}` for a
+non-Mapping. Drop the facade property and every history view goes empty,
+raising nowhere and failing no existing test. That is leg (e), and it
+asserts the reader gets the REAL dict (`is`), not merely that it does not
+explode. Legs (a) identity, (b) no instance field and both are properties,
+(c) writes cross, (d) live delegation through all four public methods.
+
+Both properties are READ-ONLY here, unlike S2's `pinned_themes`. Nothing
+assigns either container wholesale once `_flush_startup_toasts` drains
+through `drain_startup()` instead of rebinding, so a future assignment
+should fail LOUDLY rather than shadow the property with a second
+container.
+
+**Mutations, all run and all reverted to a byte-identical tree.** The
+facade one was run as THREE variants, because only the third isolates the
+claim.
+- facade keeps its own REFERENCE to the records dict: 1 red, leg (b)
+  alone.
+- the facade property is REMOVED entirely: 16 red, 12 of them
+  pre-existing. So a total removal is caught by the repo as it stands.
+- the facade property returns a COPY: **every pre-existing toast suite
+  stays GREEN, 66 of 66**, and only legs (a) and (e) go red. That is the
+  measurement behind this slice's claim. A copy works perfectly on the
+  day it is written and diverges the first time anything writes through
+  the inbox rather than through the facade, and `toast_history`'s
+  tolerant `getattr` cannot tell the difference.
+- `find_supersedable` may return an ACKED record: 2 red, including the
+  pre-existing `test_toast_supersede.py`.
+- `ack` re-stamps a record already acknowledged: 4 red.
+- `prune` caps the UNACKED half too: 2 red.
+
+**A claim corrected rather than left standing.** An earlier draft of this
+entry said `test_toast_lifecycle.py` passed 17 of 17 with the property
+removed. That was measured on a tree where a `git checkout --` had
+already reverted the facade wiring, so it was a reading of the S2 code,
+not of a mutant. Re-measured properly, removal IS caught. The copy
+variant above is the honest version of the same point.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,734 passed
+/ 2 failed / 19 skipped. After S2: 5,778 / 2 / 19. After S3: 5,804 / 2 /
+19, the same two environmental failures throughout. Collection 5,799 ->
+5,825, +26, ZERO removed: 23 new tests, 2 from the package-rules
+parametrisation, 1 from `test_no_unresolved_names`. Node 200/200. Listing
+cost ceilings hold. `scan_secrets.py` exit 0.
+
+The plan's S3 asked for "a test that a duplicated `Stop` acks by KIND and
+never acks the toast the same event just raised, a rule currently
+expressed only in prose". It is
+`test_a_duplicated_stop_acks_by_kind_and_not_the_toast_it_just_raised`,
+end to end through the facade, plus a cutoff negative control beside it.
+
+No protocol added. The inbox does no I/O at all - no tmux, no database,
+no filesystem - so there is nothing to substitute.
+
+## 2026-09-10 - backend decomposition S4: the log buffers and command counts
+
+Slice S4 of `.claude/notes/backend-decomposition-plan.md`. `log_buffers`
+and `command_counts` left `SessionManager` for `SessionRegistry` in
+`src/core/sessions/registry.py` (187 lines), along with the append, the
+per-session line cap, the registration ensure and the teardown.
+
+`session_manager.py` 8,112 -> 8,167 (+55). Cumulative S1+S2+S3+S4: 8,340
+-> 8,167, -173. **This slice GROWS the facade and that is expected, not a
+regression.** The moved BODY was about 20 lines; the property pair plus
+the documented delegation that replaces it is a fixed cost of roughly 70,
+and the docstring standard is what makes it so. S7 moves the other four
+fields of this cluster into the same class and pays that cost only once
+more.
+
+**The registry lands in two pieces, on purpose.** The plan's registry
+cluster is six fields. S4 moves the two with NO reader outside
+`session_manager.py`; S7 moves `sessions`, `backends`, `_subscribers` and
+`_last_session_id`, which have 27 external readers between them. Splitting
+on reader count rather than on the heading puts the pattern under test on
+the half that cannot break a caller.
+
+**PLAN VERSUS CODE: the named coverage does not exist.** S4's entry says
+"Tests: `tests/test_session_backend.py`". Measured before the move,
+`add_log_entry` and `get_recent_logs` appear in ZERO test files in this
+suite, that one included. The only exercise either got was indirect,
+through `_session_info_for` reading `get_recent_logs` for a listing row.
+So no pre-existing test could have gone red for a defect introduced here.
+That is why `tests/test_session_registry.py` is 21 tests rather than a
+handful of legs.
+
+**The no-copy legs, chosen for a cluster with no external reader.** S3
+could lean on a defensive accessor in another module; there is no
+analogue here, and no consumer whose behaviour a copy would break. So:
+(a) identity of both containers; (b) neither name is an instance
+attribute and both are properties on the class; (c) an in-place write
+through either spelling is seen by the other; (d) live delegation through
+`add_log_entry`, `get_recent_logs` and `_wipe_session_state`; (e) an
+injected registry is the object the facade actually holds and uses.
+
+**The setter posture is now a rule with evidence behind it.** A
+write-through setter exists where a rebind is MEASURED (S2's
+`pinned_themes`, which `tests/test_tmux_listing_consumers.py` assigns
+wholesale). Nothing in `src/` or `tests/` assigns either name here, so
+both properties are read-only, like S3's pair. An earlier draft of this
+slice shipped setters for symmetry; they were removed once the rule was
+stated, because a setter nothing needs is a second way to write a
+container that must have one owner.
+
+**The line cap is an injected callable, and that is the S2 hazard in a
+new dress.** `add_log_entry` trimmed to `settings.log_buffer_size`,
+resolved out of `session_manager`'s globals per call. Four test modules
+(`test_s9_recent_and_pills.py`, `test_session_lifecycle_wiring.py`,
+`test_persist_fingerprint_family_wiring.py`,
+`test_tmux_listing_consumers.py`) install a stub `settings` carrying their
+own `log_buffer_size`. A registry importing `settings` itself would read
+the developer's real configuration during a pytest run. The cap is re-read
+per append rather than captured, so a settings reload still takes effect
+on a live manager. There is a leg for it.
+
+**Mutations, all run and all reverted to a byte-identical tree** (sha256
+checked after each revert).
+- facade property returns a COPY: 3 red - legs (a), (c) and (e).
+- `append_log` skips the cap trim: 3 red, the two cap legs and the trim
+  direction test.
+- `forget` drops only the buffer and leaves the counter: 2 red.
+- `forget` is a no-op: 2 red.
+- facade keeps its own plain ATTRIBUTE aliasing the registry's dict:
+  **1 red, leg (b) alone. Leg (a), the `is` check, stays GREEN**, which
+  is S2's measurement reproduced on a second cluster and the reason an
+  identity assertion is never the whole proof.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,804
+passed / 2 failed / 19 skipped. After S4: 5,828 / 2 / 19, the same two
+environmental failures (`test_home_write_guard`, `test_version_probe`).
+Collection 5,825 -> 5,849, +24, ZERO removed: 21 new tests, 2 from the
+package-rules parametrisation, 1 from `test_no_unresolved_names`. Node
+200/200. The three listing cost ceilings pass inside the full run.
+`scan_secrets.py` exit 0. Pre-commit hook left enabled.
+
+No protocol added. The registry does no I/O of its own - the one thing it
+reaches outside itself is the cap, and a zero-argument callable is a
+parameter, not a substitution point.
+
+No patch had to be repointed: nothing in the suite patches or
+monkeypatches `log_buffers`, `command_counts`, `add_log_entry` or
+`get_recent_logs` under any spelling.
+
+## 2026-09-10 - backend decomposition S5: the three per-session sidecars
+
+Slice S5 of `.claude/notes/backend-decomposition-plan.md`. `idle_watchers`,
+`adopt_fifo_offsets` and `pending_terminal_commands` left `SessionManager`
+for `AttachmentSidecars` in `src/core/sessions/sidecars.py` (211 lines),
+taking three clusters out of `_wipe_session_state`.
+
+`session_manager.py` 8,167 -> 8,239 (+72). Cumulative S1..S5: 8,340 ->
+8,239, -101. Like S4 this slice grows the facade, for the same reason:
+three properties plus a documented setter cost more lines than the three
+field declarations and eleven call sites they replace. The god method
+`_wipe_session_state` lost three of its nine clusters, which is the
+measurement the plan actually cares about.
+
+**They are one cluster because they have one lifecycle**, not because
+they are three dicts: each is written on the create or adopt path, read
+once when a client shows up, and dropped when the session goes away.
+
+**The one-shot rule is the point, and half of it was undefended.** The
+plan asks for both. `take_pending_command` already had a pre-existing
+guard - `test_terminal_commands.py::test_flush_types_the_command_and_pops_it`
+went red on the pop-to-get mutation. `take_fifo_offset` had NONE: that
+same mutation on the FIFO offset reddened only the two new tests. A
+reconnect re-seeking to a stale offset would replay against a FIFO that
+has grown by however much output landed meanwhile.
+
+**A getter may not consume.** `peek_fifo_offset` exists next to
+`take_fifo_offset` because `adopt_fifo_start_offset` is a PROPERTY, and
+`peek` and `take` differ by one method call while both read perfectly.
+Its own test, and its own mutation.
+
+**PLAN VERSUS CODE: `flush_pending_terminal_command` did not move, only
+its pop did.** The plan lists it among "their four accessors". It is 60
+lines of settings lookup, backend write and retry loop, which is the S3
+seam - storage versus everything else - so the sidecars own
+`take_pending_command` and the facade keeps the flush. The ordering is
+the safety property rather than the pop alone: the flush can fail after
+the pop on an unknown id, a missing backend or a write error, and a
+session whose command FAILED must still not have it retyped. There is a
+test for that ordering.
+
+**`forget` deliberately does not drop the pending command.** Measured
+pre-move: `_wipe_session_state` popped the watcher and the offset and
+never touched `pending_terminal_commands`. Preserved verbatim, and now
+ASSERTED, so that changing it is a decision somebody makes rather than a
+diff nobody notices. Session ids are not reused, so what is left behind
+is an entry nothing can ever read; worth dropping one day, but a refactor
+is not where a behaviour change belongs.
+
+**The legs, and the one that is necessary but NOT sufficient.** (a)
+identity of all three containers; (b) none of the three is an instance
+attribute and all three are properties; (c) in-place writes cross both
+ways; (c2) a whole-map REBIND through the facade reaches the collaborator
+- this is the cluster that gives the setter rule its evidence, because
+`tests/test_terminal_commands.py` rebinds `pending_terminal_commands`
+wholesale twice while nothing rebinds the other two, which are therefore
+read-only with a negative control asserting the assignment raises; (d)
+live delegation through `idle_watcher`, `adopt_fifo_start_offset` and
+`_wipe_session_state`; (e) the defensive reader in `src/api/websocket.py`
+still finds the watcher; (f) injection is real.
+
+**Leg (e) is where the S3 rule gets QUALIFIED.** `toast_history`'s leg
+asserts `is` on the container and catches a copying property. The
+websocket's is `getattr(sm, "idle_watchers", {}).get(session_id)`, and
+`.get()` on a copy answers correctly - so measured on the copying
+mutation, leg (e) PASSED while (a), (c), (c2) and (f) failed. A
+defensive-accessor leg catches a REMOVED property always, and a COPYING
+one only if it asserts identity on the container itself.
+
+**A patch that had to be repointed.** `tests/test_terminal_commands.py`
+builds its manager with `SessionManager.__new__(SessionManager)`, which
+skips `__init__` entirely, so `_sidecars` does not exist and every S5
+property is unreachable. It now installs `AttachmentSidecars()` by hand
+the same way it already installs `backends`. Two other files bypass the
+constructor (`test_workspace_env_reaches_terminal.py`,
+`test_adoption_three_outcomes.py`) and neither touches an S5 name. Any
+later slice adding a property must re-check those three.
+
+**Mutations, all run and all reverted to a byte-identical tree** (sha256
+checked after each revert).
+- `take_fifo_offset` reads instead of popping: 2 red, both new.
+- `take_pending_command` reads instead of popping: 3 red, one
+  pre-existing.
+- `peek_fifo_offset` consumes: 2 red.
+- `forget` also drops the pending command: 1 red.
+- the three facade properties return COPIES: 4 red, and leg (e) GREEN,
+  as above.
+- the setter shadows instead of writing through: 3 red, two pre-existing.
+- the facade keeps its own attributes aliasing the sidecar dicts: 5 red.
+- `_wipe_session_state` stops reaching the sidecars: 1 red.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,804
+passed / 2 failed / 19 skipped. After S4: 5,828 / 2 / 19. After S5:
+5,856 / 2 / 19, the same two environmental failures throughout.
+Collection 5,849 -> 5,877, +28, ZERO removed against S4 and ZERO against
+the control: 25 new tests, 2 from the package-rules parametrisation, 1
+from `test_no_unresolved_names`. Node 200/200. The three listing cost
+ceilings pass inside the full run. `scan_secrets.py` exit 0. Pre-commit
+hook left enabled.
+
+No protocol added. The sidecars do no I/O at all - no tmux, no database,
+no filesystem, no awaits - so there is nothing to substitute.
+
+**Coordination.** Re-read `now/adoom666.md` and both his claims off
+`adamdev/coord` at `6e09b1c` before starting. Nothing of his names
+`session_manager.py`, `log_buffers`, `command_counts`, `idle_watchers`,
+`adopt_fifo_offsets` or `pending_terminal_commands`. His mute work lives
+in `src/core/session_notification_policy.py` and
+`src/core/notifications/idle_watcher.py`; neither is touched here - S5
+moves only the manager's MAP of watchers, not the watcher. His queued
+wave 3 lands in `_session_info_for` and `create_session`, which are
+slices 8 and 9, not these.
+
+---
+
+## 2026-09-10 - backend decomposition v2, slice S0: the composition root, the four ports, the fixture
+
+Plan v2 (`.claude/notes/backend-decomposition-plan.md` on
+`docs/backend-plan-v2`, `d70bb98`) replaces v1's permanent facade. This is
+its first slice. NO BEHAVIOUR MOVES.
+
+**What landed.**
+- `src/core/sessions/ports.py` - four `typing.Protocol` boundaries,
+  `runtime_checkable`, structural. Zero runtime imports from this project.
+- `src/core/live_ports.py` - `SystemClock`, `LiveSettings`,
+  `LiveSessionRecordStore`. `TmuxReader` gets NO adapter: `TmuxBackend`
+  already satisfies it by shape, which is the point of a structural port.
+- `src/core/composition.py` - `AppServices` (frozen) and `build_services`,
+  the one construction site. It builds the five collaborators the shipped
+  slices created and hands them to `SessionManager` through the keyword
+  seam those slices already added, so `services.themes is
+  manager._theme_store` holds BY CONSTRUCTION.
+- `src/main.py` - `lifespan` calls `build_services()` and publishes
+  `app.state.services` beside `app.state.session_manager`.
+- `tests/conftest.py` - the `app_services` fixture, written once.
+- CLAUDE.md - the pure-forwarder docstring exemption, verbatim from the
+  plan's section 5.
+- `tests/test_sessions_package_rules.py` - RULE 3, nothing under
+  `src/core/sessions/` may import the `settings` singleton.
+
+**Three places the PLAN and the CODE disagreed, and the code won.**
+1. `TmuxReader`'s methods. The plan sketched `list_sessions` /
+   `capture_pane` / `pane_status_all`; the real `TmuxBackend` spells them
+   `discover_existing` / `capture_scrollback` / `capture_visible_screen` /
+   `list_pane_status_all`. The sketch's spelling would have been satisfied
+   by nothing in the tree, which is a rung that can never be observed to
+   fire.
+2. `SessionRecordStore`'s members. `get_instance` is a module function in
+   `session_store.py`, `claim_instance` is one in `session_identity.py`,
+   and the nine `record_*` functions live in seven unrelated modules with
+   no shared shape. What the manager actually funnels every row read
+   through is `_datastore_connection` / `_writable_datastore_connection`,
+   so THAT pair is the port. `claim_instance` joins when S8 gives it a
+   call site to be substituted at.
+3. `AppServices` carries no `tmux` field. A `TmuxReader` is bound to ONE
+   pane; there is no process-wide instance to hold. Putting a per-pane
+   object in a process-wide container is the same category error as
+   keying unread state on a name when it describes an instance.
+
+**The S2 near miss is now a test, not a comment.** `LiveSettings` resolves
+`src.core.session_manager.settings` on EVERY call, because 41 places in
+the suite `monkeypatch.setattr` that name and a reader bound to
+`src.config.settings` would be invisible to all of them and would write
+the owner's real `~/.cloude-sessions` during a pytest run. Four tests fail
+if that indirection is removed. DELETE AFTER S5.
+
+**Mutations, all eight measured, every revert verified byte-identical by
+sha256.**
+1. Drop the `records` field from `AppServices` -> 2 red.
+2. `LiveSettings` reads `src.config.settings` -> 4 red.
+3. The facade's `pinned_themes` property returns a COPY -> 1 red.
+   NOTE, AND IT IS THE MOST USEFUL RESULT HERE: the identity test stayed
+   GREEN and so did the forward data leg. Only the REVERSE leg caught it.
+   `is` alone has now failed four times in this project, and a
+   one-directional data leg is not enough either.
+4. `build_services` hands `AppServices` a second `ThemeStore` -> 4 red.
+5. The manager-plus-collaborator refusal removed -> 1 red.
+6. The REAL `TmuxBackend.capture_scrollback` grows a required argument ->
+   the real conformance leg red, the double GREEN. That is the whole
+   reason both legs exist.
+7. A collaborator imports the settings singleton -> package rule 3 red.
+8. `lifespan` builds services then constructs a second manager -> 2 red.
+
+**Verification.** Control measured first-hand on `209947d`: 5,856 passed /
+2 failed / 19 skipped, 5,877 collected. The two failures are the known
+environmental pair (`test_home_write_guard`, `test_version_probe`).
+
+**Coordination.** Checked live before starting. PR #60 (draft,
+`fix/5-pipe-rotation-fd`) now CLAIMS issue #5, the p0 pipe rotation in
+`tmux_backend.py`. Plan v2 had already removed the tmux_backend split from
+this lane on the strength of #5 being free-but-his; it is now formally
+taken, which confirms rather than changes the plan. #28 and #32 remain
+free, both still labelled `blocked`. No new issue touches
+`session_manager.py`, `composition`, or the ports.
+
+---
+
+## 2026-09-10 - backend decomposition v2, slice S1: retro-fit the five shipped slices, delete the 291 lines of forwarders
+
+**THE GO/NO-GO SLICE, AND IT PASSES.** Plan v2 says: if retro-fitting the
+five shipped slices does not drop `session_manager.py` by roughly 291
+lines plus the migrated readers, the premise is wrong and the honest move
+is to revert to v1's permanent facade.
+
+`src/core/session_manager.py`: **8,239 -> 7,894, a drop of 345 lines.**
+291 of forwarder bodies, 21 blank separators, 33 of comment blocks that
+existed only to explain the forwarders. Zero pure forwarders to a shipped
+collaborator remain, enforced by `tests/test_no_cluster_forwarders.py`
+rather than remembered. Contrast the five slices before this one, which
+moved 101 lines NET between them.
+
+**THE PREDICTION HELD.** The plan predicted 22 test files. Actual: 23
+pre-existing test files, plus my own two S0 files that assert through the
+facade, plus 2 new files. The one the plan's name-grep missed is
+`test_session_kind_listing.py`, which reaches `/sessions/recent` through a
+hand-rolled `_Manager` double and so carries none of the 21 names.
+
+**FOUR DEFENSIVE READERS, and every one of them would have failed
+SILENTLY.** This is the characteristic failure CLAUDE.md names, and it was
+sitting in four places at once:
+- `toast_history.buckets_from_manager` answered `{}` for anything without
+  `_pending_toasts`. Every toast history view empties, nothing raises.
+- `routes.py` guarded `get_toasts` with `hasattr`. The reattach backfill
+  endpoint returns `[]` on every session.
+- `away_routes.py` used `getattr(..., None)` plus a `callable` check on
+  the same method. The away report shows no toasts.
+- `websocket.py` did `getattr(sm, "idle_watchers", {}).get(...)`. No idle
+  watcher, on every session, forever.
+All four were repointed AND their tolerance removed, so the next such
+move is a crash rather than an empty page.
+
+**A GREEN MUTATION FOUND A TEST THAT DID NOT EXIST.** Replacing the
+websocket watcher lookup with a literal `None` broke nothing in 5,900
+tests. The one path guaranteed to fail quietly had no coverage at all,
+which is the worst possible pairing. `tests/test_ws_idle_watcher_lookup.py`
+drives the real `send_pty_output` over a fake socket and a one-item queue;
+the `None` mutation now goes red, and so does a lookup that ignores
+`session_id`.
+
+**`test_route_names_resolve.py` earned its keep.** The first draft of the
+theme migration wrote `request.app.state...` inside `_apply_session_theme`,
+which takes no `request`. That is a NameError and a bare 500 on the first
+click, and no other test in the suite would have caught it. The helper now
+takes the `ThemeStore` as an argument and its two callers pass it.
+
+**One argument reshape, on purpose.** `SessionManager.ack_toast` defaulted
+`reason` to `ACK_REASON_DISMISSED`; `ToastInbox.ack` requires it. 13 test
+call sites now say why the ack happened. An ack that does not record its
+reason is what makes a toast history unreadable, and the route already
+passed it explicitly.
+
+**Mutations, all eight measured, every revert verified byte-identical by
+sha256.**
+1. A forwarder comes back -> 2 red (shape leg and name leg).
+2. The tolerant `getattr` returns to `toast_history` -> 2 red.
+3. `buckets_from_inbox` returns a COPY -> 1 red.
+4. The `/toasts` backfill route answers `[]` -> 2 red.
+5. The websocket watcher lookup answers None -> GREEN first time. Test
+   written, then 1 red.
+6. The watcher lookup ignores `session_id` -> 1 red.
+7. The away report stops reading toasts -> 1 red.
+8. The theme route stops writing the dotfile -> 3 red.
+
+**Patch sweep: clean.** Zero `patch(` or `patch.object(` in the suite aims
+at any of the 21 deleted names, checked before and after.
+
+**Verification.** 5,928 passed / 2 failed / 19 skipped, 5,949 collected,
+against the S0 baseline of 5,902 / 2 / 19 and 5,923 collected. Delta +26,
+accounted by collection diff as 23 in `test_no_cluster_forwarders.py` and
+3 in `test_ws_idle_watcher_lookup.py`. FOUR ids left the listing and all
+four are RENAMES with a matching new id in the same file - the leg (b) and
+leg (e) tests whose old names described the forwarder they no longer test.
+ZERO tests removed. The two failures are the known environmental pair.
+Node 200/200. The three listing cost ceilings pass. `scan_secrets.py` exit
+0, pre-commit hook left enabled.
+
+**What is NOT done, said out loud.** Six pure forwarders remain on the
+class, 81 lines, pointing at `_hook_tokens`, `_unread_store`,
+`_activity_tracker`, the two notification handles and `_tmux_socket_name`.
+Those belong to S7 and later and are deliberately outside
+`test_no_cluster_forwarders.py`'s list, which grows one entry per slice. A
+list that failed for work nobody has done would be a countdown, not an
+invariant.
+
+## 2026-09-10 - decomposition v2 slice S2: `src/models.py` into `src/models/`
+
+Plan v2 section 6, slice S2. Pure filing, zero behaviour, and it exists to
+prove the package machinery on the safest file in the tree before the
+machinery is pointed at anything that runs.
+
+**What moved.** 2,495 lines holding 78 top-level definitions - 73 pydantic
+models, 2 enums, 2 functions and 3 constants - into 16 domain modules plus a
+re-export `__init__.py`. `src/models.py` is DELETED, not emptied, in the same
+commit. Nothing was renamed and no importer changed: all 41 `from src.models
+import ...` sites in `src/`, `tests/` and `scripts/` still read the same names
+off the same objects. Largest module is `sessions.py` at 380 lines, the shim is
+149, every file is under the 500-line guideline.
+
+**The moved bodies are byte-exact.** Each definition was carved by source span
+including the comment block above it, so `git show` of this commit is a pure
+move plus 17 new headers. Two now-redundant section comments (`# API Response
+Models`, `# WebSocket Message Models`) were KEPT rather than tidied away,
+because a byte-exact diff is a property a reviewer can check and a tidied one
+is a property they have to take on trust.
+
+**The proof that nothing changed.** Every model's `model_json_schema()`, field
+annotations and model config were fingerprinted from the flat file at `1cc7046`
+and from the package, and compared: 78 names, zero differences once module
+qualnames (`src.models.Session` -> `src.models.sessions.Session`) and lambda
+repr addresses are normalised. `SessionInfo`'s two levels came through
+unchanged, which is what the plan named as this slice's trap.
+
+Three names the flat module leaked and the package does not re-export: `Enum`,
+`Field` and `field_validator`, which were only ever visible because they were
+imported at the top of one file. Checked before deleting: nothing in the tree
+imports any of them from `src.models`, and there is no `import *`.
+
+**`tests/test_models_package_rules.py`, 198 tests.** The frozen 78-name public
+surface, `__all__` parity with it, one-definition-per-name, and the two-level
+`SessionInfo` shape asserted in BOTH directions with the three fields that
+genuinely live on both levels named rather than left out.
+
+**The no-copy legs, chosen for THIS data.** A package split's characteristic
+failure is a class PASTED into two modules: both importable, neither
+recognising the other, and no traceback explaining it. So identity is one leg
+of four, not the proof.
+(a) `models.X is submodule.X` for all 78 names.
+(b) forward - build through the submodule, assert `type(...) is models.X`.
+(c) reverse - build through the root, assert `type(...) is submodule.X`. One
+    direction is not enough: S1 measured a copy that left the identity leg and
+    the forward leg both green.
+(d) through pydantic - `SessionInfo(session=...)` re-validates its nested
+    field against whatever its annotation resolves to, so a copy is silently
+    rebuilt as the copy and the VALUE still looks right. Assert the class that
+    comes OUT.
+
+**Five mutations, five red, every revert byte-identical by sha256.**
+1. Drop `SessionStats` from the re-export -> 2 red.
+2. Define `SessionStats` a second time in `common.py` -> 2 red.
+3. Flatten `SessionInfo.unread` down onto `Session` -> 1 red (the trap).
+4. Re-export `Session` as a SUBCLASS of the real one -> 4 red, including
+   both data legs. `isinstance` alone would have passed the reverse; the
+   `type(...) is` assertions are what made it fail.
+5. `adopt.py` keeps its own pasted `Session` instead of importing the
+   sibling -> 2 red.
+
+**Patch sweep: nothing to repoint.** Zero `patch(` or `patch.object(` anywhere
+in the tree aims at `src.models`, before or after.
+
+**Verification.** 6,141 passed / 2 failed / 20 skipped, 6,163 collected,
+against a control MEASURED on the same tree at `1cc7046` of 5,928 / 2 / 19 and
+5,949 collected. Delta +214, accounted entirely by collection diff: 198 in the
+new rules file (197 pass, 1 skip) and 16 in
+`test_no_unresolved_names.py::test_every_loaded_name_is_bound_somewhere`, which
+parametrises over source modules and now sees 17 files where it saw 1. ZERO
+tests removed, zero renamed. The two failures are the known environmental pair.
+Node 200/200 as CI globs them, `check-js-syntax.sh` clean. The three listing
+cost ceilings pass. `scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Doc paths repaired in the same commit**, per gotcha 8: CLAUDE.md's
+`src/models.py:138` and `src/models.py` in the `/sessions/list` section, and
+`docs/session-attribution-import.md`'s `models.py:346-353`, which was a line
+range rather than a name and would have been wrong on the next edit anyway.
+
+**Plan versus code: one disagreement, minor.** The plan's stopping condition
+says `src/models.py` ends "under 200, a re-export shim only". A module and a
+package of one name cannot coexist, so the shim is `src/models/__init__.py` at
+149 lines and the flat file is gone. The budget is the same number and it is
+enforced by `test_the_re_export_shim_stays_a_shim`.
+
+## 2026-09-10 - decomposition v2 slice S3: OwnedTmuxLedger
+
+Plan v2 section 6, slice S3. The first slice on the boot path, and the first
+one that moves a durable file.
+
+**What moved.** `src/core/sessions/owned_tmux_ledger.py`, 435 lines, owns the
+owned tmux NAME set (`owned_tmux_sessions` -> `OwnedTmuxLedger.names`), the
+pre-v3 backfill sentinel, the boot listing, `session_metadata.json` (load,
+save, the atomic write and the pointer drop) and the two datastore-backed
+ownership queries (`_owned_instances_from_db` -> `instances_from_db`,
+`owned_tmux_instances` -> `instances`, `is_owned_tmux_name` -> `is_owned_name`).
+`src/core/session_manager.py` goes 7,894 to 7,725, a drop of 169.
+
+`SessionManager` keeps no copy and no forwarder: `self._owned` is the ledger and
+every one of the 66 internal reads reaches it directly. `AppServices` grew an
+`owned_tmux` field and `build_services` hands the SAME object to both sides.
+Rule B is enforced by `tests/test_no_cluster_forwarders.py`, whose deleted-name
+list grew by the seven members that left.
+
+**Three methods stayed, and they are not forwarders.** `_load_session_metadata`
+registers the session the ledger parsed, which wires backends and subscribers
+and would put the registry on the far side of the package rule.
+`_save_session_metadata` fills in the current session as a default.
+`_clear_stale_metadata` wipes in-memory state the ledger cannot see. Each does
+work of its own, so the full docstring rule applies to each and does.
+
+**The socket and the metadata path are late-bound, and both had to be.**
+`_tmux_socket_name` lets the PROBED socket win over the configured one, and a
+captured string would key every ownership read on the configured value and
+answer the badge from a socket nothing was ever written to. The metadata path is
+a callable resolving `settings` out of the `session_manager` module's globals at
+call time, which is the S2 near-miss rule: a ledger that imported `src.config`
+would be invisible to the 41 `monkeypatch.setattr("src.core.session_manager.settings", ...)`
+calls in the suite and would read and WRITE the owner's real
+`~/.cloude-sessions/session_metadata.json` during a plain pytest run. In
+`build_services` the socket callable closes over the name `manager`, which the
+NEXT statement binds; there is no value that could be supplied at that point.
+
+`SettingsReader` grew one method, `session_metadata_path`, which is the growth
+model its own docstring describes: one method at a time, when a collaborator
+genuinely needs one.
+
+**The no-copy legs, chosen for THIS data.** The risk here is two objects holding
+one logical set, which passes every `==` assertion until the first write through
+the wrong reference and then badges a session this app created as somebody
+else's.
+(a) identity, `services.owned_tmux is manager._owned`;
+(b) data forward, add through the manager's handle, read on the ledger;
+(c) data reverse, add on the ledger, read through the manager. S1 measured a
+    copy that left (a) and (b) both green and failed only here;
+(d) through the FILE, which is the medium this cluster exists for: save from one
+    ledger, load into a second, then mutate the first and assert the second does
+    not see it. That last half is the control on the other three - if they
+    passed because everything in the module aliases everything else, (d) fails.
+The same four legs were added to `tests/test_composition_root.py`'s existing
+services-versus-facade pair.
+
+**Seven mutations. Six red, one green that was MY MUTATION'S FAULT, and one
+that was red outside the runner I first used.**
+1. `build_services` stops handing the ledger to the manager -> 3 red, all three
+   composition legs.
+2. `write_atomic` writes in place, no tmp and no rename -> 1 red.
+3. `drop_session_pointer` stops re-writing the owned set -> 2 red, including the
+   pre-existing `test_owned_set_survives_stale_clear.py`.
+4. A failed read empties the owned set -> 1 red.
+5. `is_owned_name` falls back to a `cloude_` prefix match -> 4 red. That is the
+   spoofable heuristic the set exists to replace.
+6. `save` stops stamping the owned set onto the payload -> 6 red across four
+   files.
+7. **GREEN, and the test was right.** `self._owned.names = set(self._owned.names)`
+   after construction is not a divergence at all: the copy is assigned back ONTO
+   the ledger, so both references still see one object. Rewritten as 7b, a
+   create-path write into a local copy (`_copy = set(...); _copy.add(...)`),
+   which is the divergence that can actually happen. 7b is red - in
+   `test_session_backend.py`, NOT in the focused runner I had been using, which
+   is worth writing down: a mutation is only measured against the tests you
+   actually ran.
+
+Every revert verified byte-identical by sha256.
+
+**A reverted file, and the lesson.** Reverting mutation 7 with
+`git checkout -- src/core/session_manager.py` threw away every S3 edit to that
+file, because the file was not yet committed. Re-applied from the same script
+(`scratchpad/s3/apply_manager.py`) and re-verified. Revert a mutation with the
+`.bak` you took, never with git, while the slice is uncommitted.
+
+**Patch sweep and repointed guards.** No `patch(` in the suite aims at any name
+that moved: the 23 sites patching `_load_session_metadata` /
+`_save_session_metadata` target members that still exist. Repointed: two
+`monkeypatch.setattr(SessionManager, "_owned_instances_from_db", ...)` in
+`test_s4_regressions.py` onto `OwnedTmuxLedger.instances_from_db`; the
+`AppServices` field list and the port conformance double; two SOURCE-TEXT guards
+in `test_session_ownership_origin.py`, one of which got STRONGER because the two
+resolvers have left `session_manager.py` and no longer need exempting; and
+`tests/test_launchpad_help_content.node.mjs`, which reads
+`owned_names=set(...)` out of the manager source to check a help-text claim and
+would otherwise have been the only failing node suite.
+
+**A double stopped answering a question nobody asks.** The listing double in
+`test_tmux_listing_consumers.py` carried an owned-name set that no assertion ever
+observed; the route reads `list_attachable_sessions()` and nothing else. Removed
+rather than repointed, so a future read through it is an AttributeError.
+
+**Verification.** 6,170 passed / 2 failed / 20 skipped, 6,192 collected, against
+the S2 tree's 6,141 / 2 / 20 and 6,163 collected. Delta +29, accounted entirely
+by collection diff: 18 in `test_owned_tmux_ledger.py`, 7 in the forwarder
+invariant's deleted-name list, 3 in `test_sessions_package_rules.py` (one more
+module in the package, three rules each) and 1 in `test_no_unresolved_names.py`.
+ZERO tests removed. The two failures are the known environmental pair. Node
+200/200, `check-js-syntax.sh` clean. The three listing cost ceilings pass.
+`scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Plan versus code, and the code won twice.**
+1. The plan's mutation for this slice is "make the atomic write skip the `.bak`.
+   If nothing goes red, the rule that protects the user's whole setup is
+   undefended." THERE IS NO `.bak` IN THIS WRITE. `_write_metadata_atomic` was
+   tmp plus `fsync` plus `os.replace` and never had one; the `.bak` belongs to
+   `Settings.update_settings_config` in `src/config.py`, which is slice S5. The
+   invariant that IS here is the atomic rename, and mutation 2 above is the test
+   of it.
+2. The plan says "9 test files, 2 `src` call sites". The `src` count is exactly
+   right. A plain attribute grep finds 13 test files, but re-measured with the
+   plan's own methodology (accesses through a variable named `manager`, `sm`,
+   `session_manager` or `mgr`) it is 9 on the nose. The extra four are two
+   docstring-only mentions and two files using other variable names, plus
+   `test_session_ownership_origin.py`, whose reach is source text rather than an
+   attribute and which a name-grep of either kind would have missed.
+
+**What is NOT done, said out loud.** `SessionManager._datastore_connection` and
+`_writable_datastore_connection` survive with about 28 callers across clusters
+this slice does not own; the ledger reaches the datastore through the
+`SessionRecordStore` port instead, so the ONE ownership caller moved and the
+private pair keeps the rest until their own slices. And `routes.py` still guards
+`active_tmux_names` with `hasattr` two lines from the call this slice edited;
+that name belongs to S4 and removing its tolerance here would change behaviour
+outside this slice.
+
+## 2026-09-10 - backend decomposition v2, slice S4: the registry's second half
+
+`src/core/sessions/registry.py` grows from 187 to 441 lines and now owns the
+LIVE SESSION TABLE as well as the log buffers: `sessions`, `backends`,
+`subscribers` (was `_subscribers`), `last_session_id` (was `_last_session_id`),
+the registration path, every lookup, the "current session" pointer with its
+self-repair, the output fan-out and `registered_ids_for_tmux_name`.
+`src/core/session_manager.py` goes **7,725 to 7,589**, and twelve members are
+gone from the class: `current_session`, `current_backend`, `session`, `backend`,
+`get_session`, `get_backend`, `list_sessions`, `_resolve_session_id`,
+`_register_session`, `_registered_ids_for_tmux_name`, `subscribe_output`,
+`unsubscribe_output`.
+
+**No copy and no forwarder.** All 82 internal reads go through
+`self._registry`, and `__init__` creates none of the four containers - a new
+test parses `__init__` and fails if it ever does, because an attribute
+assignment is invisible to the existing forwarder SHAPE walk. `AppServices`
+needed no new field: the registry has been on it since S0, so the composition
+root already hands the same object to both sides.
+
+**Three methods stayed and none is a forwarder.** `_make_output_handler`
+builds a per-session closure over `publish`, which is real work rather than a
+forward. `idle_watcher` and `adopt_fifo_start_offset` each reach TWO
+collaborators (the registry for which session is current, the sidecars for what
+is attached to it), so neither belongs on either one alone.
+
+**The no-copy legs are chosen for this data, and there are five.** What can go
+wrong here is not a wrong value, it is TWO CONTAINERS: two dicts written
+through one path agree forever and diverge only when a create through the
+manager meets a boot re-adopt through the registry, which is the 22-rows-for-21
+-panes shape. So: (a) identity, kept only as the cheap canary; (b) FORWARD,
+write through the manager and read through a registry reference captured
+BEFORE that write; (c) REVERSE, write through the registry and read through
+`has_active_session` / `is_session_live` / `active_tmux_names`, which walk the
+dicts themselves; (d) TWO REFERENCES ONE PANE, register one tmux name under two
+ids through two different references and require the query to see both, which
+is the plan's named negative control and a no-copy leg at once; (e) DELETION,
+because `pop` on a copy leaves the original populated and an add-only suite
+cannot see that. (d) carries its own control: an unregistered name finds
+nothing, and `also` naming an id with no backend is refused.
+
+**Five mutations, five RED, every revert byte-identical by sha256.** Reverted
+from `.pristine` copies, never with `git checkout`.
+1. The composition root hands the manager a DIFFERENT registry from the one in
+   `AppServices`: 5 red across `test_composition_root` and
+   `test_lifespan_composition`.
+2. `registered_ids_for_tmux_name` returns only the first match: 2 red,
+   including the PRE-EXISTING `test_adopt_rekey_stored_id`.
+3. `forget` stops repairing the current pointer: 1 red.
+4. `publish` fans out to every subscriber instead of the session's own: 4 red,
+   including the pre-existing `test_session_backend::
+   test_concurrent_sessions_output_isolation`.
+5. THE NO-COPY ONE: `register` writes into `dict(self.sessions)` and rebinds.
+   **Leg (a) stayed GREEN** - both spellings still read one attribute on one
+   object at any instant - and legs (b) and (e) went red. That is the whole
+   argument for choosing legs per slice rather than reusing an `is` check.
+
+**Ten defensive readers repointed, and NINE of them were invisible to the first
+sweep** because they were spelled `getattr(manager, "backends", None)` rather
+than `manager.backends`. Every one would have answered empty instead of
+raising: `session_view_clears` (twice - a view would have stopped clearing any
+flag), `session_status_seed_read`, `session_agent_infer_apply`,
+`claude_title_sync_apply`, `local_servers`, `status_routes` (twice),
+`away_routes` (twice) and `routes.py`. `read_alternate_screen` now takes the
+REGISTRY rather than the manager, because a `callable` guard on `get_backend`
+answers None for a moved method and a real refusal identically. The
+`hasattr(session_manager, "active_tmux_names")` guard that the S3 entry flagged
+as belonging to this slice is gone, and the `elif` behind it was dead code.
+
+**Patch sweep clean.** No `patch(`/`patch.object(` in the suite aims at any of
+the twelve deleted names. One monkeypatch repointed:
+`test_boot_readopt.py` patched `mgr._register_session` and now patches
+`mgr._registry.register`. Both node source-text guards
+(`test_launchpad_help_content`, `test_session_ownership_badge`) still match
+without edits, checked rather than assumed.
+
+**Verification.** Control MEASURED on this tree before any edit: 6,169 passed /
+3 failed / 20 skipped, 6,192 collected. After: **6,200 passed / 2 failed / 20
+skipped, 6,222 collected**. Collection diff is exact: +31 added (14 in the new
+`test_session_registry_live.py`, 16 parametrised cases in
+`test_no_cluster_forwarders.py`, 1 rename replacement), -1 removed, and the
+removed one is `test_open_ids_tolerates_a_manager_with_no_backends_dict`
+RENAMED to `test_open_ids_is_empty_when_nothing_is_registered` in the same
+file. **ZERO tests removed.** The two remaining failures are the known
+environmental pair. The control's third failure,
+`test_boot_readopt_real_tmux::test_attach_to_a_dead_pane_still_succeeds`,
+passed after the change: it drives the real `cloude` socket and is the
+INFRA-49 flake class, not a regression either way. Node 200/200,
+`check-js-syntax.sh` 227 files clean, four listing cost ceilings pass,
+`scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Plan versus code, and the code won twice.**
+1. The plan says "31 test files touch these attributes but only 41 times".
+   Re-measured today with the plan's own methodology it is **37 files and 138
+   hits**, three times the stated reach. Wide and shallow was right; the number
+   was not.
+2. `src/core/sessions/registry.py`'s own module docstring said the second half
+   was slice "S7", which is version 1 numbering. Under plan v2 it is S4. The
+   docstring is rewritten rather than left to become the stale-doc trap gotcha
+   8 warns about.
+
+**What is NOT done, said out loud.** `test_session_registry.py`'s legs (a) and
+(c) became degenerate when S1 deleted the forwarders - both sides of each
+assertion now read `manager._registry` - and this slice did not repair them,
+because they belong to the log-buffer half and the real legs for the live table
+are in the new file. Worth a follow-up.
+
+## 2026-09-10 - backend decomposition v2, slice S5: src/config.py into src/config/
+
+`src/config.py`, 2,112 lines, is DELETED. In its place a 23-module package:
+13 typed `config.json` blocks and the one named error in their own files
+(bodies byte-exact, carved by source span including the comment above each,
+the same machinery slice S2 proved on `src/models.py`), and the 1,426-line
+`Settings` split into a LOADER plus typed READERS - `auth_loader`,
+`state_paths`, `agent_command`, `config_file`, `config_writes`, `summary`,
+`wrappers`, `provider_models`, `bootstrap`. `__init__.py` is a 73-line
+re-export, so not one of the 111 importers changed.
+
+**PROOF THAT NOTHING MOVED: A FINGERPRINT, NOT A READING.** Every public
+name the flat module exposed was recorded before and after - pydantic json
+schema, field annotations and defaults for all 13 models, plus all 31
+`Settings` method signatures and all 19 field annotations. Over the 21
+shared public names there is exactly ONE difference, and it is an
+improvement the standards require: `_mutate_wrappers(self, mutation)` gained
+`mutation: Callable[[List[dict]], List[dict]]`.
+
+**THE FINGERPRINT EARNED ITS KEEP IMMEDIATELY.** The first run found FOUR
+models whose schema would no longer build - `AgentsConfig`, `AuthConfig`,
+`ProjectConfig`, `WorkspaceConfig` - because a carved module did not import a
+name its annotations use (`AgentWrapper`, `Union`, `Literal`, `Dict`). They
+became unresolved ForwardRefs. Every one of those models still CONSTRUCTED
+fine, so the suite was green on three of the four; only a schema build says
+so. This is the S2 trap restated: a package split fails by an annotation
+resolving somewhere new. A fifth, `default_terminal_commands` missing in
+`auth.py`, was caught by `test_no_unresolved_names.py` and would have been a
+NameError the first time that default fired.
+
+**37 NAMES THE FLAT MODULE LEAKED ARE NOT RE-EXPORTED** - its own imports
+(`json`, `os`, `Path`, `Field`, `TerminalCommand`, `MODEL_ID_PATTERN`,
+`wrapper_store` and the rest). Checked rather than assumed: zero of the 37 is
+imported from `src.config` anywhere in `src/`, `tests/`, `scripts/` or
+`macOS/`.
+
+**DUPLICATION REMOVED, AND THE BIGGEST ONE HAD NO TEST UNDER IT.**
+`load_auth_config` carried the four-line malformed-block pattern TWELVE
+times. It is now `auth_loader.parse_block`, with the event name and the log
+payload as arguments because those genuinely differ - a workspace env VALUE
+can be a secret, so that block logs key names only. **Measured before
+touching it: 21 test files reach `load_auth_config` and NOT ONE asserts any
+of the twelve `invalid_*_config_block` fallbacks.** The whole degraded path
+was unmeasured. `tests/test_config_block_tolerance.py` is 20 new tests over
+it, including the two extremes pointing OPPOSITE ways on purpose (a mangled
+`message_archive` yields disabled, the safe direction; a mangled `ui` yields
+the ALL-DEFAULT object, because an unparseable block must not be able to HIDE
+a capability) and the negative controls: a valid block round-trips, a missing
+file and invalid JSON and a missing secret are all still REFUSED. Also
+collapsed: four copies of the "run setup_auth.py" `FileNotFoundError`, four
+of the invalid-JSON wrap, and TWO copies of the atomic write, into
+`config_file.py`.
+
+**SEVEN MUTATIONS. THREE RED IMMEDIATELY, FOUR CAME BACK GREEN, AND ALL FOUR
+WERE A MISSING TEST RATHER THAN A MEANINGLESS MUTATION.** Reverted from
+`.pristine` copies, never `git checkout`; every revert byte-identical by
+sha256.
+1. RED. The plan's named mutation: the atomic write stops making the `.bak`.
+   Two tests. (Note this IS the write that has a `.bak`; the S3 entry
+   recorded that the plan had aimed the same mutation at the session-metadata
+   write, which never had one.)
+2. GREEN, then RED. The write stops being atomic - in place instead of
+   tmp-plus-rename. Green because BOTH PATHS PRODUCE IDENTICAL FINAL BYTES;
+   they differ only when the write does not finish, which no outcome
+   assertion can see. Two new tests stage the difference: a serialisation
+   that fails part way must leave `config.json` untouched, and the
+   destination must never be opened for writing at all.
+3. RED. `parse_block` stops falling back: 14 red.
+4. RED. The state-file pin stops sticking: 3 red, including the two that
+   exist because a re-derived pin silently MOVED `session_metadata.json`.
+5. GREEN, then RED. `get_agent_command` resolves the state directory
+   EAGERLY. Green because no test had ever made that resolution FAIL, which
+   is the only thing the laziness protects: `get_state_dir` raises on an
+   unwritable directory, and the wrapper-less branch has no scripts
+   directory to need. A launch that always worked would start failing on
+   the box least able to afford it.
+6. GREEN, then RED. A writer stops invalidating `_auth_config_cache`. Green
+   for a precise and worrying reason: `test_config_settings.py`'s fixture
+   EMPTIES the cache before every test, so no test in that file had ever
+   exercised a WARM cache - which is the only state a running server is in
+   after its first read. The new test warms it first; without the
+   invalidation the PATCH writes correctly and reports the PRE-write value
+   straight back.
+7. GREEN, then RED. The merge stops re-validating, so a block pydantic
+   refuses reaches disk and the next load quietly falls back to that block's
+   defaults - the user's notifications setup gone with no error anywhere.
+
+**THE ONE RULE THIS SLICE COULD NOT MEET, SAID PLAINLY.**
+`src/config/settings.py` is **632 lines, over the 500-line guideline**. It is
+109 lines of pre-existing field declarations plus 31 typed entry points
+averaging 13 lines; every method BODY is gone. It cannot go lower without
+either inheritance (banned) or deleting `Settings`' public surface and
+migrating its ~45 callers - Rule B applied to `Settings`, which plan v2's S5
+does not specify and which is its own slice. Measured reason the surface has
+to stay: 111 modules import from this package and the suite patches these
+members on the CLASS, 23 sites on `state_dir_override`, eight on
+`type(sm.settings).get_state_dir`. **This needs the owner's call**: accept it,
+or schedule S5b to migrate the callers. Recorded in CLAUDE.md as a known
+measured exception so the next agent does not read it as drift.
+
+**CARVED OUT, DELIBERATELY.** Plan v2's S5 also asks for a validated
+`AgentChoice` value object that only `validate_agent_choice` can construct.
+That is a typed-API change threading through four restart paths, not a
+relocation, and folding it into a commit that moves 2,112 lines would make a
+failure unattributable to either half. Not done, not hidden.
+
+**Two other things found and fixed rather than left.**
+`test_config_defaults_source_of_truth.py` sliced the loader with
+`source.index("\n    def ")`; it now slices by AST. Its known HOLE is
+recorded in the test: the four blocks read through a CONSTANT (`ui`,
+`workspace`, `server_prefs`, `message_archive`) are invisible to its regex
+AND absent from `supported_keys()`, so the two agree by both being blind.
+And `socket.gethostname()`'s `except Exception` narrowed to `OSError`, which
+is what it raises.
+
+**Verification.** Control for this slice is the S4 commit, measured: 6,200
+passed / 2 failed / 20 skipped, 6,222 collected. After: **6,248 passed / 2
+failed / 20 skipped, 6,270 collected.** +52 added (20 tolerance, 4 config
+settings, 2 agent families, 26 from `test_no_unresolved_names.py`, which is
+parametrised over source FILES and the package has 22 more of them), -4
+removed, and all four are the SAME parametrised test's ids being
+re-disambiguated by pytest (`agents.py` became `agents.py0`/`agents.py1`
+because the name now exists in two places). **ZERO tests removed.** The two
+failures are the known environmental pair. Node 200/200, four cost ceilings
+pass, `scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+---
+
+## 2026-09-10 - the S5 settings question, RULED and closed
+
+The owner was shown the one open question S5 left and ruled on it, verbatim:
+**"Leave it it's ok"**.
+
+`src/config/settings.py` stays at 632 lines. It is the ONE ruled exception to
+this project's 500-line rule and it is not a precedent for any other file.
+Recorded in three places so nobody, on either side, "fixes" it later:
+
+- `docs/DECISIONS.md`, entry "`src/config/settings.py` stays over 500 lines".
+  The file binds both teams. Its exact blob was carried across from
+  `feat/work-protocol` and the entry APPENDED, so a later merge stays clean.
+- `CLAUDE.md`, where the existing note was rewritten to read as a RULING with
+  the owner's words and the date, rather than as an observation someone could
+  take as an invitation.
+- `.claude/notes/backend-decomposition-plan.md` section 11, FO1, as a future
+  OPTIONAL slice. Plan v2's exact blob was carried across from
+  `docs/backend-plan-v2` in the same commit, because the branch was still
+  carrying plan v1 while shipping plan v2's slices, and a stale doc is worse
+  than no doc.
+
+**The migration is NOT SCHEDULED.** Getting under 500 needs the 31 typed entry
+points deleted and roughly 45 callers migrated. That is Rule B applied to
+`Settings` and it is a test-suite migration wearing a refactor's clothes: 111
+modules import from the package and the suite patches these members on the
+CLASS, 23 sites on `state_dir_override` and eight on
+`type(sm.settings).get_state_dir`. A name that stopped resolving there fails
+silently, not loudly. If it is ever taken it gets its own slice, its own patch
+sweep and its own control.
+
+---
+
+## 2026-09-10 - S6 SHIPPED: the two route monoliths into siblings
+
+Plan v2's S6. `src/api/routes.py` **4,397 to 106** and `src/api/auth.py`
+**1,674 to 362**, into 29 new sibling modules plus two pure core modules.
+Both stopping-condition rows met (routes.py under 500, auth.py under 500).
+Largest new file is `hook_event_routes.py` at 441; every one is under 500.
+
+**THE PLAN CONTRADICTS ITSELF AND THE CODE SETTLED IT.** Section 3.4 says
+`src/api/routes/` (a package) while section 7 says "`src/api/routes.py`
+under 500". Those cannot both exist: a package shadows a module of the same
+name. `src/api/` already carries eleven `<resource>_routes.py` siblings and
+S6's own prose says "the eleven-sibling pattern the directory already has",
+so it is flat siblings with `routes.py` left as the aggregator. That keeps
+`from src.api.routes import router` resolving for `src/main.py` and ten test
+files, untouched.
+
+**ORDER IS PRESERVED BY CONSTRUCTION, and that is the fingerprint.** Modules
+are CONTIGUOUS runs of the original declaration order, so aggregating in
+that order reproduces the table exactly. Two resources were not contiguous
+and keep a second router rather than moving:
+`provider_models_routes.local_models_router` (registered second) and
+`auth_routes.status_router` (`GET /auth/status`, registered between the
+clone route and the command lists). **Fingerprint: 51 routes, 18 auth
+routes and 99 openapi operations, IDENTICAL before and after on path,
+method set, endpoint name, response model, status code, dependency count,
+response class, schema inclusion AND position.**
+
+**NOTHING IS RE-EXPORTED FROM THE AGGREGATOR BUT `router`.** A re-export
+would let `monkeypatch.setattr(routes_mod, "_bundled_themes_root", ...)`
+go green while patching a name the handler no longer reads. Every such
+site was repointed at the module that owns the name.
+
+**auth.py IS NOW THE AUTHORITY AND DECLARES NO ROUTER.** 83 call sites
+import `require_auth` from it, so every auth-side route module depends on
+it; a router there would need the imports back and the cycle would only
+resolve by ordering them at the bottom of the file. `auth_routes.py`
+assembles that side instead. Acyclic, and `test_api_route_modules.py`
+enforces it.
+
+**Two decision halves lifted to pure modules**, per the plan's S6.
+`src/core/hook_event_presentation.py` is the toast copy;
+`src/core/hook_toast_gate.py` is the mute-then-subagent ladder, which had
+no test of its own because it was reachable only through an HTTP POST.
+`tests/test_hook_toast_gate.py` is 18 cases and over half of them are
+negative controls: a gate that suppressed broadly would pass every "it
+went quiet" test and rebuild the false-silence failure.
+
+**A REAL DEFECT FOUND, not introduced.** Five siblings inherited a
+FUNCTION-LOCAL `from fastapi.concurrency import run_in_threadpool` - nine
+of them across the five - which is the exact defect
+`tests/test_route_names_resolve.py` was written for: the next handler in
+that module uses the name and NameErrors into a bare 500. Hoisted to module
+scope and the local imports deleted.
+
+**Three structural tests were pointed at a file that no longer holds what
+they check**, and all three would have gone quietly useless:
+`test_route_names_resolve.py` (hardcoded `src/api/routes.py`, now
+discovers every module declaring a router and parametrises over 46),
+`test_docs_operations_chart_drift.py` (a seven-entry `ROUTER_FILES` tuple,
+now discovered the same way), and `test_rename_writes_label_not_tmux.py`
+plus `test_session_fork.py` and `test_configured_wrappers_path.py`, which
+AST-parse a named source file.
+
+**Patch sweep: 22 sites across 19 files, and the first grep found 13 of
+them.** The nine it missed were spelled through a different alias
+(`from src.api import routes as routes_module`) or reached a name the
+literal grep did not contain. A second sweep by AST - resolve each file's
+alias for the module, then check every attribute against the aggregator's
+real namespace - found the rest and now reports zero.
+
+**Mutations.** (1) Delete one `include_router` line: red on
+`test_the_aggregator_actually_serves_what_it_assembles`. It ALSO exposed a
+hole in the new test's own per-module case, which skipped instead of
+failing because it inferred "mounted elsewhere" from having no aggregated
+routes - which is what a deleted include looks like. Replaced with an
+explicit register of the modules `src/main.py` mounts directly; the
+mutation is now red twice. (2) Strip a module-scope import from a sibling:
+red on `test_every_route_handler_resolves_its_helper_names` for that
+module, proving the generalisation actually covers the new files. Both
+reverted by hunk and verified byte-identical by sha256.
+
+**Imports are emitted PER NAME.** The first pass copied whole statements,
+so any sibling needing one model got all fifty names of
+`from src.models import (...)` - the monolith's coupling surface handed to
+every file. `themes_routes.py` went from 253 lines to 202 on that change
+alone.
+
+**Verification.** Control MEASURED on this branch at `a1bf306`: 6,248
+passed / 2 failed / 20 skipped, 6,270 collected. After: **6,478 passed /
+2 failed / 76 skipped, 6,556 collected.** +289 added, -3 removed, and all
+three "removals" are accounted: two are `test_route_names_resolve`'s
+un-parametrised ids being replaced by 92 parametrised ones, and one is a
+parametrised id that embeds the worktree path. **ZERO tests removed.** The
++289: 147 `test_api_route_modules.py` (new), 92
+`test_route_names_resolve.py` (2 tests over 46 route modules), 31
+`test_no_unresolved_names.py` (parametrised over source FILES, and there
+are exactly 31 new ones), 18 `test_hook_toast_gate.py` (new), 1 the
+worktree-path id. The two failures are the known environmental pair. Node
+200/200 as CI runs it, four listing cost ceilings pass, `scan_secrets.py`
+exit 0, pre-commit hook left enabled.
+
+**Not done, and said out loud.** `src/api/recreate_routes.py` (582) and
+`src/api/websocket.py` (675) were already over the guideline and are not in
+this slice's lane. They are on an explicit register in
+`test_api_route_modules.py` with their measured size, so they are visible
+and may not GROW; a register that tolerates any number is the rule deleted
+with extra steps.
+
+---
+
+## 2026-09-10 - S7 SHIPPED: HookTokenAuthority
+
+Plan v2's S7. The four pieces of hook-token state and the eight methods
+that touch them off `SessionManager` and onto
+`src/core/sessions/hook_token_authority.py`, 447 lines.
+**`session_manager.py` 7,589 to 7,294**, and the 291 lines it lost are the
+methods themselves, not a forwarder block: nothing forwards, and the
+facade keeps no copy of any of the four.
+
+**THE INVARIANT IS NOW STRUCTURAL.** `mint` is the only writer of a
+secret, `keep` re-binds a tmux name and cannot reach one, `recover`
+accepts a superseded value once and never mints. That separation is what
+ended the 4h24m outage of 2026-09-08 (a derived-id adopt minted at
+16:16:40.633984Z, the first rejection 130 ms later, 4,325 more until the
+owner restarted the pane by hand), and it used to be a comment.
+
+**THE PLAN SAID "zero `src/` reach". IT IS FOUR.** Measured here:
+`session_boot_readopt.py` (two, one of them a WRITE through
+`.setdefault`), `claude_title_sync_apply.py`, `session_status_seed_read.py`
+and `hook_event_routes.py`. **THREE OF THE FOUR ARE DEFENSIVE READERS
+SPELLED `getattr(manager, "_hook_tmux_names", None) or {}`**, so a grep
+for the plain attribute finds ONE of them. Left alone, each would have
+gone on answering `{}` forever: the title sync would stop resolving a
+pane's name, the status seed would lose its instance identification, and
+the boot re-adopt would hold nothing - all silently, all green. Repointed
+onto `authority.name_for` / `authority.tmux_names`, with the TOLERANCE
+KEPT and now pointed at `hook_tokens`, because a caller may still inject a
+manager double that has no authority and that must answer "nothing
+recorded" rather than raise.
+
+**`get_env_for_spawn` STAYS ON THE MANAGER, against the plan's listing.**
+It is 60 lines of workspace-env composition - the user's global env, the
+development root, the default shell, the LM Studio address - with three
+lines of token in it. Only the token acquisition moved, as
+`authority.token_for_spawn`. Moving the whole method would have put the
+workspace settings layering inside a credential module.
+
+**The gc's one outside reach became a callback.** It used to pop
+`manager._instance_epochs` inline; the authority now takes `on_drop` and
+returns the ids it dropped, so the collaborator does not know that cache
+exists.
+
+**Rule A, four legs, chosen for THIS data.** Identity (no `_hook_tokens`,
+`_hook_tmux_names`, `_hook_tokens_durable` or `_superseded_hook_tokens`
+left on the manager); FORWARD (mint through the authority, read back);
+DELETION (pop through one reference, read through the other - the leg that
+actually caught S4, because writing into `dict(...)` leaves every
+add-only assertion green); and the TMUX NAME MAP separately, because
+`keep` re-binds a name without touching a secret and a copied name map
+would pass every token assertion while losing the only durable record of
+which pane an id was injected into.
+
+**Mutations, four, and one judged.**
+(A) `keep()` calls `mint()` - the one the plan names: RED on
+`test_keep_does_not_rotate_the_secret` plus both re-key tests in
+`test_adopt_rekey_stored_id.py`. (B) `recover()` accepts broadly, the
+credential bypass: RED on 7, four of them pre-existing. (C) gc treats an
+unreadable metadata file as `owned = set()`: **GREEN, and judged
+MEANINGLESS rather than a missing test** - the `if not owned: return []`
+guard two lines below already catches an empty set, so the mutation
+changes no behaviour at all. Re-run as (C2) with `owned = {"__unreadable__"}`,
+which is what "actioned as nothing is owned" really looks like: RED on
+`test_an_unreadable_owned_list_keeps_every_token`. (D) `compare_digest`
+replaced by `==`: RED on `test_validate_hook_token_uses_compare_digest`.
+Every revert verified byte-identical by sha256
+(`75538bef4d66edc082318df202df14fa9b53664536b1a526859abec1d50f9ac7`).
+
+**Negative controls, both the plan's and two more.** A forged token of the
+RIGHT LENGTH is refused; `recover` refuses a value this process never
+minted (`no_match`); refuses a superseded value against a DIFFERENT pane;
+and refuses with `unavailable` when there was nothing to search - kept as
+a separate word because a check that could not run must never read as one
+that ran and cleared.
+
+**Test-side sweep: 13 files, 88 lines.** Two test doubles had to grow a
+real authority rather than a stand-in:
+`test_claude_title_sync_apply.py`'s `_FakeManager` and
+`test_workspace_env_reaches_terminal.py`'s `SessionManager.__new__`
+construction, which skips the constructor entirely.
+
+**Verification.** Control is the S6 commit `e859106`: 6,478 passed / 2
+failed / 76 skipped, 6,556 collected. After: **6,498 passed / 2 failed /
+76 skipped, 6,576 collected.** +20 added, **ZERO removed**: 16 the new
+`test_hook_token_authority.py`, 1 `test_no_unresolved_names` (one new
+source file), 3 `test_sessions_package_rules` (one new package module,
+three rules). The two failures are the known environmental pair. Node
+200/200, four listing cost ceilings pass, `scan_secrets.py` exit 0.
+
+**Prose repointed in 6 src files.** Every ``_mint_hook_token`` /
+``validate_hook_token`` / ``_hook_tmux_names`` reference in a docstring or
+comment now names the authority. A stale doc sends the next agent to write
+a bug.
+
+---
+
+## 2026-09-11 - CORRECTION: 22 of S6's new skips were a coverage hole
+
+Raised in review: skips went 20 to 76 across the round and the S6 report
+accounted for every ADDED test and not one skipped one. A skip is a test
+that does not run, and this round had already been bitten once by exactly
+that shape.
+
+**The full breakdown, from a run taken for this purpose (`pytest -q -rs`),
+before the fix. 76 total.**
+
+| count | reason | new? |
+|---|---|---|
+| 33 | `<module> does not use run_in_threadpool` | NEW, S6 |
+| 22 | `<module> is mounted onto the app by src/main.py` | NEW, S6 |
+| 9 | `CLOUDE_REAL_HOOK_TESTS` not set | pre-existing |
+| 4 | a non-object jsonl line has no key order | pre-existing |
+| 4 | corpus fidelity, no `CLOUDE_FIDELITY_DB` on this box | pre-existing |
+| 1 | `rsvg-convert` not installed | pre-existing |
+| 1 | playwright/chromium absent | pre-existing |
+| 1 | the root is allowed to be the root | pre-existing |
+| 1 | `routes.py` IS the aggregator | NEW, S6 |
+
+Pre-existing total is 20, which is the baseline figure exactly. S6 added
+56 and S7 added none.
+
+**THE 22 WERE A COVERAGE HOLE WEARING A SKIP, and it is the SAME defect I
+had already fixed once in this round, one layer out.** The first version
+of `test_every_router_a_sibling_declares_reaches_the_application` INFERRED
+"mounted elsewhere" from a module having no routes in the aggregator,
+which is what a deleted include looks like; mutation caught it and I
+replaced the inference with an explicit register. The register was still
+wrong: it turned "I decided not to check this one" into 22 silent
+non-assertions covering every archive route, the whole auth side, the
+projects routes, the clone flow and the settings write. Fixing the
+inference and keeping the exemption fixed the symptom.
+
+**The fix removes the exemption rather than justifying it.** The test now
+asserts against the ASSEMBLED APPLICATION (`src.main.app`) instead of this
+package's aggregator. A sibling reaches the app three ways - through
+`src/api/routes.py`, mounted directly by `src/main.py`, or through another
+sibling's router such as `auth_routes` or `archive_routes` - and only the
+application knows about all three, so no register and no exemption is
+needed. The only remaining conditional is `ARCHIVE_GATED`, six modules
+`src/main.py` mounts behind `MESSAGE_ARCHIVE.enabled`, named WITH THEIR
+CONDITION; `conftest.py` sets `CLOUDE_MESSAGE_ARCHIVE=1`, so under pytest
+they are mounted and DO assert.
+
+**Mutation-proved on all three mounting paths**, the way the first one
+was. (1) `src/main.py` drops `toast_router`: RED on `[toast_routes.py]`.
+(2) `auth_routes.py` drops `projects_routes.router`: RED on
+`[projects_routes.py]`. (3) the main aggregator drops `themes_routes`: RED
+on `[themes_routes.py]` AND on the fleet count. Every revert byte-identical
+by sha256. Note (1) was ALSO caught by the pre-existing
+`test_client_called_routes_exist.py`, but only because the client happens
+to call that route; nothing covered a router the client never calls.
+
+**THE REMAINING 33 ARE NOT A HOLE, and that was proved rather than
+argued.** `test_run_in_threadpool_is_available_at_module_scope` asserts
+that a module which USES the name binds it at module scope; a module whose
+source never mentions it has nothing to assert. The skip is keyed on a
+MEASURED PROPERTY OF THE FILE, not on an absent precondition, and its
+companion `test_every_route_handler_resolves_its_helper_names` runs for
+all 46 modules and never skips. Measured: adding an unbound
+`run_in_threadpool` call to `health_routes.py` dropped the skip count 33
+to 32 and turned BOTH tests red. `routes.py IS the aggregator` is the
+cycle test declining to ask whether a file imports itself.
+
+**Question 4, answered plainly: no skip introduced here can hide a real
+failure on the owner's machine.** The 34 remaining new ones are keyed on
+the source text of the file under test, which is the same on every
+machine. The 20 pre-existing ones are honest could-not-evaluates: an
+opt-in variable, a database this box does not have, two absent binaries.
+
+**Verification.** Before: 6,498 passed / 2 failed / 76 skipped, 6,576
+collected. After: **6,520 passed / 2 failed / 54 skipped**, same 6,576
+collected - the 22 skips became 22 passes and nothing else moved. The two
+failures are the known environmental pair.
 ---
 
 ## 2026-09-10 - v1.2.0 and v1.2.1 PUBLISHED on ccsliinc/CloudeCode

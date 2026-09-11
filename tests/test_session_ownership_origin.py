@@ -38,6 +38,7 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 from src.core.tmux_backend import TmuxBackend
 
 SESSION_MANAGER_PATH = ROOT / "src" / "core" / "session_manager.py"
+LEDGER_PATH = ROOT / "src" / "core" / "sessions" / "owned_tmux_ledger.py"
 TMUX_BACKEND_PATH = ROOT / "src" / "core" / "tmux_backend.py"
 
 
@@ -207,9 +208,14 @@ def test_the_ownership_decision_lives_in_ONE_place_in_session_manager():
     The original bug survived because three call sites answered this
     question three different ways, so the badge could be right on one
     screen and wrong on another. Every read now funnels through
-    ``is_owned_tmux_name`` / ``owned_tmux_instances``, and the raw
-    ``in self.owned_tmux_sessions`` membership test is allowed ONLY
-    inside those helpers.
+    ``OwnedTmuxLedger.is_owned_name`` / ``.instances``, and the raw
+    membership test is allowed ONLY inside the ledger.
+
+    Decomposition slice S3 moved the set to
+    ``src/core/sessions/owned_tmux_ledger.py`` as ``self.names``, so this
+    walks for ``self._owned.names`` and the two resolvers are no longer
+    exempted here: they have LEFT this file, which makes the guarantee
+    structural rather than a list.
     """
     source = SESSION_MANAGER_PATH.read_text()
     tree = ast.parse(source)
@@ -225,8 +231,6 @@ def test_the_ownership_decision_lives_in_ONE_place_in_session_manager():
     #
     # These disappear with the set itself in the follow-up commit.
     allowed = {
-        "is_owned_tmux_name",
-        "owned_tmux_instances",
         "rename_session",
         "destroy_external_session",
     }
@@ -243,11 +247,13 @@ def test_the_ownership_decision_lives_in_ONE_place_in_session_manager():
             if not any(isinstance(op, ast.In) for op in node.ops):
                 continue
             for comparator in node.comparators:
-                if getattr(comparator, "attr", None) == "owned_tmux_sessions":
+                if getattr(comparator, "attr", None) != "names":
+                    continue
+                if getattr(getattr(comparator, "value", None), "attr", None) == "_owned":
                     offenders.append((func.name, node.lineno))
 
     assert offenders == [], (
-        "these functions test membership of owned_tmux_sessions directly "
+        "these functions test membership of the owned name set directly "
         f"instead of going through the shared resolver: {offenders}. That "
         "is exactly how the badge came to disagree with itself before"
     )
@@ -260,10 +266,18 @@ def test_owned_tmux_sessions_is_still_alive_this_commit():
     passed against the DB as the source of truth. Deleting it in the same
     commit that introduces its replacement leaves no way to tell a
     cutover bug from a removal bug.
+
+    Decomposition slice S3 MOVED the set rather than removing it, so this
+    now reads the ledger. The guarantee is unchanged and is deliberately
+    still expressed against SOURCE TEXT: the point is that the set is
+    declared and that a save round-trips it under its ON-DISK key,
+    ``owned_tmux_sessions``, which is what a v3 metadata file written by
+    an older build spells. Asserting that through the object would pass
+    just as happily against a ledger that had quietly renamed the key.
     """
-    source = SESSION_MANAGER_PATH.read_text()
-    assert "self.owned_tmux_sessions: set[str] = set()" in source
-    assert 'payload["owned_tmux_sessions"] = sorted(self.owned_tmux_sessions)' in source
+    source = LEDGER_PATH.read_text()
+    assert "self.names: set[str] = set()" in source
+    assert 'payload["owned_tmux_sessions"] = sorted(self.names)' in source
 
 
 def test_the_adopt_path_now_persists_origin():

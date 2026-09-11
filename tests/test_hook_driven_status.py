@@ -37,6 +37,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
 from src.core.session_manager import SessionManager
 from src.core.session_status import STATUS_FINISHED_UNREAD, STATUS_IDLE, STATUS_WORKING
@@ -94,9 +95,9 @@ def _register_session(mgr: SessionManager, sid: str, tmux_name: str, working_dir
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    mgr.sessions[sid] = sess
-    mgr.backends[sid] = _FakeBackend(tmux_name)
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = _FakeBackend(tmux_name)
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 
@@ -281,7 +282,7 @@ def _build_hook_app(monkeypatch, tmp_path):
     work = tmp_path / "hook_proj"
     work.mkdir()
     _register_session(mgr, "ses_hook", "cloude_hook_proj", work)
-    mgr._mint_hook_token("ses_hook")
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -300,11 +301,11 @@ def _loopback_client(app):
 )
 def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, event):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
         resp = client.post(
@@ -324,7 +325,7 @@ def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, even
     assert "toast_id" not in payload  # no toast for activity-only events
 
     # No toast recorded.
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     # No WS broadcast fired.
     mock_bcast.assert_not_called()
 
@@ -334,7 +335,7 @@ def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, even
 
 def test_pre_tool_use_via_endpoint_updates_activity_status(monkeypatch, tmp_path):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     client.post(
@@ -353,11 +354,11 @@ def test_pre_tool_use_via_endpoint_updates_activity_status(monkeypatch, tmp_path
 def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tmp_path):
     """Stop is BOTH a toast event and an activity event - both must fire."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
         resp = client.post(
@@ -373,7 +374,7 @@ def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tm
     assert resp.status_code == 200
     payload = resp.json()
     assert "toast_id" in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
     assert mgr._is_unread("cloude_hook_proj") is True
 
@@ -381,7 +382,7 @@ def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tm
 def test_hook_endpoint_rejects_unknown_event_still(monkeypatch, tmp_path):
     """Whitelist still rejects a truly bogus event kind."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
     resp = client.post(
         "/api/v1/hooks/claude-event",

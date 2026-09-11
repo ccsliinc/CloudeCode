@@ -685,7 +685,7 @@ async def test_boot_seeds_a_resting_session_and_refuses_a_busy_one(
     await mgr._boot_readopt_task
 
     store = seeds_for(mgr)
-    by_name = {b.tmux_session: sid for sid, b in mgr.backends.items()}
+    by_name = {b.tmux_session: sid for sid, b in mgr._registry.backends.items()}
     resting_seed = store.get(by_name["cloude_resting"])
     busy_seed = store.get(by_name["cloude_busy"])
 
@@ -777,7 +777,7 @@ async def test_a_session_with_live_hook_signal_is_never_seeded(
 
     session = Session(id="ses_hooked", working_dir=wd)
     session.tmux_session = "cloude_hooked"
-    mgr.sessions["ses_hooked"] = session
+    mgr._registry.sessions["ses_hooked"] = session
     mgr._instance_epochs["ses_hooked"] = EPOCH_A
 
     # Without a hook, the warm-up seeds it.

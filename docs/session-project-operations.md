@@ -299,7 +299,7 @@ graph LR
 ```mermaid
 graph TD
     U["user clicks fork on a running session<br/>client/js/launchpad.js::_forkSession"]
-    U --> R["POST /sessions/{session_name}/fork<br/>src/api/routes.py::fork_session"]
+    U --> R["POST /sessions/{session_name}/fork<br/>src/api/session_fork_routes.py::fork_session"]
     R --> S["resolve the parent's LIVE anchor<br/>src/core/session_fork.py::resolve_fork_source"]
 
     S --> OK["READY - the row carries a claude_session_uuid"]
@@ -322,7 +322,7 @@ reverse lookup - `src/core/session_fork.py::children_of` - which costs nothing
 and cannot go stale.
 
 The fork arguments travel THROUGH the user's own wrapper rather than around
-it (`src/config.py::Settings.get_agent_command`, `extra_args`), because the
+it (`src/config/settings.py::Settings.get_agent_command`, `extra_args`), because the
 wrapper is where their auth is set up. They are deliberately not gated on
 `accepts_model`: that flag is about consuming an OpenRouter model id, and
 gating the fork flags on it would make a fork through a modelless wrapper

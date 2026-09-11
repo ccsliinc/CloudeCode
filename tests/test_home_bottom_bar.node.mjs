@@ -505,7 +505,7 @@ test('the menu rides the shared FabMenu plumbing rather than its own', () => {
 // a 500 naming the missing file. It was removed rather than shipped
 // because restarting a process belongs to whatever SUPERVISES it and this
 // server never supervises itself; the argument, and where each install
-// shape's real restart lives, is at the removal site in src/api/routes.py.
+// shape's real restart lives, is at the removal site in src/api/server_control_routes.py.
 //
 // These tests used to assert the row EXISTED. They assert its absence now,
 // for the same reason they existed before: so the control cannot come back

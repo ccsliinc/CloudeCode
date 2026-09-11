@@ -272,7 +272,7 @@ async def test_every_session_with_a_row_is_held_under_its_stored_id(
         seed_row(state_dir, mgr, name=name, epoch=epoch, agent_type="claude")
 
     # Two ids the pane environments already carry.
-    mgr._hook_tmux_names = {
+    mgr.hook_tokens.tmux_names = {
         "ses_alpha": "cloude_alpha",
         "ses_beta": "cloude_beta",
     }
@@ -293,10 +293,10 @@ async def test_every_session_with_a_row_is_held_under_its_stored_id(
     report = await mgr._boot_readopt_task
 
     assert report.outcome == READOPT_RAN
-    assert set(mgr.sessions) == {"ses_alpha", "ses_beta", "adopted:cloude_gamma"}
+    assert set(mgr._registry.sessions) == {"ses_alpha", "ses_beta", "adopted:cloude_gamma"}
 
     by_name = {
-        backend.tmux_session: sid for sid, backend in mgr.backends.items()
+        backend.tmux_session: sid for sid, backend in mgr._registry.backends.items()
     }
     assert by_name == {
         "cloude_alpha": "ses_alpha",
@@ -304,19 +304,19 @@ async def test_every_session_with_a_row_is_held_under_its_stored_id(
         "cloude_gamma": "adopted:cloude_gamma",
     }
     # Every one was actually attached, with the dead-pane-refusing path.
-    assert all(b.attach_calls == 1 for b in mgr.backends.values())
-    assert all(b.needs_pipe_setup is True for b in mgr.backends.values())
+    assert all(b.attach_calls == 1 for b in mgr._registry.backends.values())
+    assert all(b.needs_pipe_setup is True for b in mgr._registry.backends.values())
 
     # The stored agent_type is carried over, NOT re-fingerprinted.
-    assert mgr.sessions["ses_alpha"].agent_type == "claude"
-    assert mgr.sessions["ses_alpha"].agent_type_via_fingerprint is False
+    assert mgr._registry.sessions["ses_alpha"].agent_type == "claude"
+    assert mgr._registry.sessions["ses_alpha"].agent_type_via_fingerprint is False
     # created_at is the instance's tmux BIRTH, not "now". Naive UTC, the
     # convention every other Session.created_at in this codebase uses
     # (``default_factory=datetime.utcnow``), so it is compared against a
     # naive-UTC value rather than through ``.timestamp()`` - which would
     # read a naive datetime as LOCAL time and silently pass or fail by
     # the machine's offset.
-    assert mgr.sessions["ses_alpha"].created_at == datetime.fromtimestamp(
+    assert mgr._registry.sessions["ses_alpha"].created_at == datetime.fromtimestamp(
         EPOCH_A, tz=timezone.utc
     ).replace(tzinfo=None)
 
@@ -343,7 +343,7 @@ async def test_an_adopted_origin_row_is_held_too(state_dir, monkeypatch):
     report = await readopt_surviving_sessions(mgr)
 
     assert report.held == ["ses_legacy"]
-    assert mgr.backends["ses_legacy"].tmux_session == "my_own_tmux"
+    assert mgr._registry.backends["ses_legacy"].tmux_session == "my_own_tmux"
 
 
 # --------------------------------------------------------------------- #
@@ -374,11 +374,11 @@ async def test_a_cloude_session_with_no_row_is_not_claimed(
     report = await readopt_surviving_sessions(mgr)
 
     assert report.plan.skipped_for(SKIP_NO_ROW) == ["cloude_stranger"]
-    held_names = {b.tmux_session for b in mgr.backends.values()}
+    held_names = {b.tmux_session for b in mgr._registry.backends.values()}
     assert held_names == {"cloude_mine"}
     # And nothing invented an ownership record for it either, which is
     # what the attachable listing reads to answer created_by_cloude.
-    owned = mgr.owned_tmux_instances() or set()
+    owned = mgr._owned.instances() or set()
     assert ("cloude_stranger", EPOCH_B) not in owned
     assert ("cloude_mine", EPOCH_A) in owned
 
@@ -400,7 +400,7 @@ async def test_a_listing_that_did_not_run_holds_nothing_and_disowns_nothing(
     """
     mgr = SessionManager()
     seed_row(state_dir, mgr, name="cloude_mine", epoch=EPOCH_A)
-    before = mgr.owned_tmux_instances()
+    before = mgr._owned.instances()
 
     install_backends(
         monkeypatch,
@@ -413,8 +413,8 @@ async def test_a_listing_that_did_not_run_holds_nothing_and_disowns_nothing(
     assert report.outcome == READOPT_CANNOT_DETERMINE
     assert report.held == []
     assert report.plan is None, "nothing was decided, so there is no plan"
-    assert mgr.backends == {}
-    assert mgr.owned_tmux_instances() == before
+    assert mgr._registry.backends == {}
+    assert mgr._owned.instances() == before
 
 
 @pytest.mark.asyncio
@@ -432,9 +432,9 @@ async def test_boot_does_not_even_schedule_the_pass_on_a_failed_probe(
 
     await mgr.lifespan_startup()
 
-    assert mgr._boot_listing is None
+    assert mgr._owned.boot_listing is None
     assert mgr._boot_readopt_task is None
-    assert mgr.sessions == {}
+    assert mgr._registry.sessions == {}
 
 
 @pytest.mark.asyncio
@@ -448,7 +448,7 @@ async def test_the_attachable_route_answers_503_with_a_reason(
     """
     from fastapi import HTTPException
 
-    from src.api.routes import list_attachable_sessions
+    from src.api.session_attach_routes import list_attachable_sessions
 
     mgr = SessionManager()
     install_backends(
@@ -501,7 +501,7 @@ async def test_the_metadata_tmux_name_is_what_gets_attached(
 
     mgr = SessionManager()
     monkeypatch.setattr(mgr, "_sweep_orphan_uploads", _noop)
-    assert mgr.current_session() is not None, "metadata did not load"
+    assert mgr._registry.current_session() is not None, "metadata did not load"
 
     install_backends(
         monkeypatch,
@@ -513,11 +513,11 @@ async def test_the_metadata_tmux_name_is_what_gets_attached(
     if mgr._boot_readopt_task is not None:
         await mgr._boot_readopt_task
 
-    assert sid in mgr.sessions, (
+    assert sid in mgr._registry.sessions, (
         "the persisted session was dropped; the backend was almost "
         "certainly built for cloude_adopted_cloude_Media_Compression"
     )
-    assert mgr.backends[sid].tmux_session == name
+    assert mgr._registry.backends[sid].tmux_session == name
     # And the metadata file survived, rather than being cleared as stale.
     assert (state_dir / "session_metadata.json").exists()
 
@@ -552,7 +552,7 @@ async def test_running_the_pass_twice_holds_each_session_once(
     """
     mgr = SessionManager()
     seed_row(state_dir, mgr, name="cloude_alpha", epoch=EPOCH_A)
-    mgr._hook_tmux_names = {"ses_alpha": "cloude_alpha"}
+    mgr.hook_tokens.tmux_names = {"ses_alpha": "cloude_alpha"}
     install_backends(
         monkeypatch,
         discover=TmuxListing.answered([]),
@@ -565,8 +565,8 @@ async def test_running_the_pass_twice_holds_each_session_once(
     assert first.held == ["ses_alpha"]
     assert second.held == []
     assert second.plan.skipped_for(SKIP_ALREADY_HELD) == ["cloude_alpha"]
-    assert list(mgr.sessions) == ["ses_alpha"]
-    assert mgr.backends["ses_alpha"].attach_calls == 1
+    assert list(mgr._registry.sessions) == ["ses_alpha"]
+    assert mgr._registry.backends["ses_alpha"].attach_calls == 1
 
 
 @pytest.mark.asyncio
@@ -582,15 +582,15 @@ async def test_a_session_registered_ahead_of_this_pass_still_gets_its_epoch(
     ever resolves an epoch for it, and nothing in the legacy path writes
     ``manager._instance_epochs``. Simulate that race directly: register
     a session the SAME way the legacy path does (a row in
-    ``manager.sessions``/``manager.backends``, no entry in
+    ``manager._registry.sessions``/``manager._registry.backends``, no entry in
     ``_instance_epochs``) and run this pass over a listing that names the
     same tmux session.
     """
     mgr = SessionManager()
     name = "cloude_PT-IMC"
     backend = FakeBackend("ses_legacy", "/tmp", session_name=name)
-    mgr.backends["ses_legacy"] = backend
-    mgr.sessions["ses_legacy"] = Session(id="ses_legacy", working_dir="/tmp")
+    mgr._registry.backends["ses_legacy"] = backend
+    mgr._registry.sessions["ses_legacy"] = Session(id="ses_legacy", working_dir="/tmp")
     assert "ses_legacy" not in mgr._instance_epochs, (
         "the legacy path never writes this - that is the whole defect"
     )
@@ -641,7 +641,7 @@ async def test_one_refused_pane_does_not_take_the_others_down(
 
     assert report.held == ["adopted:cloude_alpha"]
     assert [name for name, _err in report.failed] == ["cloude_dead"]
-    assert "adopted:cloude_dead" not in mgr.sessions
+    assert "adopted:cloude_dead" not in mgr._registry.sessions
 
 
 # --------------------------------------------------------------------- #
@@ -663,7 +663,7 @@ async def test_a_hook_for_a_re_adopted_session_raises_a_toast(
     """
     mgr = SessionManager()
     seed_row(state_dir, mgr, name="cloude_alpha", epoch=EPOCH_A)
-    mgr._hook_tmux_names = {"ses_alpha": "cloude_alpha"}
+    mgr.hook_tokens.tmux_names = {"ses_alpha": "cloude_alpha"}
     install_backends(
         monkeypatch,
         discover=TmuxListing.answered([]),
@@ -693,7 +693,7 @@ async def test_the_current_session_pointer_is_not_decided_by_a_race(
 ):
     """Re-adopting N sessions must not steal "current" from the last one.
 
-    ``_register_session`` moves ``_last_session_id``, and these attaches
+    ``_register_session`` moves ``last_session_id``, and these attaches
     finish in whatever order tmux answers. Without the guard, the session
     the user was last in is replaced by whichever pane came back last -
     a different answer on every boot, over identical state.
@@ -710,17 +710,17 @@ async def test_the_current_session_pointer_is_not_decided_by_a_race(
     )
 
     # Stand in for the single-session rehydrate that ran just before us.
-    mgr._register_session(
+    mgr._registry.register(
         Session(id="ses_rehydrated", working_dir="/tmp",
                 tmux_session="cloude_rehydrated"),
         None,
     )
-    assert mgr.current_session().id == "ses_rehydrated"
+    assert mgr._registry.current_session().id == "ses_rehydrated"
 
     await readopt_surviving_sessions(mgr)
 
-    assert mgr.current_session().id == "ses_rehydrated"
-    assert len(mgr.sessions) == 3
+    assert mgr._registry.current_session().id == "ses_rehydrated"
+    assert len(mgr._registry.sessions) == 3
 
 
 @pytest.mark.asyncio
@@ -745,7 +745,7 @@ async def test_with_no_prior_current_the_pointer_is_deterministic(
 
     await readopt_surviving_sessions(mgr)
 
-    assert mgr.current_session().id == "adopted:cloude_alpha"
+    assert mgr._registry.current_session().id == "adopted:cloude_alpha"
 
 
 @pytest.mark.asyncio
@@ -756,7 +756,7 @@ async def test_a_session_entered_during_the_pass_keeps_the_pointer(
 
     This task is NOT awaited by boot: uvicorn has already bound the port
     by the time it runs, so a user can create or enter a session while
-    the gather is still in flight. That moves ``_last_session_id`` to a
+    the gather is still in flight. That moves ``last_session_id`` to a
     session none of these attaches produced. Re-pinning the boot default
     over it would take "current" away from the session the user is
     actually looking at, so the pass only overrules a pointer its OWN
@@ -776,8 +776,8 @@ async def test_a_session_entered_during_the_pass_keeps_the_pointer(
     # The user's create lands in the window between the LAST attach
     # registering and the pointer being restored below it. Registering
     # the session is exactly what the create path does, and it moves
-    # ``_last_session_id``.
-    register = mgr._register_session
+    # ``last_session_id``.
+    register = mgr._registry.register
     registered = []
 
     def register_then_maybe_user_creates(session, backend):
@@ -794,9 +794,9 @@ async def test_a_session_entered_during_the_pass_keeps_the_pointer(
             )
 
     monkeypatch.setattr(
-        mgr, "_register_session", register_then_maybe_user_creates
+        mgr._registry, "register", register_then_maybe_user_creates
     )
 
     await readopt_surviving_sessions(mgr)
 
-    assert mgr.current_session().id == "ses_user_made"
+    assert mgr._registry.current_session().id == "ses_user_made"

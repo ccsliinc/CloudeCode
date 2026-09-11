@@ -64,6 +64,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
+import src.api.session_records_routes as records_routes_mod
 from src.api.auth import require_auth
 from src.core import session_store
 from src.core.db_steps import run_chain
@@ -246,17 +248,17 @@ def _build_hook_app(monkeypatch, tmp_path, *, store=None, router=None):
 
     work = tmp_path / "mute_proj"
     work.mkdir(exist_ok=True)
-    mgr.sessions["ses_mute"] = Session(
+    mgr._registry.sessions["ses_mute"] = Session(
         id="ses_mute",
         pty_pid=None,
         working_dir=str(work),
         status=SessionStatus.RUNNING,
         tmux_session=TMUX_NAME,
     )
-    mgr.backends["ses_mute"] = _FakeBackend(TMUX_NAME)
-    mgr._subscribers.setdefault("ses_mute", [])
+    mgr._registry.backends["ses_mute"] = _FakeBackend(TMUX_NAME)
+    mgr._registry.subscribers.setdefault("ses_mute", [])
     mgr._instance_epochs["ses_mute"] = TMUX_EPOCH
-    mgr._mint_hook_token("ses_mute")
+    mgr.hook_tokens.mint("ses_mute")
     if store is not None:
         mgr.attach_notification_policy_store(store)
     if router is not None:
@@ -279,7 +281,7 @@ def _post_event(app, mgr, event: str):
     """
     client = TestClient(app, client=("127.0.0.1", 12345))
     with patch.object(
-        routes_mod.connection_manager,
+        hook_routes_mod.connection_manager,
         "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
@@ -287,7 +289,7 @@ def _post_event(app, mgr, event: str):
             "/api/v1/hooks/claude-event",
             headers={
                 "X-Cloudecode-Session": "ses_mute",
-                "X-Cloudecode-Token": mgr.get_hook_token("ses_mute"),
+                "X-Cloudecode-Token": mgr.hook_tokens.get("ses_mute"),
                 "X-Cloudecode-Event": event,
                 "Content-Type": "application/json",
             },
@@ -717,7 +719,7 @@ def test_a_muted_session_raises_no_web_alert_for_any_toast_kind(
     assert payload["ok"] is True
     assert "toast_id" not in payload
     assert payload["toast_suppressed"] == "notifications_muted"
-    assert mgr.get_toasts("ses_mute") == []
+    assert mgr._toast_inbox.get("ses_mute") == []
     mock_bcast.assert_not_called()
 
 
@@ -760,7 +762,7 @@ def test_an_unmuted_session_still_raises_and_still_pushes(
 
     assert resp.status_code == 200, resp.text
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_mute")) == 1
+    assert len(mgr._toast_inbox.get("ses_mute")) == 1
     mock_bcast.assert_called_once()
     assert len(router.emitted) == 1
     assert router.emitted[0].policy_key == "u1"
@@ -786,7 +788,7 @@ def test_an_unreadable_policy_suppresses_rather_than_notifying(
     resp, mock_bcast = _post_event(app, mgr, "Stop")
 
     assert resp.json()["toast_suppressed"] == "notifications_muted"
-    assert mgr.get_toasts("ses_mute") == []
+    assert mgr._toast_inbox.get("ses_mute") == []
     mock_bcast.assert_not_called()
 
 
@@ -863,11 +865,11 @@ def test_muting_does_not_acknowledge_a_toast_already_on_record(
         monkeypatch, tmp_path, store=store, router=_RecordingRouter()
     )
     _post_event(app, mgr, "PermissionRequest")
-    assert len(mgr.get_toasts("ses_mute", unacked_only=True)) == 1
+    assert len(mgr._toast_inbox.get("ses_mute", unacked_only=True)) == 1
 
     store.apply("u1", muted=True, generation=1)
 
-    remaining = mgr.get_toasts("ses_mute", unacked_only=True)
+    remaining = mgr._toast_inbox.get("ses_mute", unacked_only=True)
     assert len(remaining) == 1
     assert remaining[0].acknowledged is False
 
@@ -992,7 +994,7 @@ def _records_app(monkeypatch, tmp_path, store=None):
         def get_state_dir(self):
             return state
 
-    monkeypatch.setattr(routes_mod, "settings", _S())
+    monkeypatch.setattr(records_routes_mod, "settings", _S())
 
     from src.core.db import db_path_for
 
@@ -1152,29 +1154,29 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
 
     verdict = mgr._startup_gate_for(
         session_id="ses_mute",
-        backend=mgr.backends["ses_mute"],
+        backend=mgr._registry.backends["ses_mute"],
         tmux_name=TMUX_NAME,
         row=row,
         liveness=LIVENESS_LIVE,
     )
 
     assert verdict == GATE_AWAITING
-    assert mgr.get_toasts("ses_mute") == []
-    assert mgr._pending_startup_toasts == []
+    assert mgr._toast_inbox.get("ses_mute") == []
+    assert mgr._toast_inbox.pending_startup == []
 
     # Unmuting does not replay it: the claim was spent while muted.
     store.apply("u1", muted=False, generation=2)
     assert (
         mgr._startup_gate_for(
             session_id="ses_mute",
-            backend=mgr.backends["ses_mute"],
+            backend=mgr._registry.backends["ses_mute"],
             tmux_name=TMUX_NAME,
             row=row,
             liveness=LIVENESS_LIVE,
         )
         == GATE_AWAITING
     )
-    assert mgr.get_toasts("ses_mute") == []
+    assert mgr._toast_inbox.get("ses_mute") == []
 
 
 def test_an_unmuted_session_still_gets_its_startup_prompt_toast(
@@ -1197,10 +1199,10 @@ def test_an_unmuted_session_still_gets_its_startup_prompt_toast(
 
     verdict = mgr._startup_gate_for(
         session_id="ses_mute",
-        backend=mgr.backends["ses_mute"],
+        backend=mgr._registry.backends["ses_mute"],
         tmux_name=TMUX_NAME,
         row=row,
         liveness=LIVENESS_LIVE,
     )
     assert verdict == GATE_AWAITING
-    assert len(mgr.get_toasts("ses_mute")) == 1
+    assert len(mgr._toast_inbox.get("ses_mute")) == 1

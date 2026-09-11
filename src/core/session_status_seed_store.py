@@ -147,7 +147,7 @@ class SessionStatusSeeds:
           rather than by everything the process has ever seen.
         Inputs: live_ids (Iterable[str]) - the ids to keep.
         Output: int - how many seeds were dropped.
-        Example: seeds.prune(manager.sessions)
+        Example: seeds.prune(registry.sessions)
         """
         keep = set(live_ids or ())
         stale = [sid for sid in self._seeds if sid not in keep]

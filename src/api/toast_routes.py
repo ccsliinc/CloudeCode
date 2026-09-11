@@ -71,9 +71,10 @@ MAX_UNACKED_LIMIT = 500
 def _buckets(request: Request) -> Dict[str, Any]:
     """Return the process's per-session toast buckets.
 
-    Description: resolves the session manager off ``app.state`` and hands
-        it to the core module's accessor. A request that arrives before
-        the manager is mounted yields empty buckets rather than a 500 -
+    Description: resolves the toast inbox off ``app.state.services`` and
+        hands it to the core module's accessor. A request that arrives
+        before the services are mounted yields empty buckets rather than a
+        500 -
         an empty notification list is the correct answer for a server
         with no sessions, and failing the request would take the client's
         poll loop down for a state that resolves itself.
@@ -81,8 +82,9 @@ def _buckets(request: Request) -> Dict[str, Any]:
     Output: mapping of session id to that session's records.
     Example: _buckets(request)  # {'ses_a': [Toast(...)]}
     """
-    manager = getattr(request.app.state, "session_manager", None)
-    return dict(toast_history.buckets_from_manager(manager))
+    services = getattr(request.app.state, "services", None)
+    inbox = services.toasts if services is not None else None
+    return dict(toast_history.buckets_from_inbox(inbox))
 
 
 @router.get(

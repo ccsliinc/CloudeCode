@@ -1,7 +1,7 @@
 """One-shot recovery for a hook token this server superseded under a live agent.
 
 THE DEFECT THIS EXISTS TO FIX, measured on the owner's box 2026-09-08.
-``SessionManager._mint_hook_token`` REPLACES the token held for a session
+``HookTokenAuthority.mint`` REPLACES the token held for a session
 id. The same token was baked into the tmux pane's environment at
 ``new-session`` time and is read from there by the agent at hook-fire
 time, so it is fixed for the life of that process and CANNOT be re-issued
@@ -47,7 +47,7 @@ oversight. A superseded token is recoverable only while the process that
 superseded it is still running. A server restart drops the ring, which is
 correct on both counts: writing superseded credentials to disk would
 widen their exposure window past the mistake they exist to correct, and a
-restart already has its own answer - ``_load_hook_tokens`` restores the
+restart already has its own answer - ``HookTokenAuthority.load`` restores the
 live token and the boot re-adopt re-keys the pane to the id its agent
 presents (``ID_SOURCE_HOOK_TOKEN``). What this cannot repair is a mint
 followed by a restart, and that case degrades to the pre-existing
@@ -211,7 +211,7 @@ class SupersededHookTokens:
             )
 
         for token, name in scoped:
-            # Constant time, same as ``validate_hook_token``. The lengths
+            # Constant time, same as ``HookTokenAuthority.validate``. The lengths
             # are equal in practice (token_urlsafe(32) throughout) but a
             # forged input of another length must not short-circuit
             # differently, so the exception path answers no-match too.

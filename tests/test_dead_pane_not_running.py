@@ -96,15 +96,15 @@ def mgr(monkeypatch, tmp_path):
 
 
 def _register(m: SessionManager, sid: str, tmux_name: str, wd: Path, exists=True):
-    m.sessions[sid] = Session(
+    m._registry.sessions[sid] = Session(
         id=sid,
         pty_pid=None,
         working_dir=str(wd),
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    m.backends[sid] = _FakeBackend(tmux_name, exists=exists)
-    m._subscribers.setdefault(sid, [])
+    m._registry.backends[sid] = _FakeBackend(tmux_name, exists=exists)
+    m._registry.subscribers.setdefault(sid, [])
 
 
 def _row(name: str, status: str):

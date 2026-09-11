@@ -43,10 +43,11 @@ class Server:
         from fastapi.testclient import TestClient
 
         from src.api import routes
+        from src.api import session_crud_routes
         from src.api.auth import require_auth
 
         self.state_dir = state_dir
-        routes.settings.__class__.get_state_dir = lambda _self: state_dir
+        session_crud_routes.settings.__class__.get_state_dir = lambda _self: state_dir
 
         class _Manager:
             def tmux_socket_name(_self):

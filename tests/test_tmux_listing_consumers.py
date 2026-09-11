@@ -139,8 +139,8 @@ async def test_failed_probe_does_not_prune_owned_sessions(monkeypatch, tmp_path,
     """
     mgr = _manager(monkeypatch, tmp_path)
     owned = {"cloude_Test", "cloude_asd", "cloude_fs2", "cloude_ses_ec5bf2a3"}
-    mgr.owned_tmux_sessions = set(owned)
-    mgr.pinned_themes = {"cloude_Test": "matrix"}
+    mgr._owned.names = set(owned)
+    mgr._theme_store.pinned_themes = {"cloude_Test": "matrix"}
 
     monkeypatch.setattr(
         "src.core.session_manager.build_backend",
@@ -148,11 +148,11 @@ async def test_failed_probe_does_not_prune_owned_sessions(monkeypatch, tmp_path,
     )
     await mgr._lifespan_tmux_reconcile()
 
-    assert mgr.owned_tmux_sessions == owned, (
+    assert mgr._owned.names == owned, (
         "a probe that could not evaluate pruned ownership records; an "
         "unanswered question was treated as an answer of zero"
     )
-    assert mgr.pinned_themes == {"cloude_Test": "matrix"}, (
+    assert mgr._theme_store.pinned_themes == {"cloude_Test": "matrix"}, (
         "pinned themes were pruned against an unavailable listing too"
     )
 
@@ -166,8 +166,8 @@ async def test_successful_empty_probe_still_prunes(monkeypatch, tmp_path):
     same defect as collapsing it into fail.
     """
     mgr = _manager(monkeypatch, tmp_path)
-    mgr.owned_tmux_sessions = {"cloude_gone"}
-    mgr.pinned_themes = {"cloude_gone": "matrix"}
+    mgr._owned.names = {"cloude_gone"}
+    mgr._theme_store.pinned_themes = {"cloude_gone": "matrix"}
 
     monkeypatch.setattr(
         "src.core.session_manager.build_backend",
@@ -177,11 +177,11 @@ async def test_successful_empty_probe_still_prunes(monkeypatch, tmp_path):
     )
     await mgr._lifespan_tmux_reconcile()
 
-    assert mgr.owned_tmux_sessions == set(), (
+    assert mgr._owned.names == set(), (
         "tmux answered 'no server running', which is a real zero - the "
         "stale ownership record should have been pruned"
     )
-    assert mgr.pinned_themes == {}
+    assert mgr._theme_store.pinned_themes == {}
 
 
 @pytest.mark.asyncio
@@ -190,14 +190,14 @@ async def test_live_sessions_survive_a_failed_probe_and_prune_when_gone(
 ):
     """A partial listing prunes only what it actually contradicts."""
     mgr = _manager(monkeypatch, tmp_path)
-    mgr.owned_tmux_sessions = {"cloude_alive", "cloude_gone"}
+    mgr._owned.names = {"cloude_alive", "cloude_gone"}
 
     monkeypatch.setattr(
         "src.core.session_manager.build_backend",
         lambda *a, **k: _ProbeBackend(TmuxListing.answered(["cloude_alive"])),
     )
     await mgr._lifespan_tmux_reconcile()
-    assert mgr.owned_tmux_sessions == {"cloude_alive"}
+    assert mgr._owned.names == {"cloude_alive"}
 
 
 # =========================================================================== #
@@ -216,7 +216,13 @@ class _RouteManager:
     def __init__(self, listing: TmuxListing):
         self._listing = listing
         self.backends: dict = {}
-        self.owned_tmux_sessions: set = set()
+        # No owned-name set here on purpose. The attachable route reads
+        # ``list_attachable_sessions()`` and nothing else off the manager,
+        # and this double used to carry an owned set that no assertion
+        # ever observed. A double that answers a question the code never
+        # asks agrees with whatever it was built to agree with; if a
+        # future change does start reading the ledger through here, the
+        # AttributeError is a loud failure, which is the point.
 
     def list_attachable_sessions(self) -> TmuxListing:
         return self._listing

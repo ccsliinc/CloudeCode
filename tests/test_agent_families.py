@@ -301,3 +301,69 @@ def test_family_registry_is_the_only_source_of_reserved_types():
 
 def test_every_family_name_is_in_the_by_name_index():
     assert set(AGENT_FAMILY_BY_NAME) == set(AGENT_FAMILY_NAMES)
+
+
+# --------------------------------------------------------------------------- #
+# The two lazy inputs to agent_command, decomposition slice S5               #
+# --------------------------------------------------------------------------- #
+#
+# ``agent_command`` takes CALLABLES for the state directory and the
+# alternate-screen setting rather than values. A mutation that resolved
+# the state directory eagerly came back GREEN across every test that
+# existed, because no test had ever made that resolution FAIL - and
+# failing is the only thing the laziness protects against.
+
+
+def test_a_static_command_launch_never_resolves_the_state_directory():
+    """An unwritable state directory must not break a wrapper-less launch.
+
+    Description: ``Settings.get_state_dir`` raises
+      ``StateDirUnavailableError`` when it cannot create the directory,
+      and in the wrapper-less branch there is no scripts directory to
+      need. Resolving it up front would fail a launch that has always
+      worked, on exactly the box least able to afford another problem.
+    Inputs: none.
+    Output: None.
+    """
+    from src.config.agent_command import agent_command
+    from src.config.agents import AgentsConfig
+
+    def _explode() -> str:
+        raise AssertionError(
+            "the state directory was resolved for a launch with no wrapper"
+        )
+
+    command = agent_command(
+        "shell",
+        agents=AgentsConfig(),
+        resolve_state_dir=_explode,
+        disable_alternate_screen=lambda: False,
+    )
+
+    assert command, "a wrapper-less launch produced no command at all"
+
+
+def test_the_alternate_screen_setting_is_read_at_launch_and_not_before():
+    """It is read per launch so a change takes effect with no restart.
+
+    Description: reading it eagerly would capture the value as it stood
+      when the agents block was loaded, so a user who switched the
+      setting would keep getting the old renderer until the server was
+      restarted.
+    """
+    from src.config.agent_command import agent_command
+    from src.config.agents import AgentsConfig
+
+    reads = []
+
+    def _record() -> bool:
+        reads.append(True)
+        return False
+
+    agent_command(
+        "shell",
+        agents=AgentsConfig(),
+        resolve_state_dir=lambda: "/tmp",
+        disable_alternate_screen=_record,
+    )
+    assert reads == [], "read on a path that has no wrapper to configure"

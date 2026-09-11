@@ -5062,7 +5062,7 @@ class Launchpad {
     // Shipping the script would not have fixed it: a process restart belongs
     // to whatever SUPERVISES the process, and the python server never
     // supervises itself. The full argument, and where each install shape's
-    // real restart lives, is at the removal site in src/api/routes.py.
+    // real restart lives, is at the removal site in src/api/server_control_routes.py.
     //
     // If this comes back, it comes back as an action the supervisor performs.
 

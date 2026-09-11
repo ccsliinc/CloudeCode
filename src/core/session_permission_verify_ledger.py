@@ -131,7 +131,7 @@ class PermissionCheckLedger:
             superseded claim's key is harmless and is never read again.
         Inputs: live_session_ids (iterable[str]).
         Output: None.
-        Example: ledger.prune(manager.sessions.keys())
+        Example: ledger.prune(registry.sessions.keys())
         """
         live = set(live_session_ids)
         for key in [k for k in self._reads if k[0] not in live]:

@@ -14,7 +14,7 @@
  * packaged install. It was removed rather than shipped because restarting a
  * process belongs to whatever SUPERVISES it, and this server never supervises
  * itself - the full argument, and where each install shape's real restart
- * lives, is at the removal site in src/api/routes.py. Withdrawing it cost
+ * lives, is at the removal site in src/api/server_control_routes.py. Withdrawing it cost
  * exactly what this file's design promised, in reverse: one entry in
  * ENTRY_IDS, one icon, one row in buildItems(), and nothing
  * else. Keep it that way - the rendering, the fetching and the one
@@ -122,7 +122,7 @@ console.log('[ServerControlsMenu Module] Loading...');
         // app, so the row 500'd on every packaged install. Restarting the
         // process belongs to whatever supervises it, never to the process
         // itself; the argument and each install shape's real restart are
-        // recorded at the removal site in src/api/routes.py. Do not
+        // recorded at the removal site in src/api/server_control_routes.py. Do not
         // re-add a row here without a supervisor-owned action behind it.
         return [statusRow];
     }

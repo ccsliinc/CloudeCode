@@ -110,15 +110,15 @@ def _manager(monkeypatch, tmp_path: Path) -> SessionManager:
     monkeypatch.setattr("src.core.session_manager.settings", stub)
     mgr = SessionManager()
 
-    mgr.sessions[SESSION_ID] = Session(
+    mgr._registry.sessions[SESSION_ID] = Session(
         id=SESSION_ID,
         pty_pid=None,
         working_dir=str(tmp_path),
         status=SessionStatus.RUNNING,
         tmux_session=TMUX_NAME,
     )
-    mgr.backends[SESSION_ID] = _FakeBackend(TMUX_NAME)
-    mgr._subscribers.setdefault(SESSION_ID, [])
+    mgr._registry.backends[SESSION_ID] = _FakeBackend(TMUX_NAME)
+    mgr._registry.subscribers.setdefault(SESSION_ID, [])
 
     monkeypatch.setattr(
         mgr,

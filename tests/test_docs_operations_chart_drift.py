@@ -44,16 +44,35 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHART = REPO_ROOT / "docs" / "session-project-operations.md"
 
+def _router_files() -> Tuple[str, ...]:
+    """Every module under ``src/api`` that declares an ``APIRouter``.
+
+    Description: DISCOVERED rather than listed. This used to be a hand
+      written tuple naming ``src/api/routes.py`` and six siblings, and
+      decomposition slice S6 turned that one file into twenty-three. A
+      hardcoded list does not fail when the code moves - it quietly stops
+      covering the routes it no longer names, and the chart it guards
+      goes stale with a green suite, which is the exact failure this file
+      exists to catch.
+    Inputs: none.
+    Output: repo-relative paths, sorted.
+    Example: ``("src/api/agent_wrappers_routes.py", ...)``.
+    """
+    found = []
+    for path in sorted((REPO_ROOT / "src" / "api").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        if "= APIRouter(" not in path.read_text():
+            continue
+        found.append(str(path.relative_to(REPO_ROOT)))
+    # An empty discovery would pass every assertion below without
+    # checking anything.
+    assert len(found) >= 25, found
+    return tuple(found)
+
+
 #: Routers whose decorators the METHOD /route citations are checked against.
-ROUTER_FILES: Tuple[str, ...] = (
-    "src/api/routes.py",
-    "src/api/auth.py",
-    "src/api/session_groups_routes.py",
-    "src/api/config_files_routes.py",
-    "src/api/status_routes.py",
-    "src/api/setup_routes.py",
-    "src/api/version_routes.py",
-)
+ROUTER_FILES: Tuple[str, ...] = _router_files()
 
 #: `path::symbol`, inside backticks so prose cannot accidentally enrol.
 _SYMBOL_CITATION = re.compile(

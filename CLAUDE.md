@@ -16,7 +16,7 @@ Read this before writing code here. It is orientation first, conventions second.
 | Terminal | tmux (live backend) driving a PTY, xterm.js client-side | `src/core/tmux_backend.py`, `client/js/terminal.js` |
 | Frontend | vanilla JS, no framework, NO build step for `client/` | `client/` |
 | Desktop shell | Electron wrapper (has its own `package.json`) | `macOS/` |
-| State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config.py`, `src/core/refresh_store.py` |
+| State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config/`, `src/core/refresh_store.py` |
 
 `client/` is served straight off disk under `/static`. There is no bundler, no
 transpile, no `client/package.json`. A file you add there is live on reload, so
@@ -42,9 +42,29 @@ guessing.
 **Created vs adopted is a real distinction, not a detail.** Cloude Code can
 attach to a tmux session it did not create. A TRULY external one - no row for
 its instance triple - gets an id of `adopted:<tmux-name>` and is absent from
-`owned_tmux_sessions`. Anything that parses, matches, displays or routes on a
+the owned tmux name set. Anything that parses, matches, displays or routes on a
 session id has to handle both shapes. Strip the prefix to recover the tmux name;
 do not assume the id is a clean display string.
+
+**THAT SET LIVES ON `OwnedTmuxLedger`, NOT ON THE MANAGER, AND SO DOES THE FILE
+THAT REMEMBERS IT.** `src/core/sessions/owned_tmux_ledger.py` owns the set (as
+`.names`), the pre-v3 backfill sentinel, the boot listing,
+`session_metadata.json` and the two datastore-backed ownership queries
+(`is_owned_name`, `instances`). `SessionManager` holds one as `self._owned` and
+keeps no copy and no forwarder; `build_services` hands the same object to
+`AppServices.owned_tmux`, so a route reaches it there rather than through the
+manager. `owned_tmux_sessions` is still the ON-DISK key in that file and must
+stay spelled that way, because a v3 file written by an older build uses it.
+
+Two halves of that file are unrelated and must not be confused: the owned set is
+about EVERY session this app created, and the session pointer is about the one
+most-recently-active. `drop_session_pointer` unlinks the pointer and re-writes
+the set, because unlinking the file outright threw away N sessions' ownership
+record to clean up one, on the ORDINARY path - after which every
+launcher-created session resolved EXTERNAL. The write is tmp plus `fsync` plus
+`os.replace` and `tests/test_owned_tmux_ledger.py` measures the protocol rather
+than the resulting file, because a plain in-place write produces identical
+contents and no atomicity.
 
 **AN ADOPTION RESOLVES THE ID, IT DOES NOT MINT ONE, and the difference is the
 hook path.** `adopt_external_session` opened with the literal
@@ -75,7 +95,11 @@ behind. Measured on live minutes after the re-key shipped: the rehydrated
 `adopted:cloude_Agent_-_Cloude_Code`, the browser's adopt correctly re-keyed to
 `ses_fb8dd410`, and `GET /sessions/list` returned **22 rows for 21 live tmux
 sessions** - one pane, two backends, two tailers on one FIFO.
-`_registered_ids_for_tmux_name` is what enforces the rule. Note this was caught
+`SessionRegistry.registered_ids_for_tmux_name` is what enforces the rule; it
+lives on the registry rather than the manager because it has to run against
+the very `backends` dict the registration path writes, and a second dict
+holding a copy answers every equality assertion while missing the second
+registration. Note this was caught
 only because the deploy was verified against `/sessions/list` rather than
 against the `boot_readopt_complete` log line, which was perfect.
 
@@ -143,7 +167,7 @@ ladder unable to identify the instance for the life of the process.
 **EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
 The owner's rule, verbatim: "all sessions belong to projects, the root folder
 ... its impossible to not have a project." Nothing in memory carries it - the
-`Session` model (`src/models.py:138`) has no project field and `SessionInfo`
+`Session` model (`src/models/sessions.py:45`) has no project field and `SessionInfo`
 ships none, so `/sessions/list` cannot lose a project and cannot restore one.
 The launchpad tree reads `project_id` / `project_attribution` off
 `GET /sessions/records`, joined to the live session by tmux name plus epoch in
@@ -313,15 +337,24 @@ beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
 
-**Config writes are atomic and backed up.** Copy the pattern in
-`Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the
-pre-write bytes first, then temp file, `fsync`, `os.replace`. A half-written
-`config.json` costs the user their whole setup, so there is no "just dump the
-JSON" shortcut anywhere in this codebase.
+**Config writes are atomic and backed up, and there is now ONE of them.**
+`src/config/config_file.py::write_config_atomic` is the pattern: write the
+`.bak` of the pre-write bytes first, then temp file, `fsync`, `os.replace`. A
+half-written `config.json` costs the user their whole setup, so there is no
+"just dump the JSON" shortcut anywhere in this codebase. Do not re-spell it;
+both writers (the settings PATCH and the wrapper CRUD) call that one function.
+
+**AND ITS ATOMICITY IS TESTED BY ITS MECHANISM, NOT BY ITS OUTCOME.** Replacing
+tmp-plus-rename with a plain in-place write leaves IDENTICAL final bytes, so
+every outcome assertion stays green; the two differ only when the write does not
+finish. `tests/test_config_settings.py` therefore stages a failure part way
+through and asserts the destination is untouched, and separately asserts the
+destination is never opened for writing at all.
 
 ## The `/sessions/list` shape
 
-`GET /sessions/list` returns `SessionInfo` objects (`src/models.py`), and the
+`GET /sessions/list` returns `SessionInfo` objects
+(`src/models/sessions.py`), and the
 fields sit on **two different levels**:
 
 - On the wrapper: `activity_status`, `unread`, `startup_gate`, `tmux_session`,
@@ -693,14 +726,121 @@ per server process and no subprocess at all.
 - **Every function documented**: one-line description, typed inputs, typed
   output, and an example when the usage is not obvious. Types belong in the
   Python signature, not only in the docstring.
+- **A pure forwarder is exempt from the full docstring rule.** A member whose
+  entire body is `return self._collaborator.method(...)` has no behaviour of
+  its own to document. Restating the collaborator's contract creates a SECOND
+  copy of it that can go stale, and a confidently wrong doc sends the next
+  agent to write a bug. Such a member carries one line naming its replacement
+  and its delete date, and nothing else. The exemption applies ONLY to a member
+  marked deprecated with a delete date, so it cannot be stretched to cover a
+  thin method that does anything at all: one argument reshaped, one default
+  filled in, one error translated, and the full rule applies again. Types still
+  belong in the signature, on the forwarder as on everything else. The
+  measurement behind this: the first five decomposition slices left 23 pure
+  forwarders costing 291 lines, an average of 12.7 lines to forward one call,
+  which is why two of those three slices GREW the file they were shrinking.
 - **DRY, single source of truth, named constants.** No magic strings. A literal
   like the hook marker or the socket name lives in exactly one module and gets
   imported.
 - **New logic goes in new focused modules.** These files are already past the
   500-line guideline and should not grow: `client/js/terminal.js`,
   `client/js/launchpad.js`, `client/js/app.js`, `client/css/styles.css`,
-  `src/config.py`, `src/api/routes.py`, `src/core/session_manager.py`. Edit them
-  when the change belongs there; do not use them as the default landing spot.
+  `src/api/routes.py`, `src/core/session_manager.py`. Edit them when the change
+  belongs there; do not use them as the default landing spot.
+- **`src/config/` is a package**, not a module: one typed block of `config.json`
+  per file, `settings.py` holding only the env-backed fields and the two caches,
+  and the behaviour in named siblings (`auth_loader`, `state_paths`,
+  `agent_command`, `config_file`, `config_writes`, `summary`, `wrappers`,
+  `provider_models`). `__init__.py` re-exports every public name the flat module
+  had, so `from src.config import settings` is unchanged.
+  **`settings.py` IS OVER THE 500-LINE GUIDELINE AT 632 AND THE OWNER HAS RULED
+  THAT IT STAYS THERE.** His words, 2026-09-10, on being shown the one open
+  question S5 left: "Leave it it's ok". This is a RULING, recorded in
+  `docs/DECISIONS.md` under "`src/config/settings.py` stays over 500 lines", and
+  it binds both sides: do not "fix" this file to hit a line count. The class
+  keeps 31 public names because 111 modules import from this package and the
+  suite patches those members on the CLASS (23 sites patch `state_dir_override`,
+  eight patch `type(sm.settings).get_state_dir`); a name that stopped resolving
+  there would be invisible to every one of them. The bodies are all gone - what
+  remains is 109 lines of pre-existing field declarations and 31 typed entry
+  points averaging 13 lines. Getting under 500 needs the entry points DELETED
+  and their ~45 callers migrated, which is Rule B applied to `Settings`. That is
+  its own slice, it is filed as a FUTURE OPTIONAL slice in
+  `.claude/notes/backend-decomposition-plan.md` and in `.claude/TODO.md`, and it
+  is NOT SCHEDULED.
+- **`src/core/sessions/` holds the collaborators `SessionManager` composes**, one
+  mutable state cluster each, per
+  `.claude/notes/backend-decomposition-plan.md`. THE STATE MOVES, IT NEVER
+  COPIES: a collaborator holds the one and only copy of its cluster and the
+  facade keeps none, because two objects holding one logical state and kept in
+  sync by hand is the shape of the bug that produced 22 `/sessions/list` rows
+  for 21 live panes. `SessionManager()` still takes NO required arguments (104
+  test files construct it bare); a collaborator is an optional KEYWORD-ONLY
+  argument with a default-constructed value, so injection is available to a new
+  test and invisible to every old one. Two rules hold for every module in the
+  package and both are enforced by `tests/test_sessions_package_rules.py`
+  rather than remembered: nothing in there may import `session_manager`, and no
+  file exceeds 500 lines. `ProbeHealthRecorder` (slice S1) is the worked
+  example, and `ProbeHealth` is DEFINED there and re-exported from
+  `session_manager` so every existing import keeps resolving. `ThemeStore`
+  (S2, with `theme_accents` and `theme_dotfile` beside it) is the worked
+  example for a cluster of DICTS, and it carries two rules the scalar one
+  could not teach. **A moved attribute that anything REBINDS needs a
+  property SETTER that writes through to the collaborator**: several tests
+  assign `mgr.pinned_themes = {...}` wholesale, and a read-only property
+  raises while a plain instance attribute silently shadows the property and
+  forks the two objects while every value assertion still passes. **And a
+  collaborator that does file I/O takes its path as a zero-argument
+  CALLABLE, not a `settings` import.** Every theme test redirects state with
+  `monkeypatch.setattr("src.core.session_manager.settings", stub)`, which
+  patches the name in THAT module; a collaborator importing `settings`
+  itself does not see it and reads and WRITES the developer's real
+  `~/.cloude-sessions` during a pytest run. Resolving the path at call time
+  is also exactly what the loose methods did. `ToastInbox` (S3) adds the
+  third shape: **a moved container reached by a DEFENSIVE ACCESSOR in
+  another module needs its own proof leg.**
+  `src/core/toast_history.py` reads `getattr(manager, "_pending_toasts",
+  None)` and answers `{}` for anything that is not a Mapping, deliberately
+  and documented as such - so a facade that stopped exposing that name
+  would show an EMPTY toast history on every surface while raising nowhere
+  and failing no existing test. Whenever a slice moves a field, grep for a
+  `getattr` on its name before trusting a green suite; that shape is what
+  CLAUDE.md calls the characteristic failure of this refactor, and it has
+  now appeared in two of the first three slices. `SessionRegistry` (S4,
+  the log buffers and command counters, half the registry cluster with S7
+  bringing the rest) settles the SETTER POSTURE as evidence rather than
+  taste: **a write-through setter exists where a whole-map rebind is
+  MEASURED in the tree, and the property is read-only everywhere else**,
+  so a future assignment fails loudly instead of shadowing the property.
+  It also generalises S2's callable rule from paths to VALUES - the line
+  cap arrives as `lambda: settings.log_buffer_size`, because four test
+  modules install a stub `settings` on `session_manager` carrying their
+  own `log_buffer_size` and a collaborator that imported `settings` would
+  read the real one. And it names the case where the existing suite can
+  prove NOTHING: this cluster has zero readers outside `session_manager`
+  and had zero tests of its own, so no pre-existing test could redden for
+  any defect in the move and the structural legs carry the whole proof.
+  Measured on the aliasing mutation, where `__init__` holds the
+  collaborator's own dict as a plain attribute: leg (a), the `is` check,
+  stays GREEN and only leg (b) fails. `AttachmentSidecars` (S5, the idle
+  watchers, the adopt FIFO offsets and the pending terminal commands)
+  QUALIFIES the getattr rule above rather than repeating it. **A
+  defensive-accessor leg catches a REMOVED property, and it catches a
+  COPYING one only if it asserts identity on the container itself.**
+  `toast_history`'s leg does (`is` on the dict) and the websocket's
+  `getattr(sm, "idle_watchers", {}).get(session_id)` does not - measured
+  on the copying mutation, that leg passed while identity, cross-writes,
+  the rebind and injection all failed. And **a test that constructs the
+  manager with `SessionManager.__new__` bypasses `__init__`, so every
+  property a slice adds is unreachable there**: it has to install the
+  collaborator by hand the way it already installs `backends`. One file
+  does that today, `tests/test_terminal_commands.py`, and it was
+  repointed in the same commit. S5 also carries the one-shot rule for
+  the two sidecars that are consumed exactly once - `take_fifo_offset`
+  and `take_pending_command` POP, `peek_fifo_offset` does not, because
+  `adopt_fifo_start_offset` is a property and a getter that consumed
+  would let an unrelated read destroy the replay position of a session
+  nobody had attached to yet.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in
@@ -2025,7 +2165,8 @@ exactly once, sits inside a `(min-width: 769px)` block, and carries
    sessions.** `build_backend` with no `session_name` rebuilds
    `cloude_<slug(session_id)>`, which for an adopted id yields
    `cloude_adopted_cloude_Foo` - a name no socket has ever carried. It then fails
-   the liveness test and `_clear_stale_metadata` throws the pointer away. Pass the
+   the liveness test and `_clear_stale_metadata` throws the pointer away (it
+   keeps the owned set; see `OwnedTmuxLedger.drop_session_pointer`). Pass the
    STORED `tmux_session`, and keep the derivation as the fallback for pre-field
    metadata.
 5. **A uuid on the row is not evidence a transcript exists, and a missing

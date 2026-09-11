@@ -1189,7 +1189,7 @@ async def test_adopt_external_session_no_409_when_other_session_active():
     backend_a = MagicMock()
     backend_a.is_alive = MagicMock(return_value=True)
     backend_a.tmux_session = "cloude_existing"
-    sm._register_session(sess_a, backend_a)
+    sm._registry.register(sess_a, backend_a)
 
     sm._resolve_external_cwd = AsyncMock(return_value=Path("/tmp"))  # type: ignore[assignment]
 
@@ -1219,10 +1219,10 @@ async def test_adopt_external_session_no_409_when_other_session_active():
     assert "session" in result and "initial_scrollback_b64" in result
     assert "fifo_start_offset" in result
     # Session A must still be registered — adopt never detaches/destroys it.
-    assert "ses_existing" in sm.sessions, (
+    assert "ses_existing" in sm._registry.sessions, (
         "adopting a second session must NOT remove the first one"
     )
-    assert "adopted:external_target" in sm.sessions, (
+    assert "adopted:external_target" in sm._registry.sessions, (
         "the adopted session must be registered as a concurrent session"
     )
     fake_backend.attach_existing.assert_awaited_once()
@@ -1251,7 +1251,7 @@ async def test_adopt_external_session_does_not_detach_or_destroy_prior():
     backend_a = MagicMock()
     backend_a.is_alive = MagicMock(return_value=True)
     backend_a.tmux_session = "cloude_prior"
-    sm._register_session(sess_a, backend_a)
+    sm._registry.register(sess_a, backend_a)
 
     detach_mock = AsyncMock(return_value=True)
     sm.detach_current_session = detach_mock  # type: ignore[assignment]
@@ -1332,11 +1332,11 @@ async def test_concurrent_sessions_output_isolation():
 
     sess_a = Session(id="ses_a", working_dir="/tmp", status=SessionStatus.RUNNING)
     sess_b = Session(id="ses_b", working_dir="/tmp", status=SessionStatus.RUNNING)
-    sm._register_session(sess_a, _mk_backend("cloude_a"))
-    sm._register_session(sess_b, _mk_backend("cloude_b"))
+    sm._registry.register(sess_a, _mk_backend("cloude_a"))
+    sm._registry.register(sess_b, _mk_backend("cloude_b"))
 
-    qa = sm.subscribe_output("ses_a")
-    qb = sm.subscribe_output("ses_b")
+    qa = sm._registry.subscribe("ses_a")
+    qb = sm._registry.subscribe("ses_b")
 
     # Push output through session A's bound handler.
     handler_a = sm._make_output_handler("ses_a")
@@ -1363,9 +1363,9 @@ async def test_concurrent_sessions_output_isolation():
         )
         await sm.destroy_session("ses_a")
 
-    assert "ses_a" not in sm.sessions
-    assert "ses_b" in sm.sessions, "destroying A must NOT remove B"
-    assert qb in sm._subscribers.get("ses_b", []), (
+    assert "ses_a" not in sm._registry.sessions
+    assert "ses_b" in sm._registry.sessions, "destroying A must NOT remove B"
+    assert qb in sm._registry.subscribers.get("ses_b", []), (
         "destroying A must not clear B's subscribers"
     )
     # B's queue still functions after A's teardown.
@@ -1433,7 +1433,7 @@ async def test_lifespan_startup_does_not_rehydrate_non_owned_session(tmp_path):
         sm = SessionManager()
 
     # Simulate loaded metadata: session exists, but owned set is empty.
-    sm._register_session(
+    sm._registry.register(
         Session(
             id="foo",
             pty_pid=None,
@@ -1444,8 +1444,8 @@ async def test_lifespan_startup_does_not_rehydrate_non_owned_session(tmp_path):
         ),
         backend=None,
     )
-    sm.owned_tmux_sessions = set()  # NOT owned
-    sm._legacy_metadata_needs_backfill = False  # new-schema file
+    sm._owned.names = set()  # NOT owned
+    sm._owned.needs_legacy_backfill = False  # new-schema file
 
     # Build a fake probe backend that reports the slug is live (simulating
     # an external user-created ``cloude_foo`` session on the socket).
@@ -1474,7 +1474,7 @@ async def test_lifespan_startup_does_not_rehydrate_non_owned_session(tmp_path):
     # ownership gate must block it.
     attach_mock.assert_not_awaited()
     # And no backend must have been registered for the non-owned session.
-    assert sm.current_backend is None, (
+    assert sm._registry.current_backend() is None, (
         "non-owned session must not be registered as an active backend"
     )
 
@@ -1492,7 +1492,7 @@ async def test_lifespan_startup_legacy_backfill_populates_owned_set(tmp_path):
     with patch.object(SessionManager, "_load_session_metadata", return_value=None):
         sm = SessionManager()
 
-    sm._register_session(
+    sm._registry.register(
         Session(
             id="legacy_sess",
             pty_pid=None,
@@ -1503,8 +1503,8 @@ async def test_lifespan_startup_legacy_backfill_populates_owned_set(tmp_path):
         ),
         backend=None,
     )
-    sm.owned_tmux_sessions = set()  # empty set
-    sm._legacy_metadata_needs_backfill = True  # <-- key flag for the legacy path
+    sm._owned.names = set()  # empty set
+    sm._owned.needs_legacy_backfill = True  # <-- key flag for the legacy path
 
     fake_probe = MagicMock()
     fake_probe.discover_existing = MagicMock(return_value=["cloude_legacy_sess"])
@@ -1526,8 +1526,8 @@ async def test_lifespan_startup_legacy_backfill_populates_owned_set(tmp_path):
     attach_mock.assert_awaited_once(), (
         "legacy-backfill path must still rehydrate the active session"
     )
-    assert "cloude_legacy_sess" in sm.owned_tmux_sessions, (
-        f"owned_tmux_sessions must be backfilled; got {sm.owned_tmux_sessions}"
+    assert "cloude_legacy_sess" in sm._owned.names, (
+        f"owned_tmux_sessions must be backfilled; got {sm._owned.names}"
     )
     save_mock.assert_called(), (
         "metadata must be re-persisted after legacy backfill to migrate schema"
@@ -1600,18 +1600,18 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
         )
 
         # Backend is wired up correctly — literal external name, not slugified.
-        assert sm.backend is not None
-        assert sm.backend.tmux_session == name, (
+        assert sm._registry.current_backend() is not None
+        assert sm._registry.current_backend().tmux_session == name, (
             f"expected backend.tmux_session == {name!r}, "
-            f"got {sm.backend.tmux_session!r}"
+            f"got {sm._registry.current_backend().tmux_session!r}"
         )
 
         # Write new bytes via the backend; verify via capture_scrollback.
         second_marker = f"second-line-{secrets.token_hex(3)}"
-        await sm.backend.write(f"echo {second_marker}\n".encode("utf-8"))
+        await sm._registry.current_backend().write(f"echo {second_marker}\n".encode("utf-8"))
         await asyncio.sleep(0.6)
 
-        pane_bytes = sm.backend.capture_scrollback()
+        pane_bytes = sm._registry.current_backend().capture_scrollback()
         pane_text = pane_bytes.decode("utf-8", errors="replace")
         assert second_marker in pane_text, (
             f"second write must reach the pane; expected {second_marker!r}, "
@@ -1625,9 +1625,9 @@ async def test_adopt_external_session_end_to_end(tmp_path, monkeypatch):
             capture_output=True,
         )
         # Tear down backend to avoid leaking the tail task.
-        if sm.backend is not None:
+        if sm._registry.current_backend() is not None:
             try:
-                await sm.backend.stop()
+                await sm._registry.current_backend().stop()
             except Exception:
                 pass
 
@@ -1665,10 +1665,10 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
             working_dir=str(tmp_path),
             auto_start_claude=False,
         )
-        assert sm.backend is not None
-        tmux_name = sm.backend.tmux_session
+        assert sm._registry.current_backend() is not None
+        tmux_name = sm._registry.current_backend().tmux_session
         # The newly-created session is tracked as owned.
-        assert tmux_name in sm.owned_tmux_sessions
+        assert tmux_name in sm._owned.names
 
         # Sanity: tmux says the session is alive BEFORE detach.
         alive_before = subprocess.run(
@@ -1684,13 +1684,13 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
         assert detached is True
 
         # Python-side invariants.
-        assert sm.backend is None, "detach must clear backend ref"
-        assert sm.session is None, "detach must clear session ref"
+        assert sm._registry.current_backend() is None, "detach must clear backend ref"
+        assert sm._registry.current_session() is None, "detach must clear session ref"
         assert sm.idle_watcher is None, "detach must stop idle watcher"
 
         # owned_tmux_sessions must persist so Adopt UI still flags the
         # detached session as cloude-owned.
-        assert tmux_name in sm.owned_tmux_sessions, (
+        assert tmux_name in sm._owned.names, (
             "owned_tmux_sessions entry must survive detach so the Adopt "
             "UI labels the detached session as created_by_cloude=True"
         )
@@ -1739,7 +1739,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
       2. Create an external session B via ``tmux new -d -s B``.
       3. Call ``adopt_external_session(B, confirm_detach=True)``.
       4. Assert ``has-session A`` still returns 0 (alive).
-      5. Assert ``sm.backend.tmux_session == B``.
+      5. Assert ``sm._registry.current_backend().tmux_session == B``.
     """
     from src.core.session_manager import SessionManager
 
@@ -1760,9 +1760,9 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
             working_dir=str(tmp_path),
             auto_start_claude=False,
         )
-        assert sm.backend is not None, "A must be the active backend"
-        tmux_name_a = sm.backend.tmux_session
-        assert tmux_name_a in sm.owned_tmux_sessions
+        assert sm._registry.current_backend() is not None, "A must be the active backend"
+        tmux_name_a = sm._registry.current_backend().tmux_session
+        assert tmux_name_a in sm._owned.names
 
         alive_a_before = subprocess.run(
             ["tmux", "-L", _TEST_SOCKET, "has-session", "-t", tmux_name_a],
@@ -1782,10 +1782,10 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
         # --- Step 3: adopt-swap with explicit consent to detach.
         result = await sm.adopt_external_session(name_b, confirm_detach=True)
         assert "session" in result
-        assert sm.backend is not None
-        assert sm.backend.tmux_session == name_b, (
+        assert sm._registry.current_backend() is not None
+        assert sm._registry.current_backend().tmux_session == name_b, (
             f"post-swap backend must point at B={name_b!r}, "
-            f"got {sm.backend.tmux_session!r}"
+            f"got {sm._registry.current_backend().tmux_session!r}"
         )
 
         # --- Step 4: the INVARIANT — A's tmux session is STILL ALIVE.
@@ -1801,7 +1801,7 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
 
         # --- Step 5: A stays in owned_tmux_sessions so the Adopt UI
         # re-offers it tagged created_by_cloude=True.
-        assert tmux_name_a in sm.owned_tmux_sessions, (
+        assert tmux_name_a in sm._owned.names, (
             "owned_tmux_sessions entry for A must survive adopt-swap "
             "so the launchpad re-lists A as cloude-owned"
         )
@@ -1815,9 +1815,9 @@ async def test_adopt_external_session_detach_keeps_prior_tmux_alive(
                 capture_output=True,
             )
         # Tear down the adopted backend to avoid a leaked tail task.
-        if sm.backend is not None:
+        if sm._registry.current_backend() is not None:
             try:
-                await sm.backend.stop()
+                await sm._registry.current_backend().stop()
             except Exception:
                 pass
 
@@ -1934,13 +1934,13 @@ async def test_session_manager_create_session_verbatim_name(tmp_path, monkeypatc
             copy_templates=False,
             project_name="T4 Verbatim Test",
         )
-        assert sm.backend is not None
-        assert sm.backend.tmux_session == "cloude_T4 Verbatim Test", (
+        assert sm._registry.current_backend() is not None
+        assert sm._registry.current_backend().tmux_session == "cloude_T4 Verbatim Test", (
             f"expected verbatim tmux_session cloude_T4 Verbatim Test, "
-            f"got {sm.backend.tmux_session!r}"
+            f"got {sm._registry.current_backend().tmux_session!r}"
         )
     finally:
-        if sm.backend is not None:
+        if sm._registry.current_backend() is not None:
             try:
                 await sm.destroy_session()
             except Exception:
@@ -1977,13 +1977,13 @@ async def test_session_manager_create_session_without_project_name_uses_legacy(
             auto_start_claude=False,
             copy_templates=False,
         )
-        assert sm.backend is not None
-        assert sm.backend.tmux_session.startswith("cloude_ses_"), (
+        assert sm._registry.current_backend() is not None
+        assert sm._registry.current_backend().tmux_session.startswith("cloude_ses_"), (
             f"expected legacy cloude_ses_<hex> naming, "
-            f"got {sm.backend.tmux_session!r}"
+            f"got {sm._registry.current_backend().tmux_session!r}"
         )
     finally:
-        if sm.backend is not None:
+        if sm._registry.current_backend() is not None:
             try:
                 await sm.destroy_session()
             except Exception:
@@ -2028,10 +2028,10 @@ async def test_create_session_uniquifies_when_target_name_exists(tmp_path, monke
                 copy_templates=False,
                 project_name=project_name,
             )
-            assert sm.backend is not None
-            assert sm.backend.tmux_session == expected_new_tmux, (
+            assert sm._registry.current_backend() is not None
+            assert sm._registry.current_backend().tmux_session == expected_new_tmux, (
                 f"expected uniquified tmux_session {expected_new_tmux!r}, "
-                f"got {sm.backend.tmux_session!r}"
+                f"got {sm._registry.current_backend().tmux_session!r}"
             )
             # Both the pre-existing session AND the new one must be alive.
             assert subprocess.call(
@@ -2045,7 +2045,7 @@ async def test_create_session_uniquifies_when_target_name_exists(tmp_path, monke
                 stderr=subprocess.DEVNULL,
             ) == 0, "new uniquified tmux session was not created"
         finally:
-            if sm.backend is not None:
+            if sm._registry.current_backend() is not None:
                 try:
                     await sm.destroy_session()
                 except Exception:
@@ -2100,13 +2100,13 @@ async def test_create_session_uniquifies_third_collision(tmp_path, monkeypatch):
                 copy_templates=False,
                 project_name=project_name,
             )
-            assert sm.backend is not None
-            assert sm.backend.tmux_session == expected_third_tmux, (
+            assert sm._registry.current_backend() is not None
+            assert sm._registry.current_backend().tmux_session == expected_third_tmux, (
                 f"expected uniquified tmux_session {expected_third_tmux!r}, "
-                f"got {sm.backend.tmux_session!r}"
+                f"got {sm._registry.current_backend().tmux_session!r}"
             )
         finally:
-            if sm.backend is not None:
+            if sm._registry.current_backend() is not None:
                 try:
                     await sm.destroy_session()
                 except Exception:

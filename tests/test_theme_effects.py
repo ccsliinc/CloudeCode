@@ -34,7 +34,7 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-import src.api.routes as routes_mod  # noqa: E402
+import src.api.themes_routes as themes_routes_mod  # noqa: E402
 from src.api.auth import require_auth  # noqa: E402
 
 BUNDLED_THEMES_DIR = Path(__file__).resolve().parents[1] / "client" / "css" / "themes"
@@ -182,7 +182,7 @@ def test_endpoint_serves_the_effects_field_for_every_declaring_theme() -> None:
     effects field on the way out is a theme with no background and no error.
     """
     app = FastAPI()
-    app.include_router(routes_mod.router, prefix="/api/v1")
+    app.include_router(themes_routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
 
     resp = TestClient(app).get("/api/v1/themes")

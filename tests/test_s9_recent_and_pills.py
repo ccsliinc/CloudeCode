@@ -115,7 +115,7 @@ class _ProbeBackend:
 
 
 def _routes_settings():
-    """The live ``settings`` singleton ``src.api.routes`` imports.
+    """The live ``settings`` singleton ``session_recent_routes`` imports.
 
     Description: a pydantic ``BaseModel`` instance rejects
       ``setattr(instance, "get_state_dir", ...)`` for any name not
@@ -124,9 +124,9 @@ def _routes_settings():
       attribute). This helper is the one place that resolves the class,
       so a patch and its call site cannot drift.
     Inputs: none.
-    Output: the ``Settings`` singleton instance ``src.api.routes.settings``.
+    Output: the ``Settings`` singleton ``session_recent_routes.settings``.
     """
-    from src.api import routes as routes_module
+    from src.api import session_recent_routes as routes_module
 
     return routes_module.settings
 
@@ -281,7 +281,7 @@ def test_probe_failure_never_crashes_listing(monkeypatch, tmp_path):
 def test_probe_health_records_ok_true_after_a_successful_listing(monkeypatch, tmp_path):
     """last_probe_health() must flip to ok=True after a listing that ran."""
     mgr = _manager(monkeypatch, tmp_path)
-    assert mgr.last_probe_health().ok is None, "must start as never-probed"
+    assert mgr._probe_health.health.ok is None, "must start as never-probed"
     monkeypatch.setattr(
         "src.core.session_manager.build_backend",
         lambda *a, **k: _ProbeBackend([]),
@@ -290,7 +290,7 @@ def test_probe_health_records_ok_true_after_a_successful_listing(monkeypatch, tm
     listing = mgr.list_attachable_sessions()
 
     assert listing.ok is True
-    health = mgr.last_probe_health()
+    health = mgr._probe_health.health
     assert health.ok is True
     assert health.reason is None
 
@@ -312,7 +312,7 @@ def test_probe_health_records_ok_false_with_reason_after_a_failed_listing(
     listing = mgr.list_attachable_sessions()
 
     assert listing.ok is False
-    health = mgr.last_probe_health()
+    health = mgr._probe_health.health
     assert health.ok is False
     assert health.reason == REASON_TIMEOUT
     assert health.detail == "tmux did not answer"
@@ -323,14 +323,28 @@ def test_probe_health_records_ok_false_with_reason_after_a_failed_listing(
 # =========================================================================== #
 
 
+class _HealthRecorder:
+    """Minimal ``ProbeHealthRecorder`` surface ``/sessions/recent`` reads.
+
+    Description: the route asks ``services.probe_health.health`` since S1
+      of the decomposition, so the double is shaped like the RECORDER and
+      not like the manager. It carries one attribute for the same reason
+      the real recorder does: ``ok`` is None until a probe has run, and
+      that third state is what the route renders as "never probed".
+    Inputs: health (ProbeHealth) - the verdict to report.
+    Output: none.
+    Example: _HealthRecorder(ProbeHealth(ok=None)).health.ok is None
+    """
+
+    def __init__(self, health: ProbeHealth):
+        self.health = health
+
+
 class _HealthManager:
     """Minimal SessionManager surface ``/sessions/recent`` reads."""
 
     def __init__(self, health: ProbeHealth):
-        self._health = health
-
-    def last_probe_health(self) -> ProbeHealth:
-        return self._health
+        self._probe_health = _HealthRecorder(health)
 
 
 def _recent_client(session_manager):
@@ -340,9 +354,15 @@ def _recent_client(session_manager):
     from src.api.auth import require_auth
     from src.api.routes import router as sessions_router
 
+    from types import SimpleNamespace
+
     app = FastAPI()
     app.include_router(sessions_router, prefix="/api/v1")
     app.state.session_manager = session_manager
+    # The route reads its ONE collaborator off ``app.state.services``.
+    app.state.services = SimpleNamespace(
+        probe_health=session_manager._probe_health
+    )
     app.dependency_overrides[require_auth] = lambda: True
     return TestClient(app)
 

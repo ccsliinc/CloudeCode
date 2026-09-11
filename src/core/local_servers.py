@@ -298,7 +298,7 @@ class LocalServersTracker:
         # Active session name comes from the backend (tmux session name).
         # When no session is running there's no meaningful key to record
         # against, so drop the detection.
-        backend = getattr(self._session_manager, "backend", None)
+        backend = self._session_manager._registry.current_backend()
         session_name: Optional[str] = (
             getattr(backend, "tmux_session", None) if backend else None
         )
