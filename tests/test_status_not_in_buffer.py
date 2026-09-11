@@ -77,10 +77,26 @@ def test_connect_banner_is_not_written_into_the_buffer() -> None:
 
 
 def test_server_welcome_frame_is_not_a_terminal_banner() -> None:
-    """The server's welcome frame no longer looks like pane output."""
+    """The server sends no welcome frame at all, so no connect pill fires.
+
+    The frame was demoted from a bracketed ``[SYSTEM]`` banner written
+    into the xterm buffer to a lowercase notice, and is now gone: the
+    header LED beside the session name already reports transport state,
+    and ``terminal.ready`` is the one positive statement that the pane
+    can take input. A pill on every connect and every reconnect carried
+    nothing the user did not already have.
+
+    The frame kind is asserted alongside the copy because the copy alone
+    would let the same pill return under different wording. ``"type":
+    "log"`` is the only frame kind ``handleWebSocketMessage`` routes into
+    ``_showStatusPill`` unconditionally, so its absence from this file is
+    what actually holds the defect shut.
+    """
     src = WEBSOCKET_PY.read_text(encoding="utf-8")
     assert "[SYSTEM]" not in src
-    assert "websocket connected, pty terminal ready" in src
+    assert "websocket connected, pty terminal ready" not in src
+    assert '"type": "log"' not in src
+    assert "failed_to_send_welcome" not in src
 
 
 def test_ws_message_handler_never_writes_to_the_terminal() -> None:
