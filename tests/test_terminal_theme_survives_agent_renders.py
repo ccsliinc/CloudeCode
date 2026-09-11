@@ -157,6 +157,12 @@ HARNESS_HTML = """<!DOCTYPE html>
   <script src="/static/vendor/xterm/xterm-addon-webgl.js"></script>
   <script src="/static/vendor/xterm/xterm-addon-unicode11.js"></script>
   <script src="/static/js/terminal-background-opacity.js"></script>
+  <!-- The two bounded waits terminal.js uses to decide the xterm bundle
+       has loaded and the container can be measured. A real dependency in
+       index.html, so it is loaded here too: without it this page measures
+       terminal.js's degraded fallback rather than the code that runs in
+       the browser. -->
+  <script src="/static/js/terminal-readiness.js"></script>
   <script src="/static/js/terminal.js"></script>
   <script src="/static/js/themes/registry.js"></script>
   <script src="/static/js/theme-navigation.js"></script>

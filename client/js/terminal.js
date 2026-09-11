@@ -122,10 +122,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
         // THE NAVIGATION THIS TERMINAL IS BOUND TO. Set by whichever
         // entry path attached the current session, and the definition of
-        // "old" for everything this controller defers: the 500ms
-        // scheduled connect, the reconnect scheduler, and the queue of
-        // bytes waiting to be written. See
-        // client/js/navigation-generation.js.
+        // "old" for everything this controller defers: the connect, the
+        // reconnect scheduler, and the queue of bytes waiting to be
+        // written. See client/js/navigation-generation.js.
         this._navToken = null;
 
         // THE CONNECTION THIS TERMINAL'S INPUT BELONGS TO. Distinct from
@@ -210,15 +209,19 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      */
     async waitForXterm() {
         // `Terminal` here is THIS file's own class, which occupies
-        // window.Terminal until the vendored bundle loads over it - so it
+        // window.Terminal until the vendored bundle loads over it, so it
         // has to be handed to the check or the check answers true against
-        // us. Bounded, and it THROWS rather than degrading: there is no
-        // terminal to degrade into, and that error path is what tells the
-        // user xterm did not load. See client/js/terminal-readiness.js.
-        if (!window.TerminalReadiness) {
-            throw new Error('terminal-readiness.js did not load');
+        // us. See client/js/terminal-readiness.js.
+        if (window.TerminalReadiness) return window.TerminalReadiness.waitForXterm(Terminal);
+        // MODULE MISSING, so DEGRADE rather than refuse: no extraction out
+        // of this file may turn a load-order accident into a terminal that
+        // cannot open. The bundle loads synchronously ahead of this file
+        // everywhere, so the one thing that must still hold is that
+        // window.Terminal is xterm's - building on ours would silently
+        // construct the wrong object.
+        if (typeof window.Terminal === 'undefined' || window.Terminal === Terminal) {
+            throw new Error('xterm.js did not load, and neither did terminal-readiness.js');
         }
-        await window.TerminalReadiness.waitForXterm(Terminal);
     }
 
     /**
@@ -1275,13 +1278,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         await this.waitForFontsAndLayout(container);
 
         // THE CONNECT IS ONLY ISSUED ONCE THE CONTAINER HAS BEEN
-        // MEASURED. This used to be fit, sleep 50ms, fit again - the
-        // second attempt existing because the first might have been taken
-        // before layout settled, which is a real concern answered with a
-        // guess. guardedFit returns a VERDICT, so the question is asked
-        // instead: retry while it refuses, stop the instant it succeeds,
-        // give up on a bound. See client/js/terminal-fit-wait.js for why
-        // the bound is a warn and never a refusal to connect.
+        // MEASURED. This used to be fit, sleep 50ms, fit again, the second
+        // attempt existing because the first might have been taken before
+        // layout settled - a real concern answered with a guess.
+        // guardedFit returns a VERDICT, so the question is asked instead.
+        // See client/js/terminal-readiness.js for why the bound is a warn
+        // and never a refusal to connect.
         const measured = window.TerminalReadiness
             ? await window.TerminalReadiness.measure(this)
             : { fitted: false, reason: 'no-readiness-module', attempts: 0, waitedMs: 0 };

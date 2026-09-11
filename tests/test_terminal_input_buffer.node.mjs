@@ -481,3 +481,37 @@ test('COMPATIBILITY GATE: with the module absent, every path still sends', () =>
         'with no buffer the bytes go straight out, exactly as they always did');
     assert.equal(self.ws.sent.length, 1);
 });
+
+test('NO EXTRACTION MAY MAKE A LOAD-ORDER ACCIDENT FATAL', async () => {
+    // Every module this file delegates to degrades when it is absent -
+    // the write queue goes unbounded, the navigation token answers true,
+    // the paint is skipped. waitForXterm briefly did NOT, and a hand-built
+    // test page that did not know to load terminal-readiness.js could not
+    // open a terminal at all. A guard is a correctness aid, never a
+    // dependency.
+    const sandbox = {
+        console: { log() {}, warn() {}, debug() {}, error() {} },
+        document: { getElementById: () => null },
+        setTimeout, clearTimeout, Promise, TextEncoder, TextDecoder, Uint8Array,
+        requestAnimationFrame: (fn) => { fn(); return 1; },
+        WebSocket: { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
+    };
+    sandbox.window = sandbox;
+    sandbox.window.document = sandbox.document;
+    vm.createContext(sandbox);
+    const cut = TERM_SRC.indexOf(TERM_SINGLETON);
+    vm.runInContext(TERM_SRC.slice(0, cut) + '\nwindow.__T = Terminal;',
+        sandbox, { filename: 'terminal.js' });
+    const P = sandbox.window.__T.prototype;
+    assert.equal(sandbox.window.TerminalReadiness, undefined, 'setup: no module');
+
+    // xterm IS on the page, which is the real case: index.html and every
+    // test page load the vendored bundle synchronously ahead of this file.
+    sandbox.window.Terminal = function XtermTerminal() {};
+    await P.waitForXterm.call({});
+
+    // And the one thing that must STILL fail loudly: building on this
+    // file's own class would silently construct the wrong object.
+    sandbox.window.Terminal = sandbox.window.__T;
+    await assert.rejects(() => P.waitForXterm.call({}), /xterm\.js did not load/);
+});
