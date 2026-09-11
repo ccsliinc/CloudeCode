@@ -1,5 +1,12 @@
 """A session waiting on its own sub-agents is not waiting on the user.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 claude fires ``Stop`` when the MAIN turn ends, whether or not the
 background agents it launched are still running, and it fires
 ``Notification`` asking to be looked at in that same state. Both raised a
@@ -475,7 +482,7 @@ def test_the_notification_after_a_suppressed_stop_is_suppressed(
     payload = resp.json()
     assert "toast_id" not in payload
     assert payload["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     mock_bcast.assert_not_called()
 
 
@@ -492,7 +499,7 @@ def test_a_second_stop_after_a_suppressed_stop_is_suppressed(
     resp, mock_bcast = _post_event(app, mgr, "Stop")
 
     assert resp.json()["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     mock_bcast.assert_not_called()
 
 
@@ -523,7 +530,7 @@ def test_the_latch_expires_and_the_notification_is_raised(
 
     assert "toast_id" in resp.json()
     assert "toast_suppressed" not in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -568,7 +575,7 @@ def test_an_opening_event_clears_the_latch(monkeypatch, tmp_path, opening):
     resp, mock_bcast = _post_event(app, mgr, "Stop")
 
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -631,7 +638,7 @@ def test_permission_request_raises_with_the_latch_stamped(
     payload = resp.json()
     assert "toast_id" in payload
     assert "toast_suppressed" not in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -653,7 +660,7 @@ def test_an_unreadable_latch_still_notifies(monkeypatch, tmp_path):
     resp, _ = _post_event(app, mgr, "Notification")
 
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
 
 
 # =========================================================================== #

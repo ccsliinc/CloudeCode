@@ -1,4 +1,11 @@
 """The stale-id toast remap must never fire against a session that is not
+
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
 stale at all.
 
 THE INCIDENT. Measured over 8 hours of the live server log: 339
@@ -99,9 +106,9 @@ def _session(mgr: SessionManager, sid: str, work: Path, tmux_name: str) -> Sessi
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    mgr.sessions[sid] = sess
-    mgr._subscribers.setdefault(sid, [])
-    mgr._hook_tmux_names[sid] = tmux_name
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.subscribers.setdefault(sid, [])
+    mgr.hook_tokens.tmux_names[sid] = tmux_name
     return sess
 
 
@@ -116,7 +123,7 @@ def test_live_session_with_empty_bucket_does_not_enter_remap(monkeypatch, tmp_pa
     the stale-id resolver, because it is not stale."""
     mgr = _manager(monkeypatch, tmp_path)
     _session(mgr, "ses_live", tmp_path / "live", "cloude_ses_live")
-    assert "ses_live" not in mgr._pending_toasts, "sanity: bucket genuinely empty"
+    assert "ses_live" not in mgr._toast_inbox.pending, "sanity: bucket genuinely empty"
 
     calls = []
     original = SessionManager._live_session_id_for_stale_id
@@ -174,10 +181,10 @@ def test_genuinely_stale_id_still_remaps_and_acks(monkeypatch, tmp_path):
     # The pre-restart id: same tmux name, no row of its own in
     # ``self.sessions`` (it was replaced by ``ses_live3`` on restart), but
     # still present in the persisted hook-token map.
-    mgr._hook_tmux_names["ses_stale"] = "cloude_ses_live3"
+    mgr.hook_tokens.tmux_names["ses_stale"] = "cloude_ses_live3"
 
     toast = mgr.record_toast("ses_live3", "Stop", "Your turn")
-    assert mgr.get_toasts("ses_live3", unacked_only=True) == [toast]
+    assert mgr._toast_inbox.get("ses_live3", unacked_only=True) == [toast]
 
     now = toast.created_at + timedelta(seconds=1)
     changed = mgr.auto_ack_toasts("ses_stale", "UserPromptSubmit", cutoff=now)
@@ -186,7 +193,7 @@ def test_genuinely_stale_id_still_remaps_and_acks(monkeypatch, tmp_path):
         "a hook arriving under the pre-restart id must still be able to "
         "ack the surviving session's toast"
     )
-    assert mgr.get_toasts("ses_live3", unacked_only=True) == []
+    assert mgr._toast_inbox.get("ses_live3", unacked_only=True) == []
 
 
 # --------------------------------------------------------------------- #
@@ -219,7 +226,7 @@ def test_live_session_id_for_stale_id_still_finds_a_different_live_session(
     still be found and logged when one exists and is not the caller."""
     mgr = _manager(monkeypatch, tmp_path)
     _session(mgr, "ses_new", tmp_path / "new", "cloude_shared_name")
-    mgr._hook_tmux_names["ses_old"] = "cloude_shared_name"
+    mgr.hook_tokens.tmux_names["ses_old"] = "cloude_shared_name"
 
     result = mgr._live_session_id_for_stale_id("ses_old")
 

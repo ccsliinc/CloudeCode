@@ -147,3 +147,21 @@ def is_viewer_stream(candidate: Any) -> bool:
         and hasattr(candidate, "close")
         and hasattr(candidate, "overflowed")
     )
+
+
+def close_viewer_stream(candidate: Any) -> None:
+    """Close a viewer outbox, tolerating anything that is not one.
+
+    Description: the subscriber list has always been able to hold a bare
+      queue handed in by a test double or an older shim, and a teardown
+      that raised on one of those would turn an ordinary disconnect into
+      a 500. So this ASKS whether the object is a viewer stream rather
+      than assuming, and does nothing when it is not. It lives here
+      beside :func:`is_viewer_stream` because the two answer one
+      question.
+    Inputs: candidate (Any) - whatever the caller was handed.
+    Output: None.
+    Example: close_viewer_stream(stream)
+    """
+    if is_viewer_stream(candidate):
+        candidate.close()

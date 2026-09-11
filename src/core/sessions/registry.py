@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, List, Optional
 import structlog
 
 from src.core import viewer_fanout
+from src.core.viewer_fanout import close_viewer_stream as _close_viewer
 from src.core.bounded_stream import (
     OFFER_ACCEPTED,
     OFFER_OVERFLOWED,
@@ -65,22 +66,6 @@ logger = structlog.get_logger()
 #: case.
 ORPHAN_BUCKET = "__orphan__"
 
-
-def _close_viewer(candidate: Any) -> None:
-    """Close a viewer outbox, tolerating anything that is not one.
-
-    Description: :meth:`SessionRegistry.subscribe` has always been
-      callable by test doubles and older shims that hand back a bare
-      queue, and a teardown that raised on one of those would turn an
-      ordinary disconnect into a 500. So this ASKS whether the object is
-      a viewer stream rather than assuming, and does nothing when it is
-      not.
-    Inputs: candidate (Any) - whatever the caller was handed.
-    Output: None.
-    Example: _close_viewer(stream)
-    """
-    if viewer_fanout.is_viewer_stream(candidate):
-        candidate.close()
 
 
 class SessionRegistry:

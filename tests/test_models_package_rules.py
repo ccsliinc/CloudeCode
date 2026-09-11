@@ -75,6 +75,7 @@ PUBLIC_SURFACE = frozenset({
     "VerifyTOTPRequest", "WSCommandMessage", "WSErrorMessage",
     "WSLocalServerDetectedMessage", "WSLocalServerLostMessage", "WSLogMessage",
     "WSMessageType", "WSPTYDataMessage", "WSPTYInputMessage", "WSPTYResizeMessage",
+    "WSTerminalReadyMessage",
     "WSSessionStatusMessage", "WorkspaceUpdate", "WrapperExamplesResponse",
     "WrapperListResponse", "describe_model_id_rejection", "is_valid_model_id",
 })

@@ -346,8 +346,13 @@ def test_an_orphan_subscriber_never_receives_another_session_s_bytes():
 
     assert ORPHAN_BUCKET in registry.subscribers
     registry.register(_session("ses_late"), None)
-    asyncio.run(registry.publish("ses_late", b"hello"))
-    assert orphan.empty(), "an orphan queue received a real session's bytes"
+    # PUBLISH IS SYNCHRONOUS SINCE 1.4.0: the tail loop that reads the tmux
+    # pipe awaits whatever the output handler returns, so a coroutine here
+    # would put every keystroke echo one await behind a viewer's outbox.
+    registry.publish("ses_late", b"hello")
+    assert orphan.queued_items == 0, (
+        "an orphan stream received a real session's bytes"
+    )
 
 
 def test_output_reaches_only_the_subscribers_of_that_session():
@@ -355,13 +360,15 @@ def test_output_reaches_only_the_subscribers_of_that_session():
     registry = SessionRegistry(log_cap=lambda: 1000)
     registry.register(_session("ses_a"), None)
     registry.register(_session("ses_b"), None)
-    queue_a = registry.subscribe("ses_a")
-    queue_b = registry.subscribe("ses_b")
+    stream_a = registry.subscribe("ses_a")
+    stream_b = registry.subscribe("ses_b")
 
-    asyncio.run(registry.publish("ses_a", b"only for a"))
+    registry.publish("ses_a", b"only for a")
 
-    assert not queue_a.empty()
-    assert queue_b.empty(), "session A's bytes landed in session B's queue"
+    assert stream_a.queued_items == 1
+    assert stream_b.queued_items == 0, (
+        "session A's bytes landed in session B's stream"
+    )
 
 
 def test_unsubscribe_without_a_session_id_searches_every_bucket():
@@ -390,15 +397,15 @@ def test_the_manager_s_output_handler_is_bound_to_one_session():
     registry = SessionRegistry(log_cap=lambda: 1000)
     registry.register(_session("ses_1"), None)
     registry.register(_session("ses_2"), None)
-    queue_1 = registry.subscribe("ses_1")
-    queue_2 = registry.subscribe("ses_2")
+    stream_1 = registry.subscribe("ses_1")
+    stream_2 = registry.subscribe("ses_2")
 
     class _Manager:
         _registry = registry
         _make_output_handler = SessionManager._make_output_handler
 
     handler = _Manager()._make_output_handler("ses_1")
-    asyncio.run(handler(b"for one"))
+    handler(b"for one")
 
-    assert not queue_1.empty()
-    assert queue_2.empty()
+    assert stream_1.queued_items == 1
+    assert stream_2.queued_items == 0

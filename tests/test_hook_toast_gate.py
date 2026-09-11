@@ -143,7 +143,10 @@ def test_live_subagents_silence_a_stop_and_a_notification(kind):
     verdict = _gate(kind, depth=2)
     assert verdict.suppressed_by == SUPPRESSED_SUBAGENTS_RUNNING
     assert verdict.log_event == LOG_SUBAGENTS
-    assert verdict.log_fields == {"subagent_depth": 2}
+    assert verdict.log_fields == {
+        "subagent_depth": 2,
+        "subagent_wait_latched": False,
+    }
 
 
 # --- the ORDER between them, which had no test at all before -----------

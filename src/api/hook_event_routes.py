@@ -31,6 +31,7 @@ from src.api.websocket import connection_manager
 from src.core import claude_hooks, claude_title_sync_apply, debug_trace
 from src.core import session_change_notice
 from src.core.hook_event_presentation import hook_event_presentation
+from src.api.hook_event_signals import read_suppression_signals
 from src.core.hook_toast_gate import resolve_toast_gate
 from src.core.hook_token_recovery import (
     RECOVERY_ACCEPTED as HOOK_RECOVERY_ACCEPTED,
@@ -186,57 +187,15 @@ async def claude_event_hook(request: Request):
     # depth as it stood at this event is the only thing available at the
     # moment the decision has to be made.
     #
-    # FAIL TOWARD NOTIFYING. Anything that is not a POSITIVE count of live
-    # sub-agents leaves this at 0 and the toast is raised exactly as
-    # before: an unknown session, a dropped ``SubagentStart`` (hooks are
-    # droppable - CLAUDE.md), or a read that threw. A missed "your turn"
-    # is a worse failure than a spurious one, so silence is only ever
-    # bought with evidence.
-    #
-    # THE LATCH IS THE OTHER HALF OF THE SAME EVIDENCE, and it is read
-    # here for the same reason: ``Stop`` resets the depth to 0, so the
-    # depth alone covers only the FIRST event of a background wait. The
-    # trailing idle ``Notification`` claude fires about 60s later, and any
-    # second ``Stop`` behind it, find a depth of 0 and would be raised.
-    # ``subagent_wait_active`` answers for a bounded window after a
-    # ``Stop`` that was itself suppressed at a positive depth. It is read
-    # BEFORE ``record_hook_event`` so this event cannot stamp the latch it
-    # is then judged by.
-    try:
-        subagent_depth_at_event = session_manager.subagent_depth(session_id)
-        subagent_wait_at_event = session_manager.subagent_wait_active(session_id)
-    except Exception as exc:  # pragma: no cover - defensive, see above
-        logger.warning(
-            "hook_subagent_depth_unreadable",
-            session_id=session_id,
-            event_kind=event_kind,
-            error=str(exc),
-        )
-        subagent_depth_at_event = 0
-        subagent_wait_at_event = False
-
-    # THE IDLE NUDGE, A SEPARATE SIGNAL FROM THE SUB-AGENT ONE ABOVE, read
-    # BEFORE ``record_hook_event`` for the same reason as the depth. Even
-    # though a ``Notification`` does not itself mutate what this read
-    # inspects today, reading first keeps the event free to change that
-    # later without this gate silently starting to judge its own effect.
-    # See ``session_activity.idle_notification_should_suppress``.
-    #
-    # FAIL TOWARD NOTIFYING. An unreadable session, one that never saw a
-    # Stop, or a read that threw all leave this False and the toast is
-    # raised exactly as before.
-    try:
-        idle_notification_suppressed_at_event = (
-            session_manager.should_suppress_idle_notification(session_id)
-        )
-    except Exception as exc:  # pragma: no cover - defensive, see above
-        logger.warning(
-            "hook_idle_notification_signal_unreadable",
-            session_id=session_id,
-            event_kind=event_kind,
-            error=str(exc),
-        )
-        idle_notification_suppressed_at_event = False
+    # THE THREE PRE-GATE SIGNALS, read BEFORE ``record_hook_event`` so an
+    # event can never be judged by the state it just wrote, and every one
+    # of them failing toward NOTIFYING. The rules and the refusals live in
+    # src/api/hook_event_signals.py.
+    (
+        subagent_depth_at_event,
+        subagent_wait_at_event,
+        idle_notification_suppressed_at_event,
+    ) = read_suppression_signals(session_manager, session_id, event_kind)
 
     # feat/hook-driven-status - EVERY valid event kind updates the
     # activity-status state machine, not just the toast-worthy ones.

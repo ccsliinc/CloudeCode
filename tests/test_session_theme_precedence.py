@@ -1,4 +1,8 @@
-"""Which theme store answers for a session, and why (issue #65).
+"""RETARGETED SEAMS, UNCHANGED BEHAVIOUR. On this line the two theme
+stores live on ``SessionManager._theme_store``; ``set_pinned_theme`` is
+still the manager's own, because it also mirrors onto the live Session.
+
+Which theme store answers for a session, and why (issue #65).
 
 A theme has two durable stores keyed on different things: the
 per-session pin in ``pinned_themes.json`` (keyed on the bare tmux name)
@@ -153,10 +157,10 @@ def test_pin_wins_over_a_conflicting_dotfile(monkeypatch, tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "snes")
+    mgr._theme_store.set_project_theme(project, "snes")
     mgr.set_pinned_theme("cloude_proj", "dracula")
 
-    assert mgr.resolve_project_theme(project, "cloude_proj") == "dracula"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_proj") == "dracula"
 
 
 def test_an_unpinned_session_still_inherits_the_project_default(
@@ -172,11 +176,11 @@ def test_an_unpinned_session_still_inherits_the_project_default(
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "snes")
+    mgr._theme_store.set_project_theme(project, "snes")
 
-    assert mgr.resolve_project_theme(project, "cloude_never_pinned") == "snes"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_never_pinned") == "snes"
     # And with no name to key a pin on at all.
-    assert mgr.resolve_project_theme(project, None) == "snes"
+    assert mgr._theme_store.resolve_project_theme(project, None) == "snes"
 
 
 def test_clearing_a_pin_drops_back_to_the_project_default(
@@ -187,11 +191,11 @@ def test_clearing_a_pin_drops_back_to_the_project_default(
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "snes")
+    mgr._theme_store.set_project_theme(project, "snes")
     mgr.set_pinned_theme("cloude_proj", "dracula")
     mgr.set_pinned_theme("cloude_proj", None)
 
-    assert mgr.resolve_project_theme(project, "cloude_proj") == "snes"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_proj") == "snes"
 
 
 # --------------------------------------------------------------------------- #
@@ -210,8 +214,8 @@ def test_two_sessions_in_one_folder_hold_two_different_themes(
     mgr.set_pinned_theme("cloude_a", "snes")
     mgr.set_pinned_theme("cloude_b", "dracula")
 
-    assert mgr.resolve_project_theme(project, "cloude_a") == "snes"
-    assert mgr.resolve_project_theme(project, "cloude_b") == "dracula"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_a") == "snes"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_b") == "dracula"
 
 
 def test_a_third_unpinned_session_in_that_folder_takes_the_default(
@@ -227,12 +231,12 @@ def test_a_third_unpinned_session_in_that_folder_takes_the_default(
     project = tmp_path / "shared"
     project.mkdir()
 
-    mgr.set_project_theme(project, "blade_runner")
+    mgr._theme_store.set_project_theme(project, "blade_runner")
     mgr.set_pinned_theme("cloude_a", "snes")
     mgr.set_pinned_theme("cloude_b", "dracula")
 
-    assert mgr.resolve_project_theme(project, "cloude_c") == "blade_runner"
-    assert mgr.get_project_theme(project) == "blade_runner"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_c") == "blade_runner"
+    assert mgr._theme_store.get_project_theme(project) == "blade_runner"
 
 
 # --------------------------------------------------------------------------- #
@@ -253,13 +257,13 @@ def test_a_pin_survives_the_manager_being_rebuilt_from_disk(
     project.mkdir()
 
     first = _manager(monkeypatch, tmp_path)
-    first.set_project_theme(project, "snes")
+    first._theme_store.set_project_theme(project, "snes")
     first.set_pinned_theme("cloude_proj", "dracula")
 
     reborn = _manager(monkeypatch, tmp_path)
 
-    assert reborn.pinned_themes.get("cloude_proj") == "dracula"
-    assert reborn.resolve_project_theme(project, "cloude_proj") == "dracula"
+    assert reborn._theme_store.pinned_themes.get("cloude_proj") == "dracula"
+    assert reborn._theme_store.resolve_project_theme(project, "cloude_proj") == "dracula"
 
 
 def test_two_sessions_in_one_folder_keep_their_themes_across_a_restart(
@@ -275,8 +279,8 @@ def test_two_sessions_in_one_folder_keep_their_themes_across_a_restart(
 
     reborn = _manager(monkeypatch, tmp_path)
 
-    assert reborn.resolve_project_theme(project, "cloude_a") == "snes"
-    assert reborn.resolve_project_theme(project, "cloude_b") == "dracula"
+    assert reborn._theme_store.resolve_project_theme(project, "cloude_a") == "snes"
+    assert reborn._theme_store.resolve_project_theme(project, "cloude_b") == "dracula"
 
 
 # --------------------------------------------------------------------------- #
@@ -301,15 +305,15 @@ def test_a_symlinked_working_dir_resolves_to_the_same_theme(
     link.symlink_to(real, target_is_directory=True)
 
     # Written through the link.
-    mgr.set_project_theme(link, "snes")
+    mgr._theme_store.set_project_theme(link, "snes")
 
     # One file, under the real path, readable by either spelling.
     assert (real / ".cc.theme").is_file()
     assert not (link / ".cc.theme").is_symlink()
-    assert mgr.get_project_theme(real) == "snes"
-    assert mgr.get_project_theme(link) == "snes"
-    assert mgr.resolve_project_theme(real, "cloude_x") == "snes"
-    assert mgr.resolve_project_theme(link, "cloude_x") == "snes"
+    assert mgr._theme_store.get_project_theme(real) == "snes"
+    assert mgr._theme_store.get_project_theme(link) == "snes"
+    assert mgr._theme_store.resolve_project_theme(real, "cloude_x") == "snes"
+    assert mgr._theme_store.resolve_project_theme(link, "cloude_x") == "snes"
 
 
 # --------------------------------------------------------------------------- #
@@ -325,7 +329,7 @@ def test_a_pin_is_not_dropped_because_its_session_is_not_running(
     Dropping absent names was safe while the dotfile was the real store.
     Now it is the user's choice being erased, on a name this app re-mints
     from a project slug and will hand out again. The removal path is the
-    explicit close, ``discard_pinned_theme``, and nothing else.
+    explicit close, ``ThemeStore.discard_pin``, and nothing else.
     """
     mgr = _manager(monkeypatch, tmp_path)
     mgr.set_pinned_theme("cloude_gone", "dracula")
@@ -338,8 +342,8 @@ def test_a_pin_is_not_dropped_because_its_session_is_not_running(
     )
 
     # The explicit close is still the way an entry goes away.
-    mgr.discard_pinned_theme("cloude_gone")
-    assert "cloude_gone" not in mgr.pinned_themes
+    mgr._theme_store.discard_pin("cloude_gone")
+    assert "cloude_gone" not in mgr._theme_store.pinned_themes
 
 
 def test_the_pin_map_is_backed_up_before_it_is_replaced(monkeypatch, tmp_path):
@@ -380,7 +384,7 @@ def test_an_unparseable_pin_map_does_not_take_the_process_down(
 
     mgr = _manager(monkeypatch, tmp_path)
 
-    assert mgr.pinned_themes == {}
+    assert mgr._theme_store.pinned_themes == {}
     # And the bytes are still there to be rescued, until the next write
     # moves them to the .bak beside it.
     assert (state / "pinned_themes.json").read_text(encoding="utf-8") == (
@@ -398,7 +402,7 @@ def test_an_unreadable_dotfile_does_not_defeat_a_pin(monkeypatch, tmp_path):
     mgr = _manager(monkeypatch, tmp_path)
     project = tmp_path / "proj"
     project.mkdir()
-    mgr.set_project_theme(project, "snes")
+    mgr._theme_store.set_project_theme(project, "snes")
     mgr.set_pinned_theme("cloude_proj", "dracula")
 
     dotfile = project / ".cc.theme"
@@ -406,6 +410,6 @@ def test_an_unreadable_dotfile_does_not_defeat_a_pin(monkeypatch, tmp_path):
     try:
         if os.access(dotfile, os.R_OK):
             pytest.skip("running as a user that ignores file modes")
-        assert mgr.resolve_project_theme(project, "cloude_proj") == "dracula"
+        assert mgr._theme_store.resolve_project_theme(project, "cloude_proj") == "dracula"
     finally:
         dotfile.chmod(0o644)

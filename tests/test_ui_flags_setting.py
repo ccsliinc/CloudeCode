@@ -177,12 +177,26 @@ def test_the_client_actually_probes_the_flag():
     """
     from pathlib import Path
 
-    client_js = Path(__file__).resolve().parents[1] / "client" / "js"
-    for name in ("session-sidebar-fetch.js", "launchpad.js"):
-        src = (client_js / name).read_text(encoding="utf-8")
-        assert "UIFlags.ensure" in src, (
-            f"{name} must probe the UI flags, or the setting never reaches "
-            "the client and fails silently"
+    root = Path(__file__).resolve().parents[1]
+    client_js = root / "client" / "js"
+
+    # THE TWO SURFACES, AS THEY ARE SPELLED AFTER THE SVELTE REWRITE.
+    # ``client/js/launchpad.js`` is DELETED; the running-sessions surface
+    # is now web/src/lib/sessions/store.svelte.ts, and it reaches the
+    # global through a guarded optional call, so the literal to look for
+    # is ``flags.ensure`` and not ``UIFlags.ensure``. Matching the old
+    # spelling against the new file would fail; matching the old FILE
+    # would raise FileNotFoundError. Either way the guard has to follow
+    # the code rather than the code following the guard.
+    for path, marker in (
+        (client_js / "session-sidebar-fetch.js", "UIFlags.ensure"),
+        (root / "web" / "src" / "lib" / "sessions" / "store.svelte.ts",
+         "flags.ensure"),
+    ):
+        src = path.read_text(encoding="utf-8")
+        assert marker in src, (
+            f"{path.name} must probe the UI flags, or the setting never "
+            "reaches the client and fails silently"
         )
 
     # And the module must actually be served, or the guard above is

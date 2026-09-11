@@ -1,5 +1,12 @@
 """Server-side toast versioning: issue #39's remaining half.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 The client-side render batching (client/js/toast-render-batch.js) landed
 first and needed a way to tell a duplicated or out-of-order hook-fed
 update apart from a genuine change, so a stale delivery cannot regress a
@@ -44,6 +51,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ruff: noqa: E402
+from src.core import toast_auto_ack
 from src.core.session_manager import SessionManager
 from src.models import Session, SessionStatus, Toast
 
@@ -80,14 +88,14 @@ def mgr(monkeypatch, tmp_path) -> SessionManager:
     manager = SessionManager()
     work = tmp_path / "proj"
     work.mkdir()
-    manager.sessions["ses_a"] = Session(
+    manager._registry.sessions["ses_a"] = Session(
         id="ses_a",
         pty_pid=None,
         working_dir=str(work),
         status=SessionStatus.RUNNING,
         tmux_session=None,
     )
-    manager._subscribers.setdefault("ses_a", [])
+    manager._registry.subscribers.setdefault("ses_a", [])
     return manager
 
 
@@ -142,7 +150,7 @@ def test_three_identical_reraises_still_hold_version_one(mgr):
     before" assertion while failing the actual rule."""
     for _ in range(3):
         mgr.record_toast("ses_a", "Stop", "Your turn", body="steady")
-    stored = mgr.get_toasts("ses_a", unacked_only=True)
+    stored = mgr._toast_inbox.get("ses_a", unacked_only=True)
     assert len(stored) == 1
     assert stored[0].version == 1
 
@@ -193,16 +201,16 @@ def test_duplicate_hook_delivered_toast_creation_is_not_double_counted(mgr):
 def test_duplicate_ack_does_not_bump_twice(mgr):
     t = mgr.record_toast("ses_a", "Notification", "hi", "body")
     assert t.version == 1
-    first_ack = mgr.ack_toast("ses_a", t.id)
+    first_ack = mgr._toast_inbox.ack("ses_a", t.id, toast_auto_ack.ACK_REASON_DISMISSED)
     assert first_ack is True
-    after_first = mgr.get_toasts("ses_a")[0]
+    after_first = mgr._toast_inbox.get("ses_a")[0]
     assert after_first.version == 2, "the ack transition is a real change"
 
     # THE DUPLICATE. Idempotent per ack_toast's own docstring: returns
     # False and changes nothing on an already-acked record.
-    second_ack = mgr.ack_toast("ses_a", t.id)
+    second_ack = mgr._toast_inbox.ack("ses_a", t.id, toast_auto_ack.ACK_REASON_DISMISSED)
     assert second_ack is False
-    after_second = mgr.get_toasts("ses_a")[0]
+    after_second = mgr._toast_inbox.get("ses_a")[0]
     assert after_second.version == 2, (
         "a duplicated ack of the same record must not move the version "
         "a second time"
@@ -219,12 +227,12 @@ def test_duplicate_auto_ack_does_not_bump_twice(mgr):
     cutoff = datetime.utcnow() + timedelta(seconds=1)
     first = mgr.auto_ack_toasts("ses_a", "PreToolUse", cutoff=cutoff)
     assert first == [t.id]
-    after_first = mgr.get_toasts("ses_a")[0]
+    after_first = mgr._toast_inbox.get("ses_a")[0]
     assert after_first.version == 2
 
     second = mgr.auto_ack_toasts("ses_a", "PreToolUse", cutoff=cutoff)
     assert second == [], "already answered - nothing changed the second time"
-    after_second = mgr.get_toasts("ses_a")[0]
+    after_second = mgr._toast_inbox.get("ses_a")[0]
     assert after_second.version == 2
 
 
@@ -239,7 +247,7 @@ def test_notifications_never_supersede_so_each_starts_at_version_one(mgr):
     history, never inherited from a sibling."""
     for i in range(3):
         mgr.record_toast("ses_a", "Notification", "Waiting", body=f"msg {i}")
-    stored = mgr.get_toasts("ses_a")
+    stored = mgr._toast_inbox.get("ses_a")
     assert len(stored) == 3
     assert all(t.version == 1 for t in stored)
 
@@ -247,7 +255,7 @@ def test_notifications_never_supersede_so_each_starts_at_version_one(mgr):
 def test_acking_one_toast_does_not_touch_anothers_version(mgr):
     a = mgr.record_toast("ses_a", "Notification", "a", "body a")
     b = mgr.record_toast("ses_a", "PermissionRequest", "b", "body b")
-    mgr.ack_toast("ses_a", a.id)
-    by_id = {t.id: t for t in mgr.get_toasts("ses_a")}
+    mgr._toast_inbox.ack("ses_a", a.id, toast_auto_ack.ACK_REASON_DISMISSED)
+    by_id = {t.id: t for t in mgr._toast_inbox.get("ses_a")}
     assert by_id[a.id].version == 2
     assert by_id[b.id].version == 1, "acking a lives entirely on a's record"

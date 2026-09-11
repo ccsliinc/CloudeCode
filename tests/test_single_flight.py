@@ -432,7 +432,9 @@ def test_every_caller_cancelling_leaves_nothing_behind():
 
 def test_the_sessions_list_endpoint_coalesces():
     """The route, not just the primitive. Same measurement, real handler."""
-    from src.api import routes
+    # THE HANDLERS LIVE IN THE SIBLING THAT OWNS THE RESOURCE on this line;
+    # src/api/routes.py is the assembly and re-exports nothing but ``router``.
+    from src.api import session_crud_routes as routes
 
     class _FakeState:
         pass

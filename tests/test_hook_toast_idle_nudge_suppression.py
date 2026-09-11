@@ -1,5 +1,12 @@
 """claude's idle nudge is not a summons, and the gate for it is separate.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 claude fires an idle ``Notification`` about 60s after a turn that already
 ended cleanly, with NO sub-agent involved at all - measured live
 2026-09-10 on ``ses_63beb976``: twelve consecutive Stop-then-Notification
@@ -60,6 +67,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+# THE HANDLER MOVED OUT OF THE FLAT ROUTES MODULE on this line, and
+# a name rebound on the aggregator would not be seen by the sibling
+# that reads it - the patch would go green over nothing.
+import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
 from src.core.session_activity import (
     IDLE_NOTIFICATION_SUPPRESSION_REASON,
@@ -118,16 +129,16 @@ def _build_hook_app(monkeypatch, tmp_path):
 
     work = tmp_path / "hook_proj"
     work.mkdir()
-    mgr.sessions["ses_hook"] = Session(
+    mgr._registry.sessions["ses_hook"] = Session(
         id="ses_hook",
         pty_pid=None,
         working_dir=str(work),
         status=SessionStatus.RUNNING,
         tmux_session="cloude_hook_proj",
     )
-    mgr.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
-    mgr._subscribers.setdefault("ses_hook", [])
-    mgr._mint_hook_token("ses_hook")
+    mgr._registry.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
+    mgr._registry.subscribers.setdefault("ses_hook", [])
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -145,7 +156,7 @@ def _post_event(app, mgr, event: str):
     """
     client = TestClient(app, client=("127.0.0.1", 12345))
     with patch.object(
-        routes_mod.connection_manager,
+        hook_routes_mod.connection_manager,
         "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
@@ -153,7 +164,7 @@ def _post_event(app, mgr, event: str):
             "/api/v1/hooks/claude-event",
             headers={
                 "X-Cloudecode-Session": "ses_hook",
-                "X-Cloudecode-Token": mgr.get_hook_token("ses_hook"),
+                "X-Cloudecode-Token": mgr.hook_tokens.get("ses_hook"),
                 "X-Cloudecode-Event": event,
                 "Content-Type": "application/json",
             },
@@ -221,7 +232,7 @@ def test_notification_after_a_clean_stop_is_suppressed(monkeypatch, tmp_path):
     assert payload["toast_suppressed"] == "turn_closed"
     # Only the SECOND toast (the Notification) is suppressed - the Stop
     # itself raised normally, matching "only the interruption is skipped".
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_not_called()
 
 

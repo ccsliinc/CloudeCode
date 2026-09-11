@@ -374,14 +374,23 @@ def test_save_publishes_atomically_and_leaves_no_temp(
 # --------------------------------------------------------------------------- #
 
 
-def test_the_dotfile_beats_the_legacy_pin(store: ThemeStore, tmp_path: Path):
-    """ORDER IS THE CONTRACT. The directory-keyed answer wins."""
+def test_the_pin_beats_the_project_default(store: ThemeStore, tmp_path: Path):
+    """ORDER IS THE CONTRACT, AND IT INVERTED AT THE 1.4.0 INTEGRATION.
+
+    The session's own pin wins over the folder's ``.cc.theme`` default.
+    Issue #65: a default that outranks an explicit choice is not a
+    default, and dotfile-first threw a pin away on every restart while
+    making two sessions in one folder unable to hold two themes. The
+    migration that used to ferry a pin INTO the dotfile went with the
+    inversion, because under it that write turns one session's private
+    choice into a folder-wide default its siblings inherit.
+    """
     project = tmp_path / "proj"
     project.mkdir()
     store.set_pin("cloude_both", "lovecraft")
     store.set_project_theme(project, "metal")
 
-    assert store.resolve_project_theme(project, "cloude_both") == "metal"
+    assert store.resolve_project_theme(project, "cloude_both") == "lovecraft"
 
 
 def test_the_legacy_pin_is_the_fallback_only(store: ThemeStore, tmp_path: Path):
@@ -446,81 +455,6 @@ def test_the_dotfile_module_and_the_store_agree_on_the_path(
     assert store.project_theme_path(tmp_path).name == theme_dotfile.DOTFILE_NAME
 
 
-# --------------------------------------------------------------------------- #
-# 5. Migration                                                                #
-# --------------------------------------------------------------------------- #
-
-
-def test_migration_ferries_a_legacy_pin_and_keeps_the_original(
-    store: ThemeStore, tmp_path: Path
-):
-    """The legacy entry is NOT deleted; it decays as users re-pin."""
-    project = tmp_path / "proj"
-    project.mkdir()
-    store.set_pin("cloude_old", "metal")
-
-    assert (
-        store.migrate_to_dotfile(
-            working_dir=project,
-            tmux_session="cloude_old",
-            session_id="ses_1",
-        )
-        is True
-    )
-    assert store.get_project_theme(project) == "metal"
-    assert store.get_pin("cloude_old") == "metal"
-
-
-def test_migration_refuses_when_a_dotfile_already_exists(
-    store: ThemeStore, tmp_path: Path
-):
-    """NEGATIVE CONTROL. The newer format wins and is never overwritten."""
-    project = tmp_path / "proj"
-    project.mkdir()
-    store.set_project_theme(project, "matrix")
-    store.set_pin("cloude_old", "metal")
-
-    assert (
-        store.migrate_to_dotfile(
-            working_dir=project,
-            tmux_session="cloude_old",
-            session_id="ses_1",
-        )
-        is False
-    )
-    assert store.get_project_theme(project) == "matrix"
-
-
-def test_migration_refuses_when_there_is_no_legacy_pin(
-    store: ThemeStore, tmp_path: Path
-):
-    """NEGATIVE CONTROL. A migration that always finds something is worse
-    than useless: it would write a theme nobody chose."""
-    project = tmp_path / "proj"
-    project.mkdir()
-
-    assert (
-        store.migrate_to_dotfile(
-            working_dir=project, tmux_session="cloude_x", session_id="ses_1"
-        )
-        is False
-    )
-    assert not (project / ".cc.theme").exists()
-
-
-def test_migration_does_not_raise_when_the_directory_is_gone(
-    store: ThemeStore, tmp_path: Path
-):
-    """Best effort: the attach path must never break over a theme."""
-    store.set_pin("cloude_old", "metal")
-    assert (
-        store.migrate_to_dotfile(
-            working_dir=tmp_path / "absent",
-            tmux_session="cloude_old",
-            session_id="ses_1",
-        )
-        is False
-    )
 
 
 @pytest.mark.parametrize(
