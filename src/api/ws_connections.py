@@ -19,10 +19,13 @@ single writer is ``ws_viewer_drain._drain_viewer``.
 from __future__ import annotations
 
 import json
-from typing import Optional, Set
+from typing import TYPE_CHECKING, Optional, Set
 
 import structlog
 from fastapi import WebSocket
+
+if TYPE_CHECKING:  # pragma: no cover - import cost is not paid at runtime
+    from src.core.sessions.registry import SessionRegistry
 
 from src.core import viewer_fanout
 from src.core.bounded_stream import OFFER_ACCEPTED, BoundedStream
@@ -30,7 +33,7 @@ from src.core.bounded_stream import OFFER_ACCEPTED, BoundedStream
 logger = structlog.get_logger()
 
 
-def _resolve_backend(registry, session_id: Optional[str]):
+def _resolve_backend(registry: SessionRegistry, session_id: Optional[str]):
     """The backend for a session id, or for the current session.
 
     Description: takes the ``SessionRegistry`` rather than the manager,

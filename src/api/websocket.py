@@ -267,7 +267,7 @@ async def websocket_terminal(websocket: WebSocket):
             # where the pane is now, and a stale value reading "unchanged"
             # is exactly the silent wrong-grid failure this guards.
             measured = await read_pane_geometry(
-                _resolve_backend(session_manager, target_sid)
+                _resolve_backend(registry, target_sid)
             )
             try:
                 outcome = await apply_negotiated_resize(
