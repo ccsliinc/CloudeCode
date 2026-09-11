@@ -282,7 +282,7 @@ def test_the_route_uses_the_filtered_name_not_the_label():
     import ast
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parents[1] / "src/api/routes.py").read_text()
+    src = (Path(__file__).resolve().parents[1] / "src/api/session_fork_routes.py").read_text()
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

@@ -47,9 +47,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def _settings():
     """The routes module's settings object, for monkeypatching state dir.
 
-    Inputs: none. Output: the src.api.routes settings instance.
+    Inputs: none. Output: the session_records_routes settings instance.
     """
-    from src.api.routes import settings
+    from src.api.session_records_routes import settings
 
     return settings
 

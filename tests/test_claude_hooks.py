@@ -40,6 +40,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
 from src.core import claude_hooks
 from src.core.claude_hooks import (
@@ -347,7 +348,7 @@ def test_hook_endpoint_creates_toast_for_stop(monkeypatch, tmp_path):
 
     # Stub the WS broadcast so we don't actually need a connection.
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
         resp = client.post(
@@ -382,7 +383,7 @@ def test_hook_endpoint_handles_empty_payload_gracefully(monkeypatch, tmp_path):
     client = _loopback_client(app)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         resp = client.post(
@@ -409,7 +410,7 @@ def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_pa
     client = _loopback_client(app)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         resp = client.post(

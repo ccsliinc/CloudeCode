@@ -103,7 +103,8 @@ def client(patched_auth, refresh_store):
     mounted on app.state. We build it synchronously; refresh_store is
     already initialized by the fixture so everything is ready.
     """
-    from src.api.auth import router as auth_router, limiter
+    from src.api.auth import limiter
+    from src.api.auth_routes import router as auth_router
 
     app = FastAPI()
     app.state.limiter = limiter

@@ -38,7 +38,7 @@ if str(ROOT) not in sys.path:
 
 from src.core.session_label import InvalidLabel, set_label_for_instance
 
-ROUTES = Path(ROOT) / "src" / "api" / "routes.py"
+ROUTES = Path(ROOT) / "src" / "api" / "session_rename_routes.py"
 
 
 def _rename_endpoint_source():
@@ -55,7 +55,10 @@ def _rename_endpoint_source():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name == "rename_session_endpoint":
                 return ast.get_source_segment(ROUTES.read_text(), node)
-    pytest.fail("rename_session_endpoint not found in src/api/routes.py")
+    pytest.fail(
+        "rename_session_endpoint not found in "
+        "src/api/session_rename_routes.py"
+    )
 
 
 def test_the_rename_endpoint_no_longer_calls_the_tmux_rename():
@@ -77,7 +80,7 @@ def test_the_endpoint_no_longer_enforces_the_ascii_only_charset():
     The compiled name either exists as a module attribute or it does
     not, and that is the thing that actually governs behaviour.
     """
-    import src.api.routes as routes_module
+    import src.api.session_rename_routes as routes_module
 
     assert not hasattr(routes_module, "_RENAME_NAME_RE"), (
         "the strict tmux-name charset must not gate a label"

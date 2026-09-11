@@ -448,7 +448,7 @@ async def test_the_attachable_route_answers_503_with_a_reason(
     """
     from fastapi import HTTPException
 
-    from src.api.routes import list_attachable_sessions
+    from src.api.session_attach_routes import list_attachable_sessions
 
     mgr = SessionManager()
     install_backends(

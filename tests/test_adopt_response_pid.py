@@ -11,14 +11,14 @@ what ``POST /sessions/adopt`` actually sends to the client, and what
 
 Neither fix touched ``SessionManager.adopt_external_session``, which
 builds the ``Session`` object returned directly in the adopt response
-with a hardcoded ``pty_pid=None`` -- and ``routes.adopt_session`` wraps
+with a hardcoded ``pty_pid=None`` -- and ``session_attach_routes.adopt_session`` wraps
 that dict straight into ``AdoptSessionResponse`` WITHOUT ever routing
 through ``_session_info_for``. So the client's first paint (and every
 value it caches from it) never saw a real pid, regardless of how
 correct the other two fixes were.
 
 These tests assert on the SERIALIZED RESPONSE MODEL
-(``AdoptSessionResponse``), exactly as ``routes.adopt_session`` builds
+(``AdoptSessionResponse``), exactly as ``session_attach_routes.adopt_session`` builds
 and returns it -- not on any internal helper -- so a regression that
 reintroduces ``pty_pid=None`` anywhere in that path fails loudly here.
 
@@ -55,10 +55,10 @@ from tests.socket_guard import TEST_SOCKET_NAME
 
 @pytest.mark.asyncio
 async def test_adopt_response_payload_carries_real_pty_pid():
-    """The exact object ``routes.adopt_session`` returns to the client
+    """The exact object ``session_attach_routes.adopt_session`` returns to the client
     (``AdoptSessionResponse(**result)``) must carry a non-null integer
     ``pty_pid`` -- not just the internal dict, not just
-    ``_session_info_for``'s output. This mirrors ``routes.py``'s own
+    ``_session_info_for``'s output. This mirrors ``session_attach_routes``'s own
     ``AdoptSessionResponse(**result)`` line so a fix that only patches
     an internal helper the route never calls stays caught.
     """
@@ -149,7 +149,7 @@ async def test_adopt_response_falls_back_to_none_when_backend_has_no_pid():
 @pytest.mark.asyncio
 async def test_create_session_response_already_carries_real_pty_pid():
     """Sanity check on the CREATE path (the task asked this be verified,
-    not just assumed): ``routes.create_session`` returns ``Session``
+    not just assumed): ``session_crud_routes.create_session`` returns ``Session``
     directly (``response_model=Session``), and
     ``SessionManager.create_session`` already resolves ``pty_pid`` via
     ``getattr(backend, "pid", None)`` before constructing it -- so the

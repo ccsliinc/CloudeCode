@@ -64,6 +64,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
+import src.api.session_records_routes as records_routes_mod
 from src.api.auth import require_auth
 from src.core import session_store
 from src.core.db_steps import run_chain
@@ -279,7 +281,7 @@ def _post_event(app, mgr, event: str):
     """
     client = TestClient(app, client=("127.0.0.1", 12345))
     with patch.object(
-        routes_mod.connection_manager,
+        hook_routes_mod.connection_manager,
         "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
@@ -992,7 +994,7 @@ def _records_app(monkeypatch, tmp_path, store=None):
         def get_state_dir(self):
             return state
 
-    monkeypatch.setattr(routes_mod, "settings", _S())
+    monkeypatch.setattr(records_routes_mod, "settings", _S())
 
     from src.core.db import db_path_for
 

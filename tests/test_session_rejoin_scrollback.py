@@ -44,6 +44,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.session_crud_routes as crud_routes_mod
 from src.api.auth import require_auth
 from src.models import Session, SessionInfo, SessionStats, SessionStatus
 
@@ -206,7 +207,7 @@ def test_get_session_with_flag_handles_capture_failure_gracefully(monkeypatch):
     def fake_warning(event, **kw):
         seen_events.append((event, kw))
 
-    monkeypatch.setattr(routes_mod.logger, "warning", fake_warning)
+    monkeypatch.setattr(crud_routes_mod.logger, "warning", fake_warning)
 
     client = TestClient(app)
     resp = client.get("/api/v1/sessions?include_scrollback=1")

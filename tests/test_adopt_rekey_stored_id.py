@@ -212,7 +212,7 @@ def _hook_app(manager: SessionManager) -> FastAPI:
     """Mount the real hook route over a given manager.
 
     Description: the assertion that matters is the ACTUAL status code
-      ``routes.claude_event_hook`` returns, not a direct call to
+      ``hook_event_routes.claude_event_hook`` returns, not a direct call to
       ``validate_hook_token``. The 403 this file exists to prevent is
       produced by the route, so the route is what gets exercised.
     Inputs: manager (SessionManager).

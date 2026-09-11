@@ -60,6 +60,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
 import src.api.toast_routes as toast_routes_mod
 from src.core.composition import build_services
 
@@ -433,7 +434,7 @@ def test_a_prompt_hook_clears_the_sessions_toasts_from_the_read_route(
     assert {waiting.id, notice.id, elsewhere.id} <= before
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as bcast:
         resp = _post_hook(client, mgr, "UserPromptSubmit", {"prompt": "say ok"})
@@ -461,7 +462,7 @@ def test_a_stop_hook_does_not_eat_the_toast_it_just_raised(monkeypatch, tmp_path
     perm = mgr.record_toast("ses_hook", "PermissionRequest", "needs your permission")
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         resp = _post_hook(client, mgr, "Stop", {})
@@ -480,7 +481,7 @@ def test_two_stops_in_a_row_leave_one_open_your_turn(monkeypatch, tmp_path):
     client, mgr = _hook_app(monkeypatch, tmp_path)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         first = _post_hook(client, mgr, "Stop", {}).json()["toast_id"]
@@ -500,7 +501,7 @@ def test_a_tool_call_clears_a_permission_but_leaves_a_notice(monkeypatch, tmp_pa
     notice = mgr.record_toast("ses_hook", "Notification", "wants your attention")
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         assert _post_hook(client, mgr, "PreToolUse", {"tool_name": "Bash"}).status_code == 200
@@ -526,7 +527,7 @@ def test_the_flags_behind_the_led_agree_with_the_toasts(monkeypatch, tmp_path, e
     assert mgr._activity_tracker.resolve("ses_hook", "running") == "question"
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         assert _post_hook(client, mgr, event, {}).status_code == 200

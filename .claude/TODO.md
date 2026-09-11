@@ -7678,3 +7678,113 @@ CLASS, 23 sites on `state_dir_override` and eight on
 `type(sm.settings).get_state_dir`. A name that stopped resolving there fails
 silently, not loudly. If it is ever taken it gets its own slice, its own patch
 sweep and its own control.
+
+---
+
+## 2026-09-10 - S6 SHIPPED: the two route monoliths into siblings
+
+Plan v2's S6. `src/api/routes.py` **4,397 to 106** and `src/api/auth.py`
+**1,674 to 362**, into 29 new sibling modules plus two pure core modules.
+Both stopping-condition rows met (routes.py under 500, auth.py under 500).
+Largest new file is `hook_event_routes.py` at 441; every one is under 500.
+
+**THE PLAN CONTRADICTS ITSELF AND THE CODE SETTLED IT.** Section 3.4 says
+`src/api/routes/` (a package) while section 7 says "`src/api/routes.py`
+under 500". Those cannot both exist: a package shadows a module of the same
+name. `src/api/` already carries eleven `<resource>_routes.py` siblings and
+S6's own prose says "the eleven-sibling pattern the directory already has",
+so it is flat siblings with `routes.py` left as the aggregator. That keeps
+`from src.api.routes import router` resolving for `src/main.py` and ten test
+files, untouched.
+
+**ORDER IS PRESERVED BY CONSTRUCTION, and that is the fingerprint.** Modules
+are CONTIGUOUS runs of the original declaration order, so aggregating in
+that order reproduces the table exactly. Two resources were not contiguous
+and keep a second router rather than moving:
+`provider_models_routes.local_models_router` (registered second) and
+`auth_routes.status_router` (`GET /auth/status`, registered between the
+clone route and the command lists). **Fingerprint: 51 routes, 18 auth
+routes and 99 openapi operations, IDENTICAL before and after on path,
+method set, endpoint name, response model, status code, dependency count,
+response class, schema inclusion AND position.**
+
+**NOTHING IS RE-EXPORTED FROM THE AGGREGATOR BUT `router`.** A re-export
+would let `monkeypatch.setattr(routes_mod, "_bundled_themes_root", ...)`
+go green while patching a name the handler no longer reads. Every such
+site was repointed at the module that owns the name.
+
+**auth.py IS NOW THE AUTHORITY AND DECLARES NO ROUTER.** 83 call sites
+import `require_auth` from it, so every auth-side route module depends on
+it; a router there would need the imports back and the cycle would only
+resolve by ordering them at the bottom of the file. `auth_routes.py`
+assembles that side instead. Acyclic, and `test_api_route_modules.py`
+enforces it.
+
+**Two decision halves lifted to pure modules**, per the plan's S6.
+`src/core/hook_event_presentation.py` is the toast copy;
+`src/core/hook_toast_gate.py` is the mute-then-subagent ladder, which had
+no test of its own because it was reachable only through an HTTP POST.
+`tests/test_hook_toast_gate.py` is 18 cases and over half of them are
+negative controls: a gate that suppressed broadly would pass every "it
+went quiet" test and rebuild the false-silence failure.
+
+**A REAL DEFECT FOUND, not introduced.** Five siblings inherited a
+FUNCTION-LOCAL `from fastapi.concurrency import run_in_threadpool` - nine
+of them across the five - which is the exact defect
+`tests/test_route_names_resolve.py` was written for: the next handler in
+that module uses the name and NameErrors into a bare 500. Hoisted to module
+scope and the local imports deleted.
+
+**Three structural tests were pointed at a file that no longer holds what
+they check**, and all three would have gone quietly useless:
+`test_route_names_resolve.py` (hardcoded `src/api/routes.py`, now
+discovers every module declaring a router and parametrises over 46),
+`test_docs_operations_chart_drift.py` (a seven-entry `ROUTER_FILES` tuple,
+now discovered the same way), and `test_rename_writes_label_not_tmux.py`
+plus `test_session_fork.py` and `test_configured_wrappers_path.py`, which
+AST-parse a named source file.
+
+**Patch sweep: 22 sites across 19 files, and the first grep found 13 of
+them.** The nine it missed were spelled through a different alias
+(`from src.api import routes as routes_module`) or reached a name the
+literal grep did not contain. A second sweep by AST - resolve each file's
+alias for the module, then check every attribute against the aggregator's
+real namespace - found the rest and now reports zero.
+
+**Mutations.** (1) Delete one `include_router` line: red on
+`test_the_aggregator_actually_serves_what_it_assembles`. It ALSO exposed a
+hole in the new test's own per-module case, which skipped instead of
+failing because it inferred "mounted elsewhere" from having no aggregated
+routes - which is what a deleted include looks like. Replaced with an
+explicit register of the modules `src/main.py` mounts directly; the
+mutation is now red twice. (2) Strip a module-scope import from a sibling:
+red on `test_every_route_handler_resolves_its_helper_names` for that
+module, proving the generalisation actually covers the new files. Both
+reverted by hunk and verified byte-identical by sha256.
+
+**Imports are emitted PER NAME.** The first pass copied whole statements,
+so any sibling needing one model got all fifty names of
+`from src.models import (...)` - the monolith's coupling surface handed to
+every file. `themes_routes.py` went from 253 lines to 202 on that change
+alone.
+
+**Verification.** Control MEASURED on this branch at `a1bf306`: 6,248
+passed / 2 failed / 20 skipped, 6,270 collected. After: **6,478 passed /
+2 failed / 76 skipped, 6,556 collected.** +289 added, -3 removed, and all
+three "removals" are accounted: two are `test_route_names_resolve`'s
+un-parametrised ids being replaced by 92 parametrised ones, and one is a
+parametrised id that embeds the worktree path. **ZERO tests removed.** The
++289: 147 `test_api_route_modules.py` (new), 92
+`test_route_names_resolve.py` (2 tests over 46 route modules), 31
+`test_no_unresolved_names.py` (parametrised over source FILES, and there
+are exactly 31 new ones), 18 `test_hook_toast_gate.py` (new), 1 the
+worktree-path id. The two failures are the known environmental pair. Node
+200/200 as CI runs it, four listing cost ceilings pass, `scan_secrets.py`
+exit 0, pre-commit hook left enabled.
+
+**Not done, and said out loud.** `src/api/recreate_routes.py` (582) and
+`src/api/websocket.py` (675) were already over the guideline and are not in
+this slice's lane. They are on an explicit register in
+`test_api_route_modules.py` with their measured size, so they are visible
+and may not GROW; a register that tolerates any number is the rule deleted
+with extra steps.

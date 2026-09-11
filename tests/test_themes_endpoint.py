@@ -40,7 +40,7 @@ if str(ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import src.api.routes as routes_mod
+import src.api.themes_routes as themes_routes_mod
 from src.api.auth import require_auth
 
 
@@ -87,7 +87,7 @@ def themes_app():
     the discovery logic. The dedicated 401 test removes the override.
     """
     app = FastAPI()
-    app.include_router(routes_mod.router, prefix="/api/v1")
+    app.include_router(themes_routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
     return app
 
@@ -99,17 +99,17 @@ def themes_app_no_auth_override():
     Used by the 401 test to verify the auth gate is still wired.
     """
     app = FastAPI()
-    app.include_router(routes_mod.router, prefix="/api/v1")
+    app.include_router(themes_routes_mod.router, prefix="/api/v1")
     return app
 
 
 @pytest.fixture
 def spy_logger(monkeypatch):
-    """Replace ``routes_mod.logger`` with a MagicMock so warning calls
+    """Replace ``themes_routes_mod.logger`` with a MagicMock so warnings
     can be inspected by event-name without going through structlog/stdlib
     logging plumbing (which is not configured in the test process)."""
     spy = MagicMock()
-    monkeypatch.setattr(routes_mod, "logger", spy)
+    monkeypatch.setattr(themes_routes_mod, "logger", spy)
     return spy
 
 
@@ -133,8 +133,8 @@ def patched_roots(monkeypatch, tmp_path):
     user = tmp_path / "user"
     bundled.mkdir()
     user.mkdir()
-    monkeypatch.setattr(routes_mod, "_bundled_themes_root", lambda: bundled)
-    monkeypatch.setattr(routes_mod, "_user_themes_root", lambda: user)
+    monkeypatch.setattr(themes_routes_mod, "_bundled_themes_root", lambda: bundled)
+    monkeypatch.setattr(themes_routes_mod, "_user_themes_root", lambda: user)
     return bundled, user
 
 
@@ -349,8 +349,8 @@ def test_user_root_none_does_not_500(themes_app, monkeypatch, tmp_path):
     bundled = tmp_path / "bundled"
     bundled.mkdir()
     _write_manifest(bundled, "only-bundled")
-    monkeypatch.setattr(routes_mod, "_bundled_themes_root", lambda: bundled)
-    monkeypatch.setattr(routes_mod, "_user_themes_root", lambda: None)
+    monkeypatch.setattr(themes_routes_mod, "_bundled_themes_root", lambda: bundled)
+    monkeypatch.setattr(themes_routes_mod, "_user_themes_root", lambda: None)
 
     client = TestClient(themes_app)
     resp = client.get("/api/v1/themes")
@@ -471,7 +471,7 @@ def test_every_bundled_theme_serves_its_audio_block():
     audio on the way out is silence for that theme and nothing else.
     """
     app = FastAPI()
-    app.include_router(routes_mod.router, prefix="/api/v1")
+    app.include_router(themes_routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
 
     resp = TestClient(app).get("/api/v1/themes")
@@ -599,7 +599,7 @@ def test_no_bundled_theme_css_files_remain_on_disk():
     """Filesystem assertion, not just endpoint behavior: no `theme.css`
     exists anywhere under the real bundled themes root any more.
     """
-    root = routes_mod._bundled_themes_root()
+    root = themes_routes_mod._bundled_themes_root()
     leftovers = sorted(str(p) for p in root.glob("*/theme.css"))
     assert leftovers == [], f"theme.css files still present: {leftovers}"
 
@@ -610,7 +610,7 @@ def test_no_bundled_theme_declares_a_dangling_themecss():
     otherwise `_load_manifest` would (correctly) drop that theme, and this
     test names the dangling reference instead of the theme just vanishing.
     """
-    root = routes_mod._bundled_themes_root()
+    root = themes_routes_mod._bundled_themes_root()
     dangling = []
     for child in sorted(root.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
@@ -632,7 +632,7 @@ def test_every_bundled_theme_declares_and_ships_effects_js():
     declares. effects.js is the ONLY per-theme JS/CSS asset that actually
     loads in the running app (see themeCss above for the one that never did).
     """
-    root = routes_mod._bundled_themes_root()
+    root = themes_routes_mod._bundled_themes_root()
     theme_dirs = sorted(
         p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")
     )

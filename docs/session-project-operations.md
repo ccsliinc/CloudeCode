@@ -299,7 +299,7 @@ graph LR
 ```mermaid
 graph TD
     U["user clicks fork on a running session<br/>client/js/launchpad.js::_forkSession"]
-    U --> R["POST /sessions/{session_name}/fork<br/>src/api/routes.py::fork_session"]
+    U --> R["POST /sessions/{session_name}/fork<br/>src/api/session_fork_routes.py::fork_session"]
     R --> S["resolve the parent's LIVE anchor<br/>src/core/session_fork.py::resolve_fork_source"]
 
     S --> OK["READY - the row carries a claude_session_uuid"]

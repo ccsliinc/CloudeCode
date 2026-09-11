@@ -39,7 +39,8 @@ if str(ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.auth import require_auth, router as auth_router
+from src.api.auth import require_auth
+from src.api.auth_routes import router as auth_router
 from src.config import settings
 
 

@@ -115,7 +115,7 @@ class _ProbeBackend:
 
 
 def _routes_settings():
-    """The live ``settings`` singleton ``src.api.routes`` imports.
+    """The live ``settings`` singleton ``session_recent_routes`` imports.
 
     Description: a pydantic ``BaseModel`` instance rejects
       ``setattr(instance, "get_state_dir", ...)`` for any name not
@@ -124,9 +124,9 @@ def _routes_settings():
       attribute). This helper is the one place that resolves the class,
       so a patch and its call site cannot drift.
     Inputs: none.
-    Output: the ``Settings`` singleton instance ``src.api.routes.settings``.
+    Output: the ``Settings`` singleton ``session_recent_routes.settings``.
     """
-    from src.api import routes as routes_module
+    from src.api import session_recent_routes as routes_module
 
     return routes_module.settings
 

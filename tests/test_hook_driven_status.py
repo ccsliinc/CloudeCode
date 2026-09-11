@@ -37,6 +37,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
 from src.core.session_manager import SessionManager
 from src.core.session_status import STATUS_FINISHED_UNREAD, STATUS_IDLE, STATUS_WORKING
@@ -304,7 +305,7 @@ def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, even
     client = _loopback_client(app)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
         resp = client.post(
@@ -357,7 +358,7 @@ def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tm
     client = _loopback_client(app)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
         resp = client.post(

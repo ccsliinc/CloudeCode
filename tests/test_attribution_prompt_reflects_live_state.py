@@ -75,11 +75,12 @@ def _client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     from src.api import routes
+    from src.api import session_attribution_routes
     from src.api.auth import require_auth
     from src.api.routes import router
 
     monkeypatch.setattr(
-        type(routes.settings), "get_state_dir", lambda self: tmp_path
+        type(session_attribution_routes.settings), "get_state_dir", lambda self: tmp_path
     )
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")

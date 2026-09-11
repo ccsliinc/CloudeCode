@@ -481,7 +481,7 @@ test('server status is an ENTRY_ID, not a rewrite of the menu', () => {
 // The "restart server" row was WITHDRAWN together with
 // POST /api/v1/server/reset: that endpoint spawned a reset.sh the packaged
 // app has never shipped, so the row returned a 500 on every packaged
-// install. See the removal note in src/api/routes.py for why it was
+// install. See the removal note in src/api/server_control_routes.py for why it was
 // withdrawn rather than shipped. Asserted as an absence here so the row
 // cannot reappear without the supervisor-owned action it needs.
 test('the menu carries no server-restart row', () => {
