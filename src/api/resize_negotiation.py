@@ -24,6 +24,7 @@ from typing import Any, Hashable, Optional, Tuple
 
 import structlog
 
+from src.api.attach_settle import NO_RESIZE_ATTEMPTED, ResizeOutcome
 from src.core.terminal_size import TerminalSizeNegotiator
 from src.models import WSMessageType
 
@@ -68,7 +69,8 @@ async def apply_effective_size(
     negotiator: TerminalSizeNegotiator,
     effective: Optional[Tuple[int, int]],
     connection_manager: Any,
-) -> None:
+    known_pane_size: Optional[Tuple[int, int]] = None,
+) -> Tuple[bool, bool]:
     """Resize the backend to a negotiated size and tell shared clients.
 
     Shared tail of both the "client resized" and "client disconnected"
@@ -78,23 +80,53 @@ async def apply_effective_size(
     each client can tell it may be letterboxed for another client's
     benefit. The UI must never silently show a pane sized for someone else.
 
+    ``known_pane_size`` IS A MEASUREMENT OR IT IS NOTHING. When the caller
+    has POSITIVELY read the pane's own ``#{pane_width}``/``#{pane_height}``
+    and it already equals ``effective``, the backend resize is skipped:
+    ``resize-window`` to a size tmux is already at changes nothing, raises
+    no ``SIGWINCH``, and costs two blocking subprocess calls on the event
+    loop (measured p50 22.81 ms). Pass None - the default, and what every
+    caller outside the attach handshake passes - and the resize is issued
+    exactly as it always was. A cached or assumed value must never be
+    passed here; see :mod:`src.api.attach_settle`.
+
     Args:
         session_manager: the app's SessionManager (resize_terminal target).
         session_id: session to resize; caller has confirmed it is truthy.
         negotiator: the session's negotiator, for client_count.
         effective: new (cols, rows) to apply, or None to skip.
         connection_manager: object exposing ``broadcast_to_session``.
+        known_pane_size: (cols, rows) the PANE itself reported, or None
+            when nothing was measured.
 
     Returns:
-        None. Side effects only: backend resize plus an optional broadcast.
+        tuple[bool, bool]: ``(issued, failed)``. ``issued`` is True only
+        when a backend resize was actually made; ``failed`` is True when
+        that call raised. Both False means nothing needed doing.
+
+    Example:
+        >>> await apply_effective_size(sm, "s", neg, (80, 24), cm, (80, 24))
+        (False, False)
     """
     if effective is None:
-        return
+        return (False, False)
     eff_cols, eff_rows = effective
-    try:
-        session_manager.resize_terminal(eff_cols, eff_rows, session_id=session_id)
-    except Exception as exc:
-        logger.error("negotiated_resize_failed", error=str(exc))
+    issued = False
+    failed = False
+    if known_pane_size is not None and tuple(known_pane_size) == (eff_cols, eff_rows):
+        logger.debug(
+            "negotiated_resize_skipped_pane_already_sized",
+            session_id=session_id,
+            cols=eff_cols,
+            rows=eff_rows,
+        )
+    else:
+        issued = True
+        try:
+            session_manager.resize_terminal(eff_cols, eff_rows, session_id=session_id)
+        except Exception as exc:
+            failed = True
+            logger.error("negotiated_resize_failed", error=str(exc))
 
     client_count = negotiator.client_count(session_id)
     if client_count > 1:
@@ -106,6 +138,7 @@ async def apply_effective_size(
             "constrained": True,
         })
         await connection_manager.broadcast_to_session(session_id, message)
+    return (issued, failed)
 
 
 async def apply_negotiated_resize(
@@ -115,8 +148,16 @@ async def apply_negotiated_resize(
     cols: int,
     rows: int,
     connection_manager: Any,
-) -> None:
+    known_pane_size: Optional[Tuple[int, int]] = None,
+) -> ResizeOutcome:
     """Record a client's requested size and apply the negotiated result.
+
+    THE TARGET IS THE SESSION'S EFFECTIVE SIZE, NOT THIS CLIENT'S REQUEST.
+    With a second browser attached the pane is letterboxed to the
+    element-wise minimum, so the geometry the pane is supposed to be at is
+    what the negotiator computes across every tracked client. Reporting
+    this client's own request would make the attach handshake compare the
+    pane against a size it is deliberately not at, and settle forever.
 
     Args:
         session_manager: the app's SessionManager (resize_terminal target).
@@ -126,16 +167,31 @@ async def apply_negotiated_resize(
         cols: this client's requested width in columns.
         rows: this client's requested height in rows.
         connection_manager: object exposing ``broadcast_to_session``.
+        known_pane_size: (cols, rows) the pane itself reported, or None.
+            See :func:`apply_effective_size`; a measurement or nothing.
 
     Returns:
-        None. Side effects only.
+        ResizeOutcome: the negotiated target plus whether a backend
+        resize was actually issued and whether it failed. Callers that
+        do not need it may ignore it; the attach handshake keys its
+        settle on it.
+
+    Example:
+        >>> await apply_negotiated_resize(sm, "s", ws, 80, 24, cm, (80, 24))
+        ResizeOutcome(target=(80, 24), issued=False, failed=False)
     """
     if not session_id:
-        return
+        return NO_RESIZE_ATTEMPTED
     negotiator = get_negotiator(session_manager)
     effective = negotiator.set_client_size(session_id, client_key, cols, rows)
-    await apply_effective_size(
-        session_manager, session_id, negotiator, effective, connection_manager
+    issued, failed = await apply_effective_size(
+        session_manager, session_id, negotiator, effective, connection_manager,
+        known_pane_size=known_pane_size,
+    )
+    return ResizeOutcome(
+        target=negotiator.effective_size(session_id),
+        issued=issued,
+        failed=failed,
     )
 
 

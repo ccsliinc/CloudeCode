@@ -61,10 +61,14 @@ async def test_history_limit_is_declared_before_the_pane_exists() -> None:
     backend = _RecordingBackend(
         session_id="probe", working_dir=Path("/tmp"), socket_name="ccwt_unit"
     )
-    await backend._apply_history_limit()
-    assert backend.tmux_calls == [
-        ["set-option", "-g", "history-limit", str(HISTORY_LIMIT)]
+    # The launch sends this inside its pre-spawn batch, so the command
+    # BUILDER is what carries the argv now. Asserting the argv rather than
+    # a recorded call keeps the claim and drops a fake that proved nothing
+    # beyond its own arrangement.
+    assert list(backend._history_limit_command()) == [
+        "set-option", "-g", "history-limit", str(HISTORY_LIMIT)
     ]
+    assert backend.tmux_calls == []
     # Matches xterm.js's own `scrollback: 50000` in client/js/terminal.js.
     # A pane that retains less than the browser is willing to show is a
     # ceiling the user runs into with no way to tell which layer stopped

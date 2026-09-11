@@ -212,6 +212,60 @@ having the respawned process write its own inherited value: a mock
 asserting two calls happened in order would only be testing its own
 arrangement.
 
+**THE ENVIRONMENT WRITES TRAVEL TOGETHER NOW, AND THEY STILL NEVER
+TRAVEL WITH THE SPAWN.** `respawn` issued one tmux process per variable;
+`src/core/tmux_command_batch.py` sends them as one `;`-separated command
+list, measured p50 20.99 ms to 9.38 ms for the two we inject. The batch is
+still a SEPARATE, AWAITED call ahead of `respawn-pane`, which is the
+distinction that matters: putting the spawn INSIDE the list would make
+this ordering a property of tmux's command queue rather than of two
+ordered awaits, and would swallow the spawn's own return code. Proved by
+`tests/test_tmux_launch_batching_real_tmux.py`, which has the respawned
+process write its own inherited value, and whose negative control was run
+before it shipped - with the writes moved BEHIND the spawn the pane does
+not come back empty, it comes back holding the tmux server's STALE
+global values, which is the 403 storm above wearing a plausible face.
+
+**THE LAUNCH IS SIX TMUX PROCESSES, DOWN FROM FOURTEEN, AND THE RULE FOR
+WHAT MAY SHARE ONE IS COMPATIBLE FAILURE BEHAVIOUR.** Counted by tracing a
+real `TmuxBackend.start()`, not estimated. Two batches: the pre-spawn
+`history-limit` plus `remain-on-exit`, and the eight post-probe
+decorations (extended keys, mouse, the two wheel bindings,
+terminal-features, escape-time, `window-size manual`, aggressive-resize).
+Every command in both was already `check=False`. The three whose outcome
+the caller ACTS on - `new-session`, `respawn-pane`, `pipe-pane` - stay in
+processes of their own, because tmux gives no per-command control over a
+list and a batch that reported only "the batch failed" would be a
+downgrade. `attach_existing`'s four adopt-time options batch the same way,
+behind `ensure_pipe_pane` rather than in front of it. Measured on tmux
+3.6a at load average 14: the eight decorations cost **p50 206.41 ms apart
+and p50 9.35 ms together**.
+
+**TMUX ABORTS A COMMAND LIST AT ITS FIRST ERROR, WHICH IS WHY THE RUNNER
+FALLS BACK.** Measured, not assumed: a list whose first command is invalid
+exits 1 and the second never runs. So a naive batch turns "one option this
+socket will not take" into "and every option after it was silently
+skipped", which is strictly WORSE than the per-command loop it replaces.
+`run_optional_batch` re-runs the commands individually on any non-zero
+exit - every one of them is idempotent, so that restores exactly the
+pre-batch behaviour, and it is also the only thing that can name WHICH
+command failed, since tmux's stderr carries the error text but not its
+position in the list. It costs nothing in steady state. A token that IS
+`;` or ENDS in one is REFUSED rather than batched, because it would split
+the list somewhere the caller did not intend; a semicolon in the MIDDLE
+of a token is fine, which the wheel bindings depend on.
+
+**AND `set-option` DOES NOT START A TMUX SERVER ON tmux 3.6a, WHICH THE
+COMMENT IN `start()` USED TO CLAIM.** Measured on a cold throwaway
+socket: both pre-spawn `set-option` calls exit 1 with "error connecting",
+batched or separate, and after `new-session` the socket reports
+`history-limit 2000` (tmux's default, not our 50000) and
+`remain-on-exit off`. That is PRE-EXISTING and unrelated to batching - it
+was silent because both calls pass `check=False` - and it means the FIRST
+session on a fresh tmux server gets neither setting. Not fixed here; it
+needs the options re-applied after `new-session`, which is a change to the
+launch ordering this section is otherwise about preserving.
+
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
 sessions and zero held. `src/core/session_boot_readopt{,_plan}.py` now re-adopts
@@ -401,6 +455,42 @@ tmux round trip per attach, 9.8 ms median against 17.5 ms for the capture
 beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
+
+**AND THE 150 ms ATTACH SETTLE IS NOW PAID ONLY WHEN A RESIZE ACTUALLY
+WENT OUT.** The handshake slept 150 ms on every attach so a `SIGWINCH`
+raised by the handshake resize could reach the pane's foreground process
+before the capture stomped its buffer. That is the right thing to wait
+for when a resize happened, and pure latency when the browser comes back
+at the geometry the pane is already at, which is the common reconnect.
+`src/api/attach_settle.py` is the rule and it has THREE outcomes, not
+two: the pane's own `#{pane_width}`/`#{pane_height}` measured EQUAL to
+the negotiated grid skips both the resize and the pause; measured
+DIFFERENT resizes and settles as before; and anything else - the probe
+refused, the backend cannot be asked, the client sent no dims, the resize
+raised - settles as before. **A READING THAT DID NOT HAPPEN IS NOT A
+READING OF NOTHING**: treating unknown as unchanged would leave the
+pane's grid disagreeing with the browser, invisibly, until the user
+typed. Both sleep sites go through the one function; the degraded branch
+that never got client dims can never take the fast path, by construction.
+
+**COMPARE AGAINST THE PANE, NEVER AGAINST THE NEGOTIATOR'S CACHE, and
+that is why this costs a probe at all.** `TerminalSizeNegotiator` forgets
+a session the moment its last client disconnects, so on the very common
+close-tab-reopen-tab attach it has NO record and reports the size as
+changed - keying the settle on its return alone would never once take the
+fast path. Worse, a value it did remember says nothing about a pane an
+adopt, a restart or an external `resize-window` has since moved.
+Measured on tmux 3.6a at load average 14: the probe costs p50 9.85 ms,
+the `resize-window` plus `refresh-client` pair it also skips costs p50
+22.81 ms of BLOCKING event-loop time, and the whole resize-and-settle
+segment on an identical-geometry attach went **p50 152.2 ms to 12.5 ms**.
+A changed geometry still measures p50 186.7 ms, which is the point.
+`tests/test_attach_settle_skip.py` proves the refusal against a REAL
+backend whose tmux session has been killed, because a double asked to
+return None proves only that someone wrote `return None`; its timing
+claims are made by RECORDING the sleeps rather than by a wall clock,
+which on a loaded box would either flake or be too loose to prove
+anything.
 
 **Config writes are atomic and backed up, and they go through ONE
 boundary.** The sequence is unchanged and is not open to tidying: the `.bak` of

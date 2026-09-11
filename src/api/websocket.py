@@ -17,6 +17,13 @@ from src.models import (
     WSPTYResizeMessage,
     WSErrorMessage
 )
+from src.api.attach_settle import (
+    NO_RESIZE_ATTEMPTED,
+    ResizeOutcome,
+    decide_settle,
+    read_pane_geometry,
+    settle_if_needed,
+)
 from src.api.deps import verify_jwt_from_subprotocol, SUBPROTOCOL_MARKER
 from src.api.resize_negotiation import (
     apply_negotiated_resize,
@@ -303,10 +310,22 @@ async def websocket_terminal(websocket: WebSocket):
     #                         the 100ms debounce client-side - this is the
     #                         handshake path, not a normal user-driven
     #                         resize)
-    #   3. Server applies backend.resize(cols, rows)
+    #   3. Server reads the PANE's own #{pane_width}/#{pane_height}, then
+    #      applies backend.resize(cols, rows) unless the pane is already
+    #      measured at the negotiated size.
     #   4. Server sleeps ~150ms so SIGWINCH reaches the pane's foreground
     #      process (Claude/bash/etc.) and that process has a chance to
-    #      finish any in-flight ANSI write before we stomp its buffer.
+    #      finish any in-flight ANSI write before we stomp its buffer -
+    #      but ONLY when there is something to wait for. Three outcomes,
+    #      and the third is why this is not a two-way branch:
+    #        - pane measured AND already at the negotiated grid: no
+    #          resize, no sleep. The common reconnect.
+    #        - pane measured and DIFFERENT: resize issued, sleep as ever.
+    #        - pane could not be measured, or the resize failed: sleep as
+    #          ever. A reading that did not happen is not a reading of
+    #          nothing, and treating unknown as unchanged would leave the
+    #          pane's grid disagreeing with the browser, invisibly, until
+    #          the user typed. See src/api/attach_settle.py.
     #   5. Server paints the pane's screen (see ws_startup_paint). Every
     #      pane, full-screen TUI or not, gets its visible screen captured
     #      post-resize and sent to the client. Nothing is written into
@@ -375,19 +394,41 @@ async def websocket_terminal(websocket: WebSocket):
                 cols=handshake_cols,
                 rows=handshake_rows,
             )
+            # Measured BEFORE the resize, off the PANE rather than off any
+            # cache: a previous socket's negotiated size says nothing about
+            # where the pane is now, and a stale value reading "unchanged"
+            # is exactly the silent wrong-grid failure this guards.
+            measured = await read_pane_geometry(
+                _resolve_backend(session_manager, target_sid)
+            )
             try:
-                await apply_negotiated_resize(
+                outcome = await apply_negotiated_resize(
                     session_manager, target_sid, websocket,
                     handshake_cols, handshake_rows, connection_manager,
+                    known_pane_size=measured,
                 )
             except Exception as exc:
                 logger.error("ws_handshake_resize_failed", error=str(exc))
+                # A resize that raised leaves the pane's geometry unknown,
+                # which is the strongest possible reason to wait.
+                outcome = ResizeOutcome(
+                    target=(handshake_cols, handshake_rows),
+                    issued=True,
+                    failed=True,
+                )
 
             # Let SIGWINCH propagate + foreground app finish any mid-flight
-            # write. 150ms is empirically enough for tmux -> pane delivery
-            # and for Claude/bash to ack the signal. We use asyncio.sleep
-            # so the event loop keeps draining other tasks.
-            await asyncio.sleep(0.15)
+            # write, when a resize actually went out. 150ms is empirically
+            # enough for tmux -> pane delivery and for Claude/bash to ack
+            # the signal. We use asyncio.sleep so the event loop keeps
+            # draining other tasks.
+            verdict = decide_settle(measured, outcome)
+            await settle_if_needed(verdict)
+            logger.debug(
+                "ws_handshake_settle",
+                settled=verdict.settle,
+                reason=verdict.reason,
+            )
 
             # Make the pane's screen visible at the new size. A TUI gets
             # Ctrl+L and repaints itself; anything else gets the pane's
@@ -403,7 +444,14 @@ async def websocket_terminal(websocket: WebSocket):
             # (timeout, bad dims, or disconnect-during-handshake recovered).
             # A frozen banner is the worst possible UX - paint at the
             # pane's current (birth) size so the user sees SOMETHING.
-            await asyncio.sleep(0.15)
+            #
+            # SAME RULE, SAME FUNCTION, and it can never take the fast
+            # path: with no client geometry there is nothing to confirm
+            # unchanged, so this always settles, exactly as before. Both
+            # sleep sites go through one gate on purpose - a fast path
+            # that is fast on only one branch is worse than either.
+            verdict = decide_settle(None, NO_RESIZE_ATTEMPTED)
+            await settle_if_needed(verdict)
             _strategy = await paint_on_attach(
                 websocket,
                 _resolve_backend(session_manager, target_sid),
