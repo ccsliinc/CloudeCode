@@ -43,8 +43,8 @@ def unique_tmp_path(path: Path) -> Path:
     Description: the temp file carries the calling process's pid and a
       random 8-hex-character suffix, so two writers - in this process or
       in another one - can never stream into the same fd. It lives in
-      the SAME directory as ``path`` so ``os.replace(tmp, path)`` stays a
-      rename within one filesystem and therefore atomic.
+      the SAME directory as ``path`` so the caller's rename into place
+      stays within one filesystem and therefore atomic.
 
       The name is also why a caller must clean up after a failed write:
       a fixed name self-limits to one orphan on disk; a unique one left
