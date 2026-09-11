@@ -339,9 +339,15 @@ def test_ws_connect_with_valid_subprotocol_accepted(ws_app):
         # Server must echo the marker back per RFC 6455.
         # Starlette exposes the negotiated subprotocol via `.accepted_subprotocol`.
         assert ws.accepted_subprotocol == "cloude.jwt.v1"
-        # Receive initial welcome message — confirms handler ran past accept.
-        welcome = ws.receive_json()
-        assert welcome.get("type") == "log"
+        # Receive the handshake's first frame - confirms the handler ran
+        # past accept, which is the only thing this auth test is about.
+        # It was the connect welcome frame until issue 106 removed that as
+        # a redundant pill; the dimension request is now the first send,
+        # and it proves the same thing. Deliberately not asserted as "any
+        # frame at all": a handler that accepted and then fell over would
+        # still satisfy that.
+        first = ws.receive_json()
+        assert first.get("type") == "request_dims"
 
 
 def test_ws_connect_without_subprotocol_rejected_4401(ws_app):

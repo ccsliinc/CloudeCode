@@ -5,7 +5,6 @@
 import asyncio
 import json
 import base64
-from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Optional, Set
 import structlog
@@ -317,20 +316,6 @@ async def websocket_terminal(websocket: WebSocket):
 
     # Subscribe to log events (keep for system messages)
     log_queue = log_monitor.subscribe()
-
-    # Send initial connection message
-    try:
-        welcome_msg = {
-            "type": "log",
-            # Lowercase and unbracketed: this is rendered as a UI notice
-            # now, not written into the xterm buffer, so it no longer
-            # needs to look like a terminal banner.
-            "content": "websocket connected, pty terminal ready",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        await websocket.send_text(json.dumps(welcome_msg))
-    except Exception as e:
-        logger.error("failed_to_send_welcome", error=str(e))
 
     # ---- Resize handshake (replaces legacy scrollback replay) ----
     #

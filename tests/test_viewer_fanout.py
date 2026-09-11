@@ -270,9 +270,10 @@ def test_exactly_one_coroutine_in_the_endpoint_sends_after_the_handshake():
         if "websocket.send_" in src:
             senders.append(name)
     # `websocket_terminal` is the endpoint itself: its sends are the
-    # welcome and the dimension request, both issued in one coroutine
-    # BEFORE any task starts, so they cannot run concurrently with the
-    # writer. `_drain_viewer` is the writer.
+    # dimension request and `terminal.ready`, both issued in one
+    # coroutine BEFORE any task starts, so they cannot run concurrently
+    # with the writer. `_drain_viewer` is the writer. (The connect
+    # welcome frame was a third such send until issue 106 removed it.)
     assert sorted(senders) == ["_drain_viewer", "websocket_terminal"], senders
 
     # `paint_on_attach` (src/api/ws_startup_paint.py) also sends, and is
