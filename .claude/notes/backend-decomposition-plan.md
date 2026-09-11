@@ -1,499 +1,564 @@
-# Backend decomposition plan
+# Backend decomposition plan, v2
 
-Written 2026-09-10 against `release/1.2.1` (tagged v1.2.1, deployed live).
-Every number below was measured on that tree today, not recalled. This is a
-CLAIM plus PLAN round; no product code was written. Coordination claim:
-`claims/ccsliinc-backend-decomposition.md` on the orphan `coord` branch,
-pushed to `adamdev` and `origin` at `dc5db2d`.
+Rewritten 2026-09-10 on `docs/backend-plan-v2` off `release/1.2.1`. Version 1 of
+this document is on `feat/backend-decomposition` and five slices shipped from
+it. Everything below was re-measured on `release/1.2.1` and on that branch
+today, not recalled. Coordination: GitHub issue #12, draft PR #19, repo
+`Adoom666/CloudeCodeDev`.
 
-## 1. What this is, and what it is not
+**Why there is a v2.** The owner's direction, verbatim: "what are we doing with
+the monoliths. I think this project now has feet and should be first class
+python", and earlier "i want full top end code with proper classes and all.
+first class." Version 1 was designed to be safe. It is safe, and it is capped.
+This version raises the ceiling and says what that costs.
 
-**We are giving the stateful shell a structure, not splitting files into
-chunks.** This repo has the right idiom for its DECIDERS already: 71
-`src/core/session_*.py` modules, almost all pure ladders that take
-measurements and return a verdict (`resolve_startup_gate`,
-`resolve_respawn_plan`, `choose_agent_evidence`). That is not the
-problem. The problem is that the object which HOLDS the state
-and performs the I/O has no members at all: one class of 8,055 lines carrying
-36 mutable fields, calling every ladder from inside itself. A mechanical file
-split moves methods without moving state, which is how you get two dicts that
-disagree. The target is a facade composing seven small collaborators, three
-structural protocols as substitution points, and the pure ladders untouched.
+## 1. What v1 got right, and the one thing that capped it
 
-## 2. The measurement: `src/core/session_manager.py`
+**The extractions are sound, the tests are real, and the file barely moved.**
+Five slices shipped: S1 `4e911b6` ProbeHealthRecorder, S2 `c170eb6` theme
+cluster, S3 `bb7abb0` toast inbox, S4 `09284df` SessionRegistry first half,
+S5 `209947d` AttachmentSidecars. They added 2,433 lines of new collaborator and
+test code that did not exist before, all of it green.
 
-**8,340 lines, one class of 8,055, and 37 percent of it lives in eleven
-methods.**
+`src/core/session_manager.py` went 8,340 to 8,239. Net 101 lines over five
+slices. Per slice, measured with `git show --numstat`:
 
-| Fact | Measured | Fact | Measured |
+| Slice | Added to the file | Removed | Net |
 |---|---|---|---|
-| File lines | 8,340 | Public methods | 68 |
-| Classes | 2 (`ProbeHealth` 22, `SessionManager` 8,055) | Written instance fields | 36 of 127 read |
-| Module level functions | 3 | Call sites from `src/` | 85 |
-| Methods on `SessionManager` | 136 | Call sites from `tests/` | 490 |
-| Constructor signature | `__init__(self)`, no arguments | `SessionManager(` constructions | 108, 107 in `tests/` |
-| Test files touching it | 93 | | |
+| S1 probe health | 53 | 76 | -23 |
+| S2 themes | 211 | 321 | -110 |
+| S3 toasts | 103 | 198 | -95 |
+| S4 registry half | 80 | 25 | **+55** |
+| S5 sidecars | 100 | 28 | **+72** |
 
-The eleven largest methods are 3,045 lines together, with their line numbers:
-`create_session` 499 @3294, `adopt_external_session` 443 @6878,
-`_session_info_for` 413 @4784, `__init__` 248 @288, `respawn_session` 244
-@7612, `list_attachable_sessions` 243 @6634, `_lifespan_tmux_reconcile` 240
-@1337, `record_claude_lifecycle_event` 209 @5485, `record_toast` 196 @2452,
-`restart_preview` 155 @7910, `_startup_gate_for` 155 @4628.
+Two of the last three slices GREW the file. That is not execution drift, it is
+the design working as specified. The cause, measured on the branch head with an
+AST walk: the class now carries **23 pure forwarding members costing 291 lines**,
+an average of 12.7 lines to forward one call. Method count went 136 to 146.
+Public surface went 68 to 76. **Extraction made the god object bigger in every
+dimension a reader cares about.**
 
-By I/O class across all 136 methods: 43 pure, 62 tmux only, 5 database only,
-26 both. The 26 that touch both are the ones that cannot be tested without a
-real socket AND a real database today, and they are exactly the ones the
-protocols in section 5 exist for.
+Three v1 rules combine to guarantee that:
 
-## 3. The state map, which is where the real seams are
+- the facade keeps every public name resolving, permanently;
+- `SessionManager()` keeps taking no required arguments, permanently, because
+  102 bare constructions across 46 test files depend on it;
+- every function carries a full docstring with description, typed inputs and
+  typed output.
 
-**A god object's seams are its state, not its headings.** The 36 written
-fields cluster into ten groups with almost no cross traffic.
+A 20-line body moves out. A 12.7-line documented forwarder stays. Do that
+seven more times and the forwarding block alone is roughly 600 lines, which is
+the entire budget for the target facade before one real method is written.
 
-| Cluster | Fields, each with its count of touching methods |
-|---|---|
-| Session registry | `sessions` 26, `backends` 24, `_subscribers` 5, `log_buffers` 5, `command_counts` 4, `_last_session_id` 3 |
-| Hook token authority | `_hook_tmux_names` 12, `_hook_tokens` 9, `_superseded_hook_tokens` 3, `_hook_tokens_durable` 2 |
-| Per-session sidecars | `idle_watchers` 7, `adopt_fifo_offsets` 4, `pending_terminal_commands` 2 |
-| Toast inbox | `_pending_toasts` 6, `_pending_startup_toasts` 2 |
-| Owned tmux ledger | `owned_tmux_sessions` 10, `_legacy_metadata_needs_backfill` 3, `_boot_listing` 2 |
-| Theme store | `pinned_themes` 9, `_theme_accent_cache` 1 |
-| Instance identity | `_instance_epochs` 7, `_unread_store` 4, `_unread_epochs` 3 |
-| Status evidence | `_activity_tracker` 5, `_startup_gate_ledger` 3 |
-| Probe health | `_last_probe_socket` 3, and `_last_probe_ok` / `_reason` / `_detail` 2 each |
-| Wiring | `_notification_router` 4, six singles including `_notification_policy_store` and `_boot_readopt_task` |
+**So the constraint to change is the facade, not the pace.**
 
-**`_wipe_session_state` (54 lines, @631) is the god method of the god
-object.** It alone touches nine clusters, because teardown has to know every
-one. It is therefore the LAST thing to cut, and the thing that proves the
-decomposition finished: when every cluster is a collaborator it becomes a
-loop. Separately, `ProbeHealth` at line 228 is a dataclass nothing constructs,
-with the four probe fields sitting loose beside it. That is a seam somebody
-already saw and did not finish.
+## 2. The measurement, all nine files, on `release/1.2.1`
 
-## 4. Where the danger is, and why it inverts the obvious order
+**They are five different problems wearing one symptom, and the treatments do
+not transfer.** Sizes re-measured today with `wc -l`; structure with `ast`.
 
-**Every incident CLAUDE.md records from this file lives in the adoption and
-hook-token triangle, and every one of them was SILENT.**
+| File | Lines | What it actually is | Treatment |
+|---|---|---|---|
+| `src/core/session_manager.py` | 8,340 | **God object.** One class of 8,055, 136 methods, 68 public, 36 written fields, 3 module functions | Collaborators, composition root, facade deleted |
+| `src/api/routes.py` | 4,387 | **Route table.** 61 module functions, ZERO classes, zero instance state, 51 routes | Split by resource; lift 4 ladders out |
+| `src/core/tmux_backend.py` | 2,801 | **Driver.** One class of 2,538 on a legitimate ABC, 38 methods, 12 fields | Split by concern behind the same ABC. COLLIDES with issue #5 |
+| `src/models.py` | 2,496 | **Schema, not behaviour.** 75 pydantic classes, 2 functions, no methods worth the name | Package split by domain. Cheapest win here |
+| `src/config.py` | 2,113 | **Settings blob.** 14 dataclasses plus one `Settings` of 1,426 | Dataclasses to a package; `Settings` to loader plus typed readers |
+| `src/api/auth.py` | 1,675 | **Route table again.** 33 module functions, one 3-line model | Same as routes.py |
+| `src/core/db_models.py` | 1,664 | **Append-only DDL ledger.** Zero classes, zero functions, pure data by its own docstring | LEAVE IT. See below |
+| `src/main.py` | 1,407 | **Boot script.** `lifespan` alone is 547 lines and constructs 15 services onto `app.state` | Becomes the composition root, as a side effect of section 3 |
+| `src/core/db_steps.py` | 1,403 | **Append-only migration ledger.** 34 step functions, additive by rule | Package split by version range, mechanical, nothing touches a version |
 
-- The adoption that minted an id instead of resolving one: 94 hook refusals in
-  four minutes, answering 403 rather than 410, so a grep for the stale-session
-  code found nothing and the hook path looked healthy.
-- The mint that landed on a running agent: 4,325 rejections over 4h24m, ended
-  by a human restarting the pane.
-- The teardown keyed on the id rather than the tmux name: 22 rows for 21 live
-  panes. Caught only because the deploy was verified against `/sessions/list`,
-  not against the `boot_readopt_complete` log line, which was perfect.
-- The guard whose only exercised caller set the flag it checked: 4,874 green
-  tests had never observed it raise, and it failed 20 of 20 owned sessions on
-  its first real boot.
+Also over the guideline and deliberately not ours:
+`src/core/session_notification_policy.py` 564 and
+`src/core/notifications/idle_watcher.py` 514, both adoom666's live mute work.
 
-That last one is the governing lesson for this whole plan. A green suite is
-not evidence when the dangerous path is not exercised by it.
+**`db_models.py` and `db_steps.py` are the two that look like the problem and
+are not.** Both are append-only by an invariant the repo enforces: no step may
+drop, rename or retype anything. A file that may only ever grow is a LEDGER,
+and splitting a ledger to hit a line count fights its own reason for existing.
+`db_steps.py` splits by version range because the boundaries are already there;
+`db_models.py` does not, because the version constant and the table names must
+stay in one importable place and the rest is 1,600 lines of DDL text. Filing
+that under "monolith" would be a line count driving a decision instead of a
+design.
 
-So the ordering is inverted from the tempting one. The hook token cluster is
-the TIGHTEST cluster in the file, with the fewest outside readers, and it is
-the LAST thing we cut. We cut the clusters whose failure is loud and visible
-within one turn first.
+**`models.py` is the opposite: 75 pydantic classes with no behaviour is a
+directory that was never made.** It is the lowest-risk change in this entire
+document and it is worth doing early purely for morale and to prove the
+package-split machinery.
 
-## 5. The target structure
+## 3. The target, stated as a design and not as a file list
 
-**Seven classes, three protocols, and the pure ladders untouched.** New code
-lives under `src/core/sessions/`. Nothing in that package may import
-`session_manager`, which is the rule that keeps the dependency arrow pointing
-one way and kills the function-level imports the file uses today.
+**A composition root builds the collaborators and hands each one to whoever
+needs it. Nothing assembles itself, and nothing reaches through a manager to
+get at something else.**
 
-### Classes, one mutable cluster each
+The measurement that makes this possible is the asymmetry between the two
+sides of the call graph:
 
-Every one is a plain class, composed not inherited, with typed attributes and
-a docstring per method giving description, inputs, outputs and an example
-where the usage is not obvious.
+| | Constructions | Call sites | Distinct names |
+|---|---|---|---|
+| `src/` | **1** (`src/main.py:290`) | 37 `app.state.session_manager` lookups, 29 of them in `routes.py` | 89 |
+| `tests/` | 102 bare, 46 files | 993 attribute accesses | 96 |
 
-- `SessionRegistry` (`sessions/registry.py`). Owns `sessions`, `backends`,
-  `_subscribers`, `log_buffers`, `command_counts`, `_last_session_id`. The
-  output fan-out binding lives here, so `_make_output_handler` stops being a
-  closure factory on the manager.
-- `HookTokenAuthority` (`sessions/hook_token_authority.py`). Owns the four
-  token maps. Its API is shaped so the invariant is structural rather than
-  remembered: `mint(session_id, tmux_name)` is the ONLY writer of a secret,
-  `keep(session_id, tmux_name)` re-binds the name and cannot reach the secret,
-  and `recover(session_id, presented)` reads the superseded ring and never
-  mints. A re-keyed adoption calling `keep` cannot revoke a credential because
-  the code to do so is not on that method.
-- `ToastInbox` (`sessions/toast_inbox.py`). Owns both pending maps, plus
-  record, ack, prune, supersede and the startup-toast one-shot claim.
-- `ThemeStore` (`sessions/theme_store.py`). Owns `pinned_themes` and the accent
-  cache, and the dotfile read and write.
-- `OwnedTmuxLedger` (`sessions/owned_tmux_ledger.py`). Owns
-  `owned_tmux_sessions`, the legacy metadata backfill flag, the boot listing,
-  and the atomic metadata write. The `.bak` then temp then `fsync` then
-  `os.replace` pattern moves with it verbatim.
-- `ProbeHealthRecorder` (`sessions/probe_health.py`). Owns the four probe
-  fields and finally CONSTRUCTS the `ProbeHealth` dataclass that already
-  exists instead of returning a tuple of loose attributes.
-- `AttachmentSidecars` (`sessions/sidecars.py`). Owns `idle_watchers`,
-  `adopt_fifo_offsets`, `pending_terminal_commands`. Three per-session dicts
-  with one identical lifecycle: set at create or adopt, popped at destroy.
+One construction site in the whole application. The manager is already reached
+through `app.state`, which is a service locator with 15 untyped entries on it.
+That is not a god object problem, that is a container waiting to be named.
 
-### Protocols, so the tmux and database sides are substitutable
+### 3.1 The composition root
 
-`typing.Protocol`, structural, so a double satisfies it by shape and needs no
-base class and no mock framework. The repo already uses `Protocol` in five
-modules, so this is not a new idea here.
+`src/core/composition.py` holds `AppServices`, a frozen dataclass of the
+collaborators, and `build_services(...)` which constructs them in dependency
+order and returns it. `lifespan` calls it and puts the result at
+`app.state.services`. `build_services` takes every port as a keyword with a
+production default, so a test overrides one and gets the other eleven real.
 
-- `TmuxReader` (`sessions/ports.py`). The READ side of tmux: `list_sessions`,
-  `capture_pane`, `pane_status_all`, `is_alive`. A listing test feeds a
-  recorded listing. The write side stays on `SessionBackend`, which is a
-  genuine is-a with a stable base and remains the one legitimate ABC.
-- `SessionRecordStore` (`sessions/ports.py`). The subset of `session_store`
-  the manager actually uses: `get_instance`, `claim_instance`, and the
-  `record_*` writers. Lets the 26 both-sides methods be tested against an
-  in-memory implementation without a real sqlite file.
-- `Clock` (`sessions/ports.py`). `now()` and `monotonic()`. Half the incidents
-  in CLAUDE.md are timing claims (`STARTUP_HOOK_GRACE_SECONDS = 20`,
-  `WORKING_HEARTBEAT_TIMEOUT_SECONDS`, `PERMISSION_TAIL_GRACE_SECONDS`) and
-  none of them is testable today without sleeping.
+That single function is the test fixture, the boot path and the documentation
+of what this application is made of, and there is exactly one of it.
 
-**The danger a protocol introduces, said out loud.** A double agrees with
-whatever it was built to agree with. So every protocol gets a conformance test
-running the REAL implementation against the same assertions as the double, and
-a slice whose only evidence is a double is not proven. This repo paid for that
-twice: `tests/test_boot_readopt.py` is hermetic and its `FakeBackend` had no
-guard to fail, and `tests/test_respawn_refreshes_pane_env.py` exists because a
-mock asserting two calls in order only tests its own arrangement.
+### 3.2 Ports, at the four genuine substitution points
 
-### Pure function modules, which is most of the remaining volume
+`src/core/sessions/ports.py`, `typing.Protocol`, structural, so a double
+satisfies it by shape with no base class and no mock framework. The repo
+already uses `Protocol` in five modules.
 
-The eleven giant methods are each a decision ladder wrapped in I/O. The
-decision half becomes a new pure module in the existing idiom; the I/O half
-stays on the facade or on a collaborator. New pure modules:
-`sessions/create_plan.py`, `sessions/adopt_plan.py`,
-`sessions/info_assembly.py` plus `sessions/measurements.py` (the frozen
-dataclass of everything `_session_info_for` reads before it decides anything).
+- `TmuxReader`: `list_sessions`, `capture_pane`, `pane_status_all`,
+  `is_alive`. The READ side only. The write side stays on `SessionBackend`,
+  which is a genuine is-a with a stable base and remains the one legitimate ABC
+  in this design.
+- `SessionRecordStore`: `get_instance`, `claim_instance`, the `record_*`
+  writers. The 26 methods that touch tmux AND sqlite become testable without a
+  real socket and a real file.
+- `Clock`: `now()`, `monotonic()`. Every timing rule in CLAUDE.md
+  (`STARTUP_HOOK_GRACE_SECONDS = 20`, `WORKING_HEARTBEAT_TIMEOUT_SECONDS`,
+  `PERMISSION_TAIL_GRACE_SECONDS`) is currently untestable without sleeping.
+- `SettingsReader`: the handful of `Settings` values a collaborator actually
+  needs. **This one is not a convenience, it is a near-miss fix.** S2 nearly
+  wrote to the owner's real `~/.cloude-sessions` during pytest because the
+  theme collaborator reached for the module-level `settings` singleton, which
+  15 modules under `src/core/` import today. A collaborator that reads its
+  configuration through a constructor argument cannot do that.
 
-### The facade
+**The danger a port introduces, said out loud.** A double agrees with whatever
+it was built to agree with. Every port gets a conformance test that runs the
+REAL implementation against the same assertions as the double, and a slice
+whose only evidence is a double is not proven. This repo paid for that twice:
+`tests/test_boot_readopt.py` is hermetic and its `FakeBackend` had no guard to
+fail, and `tests/test_respawn_refreshes_pane_env.py` exists because a mock
+asserting two calls in order only tests its own arrangement.
 
-`SessionManager` keeps its name, its module path and its 68 public methods.
-Its body becomes composition plus delegation. Target under 500 lines; if it
-does not fit, the public surface is too wide and that is a separate
-conversation with the owner, not a reason to leave a 700-line file.
+### 3.3 Dependency direction, and what may never import what
 
-## 6. The contract that cannot move
+```
+src/core/sessions/ports.py        imports nothing from this project
+src/core/sessions/*.py            may import ports and the pure ladders
+src/core/composition.py           imports everything under core
+src/main.py, tests/conftest.py    import composition
+src/api/*.py                      imports the TYPE of AppServices, nothing else from core
+```
 
-**68 public methods, 85 src call sites, 490 test call sites, and ten public
-ATTRIBUTES reached from outside.** The attributes are the trap, because Python
-has no compile step and a moved dict fails at runtime, in one code path, on
-one machine.
+Three rules, all enforced by the existing `tests/test_sessions_package_rules.py`
+rather than by memory:
 
-Measured external attribute reach: `manager.backends` 10, `manager.sessions`
-17 across three spellings, `sm.owned_tmux_sessions` 14 across three spellings,
-`sm.pending_terminal_commands` 3, `manager.idle_watchers` 1.
+1. Nothing under `src/core/sessions/` may import `session_manager`.
+2. Nothing under `src/core/sessions/` may import the module-level `settings`
+   singleton. It takes a `SettingsReader`. This is the S2 rule.
+3. No new file over 500 lines.
 
-Two hard rules follow.
+### 3.4 Packages
 
-**Rule A: every slice moves the state, never a copy of it.** The collaborator
-holds the one and only dict; the facade exposes it through a property. Two
-objects holding one logical state and kept in sync by hand is the shape of the
-bug that produced 22 rows for 21 panes. The proof obligation is an identity
-assertion, not a value assertion: `manager.sessions is registry.sessions`.
+`src/core/sessions/` (exists), `src/models/` (new, by domain),
+`src/config/` (new: the dataclasses, then `Settings` as a loader plus typed
+readers), `src/api/routes/` (new, by resource), `src/core/schema/steps/`
+(new, by version range).
 
-**Rule B: `SessionManager()` keeps taking no required arguments.** 107 test
-files construct it bare. Every collaborator is an optional keyword with a
-default-constructed value, so injection is available to new tests and
-invisible to old ones. A slice that changes the constructor signature is a
-107-file commit and stops being independently shippable.
+Composition over inheritance throughout. `SessionBackend` stays the one ABC
+because tmux and PTY are a real is-a over a stable base. Everything else is a
+plain class with typed attributes, constructed and handed in.
 
-The busiest public methods, which are the ones a regression would be loudest
-on: `record_toast` (2 src, 81 test), `get_toasts` (1, 61),
-`list_attachable_sessions` (8, 25), `get_session_info` (6, 13),
-`record_hook_event` (1, 27), `get_hook_token` (0, 29), `create_session`
-(5, 12), `adopt_external_session` (1, 18), `respawn_session` (1, 17).
+## 4. The facade verdict
 
-## 7. The twelve slices
+**It becomes a deprecated shim with a delete date, and it is deleted a cluster
+at a time by the slice that extracts the cluster. Not at the end, and never in
+one heroic commit.**
 
-**Smallest and safest first, each independently deployable, each deleting what
-it replaces in the same commit.** No slice is split across a release, and a
-cluster is either fully moved or not started: a half-moved decomposition is
-worse than the god object, because a reader can no longer tell where a field
-lives.
+The v1 rule was: the facade is permanent, so a slice ADDS forwarders. The v2
+rule inverts it.
 
-### S1. ProbeHealthRecorder
-Moves the four probe fields plus `last_probe_health`,
-`list_attachable_sessions_with_socket` and `reconcile_lifecycle`'s probe read.
-About 60 lines. Constructs the existing `ProbeHealth` dataclass. Public names:
-those two plus `tmux_socket_name`. Tests: `tests/test_tmux_listing.py`,
-`tests/test_listing_liveness_socket_scope.py`. New:
-`tests/test_probe_health_recorder.py`, including that a probe that did not run
-reports `cannot_determine` and never `ok`.
-Proof: `GET /sessions/list` row count equals
-`tmux -L cloude list-sessions | wc -l`, same number before and after.
-Risk: lowest in the file, and the warm-up that proves the facade-property
-pattern before anything risky uses it. Parallel: yes.
+> **Rule B, v2.** A slice is not done until nothing outside the collaborator's
+> own module and its own tests calls the manager for that cluster. The slice
+> DELETES the forwarders it would otherwise have written. A slice that leaves a
+> forwarder behind has not finished; it has moved the code and kept the weight.
 
-### S2. ThemeStore
-Moves `pinned_themes`, `_theme_accent_cache` and nine theme methods, about 250
-lines. Public names: `get_pinned_theme`, `set_pinned_theme`,
-`discard_pinned_theme`, `get_project_theme`, `set_project_theme`,
-`resolve_project_theme`, `migrate_pinned_theme_to_dotfile`.
-Tests: `tests/test_project_theme.py`, `tests/test_themes_endpoint.py`,
-`tests/test_terminal_theme_survives_agent_renders.py`.
-Proof: switch between two sessions with different pinned themes in a browser;
-the theme must not bleed, which is gotcha 7 and why this cluster is worth
-isolating. Risk: low. Parallel: yes.
+That makes every slice a net reduction by construction, because the file loses
+the moved body AND the members that used to reach it, instead of losing the
+body and gaining a documented forwarder.
 
-### S3. ToastInbox
-Moves both pending maps, `record_toast` (196), `ack_toast`, `auto_ack_toasts`,
-`get_toasts`, `_prune_toasts`, `_find_supersedable_toast`,
-`_flush_startup_toasts`. Public names: the four listed. Tests: 142 existing
-call sites across `tests/test_toast_auto_ack.py` and neighbours, the
-best-covered cluster in the file, which is why it moves early.
-New: a test that a duplicated `Stop` acks by KIND and never acks the toast the
-same event just raised, a rule currently expressed only in prose.
-Proof: raise a real permission prompt in a live pane, watch the card appear
-and drop on the `toast.ack` frame. Risk: low. Parallel: yes.
+### 4.1 What it costs, measured rather than feared
 
-### S4. Log buffers and command counts
-Moves `log_buffers`, `command_counts`, `get_recent_logs`, `add_log_entry` into
-`SessionRegistry`'s first half. About 40 lines. Deliberately separate from S7
-so the registry lands in two pieces. Tests: `tests/test_session_backend.py`.
-Risk: lowest. Parallel: yes.
+The 102 bare constructions and 993 accesses sound like the cost. They are not,
+because both are concentrated. Measured today, counting only accesses through a
+variable named `manager`, `sm`, `session_manager` or `mgr`:
 
-### S5. AttachmentSidecars
-Moves `idle_watchers`, `adopt_fifo_offsets`, `pending_terminal_commands` and
-their four accessors, cutting three clusters out of `_wipe_session_state`.
-Public names: `idle_watcher`, `adopt_fifo_start_offset`,
-`consume_adopt_fifo_offset`, `flush_pending_terminal_command`, and the
-attribute `manager.idle_watchers`.
-New: a test that the FIFO offset is consumed exactly ONCE, and that a restart
-cannot replay a pending terminal command, the in-memory-only rule the
-constructor comment states and nothing asserts.
-Proof: restart the server, confirm zero `hook_post_rejected_invalid_token` in
-the following ten minutes. Risk: low, but it is the first slice touching
-create and adopt, so the first to need the live boot check. Parallel: yes.
+| Cluster | Test files to migrate | `src/` call sites |
+|---|---|---|
+| Probe health (shipped S1) | 3 | 3 |
+| Themes (shipped S2) | 4 | 0 |
+| Toasts (shipped S3) | 13 | 5 |
+| Log buffers, command counts (shipped S4) | 0 | 0 |
+| Sidecars (shipped S5) | 2 | 0 |
+| Owned tmux ledger | 9 | 2 |
+| Hook token authority | 12 | 0 |
+| Registry attributes (`sessions`, `backends`) | 31, but 41 hits | 6 |
 
-### S6. OwnedTmuxLedger
-Moves `owned_tmux_sessions`, the backfill flag, `_boot_listing`,
-`_load_session_metadata`, `_save_session_metadata`, `_write_metadata_atomic`,
-`_clear_stale_metadata`, `is_owned_tmux_name`, `owned_tmux_instances`.
-Public names: `owned_tmux_instances`, `is_owned_tmux_name`, and the attribute
-`manager.owned_tmux_sessions` (14 external readers).
-Tests: `tests/test_boot_readopt.py`, `tests/test_boot_readopt_real_tmux.py`,
-`tests/test_session_row_reuse.py`.
-Mutation that must turn a test red: make `_write_metadata_atomic` skip the
-`.bak`. If nothing goes red, the atomic-write rule is undefended.
-Proof by measurement: after a restart, `boot_readopt_complete`'s held plus
-skipped must equal the live tmux session count, AND `GET /sessions/list` must
-return exactly that many rows. Both, because the log line was perfect the day
-the listing returned 22 for 21.
-Risk: medium. This is the first slice on the boot path.
-Parallel: yes.
+**Retro-fitting all five shipped slices is 22 test files.** Not 46, not 107.
 
-### S7. SessionRegistry
-Moves `sessions`, `backends`, `_subscribers`, `_last_session_id`,
-`_register_session`, `_make_output_handler`, `subscribe_output`,
-`unsubscribe_output`, `current_session`, `current_backend`, `get_session`,
-`get_backend`, `_resolve_session_id`, `_require_running`,
-`_registered_ids_for_tmux_name`. Public names: all of those plus the
-attributes `manager.sessions` and `manager.backends`, 27 external readers.
-The load-bearing one is `_registered_ids_for_tmux_name`, which enforces ONE
-PANE IS ONE REGISTRATION. It gets its own test that registering the same pane
-under two ids is detectable: the 22 versus 21 defect as an assertion rather
-than a paragraph.
-Negative control: `manager.sessions is registry.sessions` must hold. A slice
-that leaves two dicts passes every value test and is wrong.
-Proof: `/sessions/list` row count equals the tmux count exactly, and a WS
-terminal binds and streams bytes on a real session.
-Risk: medium-high, purely from the attribute reach. Parallel: yes.
+The 102 bare `SessionManager()` constructions mostly do not need a builder at
+all: a test that exercises only the toast cluster stops constructing a manager
+and constructs a `ToastInbox`, which is a REDUCTION in setup, not an addition.
+The tests that genuinely need a whole application get one `conftest.py` fixture
+wrapping `build_services(...)`. The builder is written once.
 
-### S8. The listing assembly
-Carves `_session_info_for` (413), `_build_tmux_status_map`,
-`_startup_gate_for` (155), `_seed_candidate_tmux_names`,
-`_listed_tmux_names_by_session` into a frozen `SessionMeasurements` dataclass
-plus a pure `assemble_session_info`. This is where `TmuxReader` earns its keep.
-It READS `session_status_map.py`, `session_instance_index.py` and
-`pipe_wakeup.py` and rewrites none of them, which is adoom666's explicit ask.
-Tests: `tests/test_listing_subprocess_cost.py`,
-`tests/test_listing_pass_datastore_cost.py`,
-`tests/test_listing_seed_row_cost.py`,
-`tests/test_listing_liveness_socket_scope.py`,
-`tests/test_session_status_seed.py`.
-The ceilings that must not move: fewer than `2 * N` `has-session` calls,
-`MAX_DATASTORE_OPENS_PER_LISTING = 4`, first pass captures equal to N, second
-pass captures zero.
-Negative control: an INCOMPLETE listing must still yield `unknown` and never
-`dead`, and a listing from a different socket must not vouch. That is the one
-invariant both parties named in their claims.
-Risk: high. Parallel with adoom666: NO. This is his queued wave 3 territory.
+### 4.2 What could go wrong, and the net under it
 
-### S9. The create path
-`create_session` (499) becomes a pure `resolve_create_plan` plus a thin
-executor, with `_cleanup_failed_create` as the plan's own rollback.
-Must keep: `persist_creation` calling `resolve_project_binding` with
-`allow_create=True`, and the pair rule that `(project_id,
-project_attribution)` moves together or neither moves.
-New: a test that a derived `(None, 'none')` writes NEITHER column, because the
-half-write is what put an attribution of `none` on a row that held a good
-project.
-Risk: high. Parallel: NO.
+- **A moved dict fails at runtime, in one path, on one machine.** Python has no
+  compile step. Mitigation is Rule A, unchanged from v1 and now with three
+  scars on it: **every slice moves the state, never a copy.** The proof
+  obligation is an identity assertion. Note that `is` ALONE has now failed to
+  catch a real mutation three times in this project, so several no-copy legs
+  are chosen for the DATA: mutate through one reference, read through the
+  other, assert the mutation is visible. If a mutation comes back green, the
+  TEST is wrong.
+- **A test patches `session_manager.<name>` and the name is gone.** Mechanical
+  and silent: `mock.patch` on a missing attribute raises, `patch.object` with
+  `create=True` does not. After moving any read, grep the suite for patches
+  aimed at the old name and repoint them. This is a per-slice checklist item,
+  not a hope.
+- **The retro-fit slice touches 22 files at once.** It is the largest single
+  commit in this plan and it lands second, on purpose, while the 5,856-test net
+  is fresh and before anything risky is built on top of it.
+- **The facade shrinks to a size nobody wants to finish.** Guarded by the
+  stopping condition in section 7 and by the delete date: the shim carries a
+  literal `DELETE AFTER` line naming the slice that removes it.
 
-### S10. HookTokenAuthority
-Moves the four token maps and `_load_hook_tokens`, `_persist_hook_tokens`,
-`_mint_hook_token`, `_keep_hook_token`, `_gc_hook_tokens`, `get_hook_token`,
-`validate_hook_token`, `recover_hook_token`, `get_env_for_spawn`.
-Mutation that must turn a test red: make `keep()` call `mint()`. If nothing
-goes red, the rule that saved 4h24m is undefended.
-Negative controls, both required: a bogus 40-char token must be refused, and
-`recover` must refuse a token this process never minted for THAT id on THAT
-pane. A recovery that accepted broadly would pass every positive test and be a
+**The delete date.** The `SessionManager` name and module survive as a shim
+only until S9. After S9 there is no `SessionManager` class, `lifespan` builds
+`AppServices`, and `src/core/session_manager.py` is deleted, not emptied.
+
+## 5. The docstring rule
+
+**Forwarding stops existing, and while it briefly exists it gets a one-line
+docstring under a written exemption. Both halves, because the transition is
+real and an implicit exemption is how a rule erodes.**
+
+The full rule (description, typed inputs, typed output, example when
+non-obvious) is right and stays. Applied to a one-line forward it produced a
+measured 12.7 lines per member, which is what inverted the line count.
+
+The ruling, to be written into CLAUDE.md verbatim in the S0 commit:
+
+> **A pure forwarder is exempt from the full docstring rule.** A member whose
+> entire body is `return self._collaborator.method(...)` has no behaviour of
+> its own to document. Restating the collaborator's contract creates a SECOND
+> copy of it that can go stale, and a confidently wrong doc sends the next
+> agent to write a bug. Such a member carries one line naming its replacement
+> and its delete date, and nothing else. The exemption applies ONLY to a member
+> marked deprecated with a delete date, so it cannot be stretched to cover a
+> thin method that does anything at all: one argument reshaped, one default
+> filled in, one error translated, and the full rule applies again.
+
+Types still belong in the signature, on the forwarder as on everything else.
+The signature is what tooling verifies; the docstring is prose.
+
+## 6. The slices
+
+**Nine, ordered by how loud a failure would be, not by how tight the cluster
+is. Every one independently shippable, full suite green, deleting what it
+replaces in the same commit, no dual path.** Two v1 slices have left this lane
+entirely; see section 8.
+
+### S0. The composition root, the ports, and the fixture
+No behaviour moves. `src/core/composition.py` with `AppServices` and
+`build_services`, `src/core/sessions/ports.py` with the four Protocols, the
+`conftest.py` builder fixture, the CLAUDE.md docstring ruling, and the two new
+package rules wired into `tests/test_sessions_package_rules.py`.
+`lifespan` calls `build_services` and keeps `app.state.session_manager` beside
+`app.state.services` so nothing breaks yet.
+**Why first:** every later slice needs somewhere to inject a collaborator FROM.
+Without it, a caller migrated off the manager has nowhere to get the
+collaborator except a module global, which is the S2 near-miss rebuilt.
+**Mutation:** delete a port from `AppServices` and the conformance test must go
+red, not the type checker alone.
+**Risk:** none, nothing moves. **Parallel with adoom666:** yes.
+
+### S1. Retro-fit the five shipped slices
+Migrate the 22 test files and the 8 `src/` call sites onto the five existing
+collaborators, then DELETE all 23 forwarders and 291 lines from the manager.
+**Why second:** it is the only slice that PROVES the new rule pays, and it is
+measurable before anything new is extracted. If the file does not drop by
+roughly 291 lines plus the migrated readers, the v2 premise is wrong and we
+stop and say so rather than building eight more slices on it.
+**Negative control:** grep the suite for `patch(` aimed at any of the 23
+deleted names. Zero remaining, or a test is patching a ghost.
+**Risk:** low per file, medium in volume. **Parallel:** yes.
+
+### S2. `src/models.py` into `src/models/`
+75 pydantic classes into a package by domain, `__init__` re-exporting every
+public name so no importer changes in the same commit. Pure filing, zero
+behaviour, and it proves the package machinery on the safest file in the tree.
+**Trap:** `SessionInfo` (242 lines) puts fields on TWO levels and that is the
+single most repeated bug in this project. The split must not silently flatten
+it. **Risk:** lowest of all nine. **Parallel:** yes.
+
+### S3. OwnedTmuxLedger
+`owned_tmux_sessions`, the legacy backfill flag, `_boot_listing`, the metadata
+load, save and atomic write, `_clear_stale_metadata`, `is_owned_tmux_name`,
+`owned_tmux_instances`. 9 test files, 2 `src/` call sites.
+**Mutation:** make the atomic write skip the `.bak`. If nothing goes red, the
+rule that protects the user's whole setup is undefended.
+**Live proof:** after a restart, `boot_readopt_complete` held plus skipped
+equals `tmux -L cloude list-sessions | wc -l`, AND `GET /sessions/list` returns
+exactly that many rows. Both, because the log line was perfect the day the
+listing returned 22 rows for 21 panes. **Risk:** medium, first slice on the
+boot path. **Parallel:** yes.
+
+### S4. SessionRegistry, the second half
+`sessions`, `backends`, `_subscribers`, `_last_session_id`, the registration
+and lookup methods, and `_registered_ids_for_tmux_name`, which is what enforces
+ONE PANE IS ONE REGISTRATION. 31 test files touch these attributes but only 41
+times, so it is wide and shallow.
+**Negative control:** registering one pane under two ids must be DETECTABLE by
+an assertion, which is the 22-versus-21 defect turned from a paragraph into a
+test. **Risk:** medium-high, purely from reach. **Parallel:** yes.
+
+### S5. `src/config.py` into `src/config/`
+The 14 dataclasses to modules; `Settings` splits into a loader and typed
+readers. `update_settings_config` carries the atomic write pattern the whole
+repo copies, so it moves verbatim and gets its own mutation test.
+`get_agent_command` must never be called with a user-supplied id, and that
+becomes a TYPE rather than a comment: a validated `AgentChoice` value object
+that only `session_agent_choice.validate_agent_choice` can construct.
+**Risk:** medium. Config writes are how a user loses their setup.
+**Parallel:** yes.
+
+### S6. `src/api/routes.py` and `src/api/auth.py` into route packages
+Split by resource into the eleven-sibling pattern the directory already has:
+31 routes under `/sessions`, 6 `/agents`, 4 `/providers`, 2 each `/filesystem`
+and `/terminal`, one each for the rest. The four large functions
+(`claude_event_hook` 424, `restart_session` 212, `fork_session` 194,
+`session_attribution_prompt` 177) are decision ladders in disguise and their
+decision halves become pure modules.
+Each moved route swaps `app.state.session_manager` for the ONE collaborator it
+needs off `app.state.services`, which is where the 29 lookups in `routes.py`
+go to die. **Risk:** medium, and loud: a broken route is a 500 on the first
+click. **Parallel:** yes.
+
+### S7. HookTokenAuthority
+The four token maps and `_load`, `_persist`, `_mint`, `_keep`, `_gc`,
+`get_hook_token`, `validate_hook_token`, `recover_hook_token`,
+`get_env_for_spawn`. 12 test files, 103 hits, zero `src/` reach.
+The invariant becomes structural: `mint(session_id, tmux_name)` is the ONLY
+writer of a secret, `keep(...)` re-binds a name and cannot reach the secret,
+`recover(...)` reads the superseded ring and never mints.
+**Mutation:** make `keep()` call `mint()`. If nothing goes red, the rule that
+saved 4h24m of dead hooks is undefended.
+**Negative controls, both required:** a bogus 40-char token is refused, and
+`recover` refuses a token this process never minted for THAT id on THAT pane.
+A recovery that accepted broadly would pass every positive test and be a
 credential bypass.
-Proof by measurement: restart the live server and count
-`hook_post_rejected_invalid_token` over the next ten minutes. It must be zero.
-The failure signature is 94 refusals in four minutes; there is no ambiguity.
-Risk: highest in the file. Parallel: NO.
+**Live proof:** restart the live server, count
+`hook_post_rejected_invalid_token` over ten minutes. Zero. The failure
+signature is unmistakable at 94 refusals in four minutes.
+**Risk:** highest in the file. **Parallel with adoom666:** yes, he has nothing
+near it. **Parallel with our own slices:** no, it lands alone.
 
-### S11. The adoption path
+### S8. The adoption and create paths
 `adopt_external_session` (443), `_adopt_identity_for`, `persist_adoption`,
-`destroy_external_session`, `_resolve_external_cwd`.
-The invariant, structurally: an adoption RESOLVES an id through
-`session_boot_readopt_plan.resolve_session_id` and the code to mint one is not
-reachable from that method. A resolved id calls `keep`, a derived id calls
-`mint`, and those are the only two exits.
-New: a test that a re-keyed adoption issues zero mints, asserted on the
-authority's own call ledger rather than on a mock's arrangement.
-Risk: highest. Parallel: NO.
+`destroy_external_session`, `_resolve_external_cwd`, then `create_session`
+(499) as a pure `resolve_create_plan` plus a thin executor with
+`_cleanup_failed_create` as the plan's own rollback.
+An adoption RESOLVES an id and the code to mint one is not reachable from that
+method. A resolved id calls `keep`, a derived id calls `mint`, and those are
+the only two exits.
+**New test:** a derived `(None, 'none')` project binding writes NEITHER column,
+because the half-write is what put an attribution of `none` on a row holding a
+perfectly good project.
+**Risk:** highest. **Parallel:** no. **Blocked on:** issue #28, see section 8.
 
-### S12. Collapse the facade
-`_wipe_session_state` becomes a loop over collaborators and `__init__` (248
-lines) becomes composition. The manager is measured under 500 lines, or the
-overflow is reported to the owner rather than absorbed.
+### S9. Delete the shim
+`_wipe_session_state` (54 lines, touching nine clusters) becomes a loop.
+`__init__` (248 lines) is gone, because `build_services` is the constructor
+now. `src/core/session_manager.py` is DELETED, not emptied. Any name still
+resolving through it at this point is a slice that did not finish, and the
+commit that finds one fixes it rather than granting an extension.
 
-## 8. The three neighbours
+## 7. The stopping condition
 
-**`src/api/routes.py`, 4,387 lines, is a different and much easier problem.**
-61 module-level functions, 3,727 lines of them, 51 routes, ZERO instance
-state. It is a router split by resource and nothing else: 31 routes under
-`/sessions`, 6 `/agents`, 4 `/providers`, 2 each `/filesystem` and
-`/terminal`, one each `/toasts`, `/hooks`, `/health`, `/themes`, `/shutdown`,
-`/projects`. The directory already has the pattern, with eleven sibling route
-modules. Four functions are over 150 lines (`claude_event_hook` 424,
-`restart_session` 212, `fork_session` 194, `session_attribution_prompt` 177)
-and those are decision ladders in disguise, same treatment as section 5. This
-track collides with nobody and can run in parallel with S8 through S11.
+**Per file, in numbers, so this cannot drift.** "Done" is not "feels better".
 
-**`src/core/tmux_backend.py`, 2,801 lines, is a second god object and it is
-smaller.** `TmuxBackend` is 38 methods and 12 written fields, with `start`
-380, `respawn` 348, `attach_existing` 238, `list_attachable_sessions` 128,
-`ensure_pipe_pane` 107. It is where the never-raised guard lived. Same
-treatment, later, and NOT before S8, because the listing slice changes what
-the backend is asked for.
+| File | Now | Done at | Test |
+|---|---|---|---|
+| `src/core/session_manager.py` | 8,340 | **0. The file does not exist** | import fails |
+| Any file under `src/core/sessions/` | n/a | **under 500 each** | package rules test |
+| `src/api/routes.py` | 4,387 | **under 500**, rest in `src/api/routes/` | package rules test |
+| `src/models.py` | 2,496 | **under 200**, a re-export shim only | package rules test |
+| `src/config.py` | 2,113 | **under 300**, rest in `src/config/` | package rules test |
+| `src/api/auth.py` | 1,675 | **under 500** | package rules test |
+| `src/main.py` | 1,407 | **under 400**, `lifespan` under 80 | package rules test |
+| `src/core/tmux_backend.py` | 2,801 | **under 800** and NOT ours yet, see section 8 | |
+| `src/core/db_models.py` | 1,664 | **unchanged, deliberately** | |
+| `src/core/db_steps.py` | 1,403 | **under 300** plus `src/core/schema/steps/` | |
 
-**`src/config.py`, 2,112 lines, is 14 dataclasses plus one 1,426-line
-class.** The dataclasses are a free split into a `src/config/` package with no
-behaviour change. `Settings` has 31 methods, four of them large
-(`load_auth_config` 261, `get_agent_command` 165, `update_settings_config`
-116, `get_settings_summary` 97). `update_settings_config` carries the atomic
-write pattern the whole repo copies, so it moves verbatim and gets a mutation
-test. `get_agent_command` must never be called with a user-supplied id, and
-that rule should become a TYPE rather than a comment: a validated
-`AgentChoice` value object only
-`session_agent_choice.validate_agent_choice` can construct.
+Two global conditions, both machine-checked:
 
-**Out of scope, deliberately.** `src/core/session_notification_policy.py` (563)
-and `src/core/notifications/idle_watcher.py` (513) are over the guideline and
-are adoom666's live mute work. `src/models.py` (2,495), `src/api/auth.py`
-(1,674), `src/core/db_models.py` (1,663), `src/main.py` (1,406) and
-`src/core/db_steps.py` (1,402) are real and not in this plan; the last two
-carry schema version machinery and nothing here goes near a schema version.
+- **Zero pure forwarders anywhere in `src/`.** A member whose whole body
+  forwards to a collaborator is a failed migration, and after S9 there is
+  nothing to forward to.
+- **`app.state.session_manager` has zero readers.** Every route reaches the
+  one collaborator it needs.
 
-## 9. The safety discipline
+And one that is not a line count: **`build_services` is the only place in
+`src/` that constructs a collaborator.** If a second construction site appears,
+the composition root has been bypassed and the design is already leaking.
+
+## 8. Coordination, and what is genuinely blocked
+
+**Checked against live GitHub state today: 53 open issues, 4 open pull requests
+and all four are ours. Nothing is formally taken by adoom666 under the draft-PR
+protocol.** Ours are #19 (this work), #18, #22, #23. Per `docs/DECISIONS.md`,
+work is claimed by draft PR and not by assignee, and any agent may pick up any
+free issue, so "free" is real and so is the risk that he takes one tomorrow.
+
+Three free issues land directly in files this plan restructures. They are his
+work by subject even though no PR holds them, and planning through them is
+exactly the silent-stale-port failure the protocol exists to prevent.
+
+- **#32, "one bulk row read per listing pass, inside one deferred read
+  transaction"** names `src/core/session_manager.py` and `_session_info_for`
+  explicitly. That is v1's slice S8, the listing assembly. **REMOVED from this
+  plan.** It is his wave 3. Our ports make it easier and we do not do it.
+- **#28, "batch the compatible tmux launch commands, without touching env
+  injection ordering"** is the tmux launch sequence, which is `create_session`
+  and `TmuxBackend.start`. S8 above touches `create_session`, so **S8 waits
+  until #28 has landed or been declared not being taken.** Env injection
+  ordering is load-bearing: `set-environment` before `respawn-pane` is the
+  whole claim of `tests/test_respawn_refreshes_pane_env.py`.
+- **#5, p0, "the pipe rotation never re-points the read fd"** names
+  `src/core/tmux_backend.py` `_maybe_rotate`, the tail loop, and
+  `pipe_wakeup.py`. That is the heart of v1's tmux_backend split. **The
+  tmux_backend decomposition is REMOVED from this plan** and re-filed as its
+  own issue after #5 ships. A p0 fix has right of way over a refactor, always.
+
+Not colliding: #30 (file tree, `config_files_routes.py`), #31 (a NEW
+`work_admission.py`), #6 (docs).
+
+Unchanged from v1 and still binding: `src/core/session_status_map.py`,
+`src/core/session_instance_index.py` and `src/core/pipe_wakeup.py` are READ and
+never rewritten. `src/core/session_notification_policy.py` and
+`src/core/notifications/idle_watcher.py` stay his even though both exceed the
+500-line guideline. **No schema version moves anywhere in this plan.** Two
+parties migrating one store on two branches is the collision that conversation
+cannot fix afterwards, which is also why `db_steps.py` splits by version range
+without touching a version number.
+
+Kept behaviours this plan must not quietly remove: dead rows go to Recent, the
+manual mark-unread control, the strict CSP with no third-party origin. Named
+here so a later slice cannot claim it did not know.
+
+## 9. The safety discipline, carried forward
 
 **A clean rebase and a green suite prove very little when the dangerous change
-never conflicts.** That is measured, not theoretical: when the two lines merged
-on 2026-09-10, only two files conflicted and both were docs, while four
-expensive design collisions merged silently.
+never conflicts.** Measured, not theoretical: when the two lines merged on
+2026-09-10, only two files conflicted and both were docs, while four expensive
+design collisions merged silently.
 
-Every slice carries three separate obligations, because they catch different
-things.
+Every slice carries four obligations, because they catch different things.
 
 **(a) The mutation.** Name one edit that must turn a specific test red. If it
 does not, the test is decorative and the slice is not done. The precedent is
-the guard that 4,874 green tests had never observed raise. Per-slice mutations
-are named in section 7.
+the guard that 4,874 green tests had never observed raise, and that failed 20
+of 20 owned sessions on its first real boot.
 
 **(b) The negative control.** Name what must NOT happen. A matcher that always
-finds something is worse than useless, which this repo learned when directory
-agreement was counting as one fact corroborating itself. The load-bearing
-controls: for S7, one object not two, asserted with `is`; for S8, an
-incomplete listing yields `unknown` and never `dead`; for S10, a bogus token
-is refused and an unminted token is refused.
+finds something is worse than useless. The load-bearing ones: for S4, one
+object and not two, proved by mutating through one reference and reading
+through the other; for S7, a bogus token refused and an unminted token refused.
 
-**(c) The live measurement.** Four instruments already exist and cost nothing
-new.
+**(c) The patch sweep.** After moving any read, grep the suite for `patch(`
+and `patch.object(` aimed at the old name and repoint them. `patch.object` with
+`create=True` will happily patch a name that no longer exists and the test goes
+green over nothing.
 
-1. `scripts/deploy-lib.sh` sha256s every destination file against the local
-   list and reports `CANNOT DETERMINE` when no hash comes back, so "it
-   deployed" is measured. A `CANNOT DETERMINE` is not a pass.
-2. `boot_readopt_complete` held plus skipped against
-   `tmux -L cloude list-sessions | wc -l`. Equal, or the boot pass lost
-   sessions.
-3. `GET /sessions/list` row count against the same tmux count. Equal, or one
-   pane has two registrations. Check BOTH 2 and 3: the log line was perfect
-   the day the listing returned 22 for 21.
-4. `hook_post_rejected_invalid_token` in the ten minutes after a restart.
-   Zero. The failure signature is unmistakable at 94 in four minutes.
+**(d) The live measurement.** Four instruments exist and cost nothing new.
+`scripts/deploy-lib.sh` sha256s every destination file and a `CANNOT DETERMINE`
+is not a pass. `boot_readopt_complete` held plus skipped against the live tmux
+count. `GET /sessions/list` row count against the same count, checked
+SEPARATELY, because the log line was perfect the day the listing returned 22
+for 21. And `hook_post_rejected_invalid_token` at zero for ten minutes after a
+restart.
 
-**The baselines to beat, so drift is detectable.** pytest on `release/1.2.1`
-is 5,708 passed, 2 known environmental failures, 19 skipped. Node is 200
-suites clean. A slice reporting materially different totals has a broken venv,
-not a passing suite: the baseline once read 4,647 for exactly that reason,
-because a `venv` symlink pointed at a `venv.nosync` that no longer existed.
-Check the symlink before trusting a number that looks wrong.
-`tests/test_respawn_refreshes_pane_env.py` is measured flaky under a full run
-because it drives the real `cloude` socket; a lone failure there with no code
-change behind it is not a regression.
+**Baselines, so drift is detectable.** pytest on `release/1.2.1` is 5,708
+passed, 2 known environmental failures, 19 skipped; the branch net is 5,856.
+Node is 200 suites with one pre-existing failure. A slice reporting materially
+different totals has a broken venv, not a passing suite: the baseline once read
+4,647 for exactly that reason, because a `venv` symlink pointed at a
+`venv.nosync` that no longer existed. `tests/test_respawn_refreshes_pane_env.py`
+is measured flaky under a full run because it drives the real `cloude` socket;
+a lone failure there with no code change behind it is not a regression.
 
-**Two rules that are not per-slice.** Nothing under `src/core/sessions/` may
-import `session_manager`, and no new file exceeds 500 lines. Both enforced by
-a test that greps the package, because the guideline that produced this
-document should defend the code that fixes it.
+**One rule that is not per-slice, and it is the S2 lesson:** a collaborator
+must not import the module-level `settings` singleton. It takes a
+`SettingsReader`. Fifteen modules under `src/core/` import that singleton today
+and one of them nearly wrote to the owner's real `~/.cloude-sessions` during a
+pytest run.
 
-## 10. Coordination with adoom666
+## 10. What we still owe the owner
 
-**Slices 1 through 7 collide with nothing he has claimed. Slice 8 onward
-does.**
+- **Nine slices is not one release.** The plan is designed so stopping after
+  any slice leaves a coherent tree with no dual path, but S9 is the only point
+  at which the headline number reaches zero.
+- **S1 is the go/no-go.** If retro-fitting the five shipped slices does not
+  drop `session_manager.py` by roughly 291 lines plus the migrated readers, the
+  premise of this document is wrong and the honest move is to say so and revert
+  to v1's permanent facade, not to write eight more slices on a bad assumption.
+- **The tmux_backend split and the listing assembly are out of our lane** until
+  issues #5 and #32 resolve. That is two of v1's twelve slices gone, and it is
+  the right answer rather than a shortfall.
+- **`db_models.py` stays 1,664 lines on purpose.** If the owner wants that
+  number down anyway, it is a conversation about the append-only invariant and
+  not a refactor decision.
 
-His active claim `adoom666-webui-perf-waves` lists
-`docs/webui-performance-and-session-menu-plan.md`, `scripts/perf/*`,
-`tests/test_perf_*.py`, `client/js/app.js`, `client/js/terminal.js` and
-`src/api/websocket.py`. None of those is in this plan. His other active claim
-is the session row menu, which is client-side.
+## 11. Future optional slices, NOT SCHEDULED
 
-The intersection is not textual, which is the kind that costs. His queued wave
-3 is "moving blocking tmux, SQLite and filesystem work off the event loop",
-which lands in `_session_info_for` and `create_session`, slices 8 and 9. His
-path list does not name `session_manager.py`, so a path detector would not
-flag it and it would be found by fetch, twice.
+Filed so a later reader knows the work was CONSIDERED and deliberately left
+undone. Nothing here is part of the nine. Do not start one because a file looks
+big; start one because someone decided to.
 
-Three files he asked not to have rewritten this week are read and not
-rewritten by slice 8: `src/core/session_status_map.py`,
-`src/core/session_instance_index.py`, `src/core/pipe_wakeup.py`.
+### FO1. Delete the `Settings` entry points and migrate their callers
 
-Nothing here touches a schema version. He noted, correctly, that two parties
-migrating one store on two branches is the collision conversation cannot fix
-afterwards.
+**Status: ruled on, not scheduled.** The owner's words on 2026-09-10, shown the
+one open question S5 left: "Leave it it's ok". Recorded in `docs/DECISIONS.md`
+under "`src/config/settings.py` stays over 500 lines", and in CLAUDE.md.
 
-Behaviours on our own kept list that these slices must not remove: dead rows
-go to Recent (`session_lifecycle.py`, `session_manager.py`), the manual
-mark-unread control, and the strict CSP. None is at risk from a structural
-change; they are named so a later slice cannot claim it did not know.
+S5 split `src/config.py`, 2,112 lines, into the 23-module `src/config/` package
+and moved every method BODY out. `settings.py` finishes at 632: 109 lines of
+pre-existing field declarations plus 31 typed entry points averaging 13 lines.
+That is over the 500-line guideline and it is the ONE ruled exception in this
+tree. It is not a precedent: no other file gets one, and a new file over 500 is
+still a package-rules failure.
 
-## 11. What we still owe the owner
+Getting under 500 has exactly two routes and neither is free. Inheritance is
+banned here, so the only real one is Rule B applied to `Settings`: delete the 31
+entry points and migrate roughly 45 call sites onto the named siblings
+(`auth_loader`, `state_paths`, `agent_command`, `config_file`, `config_writes`,
+`summary`, `wrappers`, `provider_models`) that already hold the behaviour.
 
-- **Whether the facade fits under 500 lines with 68 public methods on it.** It
-  probably does not. Some of those 68 are legacy views (`session`, `backend`,
-  `current_backend` have zero call sites in `src/` and zero in `tests/`) and
-  the surface should shrink. That is a deprecation conversation, not a
-  refactor decision.
-- **Whether slice 8 is ours or adoom666's.** We offered it to him in the claim. Until `now/adoom666.md` answers, slices 1 through 7 are the work.
-- **Twelve slices is not one release.** The plan is designed so stopping after any slice leaves a coherent tree.
+**Why it is not scheduled, stated so nobody re-derives it.** 111 modules import
+from this package and the suite patches these members on the CLASS: 23 sites
+patch `state_dir_override`, eight patch `type(sm.settings).get_state_dir`. A
+name that stopped resolving on `Settings` is invisible to every one of those,
+which is the silent direction of failure rather than the loud one. The migration
+is therefore a test-suite migration wearing a refactor's clothes, and this plan
+does not specify it. If it is ever taken, it needs its own slice, its own patch
+sweep and its own control.

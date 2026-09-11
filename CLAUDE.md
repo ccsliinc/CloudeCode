@@ -753,16 +753,21 @@ per server process and no subprocess at all.
   `agent_command`, `config_file`, `config_writes`, `summary`, `wrappers`,
   `provider_models`). `__init__.py` re-exports every public name the flat module
   had, so `from src.config import settings` is unchanged.
-  **`settings.py` IS OVER THE 500-LINE GUIDELINE AT 632 AND THAT IS A KNOWN,
-  MEASURED EXCEPTION, NOT AN OVERSIGHT.** The class keeps 31 public names
-  because 111 modules import from this package and the suite patches those
-  members on the CLASS (23 sites patch `state_dir_override`, eight patch
-  `type(sm.settings).get_state_dir`); a name that stopped resolving there would
-  be invisible to every one of them. The bodies are all gone - what remains is
-  109 lines of pre-existing field declarations and 31 typed entry points
-  averaging 13 lines. Getting under 500 needs the entry points DELETED and
-  their ~45 callers migrated, which is Rule B applied to `Settings` and is its
-  own slice.
+  **`settings.py` IS OVER THE 500-LINE GUIDELINE AT 632 AND THE OWNER HAS RULED
+  THAT IT STAYS THERE.** His words, 2026-09-10, on being shown the one open
+  question S5 left: "Leave it it's ok". This is a RULING, recorded in
+  `docs/DECISIONS.md` under "`src/config/settings.py` stays over 500 lines", and
+  it binds both sides: do not "fix" this file to hit a line count. The class
+  keeps 31 public names because 111 modules import from this package and the
+  suite patches those members on the CLASS (23 sites patch `state_dir_override`,
+  eight patch `type(sm.settings).get_state_dir`); a name that stopped resolving
+  there would be invisible to every one of them. The bodies are all gone - what
+  remains is 109 lines of pre-existing field declarations and 31 typed entry
+  points averaging 13 lines. Getting under 500 needs the entry points DELETED
+  and their ~45 callers migrated, which is Rule B applied to `Settings`. That is
+  its own slice, it is filed as a FUTURE OPTIONAL slice in
+  `.claude/notes/backend-decomposition-plan.md` and in `.claude/TODO.md`, and it
+  is NOT SCHEDULED.
 - **`src/core/sessions/` holds the collaborators `SessionManager` composes**, one
   mutable state cluster each, per
   `.claude/notes/backend-decomposition-plan.md`. THE STATE MOVES, IT NEVER

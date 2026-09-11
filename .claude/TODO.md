@@ -7646,3 +7646,35 @@ re-disambiguated by pytest (`agents.py` became `agents.py0`/`agents.py1`
 because the name now exists in two places). **ZERO tests removed.** The two
 failures are the known environmental pair. Node 200/200, four cost ceilings
 pass, `scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+---
+
+## 2026-09-10 - the S5 settings question, RULED and closed
+
+The owner was shown the one open question S5 left and ruled on it, verbatim:
+**"Leave it it's ok"**.
+
+`src/config/settings.py` stays at 632 lines. It is the ONE ruled exception to
+this project's 500-line rule and it is not a precedent for any other file.
+Recorded in three places so nobody, on either side, "fixes" it later:
+
+- `docs/DECISIONS.md`, entry "`src/config/settings.py` stays over 500 lines".
+  The file binds both teams. Its exact blob was carried across from
+  `feat/work-protocol` and the entry APPENDED, so a later merge stays clean.
+- `CLAUDE.md`, where the existing note was rewritten to read as a RULING with
+  the owner's words and the date, rather than as an observation someone could
+  take as an invitation.
+- `.claude/notes/backend-decomposition-plan.md` section 11, FO1, as a future
+  OPTIONAL slice. Plan v2's exact blob was carried across from
+  `docs/backend-plan-v2` in the same commit, because the branch was still
+  carrying plan v1 while shipping plan v2's slices, and a stale doc is worse
+  than no doc.
+
+**The migration is NOT SCHEDULED.** Getting under 500 needs the 31 typed entry
+points deleted and roughly 45 callers migrated. That is Rule B applied to
+`Settings` and it is a test-suite migration wearing a refactor's clothes: 111
+modules import from the package and the suite patches these members on the
+CLASS, 23 sites on `state_dir_override` and eight on
+`type(sm.settings).get_state_dir`. A name that stopped resolving there fails
+silently, not loudly. If it is ever taken it gets its own slice, its own patch
+sweep and its own control.
