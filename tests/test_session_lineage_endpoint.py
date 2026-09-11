@@ -125,7 +125,7 @@ def harness(monkeypatch, tmp_path):
     )
     mgr._registry.backends[APP_SESSION_ID] = _FakeBackend(TMUX_NAME)
     mgr._registry.subscribers.setdefault(APP_SESSION_ID, [])
-    token = mgr._mint_hook_token(APP_SESSION_ID)
+    token = mgr.hook_tokens.mint(APP_SESSION_ID)
 
     monkeypatch.setattr(
         mgr,

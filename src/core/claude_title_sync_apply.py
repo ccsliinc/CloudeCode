@@ -116,8 +116,12 @@ def _tmux_name_for(session_manager: Any, session_id: str) -> Optional[str]:
     name = getattr(sess, "tmux_session", None) if sess else None
     if name:
         return str(name)
-    hook_names = getattr(session_manager, "_hook_tmux_names", None) or {}
-    name = hook_names.get(session_id)
+    # THE AUTHORITY OWNS THIS MAP, and the tolerance is kept because a
+    # caller may inject a session-manager double that has no token
+    # collaborator at all. A missing one must answer 'no name' exactly
+    # as the missing attribute used to, never raise.
+    authority = getattr(session_manager, "hook_tokens", None)
+    name = authority.name_for(session_id) if authority is not None else None
     if name:
         return str(name)
     return session_id or None

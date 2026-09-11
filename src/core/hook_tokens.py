@@ -2,7 +2,7 @@
 
 THE DEFECT THIS EXISTS TO FIX, measured on the mini 2026-08-28. The
 per-session HMAC token was minted at session-create and held ONLY in
-``SessionManager._hook_tokens``, an in-memory dict. The same token is
+``HookTokenAuthority.tokens``, an in-memory dict. The same token is
 baked into the tmux pane's environment at spawn, and the hook command
 reads it from there at fire time - so it is fixed for the life of the
 agent process and cannot be re-issued to a running session.

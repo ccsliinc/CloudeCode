@@ -258,7 +258,7 @@ def _build_hook_app(monkeypatch, tmp_path, *, store=None, router=None):
     mgr._registry.backends["ses_mute"] = _FakeBackend(TMUX_NAME)
     mgr._registry.subscribers.setdefault("ses_mute", [])
     mgr._instance_epochs["ses_mute"] = TMUX_EPOCH
-    mgr._mint_hook_token("ses_mute")
+    mgr.hook_tokens.mint("ses_mute")
     if store is not None:
         mgr.attach_notification_policy_store(store)
     if router is not None:
@@ -289,7 +289,7 @@ def _post_event(app, mgr, event: str):
             "/api/v1/hooks/claude-event",
             headers={
                 "X-Cloudecode-Session": "ses_mute",
-                "X-Cloudecode-Token": mgr.get_hook_token("ses_mute"),
+                "X-Cloudecode-Token": mgr.hook_tokens.get("ses_mute"),
                 "X-Cloudecode-Event": event,
                 "Content-Type": "application/json",
             },

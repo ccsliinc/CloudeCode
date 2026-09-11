@@ -13,7 +13,7 @@ only reason a rejected token gets a second look: a mint replaces the
 credential a running process holds and cannot be handed a replacement
 for, so it 403s forever with no retry available from its side - measured
 2026-09-08, 4,325 rejections over 4h24m from one such mint.
-``recover_hook_token`` accepts ONLY a token this process itself minted
+``HookTokenAuthority.recover`` accepts ONLY a token this process itself minted
 for THAT id on THAT pane and then superseded, and it NEVER mints.
 
 EVENTS ARRIVE UNORDERED, DUPLICATED AND DROPPABLE, so every consumer
@@ -125,20 +125,21 @@ async def claude_event_hook(request: Request):
     session_manager = request.app.state.session_manager
 
     # Layer 2 - HMAC token validation, constant time.
-    if not session_manager.validate_hook_token(session_id, token):
+    if not session_manager.hook_tokens.validate(session_id, token):
         # SECOND CHANCE FOR OUR OWN MISTAKE, AND ONLY FOR THAT. A mint
         # that lands on an id whose agent is already running revokes a
         # credential the agent cannot be handed a replacement for, so it
         # 403s forever with no retry available from its side - measured
         # 2026-09-08, 4,325 rejections over 4h24m from a single such
-        # mint. ``recover_hook_token`` accepts ONLY a token this process
+        # mint. ``HookTokenAuthority.recover`` accepts ONLY a token this process
         # itself minted for this id, on this pane, and then superseded;
         # it re-binds the store to what the running process holds, once,
         # and NEVER mints. Anything else still rejects.
         # ``getattr`` because a caller may inject a session-manager
         # double predating this method, and a missing recovery must
         # refuse exactly as it always did.
-        recover = getattr(session_manager, "recover_hook_token", None)
+        authority = getattr(session_manager, "hook_tokens", None)
+        recover = getattr(authority, "recover", None)
         recovery = (
             recover(session_id, token)
             if callable(recover)

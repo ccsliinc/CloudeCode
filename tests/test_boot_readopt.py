@@ -272,7 +272,7 @@ async def test_every_session_with_a_row_is_held_under_its_stored_id(
         seed_row(state_dir, mgr, name=name, epoch=epoch, agent_type="claude")
 
     # Two ids the pane environments already carry.
-    mgr._hook_tmux_names = {
+    mgr.hook_tokens.tmux_names = {
         "ses_alpha": "cloude_alpha",
         "ses_beta": "cloude_beta",
     }
@@ -552,7 +552,7 @@ async def test_running_the_pass_twice_holds_each_session_once(
     """
     mgr = SessionManager()
     seed_row(state_dir, mgr, name="cloude_alpha", epoch=EPOCH_A)
-    mgr._hook_tmux_names = {"ses_alpha": "cloude_alpha"}
+    mgr.hook_tokens.tmux_names = {"ses_alpha": "cloude_alpha"}
     install_backends(
         monkeypatch,
         discover=TmuxListing.answered([]),
@@ -663,7 +663,7 @@ async def test_a_hook_for_a_re_adopted_session_raises_a_toast(
     """
     mgr = SessionManager()
     seed_row(state_dir, mgr, name="cloude_alpha", epoch=EPOCH_A)
-    mgr._hook_tmux_names = {"ses_alpha": "cloude_alpha"}
+    mgr.hook_tokens.tmux_names = {"ses_alpha": "cloude_alpha"}
     install_backends(
         monkeypatch,
         discover=TmuxListing.answered([]),

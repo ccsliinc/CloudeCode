@@ -90,6 +90,26 @@ __all__ = [
 ]
 
 
+def _hook_names(manager: Any) -> Dict[str, str]:
+    """The id -> tmux name map the hook token authority holds.
+
+    Description: the ONLY durable record of the ``CLOUDECODE_SESSION_ID``
+      injected into a pane, which is why reversing it is what stops the
+      hook route answering 410 for a session that survived a restart. The
+      tolerance is deliberate and was tolerated before the map moved onto
+      a collaborator: a caller may hand this pass a session-manager double
+      with no token authority, and that must answer "nothing recorded"
+      rather than raise. A raise here would fail the whole boot re-adopt
+      pass, which holds every surviving session.
+    Inputs: manager - the SessionManager, or a double.
+    Output: dict[str, str]. Empty when nothing is recorded OR when no
+      authority is attached; the two are the same answer to this caller.
+    Example: ``_hook_names(manager).get('ses_ab12')``
+    """
+    authority = getattr(manager, "hook_tokens", None)
+    return dict(getattr(authority, "tmux_names", None) or {})
+
+
 def _record_epoch_for_already_registered(
     manager: Any, plan: "ReadoptPlan", listing: Any
 ) -> None:
@@ -305,7 +325,7 @@ async def readopt_surviving_sessions(
             row_lookup=lambda name, epoch: get_instance(
                 conn, socket=socket, name=name, epoch=epoch
             ),
-            hook_names=dict(getattr(manager, "_hook_tmux_names", {}) or {}),
+            hook_names=dict(_hook_names(manager)),
             held_ids=list(manager._registry.sessions.keys()),
             held_names=[
                 getattr(backend, "tmux_session", None)
@@ -363,7 +383,7 @@ async def readopt_surviving_sessions(
         manager._instance_epochs[target.session_id] = target.epoch
         # Make the id -> name association explicit even on the derived
         # rung, so a hook that does arrive can be resolved to a session.
-        manager._hook_tmux_names.setdefault(target.session_id, target.name)
+        manager.hook_tokens.bind_name(target.session_id, target.name)
 
         # PUSH THE CURRENT CONTROL VARIABLES ONTO THE PANE'S SESSION
         # ENVIRONMENT. It does NOT reach the agent already running in

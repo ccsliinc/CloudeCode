@@ -56,6 +56,7 @@ from src.core.session_backend import SessionBackend, build_backend
 # name is the facade rule applied to a type rather than to a method: no
 # caller moves.
 from src.core.live_ports import LiveSessionRecordStore, LiveSettings
+from src.core.sessions.hook_token_authority import HookTokenAuthority
 from src.core.sessions.owned_tmux_ledger import OwnedTmuxLedger
 from src.core.sessions.probe_health import ProbeHealth, ProbeHealthRecorder
 from src.core.sessions.registry import SessionRegistry
@@ -71,10 +72,6 @@ from src.core.agent_wrapper_display import resolve_wrapper_for_display
 from src.core.session_agent_evidence import choose_agent_evidence
 from src.core import session_agent_infer_apply
 from src.core.session_agent_infer import restart_agent_type
-from src.core.hook_token_recovery import (
-    RECOVERY_ACCEPTED,
-    SupersededHookTokens,
-)
 from src.core.session_status import (
     LIVENESS_GONE,
     LIVENESS_LIVE,
@@ -285,6 +282,7 @@ class SessionManager:
         registry: Optional[SessionRegistry] = None,
         sidecars: Optional[AttachmentSidecars] = None,
         owned_tmux: Optional[OwnedTmuxLedger] = None,
+        hook_tokens: Optional[HookTokenAuthority] = None,
     ):
         """Initialize the session manager.
 
@@ -306,6 +304,9 @@ class SessionManager:
           and the pending terminal commands. owned_tmux (OwnedTmuxLedger |
           None) - the owner of the owned-tmux-name set, its
           ``session_metadata.json`` file and the two ownership queries.
+          hook_tokens (HookTokenAuthority | None) - the owner of the
+          hook bearer tokens, the tmux name each one is bound to, the
+          durability flag and the superseded-token ring.
           Each default-constructed when None.
         Output: None.
         Example: SessionManager(probe_health=ProbeHealthRecorder())
@@ -432,30 +433,6 @@ class SessionManager:
         )
 
 
-        # v0.7.0 Part 3 - per-session HMAC tokens. Minted on
-        # ``create_session`` / ``adopt_external_session``, injected as
-        # ``CLOUDECODE_HOOK_TOKEN`` into the spawned agent's tmux env, and
-        # forwarded back by Claude Code's lifecycle hooks via the
-        # ``X-Cloudecode-Token`` header so the loopback hook endpoint can
-        # authenticate the originating session. Dropped on
-        # ``_wipe_session_state``. NEVER logged.
-        # DURABLE, NOT EPHEMERAL, since 2026-08-28. Held in memory for
-        # speed but backed by ``hook_tokens.json`` in the state dir,
-        # because the same token is baked into each tmux pane's env at
-        # spawn and read from there at hook-fire time - so it cannot be
-        # re-issued to a running agent. A server restart used to forget
-        # the table while every agent kept presenting its baked token,
-        # which 403'd forever and silently killed activity status,
-        # toasts and lineage for every pre-restart session. See
-        # src/core/hook_tokens.py for the full reasoning.
-        self._hook_tokens: dict[str, str] = {}
-        # session_id -> tmux name, persisted beside the token. Surviving a
-        # restart needs BOTH: the token gets a hook past authentication,
-        # this is what lets the server work out WHICH session it belongs
-        # to. Restoring only the token produces a hook that authenticates,
-        # returns 200, and resolves to nothing - measured, and from the
-        # agent's side indistinguishable from success.
-        self._hook_tmux_names: dict[str, str] = {}
         # Boot re-adopt handoff. The listing itself lives on the ledger
         # (``self._owned.boot_listing``), set ONLY past the
         # ``listing.ok`` gate in ``_lifespan_tmux_reconcile``; None means
@@ -475,7 +452,7 @@ class SessionManager:
         # CANNOT-DETERMINE, and the state is left to the listing-time
         # settled write instead, which always has a fresh epoch off the
         # tmux probe it already ran. NOT persisted across restarts -
-        # unlike ``_hook_tmux_names`` this needs no durability, because
+        # unlike ``HookTokenAuthority.tmux_names`` this needs no durability, because
         # the very next listing poll re-derives it from live tmux. A
         # stale entry is harmless: ``write_state`` scopes its UPDATE to
         # the full triple, so a wrong cached epoch matches zero rows
@@ -501,18 +478,37 @@ class SessionManager:
         # but /branch ends the previous conversation first and /fork does
         # not. Consumed and cleared by the next SessionStart.
         self._last_session_end_uuid: dict[str, str] = {}
-        self._hook_tokens_durable: bool = True
-        # Tokens this process minted for an id and then REPLACED. A mint
-        # over a live agent revokes a credential that cannot be re-issued
-        # to it - the value is baked into the pane env at new-session time
-        # and read from there at hook-fire time - so the agent 403s
-        # forever with no retry available from its side. Measured
-        # 2026-09-08: 4,325 rejections over 4h24m from one such mint.
-        # ``recover_hook_token`` recognises our own superseded credential
-        # and corrects the record; NOTHING IS EVER MINTED THERE.
-        # In memory only, on purpose - see src/core/hook_token_recovery.py.
-        self._superseded_hook_tokens = SupersededHookTokens()
-        self._load_hook_tokens()
+        # v0.7.0 Part 3 - the hook bearer tokens, the tmux name each is
+        # bound to, the durability flag and the ring of tokens this
+        # process minted and then replaced. ALL FOUR LIVE ON THE
+        # AUTHORITY and not one of them is mirrored here: two objects
+        # holding one logical state and kept in sync by hand is the shape
+        # of the bug that produced 22 /sessions/list rows for 21 panes.
+        #
+        # ``mint`` is the ONLY writer of a secret, ``keep`` re-binds a
+        # name and cannot reach one, and ``recover`` accepts a superseded
+        # value once and never mints. See
+        # src/core/sessions/hook_token_authority.py for why that
+        # separation cost 4h24m of dead hooks to learn.
+        #
+        # The state dir is a zero-argument CALLABLE, resolved at call
+        # time, so the suite's monkeypatch of the ``settings`` NAME in
+        # THIS module is obeyed. A collaborator that imported settings
+        # itself would read and WRITE the owner's real token store during
+        # a plain pytest run.
+        #
+        # ``on_drop`` is how the garbage collector's rule reaches the one
+        # cache outside the authority that is keyed the same way: the
+        # epoch cache. It used to be popped inline in ``HookTokenAuthority.gc``,
+        # and the collaborator has no business knowing that cache exists.
+        self.hook_tokens: HookTokenAuthority = (
+            hook_tokens
+            if hook_tokens is not None
+            else HookTokenAuthority(
+                lambda: settings.get_state_dir(),
+                on_drop=lambda sid: self._instance_epochs.pop(sid, None),
+            )
+        )
 
 
         # feat/hook-driven-status - ephemeral, in-memory hook-signal state
@@ -672,7 +668,7 @@ class SessionManager:
         self._toast_inbox.drop_session(session_id)
         # v0.7.0 Part 3 - drop the HMAC hook token. After this point any
         # incoming hook POST for this session_id rejects with 403 (unknown
-        # session → ``validate_hook_token`` returns False).
+        # session → ``HookTokenAuthority.validate`` returns False).
         # THE TOKEN IS DELIBERATELY NOT DROPPED HERE, and getting this
         # wrong once already cost a full debugging cycle.
         #
@@ -688,7 +684,7 @@ class SessionManager:
         # Forgetting state and revoking a credential are two different
         # operations. The token's real lifetime is "as long as a tmux
         # session by that name is still owned", which is what
-        # ``_gc_hook_tokens`` enforces at load, so nothing accumulates.
+        # ``HookTokenAuthority.gc`` enforces at load, so nothing accumulates.
         # feat/hook-driven-status - drop the ephemeral hook-signal state.
         # The persisted unread flag (keyed by tmux NAME, not session_id) is
         # deliberately untouched here - it must survive detach/re-adopt.
@@ -798,216 +794,13 @@ class SessionManager:
     # Claude Code's lifecycle hooks (Stop / Notification / PermissionRequest)
     # POST to ``/api/v1/hooks/claude-event`` with the token in an
     # ``X-Cloudecode-Token`` header; the route validates via
-    # ``validate_hook_token`` before recording a toast. The endpoint is also
+    # ``HookTokenAuthority.validate`` before recording a toast. The endpoint is also
     # loopback-only - this is a defense-in-depth pair, not a single layer.
 
-    def _load_hook_tokens(self) -> None:
-        """Rehydrate the hook-token table from disk at startup.
 
-        Description: without this, every agent that survived the restart
-          presents a token the server has never heard of and is rejected
-          403 forever - silently, because nothing downstream of a hook
-          reports its own absence. Never raises: a store that cannot be
-          read leaves an empty table and sets ``_hook_tokens_durable``
-          False, so the condition is KNOWN rather than merely suffered.
-        Inputs: none (reads ``settings.get_state_dir()``).
-        Output: None.
-        """
-        try:
-            from src.core.hook_tokens import load_tokens
 
-            result = load_tokens(settings.get_state_dir())
-            self._hook_tokens = dict(result.tokens)
-            self._hook_tmux_names = dict(result.tmux_names)
-            self._gc_hook_tokens()
-            self._hook_tokens_durable = result.durable
-            if not result.durable:
-                logger.warning(
-                    "hook_tokens_not_durable",
-                    detail=result.detail,
-                    note=(
-                        "sessions that survive a restart will 403 on every "
-                        "hook until they are recreated"
-                    ),
-                )
-            elif result.tokens:
-                logger.info(
-                    "hook_tokens_restored", count=len(result.tokens)
-                )
-        except Exception as exc:  # noqa: BLE001 - startup must not die here
-            self._hook_tokens = {}
-            self._hook_tmux_names = {}
-            self._hook_tokens_durable = False
-            logger.warning("hook_tokens_load_threw", error=str(exc))
 
-    def _gc_hook_tokens(self) -> None:
-        """Drop stored tokens whose tmux session is no longer owned.
 
-        Description: the token's honest lifetime is "as long as a tmux
-          session by that name is still ours". Bounding it that way -
-          rather than by whether an id is in the in-memory table - is
-          what lets a token survive a restart while still not
-          accumulating for the life of the install.
-
-          READS ``session_metadata.json`` DIRECTLY rather than
-          ``self._owned.names``, because this runs from
-          ``__init__`` before that set is rehydrated.
-
-          KNOWN: IT IS ONE RESTART BEHIND. The file is reconciled against
-          live tmux LATER in startup, so a session killed since the last
-          run is still listed as owned when this reads it, and its token
-          survives until the restart after. Measured: after killing four
-          sessions the store still held 7 entries; the next restart took
-          it to 1.
-
-          Left as is because the lag errs in the safe direction. Over-
-          retention keeps a token nothing can present - a dead session
-          has no process to send a hook. Over-deletion would revoke a
-          LIVE agent that cannot be re-issued one, which is the bug this
-          whole store exists to fix. Reading a not-yet-reconciled list
-          and pruning hard against it would be exactly that mistake. An unreadable or
-          absent metadata file KEEPS EVERYTHING: "I could not find out
-          which sessions are owned" must never be actioned as "none are",
-          which would delete every token on every start and reinstate the
-          bug this store exists to fix.
-        Inputs: none.
-        Output: None.
-        """
-        if not self._hook_tokens:
-            return
-        try:
-            import json as _json
-
-            meta = settings.get_state_dir() / "session_metadata.json"
-            if not meta.exists():
-                return
-            owned = set(
-                _json.loads(meta.read_text()).get("owned_tmux_sessions") or []
-            )
-        except (OSError, ValueError) as exc:
-            logger.debug("hook_token_gc_skipped", error=str(exc))
-            return
-        if not owned:
-            return
-
-        # A token with NO recorded name is kept: it predates schema 2 and
-        # cannot be judged, and discarding what cannot be evaluated is the
-        # false-green move.
-        dead = [
-            sid
-            for sid, name in self._hook_tmux_names.items()
-            if name not in owned
-        ]
-        if not dead:
-            return
-        for sid in dead:
-            self._hook_tokens.pop(sid, None)
-            self._hook_tmux_names.pop(sid, None)
-            # The superseded ring outlives nothing the live token
-            # outlives. Dropping it on the same rule keeps the two from
-            # disagreeing about whether a session still exists.
-            self._superseded_hook_tokens.forget(sid)
-            self._instance_epochs.pop(sid, None)
-        logger.info("hook_tokens_gc", dropped=len(dead))
-        self._persist_hook_tokens()
-
-    def _persist_hook_tokens(self) -> None:
-        """Write the token table out. Never raises, never logs a token."""
-        try:
-            from src.core.hook_tokens import save_tokens
-
-            ok, reason = save_tokens(
-                settings.get_state_dir(),
-                self._hook_tokens,
-                tmux_names=self._hook_tmux_names,
-            )
-            self._hook_tokens_durable = ok
-            if not ok:
-                logger.warning("hook_tokens_not_persisted", reason=reason)
-        except Exception as exc:  # noqa: BLE001 - see docstring
-            self._hook_tokens_durable = False
-            logger.warning("hook_tokens_persist_threw", error=str(exc))
-
-    def _mint_hook_token(
-        self, session_id: str, tmux_name: Optional[str] = None
-    ) -> str:
-        """Mint and store a fresh URL-safe token for ``session_id``.
-
-        Replaces any existing token for the same id (e.g. a re-adopt of a
-        session whose backend was wiped). Returns the new token. The value
-        is NEVER logged.
-        """
-        # WHAT IS BEING REPLACED IS REMEMBERED BEFORE IT IS LOST. A mint
-        # that lands on an id whose agent is already running revokes a
-        # credential that agent cannot be handed a replacement for, and
-        # every hook it sends afterwards is answered 403 with no retry
-        # available to it. Recording the superseded value here is what
-        # lets ``recover_hook_token`` recognise our own mistake when that
-        # agent presents it. Bounded and in memory only; the value is
-        # never logged. See src/core/hook_token_recovery.py.
-        previous = self._hook_tokens.get(session_id)
-        if previous:
-            self._superseded_hook_tokens.record(
-                session_id,
-                previous,
-                # THE NAME THE OLD TOKEN WAS BOUND TO, not the one being
-                # bound now. The scope rule is one pane, one credential,
-                # so a token superseded while the id sat on a different
-                # pane must not be recoverable against this one. The
-                # argument is only a fallback for an id that had a token
-                # and no recorded name (a v1 store entry).
-                tmux_name=(
-                    self._hook_tmux_names.get(session_id) or tmux_name
-                ),
-            )
-        token = secrets.token_urlsafe(32)
-        self._hook_tokens[session_id] = token
-        # THE NAME MUST BE PASSED IN, not looked up. This is called BEFORE
-        # the tmux spawn (the token has to exist to be injected into the
-        # pane's environment), so ``self._registry.sessions`` does not carry this id
-        # yet and a lookup here returns None every time - measured: the
-        # first store written this way recorded `tmux_name: null` for a
-        # session whose name was known to its own caller.
-        # NO FALLBACK LOOKUP. An earlier version ended `or getattr(
-        # self._registry.sessions.get(session_id), "tmux_session", None)`, which the
-        # comment above already explains can only ever return None here -
-        # so it was dead code whose sole effect was to require a fully
-        # built manager, and it crashed five terminal tests on a test
-        # double that has no `.sessions`. A fallback that cannot succeed
-        # is not a safety net, it is an extra failure mode.
-        if tmux_name:
-            self._hook_tmux_names[session_id] = tmux_name
-        self._persist_hook_tokens()
-        return token
-
-    def _keep_hook_token(
-        self, session_id: str, tmux_name: Optional[str] = None
-    ) -> Optional[str]:
-        """Re-bind an EXISTING token's tmux name without rotating the token.
-
-        Description: the counterpart to :meth:`_mint_hook_token` for a
-          session whose id was RECOVERED rather than invented. Minting
-          replaces the stored token, and the agent running inside an
-          adopted pane is holding the old one in its environment with no
-          way to be handed a new one - so minting there revokes a working
-          credential and every subsequent hook POST answers 403. This
-          records the id -> tmux name association (which a restart needs
-          to resolve a hook back to a session) and persists, leaving the
-          secret itself untouched. Idempotent.
-        Inputs: session_id (str) - an id that already holds a token.
-          tmux_name (str | None) - the live tmux session name to bind.
-        Output: str | None - the UNCHANGED stored token, or None when the
-          id holds none (in which case nothing was written and the caller
-          should mint instead).
-        Example: mgr._keep_hook_token('ses_ab12', tmux_name='cloude_x')
-        """
-        existing = self._hook_tokens.get(session_id)
-        if existing is None:
-            return None
-        if tmux_name:
-            self._hook_tmux_names[session_id] = tmux_name
-        self._persist_hook_tokens()
-        return existing
 
 
     def _adopt_identity_for(
@@ -1047,7 +840,7 @@ class SessionManager:
                 name=name,
                 epoch=epoch,
                 row_lookup=_lookup,
-                hook_names=dict(self._hook_tmux_names or {}),
+                hook_names=dict(self.hook_tokens.tmux_names or {}),
             )
         finally:
             if conn is not None:
@@ -1056,96 +849,8 @@ class SessionManager:
                 except sqlite3.Error as exc:  # a close failure is not a verdict
                     logger.debug("adopt_identity_conn_close_failed", error=str(exc))
 
-    def get_hook_token(self, session_id: str) -> Optional[str]:
-        """Return the active hook token for ``session_id``, or None."""
-        return self._hook_tokens.get(session_id)
 
-    def validate_hook_token(self, session_id: str, token: str) -> bool:
-        """Constant-time compare a presented token against the stored one.
 
-        Returns False when the session is unknown, no token has been
-        minted, or the value mismatches. Implemented via
-        ``hmac.compare_digest`` so timing-leak attacks can't enumerate
-        tokens via response-time deltas.
-        """
-        if not session_id or not token:
-            return False
-        expected = self._hook_tokens.get(session_id)
-        if expected is None:
-            return False
-        # ``compare_digest`` requires equal-length byte/str inputs. The
-        # length check itself is short-circuit, but since token_urlsafe(32)
-        # always yields a 43-char string, length-mismatch from a forged
-        # input is an unconditional False anyway.
-        try:
-            return hmac.compare_digest(expected, token)
-        except (TypeError, ValueError):
-            return False
-
-    def recover_hook_token(self, session_id: str, token: str) -> str:
-        """Accept a token this server superseded under a still-running agent.
-
-        Description: the second chance for a hook POST that
-          :meth:`validate_hook_token` has ALREADY rejected. Called only
-          from that rejection path, so a healthy hook never reaches it.
-
-          It answers one question: is the presented value a token THIS
-          PROCESS minted for THIS id, on THIS pane, and then replaced?
-          If so the agent is holding it because a mint revoked its
-          credential mid-flight and there was no way to tell it - see
-          ``_mint_hook_token`` - and the honest correction is to re-bind
-          the store to what the running process actually holds. That is
-          done here, ONCE: the ring entry is consumed, so the next hook
-          from the same agent validates through the ordinary path and
-          this method is not reached again.
-
-          IT NEVER MINTS. Minting is the defect being recovered from, and
-          a recovery that minted would revoke the credential a second
-          time while logging that it had fixed something.
-
-          The pane binding is a REFUSAL and not a relaxation: an id whose
-          tmux name is unknown yields ``unavailable`` and stays rejected.
-          Not having been able to scope the check is never a pass.
-        Inputs: session_id (str) - the id presented on the hook.
-          token (str) - the token presented on the hook.
-        Output: str - one of the ``RECOVERY_*`` outcomes from
-          ``src.core.hook_token_recovery``. Only ``accepted`` authorises
-          the caller to treat the request as authenticated.
-        Example: mgr.recover_hook_token('ses_ab12', presented) ==
-                 'accepted'
-        """
-        decision = self._superseded_hook_tokens.decide(
-            session_id,
-            token,
-            current_tmux_name=self._hook_tmux_names.get(session_id),
-        )
-        if decision.outcome != RECOVERY_ACCEPTED or not decision.token:
-            return decision.outcome
-
-        # CONSUME FIRST. Two duplicate deliveries of the same hook can be
-        # in flight at once (hook events are duplicated by design - see
-        # src/core/session_activity.py), and ``consume`` returning False
-        # is how the second one learns it lost the race. Both are still
-        # ACCEPTED - the token is genuine either way - but only the
-        # winner re-binds and only the winner logs, so a duplicate cannot
-        # produce a second rebind event describing a change that already
-        # happened.
-        first = self._superseded_hook_tokens.consume(session_id, decision.token)
-        if first:
-            self._hook_tokens[session_id] = decision.token
-            self._persist_hook_tokens()
-            logger.warning(
-                "hook_token_rebound_from_superseded",
-                session_id=session_id,
-                tmux_session=decision.tmux_name,
-                note=(
-                    "a mint replaced this pane's token while its agent "
-                    "was running; the store has been re-bound to the "
-                    "token the process actually holds and nothing was "
-                    "minted"
-                ),
-            )
-        return RECOVERY_ACCEPTED
 
     def get_env_for_spawn(self, session_id: str) -> dict[str, str]:
         """Return the env-var trio injected into the spawned agent's tmux env.
@@ -1174,13 +879,13 @@ class SessionManager:
                 header so the hook endpoint can route the POST to the right
                 session's toast bucket.
             CLOUDECODE_HOOK_TOKEN - bearer credential for the same hook
-                endpoint. Validated via ``validate_hook_token``.
+                endpoint. Validated via ``HookTokenAuthority.validate``.
             CLOUDECODE_HOOK_URL - full loopback URL the hook curl POSTs to.
                 Built from ``settings.port`` so port overrides (e.g.
                 cloudecode running on 5001 vs the default 8000) flow
                 through automatically.
         """
-        token = self._hook_tokens.get(session_id) or self._mint_hook_token(session_id)
+        token = self.hook_tokens.token_for_spawn(session_id)
         try:
             port = settings.port
         except Exception:  # pragma: no cover - defensive
@@ -1922,7 +1627,7 @@ class SessionManager:
         Inputs: session_id (str) - the id the hook presented.
         Output: str | None - a live session id, or None.
         """
-        tmux_name = self._hook_tmux_names.get(session_id)
+        tmux_name = self.hook_tokens.name_for(session_id)
         if not tmux_name:
             return None
         for live_id, sess in self._registry.sessions.items():
@@ -2145,7 +1850,7 @@ class SessionManager:
             # persisted map still knows the name - the same fallback the
             # lineage path uses, and the reason a surviving agent's status
             # keeps being recorded instead of silently stopping.
-            tmux_name = self._hook_tmux_names.get(session_id)
+            tmux_name = self.hook_tokens.name_for(session_id)
         # punchlist 19 - EVERY event kind counts here, not just the
         # lifecycle pair. The gate asks "has this instance produced ANY
         # sign of life", and a session whose SessionStart POST was dropped
@@ -2911,7 +2616,7 @@ class SessionManager:
             # PTYBackend's start() signature also accepts ``env`` (or
             # ignores extra kwargs - see backend) so this is safe across
             # backend types.
-            self._mint_hook_token(session_id, tmux_name=tmux_session_name)
+            self.hook_tokens.mint(session_id, tmux_name=tmux_session_name)
             spawn_env = self.get_env_for_spawn(session_id)
 
             if auto_start_claude:
@@ -3457,7 +3162,7 @@ class SessionManager:
             # are readable from the datastore and the live listing without
             # the session being open. So an id we do not hold is no longer
             # a dead end - it may simply BE a tmux name.
-            tmux_name = self._hook_tmux_names.get(session_id)
+            tmux_name = self.hook_tokens.name_for(session_id)
         if not tmux_name and self._is_live_tmux_name(session_id):
             tmux_name = session_id
         if not tmux_name:
@@ -4650,7 +4355,7 @@ class SessionManager:
           deduplicated by NAME, order preserved, no falsy entries.
         Example: mgr._listed_tmux_names_by_session() -> [('ses_1', 'cloude_a')]
         """
-        hook_names = getattr(self, "_hook_tmux_names", None) or {}
+        hook_names = self.hook_tokens.tmux_names
         pairs: list[tuple] = []
         seen: set = set()
         for session_id in list(self._registry.sessions.keys()):
@@ -4917,7 +4622,7 @@ class SessionManager:
             # The persisted map is the missing half. It is consulted ONLY
             # when the live lookup misses, so a live session always wins
             # and this can never override current state with a stale name.
-            tmux_name = self._hook_tmux_names.get(session_id)
+            tmux_name = self.hook_tokens.name_for(session_id)
             if tmux_name:
                 logger.info(
                     "lineage_resolved_from_persisted_name",
@@ -5142,7 +4847,7 @@ class SessionManager:
         session = self._registry.get_session(session_id)
         tmux_name = getattr(session, "tmux_session", None) if session else None
         if not tmux_name:
-            tmux_name = self._hook_tmux_names.get(session_id)
+            tmux_name = self.hook_tokens.name_for(session_id)
         if not tmux_name:
             return None
 
@@ -6494,7 +6199,7 @@ class SessionManager:
         # that needs it - its id is minted here and exists nowhere else.
         #
         # A RECOVERED ID ALREADY HAS A CREDENTIAL, AND MINTING OVER IT
-        # REVOKES ONE THAT WORKS. ``_mint_hook_token`` replaces any token
+        # REVOKES ONE THAT WORKS. ``HookTokenAuthority.mint`` replaces any token
         # held for the id. That is right for an id minted here for the
         # first time and catastrophic for one we just recovered: the
         # agent in the pane is holding the OLD token in its environment
@@ -6504,10 +6209,10 @@ class SessionManager:
         # landed. So a re-keyed adoption KEEPS the stored token and only
         # refreshes the id -> tmux name association; a derived id mints
         # exactly as it always has.
-        if adopt_identity.rekeyed and self.get_hook_token(adopt_session_id):
-            self._keep_hook_token(adopt_session_id, tmux_name=name)
+        if adopt_identity.rekeyed and self.hook_tokens.get(adopt_session_id):
+            self.hook_tokens.keep(adopt_session_id, tmux_name=name)
         else:
-            self._mint_hook_token(adopt_session_id, tmux_name=name)
+            self.hook_tokens.mint(adopt_session_id, tmux_name=name)
         spawn_env = self.get_env_for_spawn(adopt_session_id)
         try:
             for var, val in spawn_env.items():

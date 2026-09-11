@@ -385,7 +385,7 @@ def _hook_app(monkeypatch, tmp_path):
     mgr = _manager(monkeypatch, tmp_path)
     _session(mgr, "ses_hook", tmp_path / "hook")
     _session(mgr, "ses_other", tmp_path / "other")
-    mgr._mint_hook_token("ses_hook")
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -404,7 +404,7 @@ def _post_hook(client, mgr, event: str, payload=None):
         "/api/v1/hooks/claude-event",
         headers={
             "X-Cloudecode-Session": "ses_hook",
-            "X-Cloudecode-Token": mgr.get_hook_token("ses_hook"),
+            "X-Cloudecode-Token": mgr.hook_tokens.get("ses_hook"),
             "X-Cloudecode-Event": event,
             "Content-Type": "application/json",
         },

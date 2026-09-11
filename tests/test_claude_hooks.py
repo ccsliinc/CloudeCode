@@ -118,50 +118,50 @@ def test_mint_and_get_hook_token(monkeypatch, tmp_path):
     work.mkdir()
     _register_session(mgr, "ses_t1", work)
 
-    token = mgr._mint_hook_token("ses_t1")
+    token = mgr.hook_tokens.mint("ses_t1")
     assert isinstance(token, str)
     # secrets.token_urlsafe(32) -> 43 chars of urlsafe base64.
     assert len(token) >= 40
-    assert mgr.get_hook_token("ses_t1") == token
+    assert mgr.hook_tokens.get("ses_t1") == token
 
 
 def test_get_hook_token_returns_none_for_unminted_session(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
-    assert mgr.get_hook_token("does_not_exist") is None
+    assert mgr.hook_tokens.get("does_not_exist") is None
 
 
 def test_validate_hook_token_correct(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_v1", tmp_path)
-    token = mgr._mint_hook_token("ses_v1")
-    assert mgr.validate_hook_token("ses_v1", token) is True
+    token = mgr.hook_tokens.mint("ses_v1")
+    assert mgr.hook_tokens.validate("ses_v1", token) is True
 
 
 def test_validate_hook_token_wrong_token(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_v2", tmp_path)
-    mgr._mint_hook_token("ses_v2")
-    assert mgr.validate_hook_token("ses_v2", "bogus_token_value_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") is False
+    mgr.hook_tokens.mint("ses_v2")
+    assert mgr.hook_tokens.validate("ses_v2", "bogus_token_value_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") is False
 
 
 def test_validate_hook_token_unknown_session(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
-    assert mgr.validate_hook_token("never_seen", "any_token") is False
+    assert mgr.hook_tokens.validate("never_seen", "any_token") is False
 
 
 def test_validate_hook_token_empty_inputs(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_e", tmp_path)
-    mgr._mint_hook_token("ses_e")
-    assert mgr.validate_hook_token("", "anything") is False
-    assert mgr.validate_hook_token("ses_e", "") is False
+    mgr.hook_tokens.mint("ses_e")
+    assert mgr.hook_tokens.validate("", "anything") is False
+    assert mgr.hook_tokens.validate("ses_e", "") is False
 
 
 def test_validate_hook_token_uses_compare_digest(monkeypatch, tmp_path):
     """Constant-time compare is non-negotiable for an HMAC bearer."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_ct", tmp_path)
-    token = mgr._mint_hook_token("ses_ct")
+    token = mgr.hook_tokens.mint("ses_ct")
 
     called = {"count": 0}
     original = hmac.compare_digest
@@ -171,7 +171,7 @@ def test_validate_hook_token_uses_compare_digest(monkeypatch, tmp_path):
         return original(a, b)
 
     monkeypatch.setattr("src.core.session_manager.hmac.compare_digest", _spy)
-    assert mgr.validate_hook_token("ses_ct", token) is True
+    assert mgr.hook_tokens.validate("ses_ct", token) is True
     assert called["count"] == 1, "expected validate_hook_token to call hmac.compare_digest"
 
 
@@ -197,12 +197,12 @@ def test_wiping_in_memory_state_does_NOT_revoke_the_token(monkeypatch, tmp_path)
     """A live agent must keep working when its id is forgotten."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses_w", tmp_path)
-    mgr._mint_hook_token("ses_w", tmux_name="cloude_w")
-    assert "ses_w" in mgr._hook_tokens
+    mgr.hook_tokens.mint("ses_w", tmux_name="cloude_w")
+    assert "ses_w" in mgr.hook_tokens.tokens
 
     mgr._wipe_session_state("ses_w")
 
-    assert mgr.get_hook_token("ses_w") is not None, (
+    assert mgr.hook_tokens.get("ses_w") is not None, (
         "wiping in-memory state must not revoke a live agent's credential - "
         "the agent cannot be re-issued one, its token is baked into the pane"
     )
@@ -229,7 +229,7 @@ def test_get_env_for_spawn_includes_all_three_vars(monkeypatch, tmp_path):
     _register_session(mgr, "ses_env", tmp_path)
     env = mgr.get_env_for_spawn("ses_env")
     assert env["CLOUDECODE_SESSION_ID"] == "ses_env"
-    assert env["CLOUDECODE_HOOK_TOKEN"] == mgr.get_hook_token("ses_env")
+    assert env["CLOUDECODE_HOOK_TOKEN"] == mgr.hook_tokens.get("ses_env")
     assert env["CLOUDECODE_HOOK_URL"] == (
         "http://127.0.0.1:5001/api/v1/hooks/claude-event"
     )
@@ -257,7 +257,7 @@ def _build_hook_app(monkeypatch, tmp_path):
     work = tmp_path / "hook_proj"
     work.mkdir()
     _register_session(mgr, "ses_hook", work)
-    mgr._mint_hook_token("ses_hook")
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -270,7 +270,7 @@ def _build_hook_app(monkeypatch, tmp_path):
 
 def test_hook_endpoint_rejects_non_loopback(monkeypatch, tmp_path):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
 
     # TestClient defaults to "testclient" as client_host. We force it to
     # an external IP by overriding the request scope via a small ASGI
@@ -327,7 +327,7 @@ def test_hook_endpoint_rejects_invalid_token(monkeypatch, tmp_path):
 
 def test_hook_endpoint_rejects_unknown_event_kind(monkeypatch, tmp_path):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
     resp = client.post(
         "/api/v1/hooks/claude-event",
@@ -343,7 +343,7 @@ def test_hook_endpoint_rejects_unknown_event_kind(monkeypatch, tmp_path):
 
 def test_hook_endpoint_creates_toast_for_stop(monkeypatch, tmp_path):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     # Stub the WS broadcast so we don't actually need a connection.
@@ -379,7 +379,7 @@ def test_hook_endpoint_creates_toast_for_stop(monkeypatch, tmp_path):
 def test_hook_endpoint_handles_empty_payload_gracefully(monkeypatch, tmp_path):
     """No JSON body at all -> still creates a toast with the fallback title."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     with patch.object(
@@ -406,7 +406,7 @@ def test_hook_endpoint_handles_empty_payload_gracefully(monkeypatch, tmp_path):
 
 def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_path):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     with patch.object(
@@ -439,7 +439,7 @@ def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_pa
 def test_hook_endpoint_410_when_session_destroyed_mid_flight(monkeypatch, tmp_path):
     """Token validates BUT session was wiped between mint and record_toast."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     # Race simulation: leave the token in _hook_tokens but yank the session.
     mgr._registry.sessions.pop("ses_hook", None)
     client = _loopback_client(app)

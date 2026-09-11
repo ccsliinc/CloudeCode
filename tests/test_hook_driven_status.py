@@ -282,7 +282,7 @@ def _build_hook_app(monkeypatch, tmp_path):
     work = tmp_path / "hook_proj"
     work.mkdir()
     _register_session(mgr, "ses_hook", "cloude_hook_proj", work)
-    mgr._mint_hook_token("ses_hook")
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -301,7 +301,7 @@ def _loopback_client(app):
 )
 def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, event):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     with patch.object(
@@ -335,7 +335,7 @@ def test_activity_only_events_accepted_without_toast(monkeypatch, tmp_path, even
 
 def test_pre_tool_use_via_endpoint_updates_activity_status(monkeypatch, tmp_path):
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     client.post(
@@ -354,7 +354,7 @@ def test_pre_tool_use_via_endpoint_updates_activity_status(monkeypatch, tmp_path
 def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tmp_path):
     """Stop is BOTH a toast event and an activity event - both must fire."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
 
     with patch.object(
@@ -382,7 +382,7 @@ def test_hook_endpoint_still_creates_toast_and_activity_for_stop(monkeypatch, tm
 def test_hook_endpoint_rejects_unknown_event_still(monkeypatch, tmp_path):
     """Whitelist still rejects a truly bogus event kind."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.get_hook_token("ses_hook")
+    token = mgr.hook_tokens.get("ses_hook")
     client = _loopback_client(app)
     resp = client.post(
         "/api/v1/hooks/claude-event",

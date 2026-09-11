@@ -404,7 +404,7 @@ def test_a_bogus_token_is_refused_and_moves_nothing(live: RealHookApp) -> None:
     import httpx
 
     before = live.signals()
-    real_token = live.app.state.session_manager._hook_tokens.get(live.session_id)
+    real_token = live.app.state.session_manager.hook_tokens.tokens.get(live.session_id)
     assert real_token, "no hook token was minted, so nothing was controlled for"
     bogus = ("0" * len(real_token))[: len(real_token)]
     assert bogus != real_token

@@ -117,7 +117,7 @@ def _build_hook_app(monkeypatch, tmp_path):
     )
     mgr._registry.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
     mgr._registry.subscribers.setdefault("ses_hook", [])
-    mgr._mint_hook_token("ses_hook")
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -143,7 +143,7 @@ def _post_event(app, mgr, event: str):
             "/api/v1/hooks/claude-event",
             headers={
                 "X-Cloudecode-Session": "ses_hook",
-                "X-Cloudecode-Token": mgr.get_hook_token("ses_hook"),
+                "X-Cloudecode-Token": mgr.hook_tokens.get("ses_hook"),
                 "X-Cloudecode-Event": event,
                 "Content-Type": "application/json",
             },

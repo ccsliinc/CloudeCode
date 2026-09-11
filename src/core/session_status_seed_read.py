@@ -476,9 +476,10 @@ def seed_live_sessions(manager: Any) -> Tuple[int, int]:
             if tracker is not None and tracker.hooks_seen(session_id):
                 continue
             examined += 1
+            authority = getattr(manager, "hook_tokens", None)
             tmux_name = getattr(session, "tmux_session", None) or (
-                getattr(manager, "_hook_tmux_names", None) or {}
-            ).get(session_id)
+                authority.name_for(session_id) if authority is not None else None
+            )
             resolved_epoch = _resolve_epoch(manager, session_id, None)
             seed = derive_seed(
                 manager, session_id, tmux_name, epoch=resolved_epoch, now=now

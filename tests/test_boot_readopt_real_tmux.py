@@ -338,7 +338,7 @@ async def test_real_readopt_pass_holds_every_live_session_by_stored_id(
         )
 
     # The durable record of the id each pane's agent already presents.
-    mgr._hook_tmux_names = {sid: name for name, sid in names.items()}
+    mgr.hook_tokens.tmux_names = {sid: name for name, sid in names.items()}
 
     try:
         report = await readopt_surviving_sessions(mgr)

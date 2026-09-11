@@ -7788,3 +7788,98 @@ this slice's lane. They are on an explicit register in
 `test_api_route_modules.py` with their measured size, so they are visible
 and may not GROW; a register that tolerates any number is the rule deleted
 with extra steps.
+
+---
+
+## 2026-09-10 - S7 SHIPPED: HookTokenAuthority
+
+Plan v2's S7. The four pieces of hook-token state and the eight methods
+that touch them off `SessionManager` and onto
+`src/core/sessions/hook_token_authority.py`, 447 lines.
+**`session_manager.py` 7,589 to 7,294**, and the 291 lines it lost are the
+methods themselves, not a forwarder block: nothing forwards, and the
+facade keeps no copy of any of the four.
+
+**THE INVARIANT IS NOW STRUCTURAL.** `mint` is the only writer of a
+secret, `keep` re-binds a tmux name and cannot reach one, `recover`
+accepts a superseded value once and never mints. That separation is what
+ended the 4h24m outage of 2026-09-08 (a derived-id adopt minted at
+16:16:40.633984Z, the first rejection 130 ms later, 4,325 more until the
+owner restarted the pane by hand), and it used to be a comment.
+
+**THE PLAN SAID "zero `src/` reach". IT IS FOUR.** Measured here:
+`session_boot_readopt.py` (two, one of them a WRITE through
+`.setdefault`), `claude_title_sync_apply.py`, `session_status_seed_read.py`
+and `hook_event_routes.py`. **THREE OF THE FOUR ARE DEFENSIVE READERS
+SPELLED `getattr(manager, "_hook_tmux_names", None) or {}`**, so a grep
+for the plain attribute finds ONE of them. Left alone, each would have
+gone on answering `{}` forever: the title sync would stop resolving a
+pane's name, the status seed would lose its instance identification, and
+the boot re-adopt would hold nothing - all silently, all green. Repointed
+onto `authority.name_for` / `authority.tmux_names`, with the TOLERANCE
+KEPT and now pointed at `hook_tokens`, because a caller may still inject a
+manager double that has no authority and that must answer "nothing
+recorded" rather than raise.
+
+**`get_env_for_spawn` STAYS ON THE MANAGER, against the plan's listing.**
+It is 60 lines of workspace-env composition - the user's global env, the
+development root, the default shell, the LM Studio address - with three
+lines of token in it. Only the token acquisition moved, as
+`authority.token_for_spawn`. Moving the whole method would have put the
+workspace settings layering inside a credential module.
+
+**The gc's one outside reach became a callback.** It used to pop
+`manager._instance_epochs` inline; the authority now takes `on_drop` and
+returns the ids it dropped, so the collaborator does not know that cache
+exists.
+
+**Rule A, four legs, chosen for THIS data.** Identity (no `_hook_tokens`,
+`_hook_tmux_names`, `_hook_tokens_durable` or `_superseded_hook_tokens`
+left on the manager); FORWARD (mint through the authority, read back);
+DELETION (pop through one reference, read through the other - the leg that
+actually caught S4, because writing into `dict(...)` leaves every
+add-only assertion green); and the TMUX NAME MAP separately, because
+`keep` re-binds a name without touching a secret and a copied name map
+would pass every token assertion while losing the only durable record of
+which pane an id was injected into.
+
+**Mutations, four, and one judged.**
+(A) `keep()` calls `mint()` - the one the plan names: RED on
+`test_keep_does_not_rotate_the_secret` plus both re-key tests in
+`test_adopt_rekey_stored_id.py`. (B) `recover()` accepts broadly, the
+credential bypass: RED on 7, four of them pre-existing. (C) gc treats an
+unreadable metadata file as `owned = set()`: **GREEN, and judged
+MEANINGLESS rather than a missing test** - the `if not owned: return []`
+guard two lines below already catches an empty set, so the mutation
+changes no behaviour at all. Re-run as (C2) with `owned = {"__unreadable__"}`,
+which is what "actioned as nothing is owned" really looks like: RED on
+`test_an_unreadable_owned_list_keeps_every_token`. (D) `compare_digest`
+replaced by `==`: RED on `test_validate_hook_token_uses_compare_digest`.
+Every revert verified byte-identical by sha256
+(`75538bef4d66edc082318df202df14fa9b53664536b1a526859abec1d50f9ac7`).
+
+**Negative controls, both the plan's and two more.** A forged token of the
+RIGHT LENGTH is refused; `recover` refuses a value this process never
+minted (`no_match`); refuses a superseded value against a DIFFERENT pane;
+and refuses with `unavailable` when there was nothing to search - kept as
+a separate word because a check that could not run must never read as one
+that ran and cleared.
+
+**Test-side sweep: 13 files, 88 lines.** Two test doubles had to grow a
+real authority rather than a stand-in:
+`test_claude_title_sync_apply.py`'s `_FakeManager` and
+`test_workspace_env_reaches_terminal.py`'s `SessionManager.__new__`
+construction, which skips the constructor entirely.
+
+**Verification.** Control is the S6 commit `e859106`: 6,478 passed / 2
+failed / 76 skipped, 6,556 collected. After: **6,498 passed / 2 failed /
+76 skipped, 6,576 collected.** +20 added, **ZERO removed**: 16 the new
+`test_hook_token_authority.py`, 1 `test_no_unresolved_names` (one new
+source file), 3 `test_sessions_package_rules` (one new package module,
+three rules). The two failures are the known environmental pair. Node
+200/200, four listing cost ceilings pass, `scan_secrets.py` exit 0.
+
+**Prose repointed in 6 src files.** Every ``_mint_hook_token`` /
+``validate_hook_token`` / ``_hook_tmux_names`` reference in a docstring or
+comment now names the authority. A stale doc sends the next agent to write
+a bug.
