@@ -93,6 +93,8 @@ from src.core.session_startup_gate_ledger import (
 from src.core import unread_identity
 from src.core import session_view_clears
 from src.core import toast_auto_ack
+from src.core import viewer_fanout
+from src.core.bounded_stream import OFFER_ACCEPTED, OFFER_OVERFLOWED
 from src.core import session_permission_verify_apply
 from src.core.session_status_source import (
     STATUS_SOURCE_HOOK,
@@ -281,6 +283,23 @@ def _configured_wrappers():
     except Exception as exc:  # noqa: BLE001 - a bad config must not break a listing
         logger.warning("configured_wrappers_unavailable", error=str(exc))
         return []
+
+
+
+def _close_viewer_stream(candidate) -> None:
+    """Close a viewer outbox, tolerating anything that is not one.
+
+    Description: `subscribe_output` has always been callable by test
+      doubles and older shims that hand back a bare queue, and a teardown
+      that raised on one of those would turn an ordinary disconnect into
+      a 500. So this asks whether the object is a viewer stream rather
+      than assuming, and does nothing when it is not.
+    Inputs: candidate (Any) - whatever `unsubscribe_output` was handed.
+    Output: None.
+    Example: _close_viewer_stream(stream)
+    """
+    if viewer_fanout.is_viewer_stream(candidate):
+        candidate.close()
 
 
 class SessionManager:
@@ -613,20 +632,50 @@ class SessionManager:
         ``self._subscribers[session_id]`` - destroying session A never
         touches session B's subscribers.
         """
-        async def _on_output(data: bytes) -> None:
-            encoded = base64.b64encode(data).decode("utf-8")
+        def _on_output(data: bytes) -> None:
+            """Fan one chunk out to every viewer of this session. NEVER awaits.
+
+            THE SYNCHRONOUS SIGNATURE IS THE CLAIM, not a style choice.
+            ``TmuxBackend._emit_output`` awaits whatever this returns, so a
+            coroutine here would put the tail loop - the thing reading the
+            pipe that carries every keystroke echo for every session - one
+            await away from a viewer's queue. It used to be
+            ``await queue.put`` into an UNBOUNDED ``asyncio.Queue``, which
+            never blocked and therefore never showed the problem: it simply
+            grew, holding every byte a stalled browser had not read.
+
+            The queue is bounded now (see src/core/viewer_fanout.py), and
+            ``offer`` refuses rather than waiting. A viewer that crosses its
+            bound is closed and DROPPED FROM THIS LIST: its writer task sees
+            the stream finish, closes the socket with a distinguishable
+            code, and the client recaptures the pane. No byte is ever
+            dropped from the middle of a stream - half an escape sequence
+            does not corrupt one cell, it leaves the VT parser wrong for
+            everything after it - so disconnecting is the only complete
+            recovery available.
+            """
             subs = self._subscribers.get(session_id)
             if not subs:
                 return
-            for queue in list(subs):
+            encoded = base64.b64encode(data).decode("utf-8")
+            for stream in list(subs):
+                outcome = viewer_fanout.offer_pty(stream, encoded)
+                if outcome == OFFER_ACCEPTED:
+                    continue
+                if outcome == OFFER_OVERFLOWED:
+                    logger.warning(
+                        "viewer_output_queue_overflow",
+                        session_id=session_id,
+                        queued_chunks=viewer_fanout.MAX_VIEWER_QUEUE_CHUNKS,
+                    )
+                # OFFER_CLOSED reaches here too - a socket torn down whose
+                # endpoint has not unsubscribed yet. Either way the viewer
+                # leaves the list, so a finished stream is never offered a
+                # second chunk and the overflow is one event, not a storm.
                 try:
-                    await queue.put(encoded)
-                except Exception as e:  # pragma: no cover - defensive
-                    logger.error("failed_to_send_to_subscriber", error=str(e))
-                    try:
-                        subs.remove(queue)
-                    except ValueError:
-                        pass
+                    subs.remove(stream)
+                except ValueError:  # pragma: no cover - concurrent removal
+                    pass
         return _on_output
 
     def _wipe_session_state(self, session_id: str) -> None:
@@ -648,7 +697,14 @@ class SessionManager:
         )
         self.sessions.pop(session_id, None)
         self.backends.pop(session_id, None)
-        self._subscribers.pop(session_id, None)
+        # CLOSE EACH VIEWER'S OUTBOX, do not just drop the list. The
+        # writer task draining it is parked in `get()`; closing is what
+        # wakes it so it can finish, and without that it would sit there
+        # until the socket itself failed. Each stream's own teardown
+        # reason is preserved, so a viewer that had already overflowed
+        # still reports the overflow rather than an ordinary close.
+        for stream in self._subscribers.pop(session_id, []) or []:
+            _close_viewer_stream(stream)
         self.log_buffers.pop(session_id, None)
         self.command_counts.pop(session_id, None)
         self.idle_watchers.pop(session_id, None)
@@ -3237,12 +3293,12 @@ class SessionManager:
         strings); a session's output never leaks into another's queue.
         """
         sid = self._resolve_session_id(session_id)
-        # Tolerate "no session yet" - return an orphan queue so callers
+        # Tolerate "no session yet" - return an orphan stream so callers
         # (e.g. the auth-only WS test) don't have to special-case it.
         key = sid if sid is not None else "__orphan__"
-        queue: asyncio.Queue = asyncio.Queue()
-        self._subscribers.setdefault(key, []).append(queue)
-        return queue
+        stream = viewer_fanout.new_viewer_stream(key)
+        self._subscribers.setdefault(key, []).append(stream)
+        return stream
 
     def unsubscribe_output(
         self, queue: asyncio.Queue, session_id: Optional[str] = None
@@ -3256,11 +3312,13 @@ class SessionManager:
             subs = self._subscribers.get(session_id)
             if subs and queue in subs:
                 subs.remove(queue)
+            _close_viewer_stream(queue)
             return
         for subs in self._subscribers.values():
             if queue in subs:
                 subs.remove(queue)
-                return
+                break
+        _close_viewer_stream(queue)
 
     # ---- session lifecycle ----------------------------------------------
 

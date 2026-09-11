@@ -60,6 +60,7 @@ from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
+from src.api.events_routes import router as events_ws_router
 from src.api.auth import (
     router as auth_router,
     limiter as auth_limiter,
@@ -76,6 +77,7 @@ from src.api.settings_routes import router as settings_import_router
 from src.api.websocket import connection_manager
 from src.core.ui_preferences_store import UiPreferencesStore
 from src.core.settings_import_store import SettingsImportStore
+from src.core.event_hub import EventHub
 from src.api.toast_routes import router as toast_router
 from src.api.corpus_routes import router as corpus_router
 from src.api.archive_overlay_routes import router as archive_overlay_router
@@ -592,6 +594,14 @@ async def lifespan(app: FastAPI):
         lambda: Path(settings.auth_config_file).expanduser()
     )
     app.state.connection_manager = connection_manager
+    # The application event channel's fan-out (/ws/events). One bounded
+    # stream per connected browser, so a client on the home screen or
+    # looking at another session hears about a change without waiting for
+    # its next five second poll. Attached here, before anything can
+    # publish: every publish site is fail-soft and a missing hub simply
+    # publishes nothing, which costs a client the optimisation and never
+    # correctness. See src/core/event_hub.py.
+    app.state.event_hub = EventHub()
 
     # Background upload-uploads TTL pruner - safety net for long-running
     # servers. Layers 1 (destroy_session rmtree) and 2 (startup orphan
@@ -917,6 +927,7 @@ app.include_router(imported_restart_router, prefix="/api/v1")  # Preview and res
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
 app.include_router(ws_router)                       # WebSocket routes
+app.include_router(events_ws_router)                 # /ws/events: per-browser application event channel (JWT via subprotocol)
 
 # Mount static files
 client_dir = Path(__file__).parent.parent / "client"

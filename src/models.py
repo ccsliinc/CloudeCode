@@ -1654,6 +1654,35 @@ class WSMessageType(str, Enum):
     # than silently wondering why the pane is smaller than its own
     # viewport. See src/core/terminal_size.py for the negotiation rule.
     TERMINAL_SIZE = "terminal_size"
+    # ---- the application event channel, /ws/events (issue 34) ----------
+    # These travel on the per-BROWSER socket rather than the per-session
+    # terminal one, so they reach a client sitting on the home screen or
+    # looking at a different session. Dot notation, matching ``toast.*``.
+    #
+    # Server -> client, once, as the FIRST frame after a successful
+    # handshake. It means "you are receiving notices now, and you missed
+    # everything before this instant", and the client answers it with an
+    # authoritative refresh. It is deliberately NOT a catch-up: nothing is
+    # replayed and nothing is buffered for a client that is not connected.
+    EVENTS_HELLO = "events.hello"
+    # Server -> client. A COMPACT change notice about one session: the
+    # instance it is about, and the handful of fields a list row paints.
+    # Never a whole SessionInfo - a notice carrying a full payload would
+    # be a second serialization of /sessions/list and would drift from it.
+    # Distinct from the legacy ``session_status`` value above, which is a
+    # different message on the terminal socket.
+    SESSION_STATUS_CHANGED = "session.status"
+    # Server -> client. The STRUCTURAL notice: the shape of the list
+    # changed, re-read it. It carries no payload at all, on purpose - a
+    # notice that says "re-read" cannot go stale or disagree with the
+    # endpoint the client then reads.
+    SESSIONS_CHANGED = "sessions.changed"
+    # Server -> client. The typed ui_preferences block committed a change.
+    # This literal predates the channel (it shipped on the terminal socket
+    # and still goes out there for a client holding one) and is named here
+    # so the enum stays the ONE vocabulary rather than acquiring a second
+    # one made of loose strings. See src/api/preferences_routes.py.
+    PREFERENCES_CHANGED = "preferences.changed"
 
 
 class Toast(BaseModel):
