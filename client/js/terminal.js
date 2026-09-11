@@ -1286,8 +1286,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             ? await window.TerminalReadiness.measure(this)
             : { fitted: false, reason: 'no-fit-wait', attempts: 0, waitedMs: 0 };
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows,
-            'measured=' + measured.fitted, 'reason=' + measured.reason,
-            'in ' + measured.waitedMs + 'ms');
+            `measured=${measured.fitted} reason=${measured.reason} in ${measured.waitedMs}ms`);
 
         // Open WebSocket via subprotocol auth (Item 3). JWT is carried in
         // the Sec-WebSocket-Protocol header, NOT in the URL - so no token
