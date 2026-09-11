@@ -279,31 +279,78 @@ that batch is issued either way, and both commands are pure assignments of
 a constant, so they are idempotent and safe under the runner's
 individual-rerun fallback.
 
-**THE FIRST PANE KEEPS 2000 ROWS, AND SAYING SO IS THE POINT.** A pane's
-scrollback depth is fixed into its grid at creation. Measured three ways
-on tmux 3.6a, a pane born under the stock limit still reports
-`#{history_limit} 2000` after a global `set-option`, after a
-session-scoped one, and after `respawn-pane -k`. So the re-application
-cannot hand that session its 48000 missing lines, and a commit message
-claiming it did would be the confidently-wrong-doc failure of gotcha 8.
-`tests/test_cold_socket_options_real_tmux.py` pins the limitation as a
-measured fact rather than a comment. What the first session DOES keep is
-its corpse: the belt-and-braces `set-option -t <session> remain-on-exit
-on` that already ran after `new-session` resolves to that session's
-WINDOW, so the dead-on-arrival probe always had a pane to read - the
-GLOBAL window table was the half that was wrong.
+**THE RE-APPLICATION CANNOT REACH THE FIRST PANE, BECAUSE A PANE'S DEPTH
+IS FIXED INTO ITS GRID AT CREATION.** Measured three ways on tmux 3.6a, a
+pane born under the stock limit still reports `#{history_limit} 2000`
+after a global `set-option`, after a session-scoped one, and after
+`respawn-pane -k`. So the re-application fixes the socket for every LATER
+session and cannot hand the first one its 48000 missing lines.
+`tests/test_cold_socket_options_real_tmux.py` pins that as a measured
+fact. What the first session always DID keep is its corpse: the
+belt-and-braces `set-option -t <session> remain-on-exit on` after
+`new-session` resolves to that session's WINDOW, so the dead-on-arrival
+probe always had a pane to read - the GLOBAL window table was the half
+that was wrong.
 
-**CLOSING THE REMAINING HALF NEEDS A SERVER BEFORE `new-session`, AND TWO
-WAYS TO GET ONE WERE MEASURED AND NOT TAKEN.** `start-server` ALONE does
-not do it - the batch exits 0 and the server is already gone by the time
-the next tmux process connects, because it has no sessions. Adding
-`set-option -s exit-empty off` to that same list DOES: measured, the
-server survives and the next `new-session` is born at 50000. So does
-`tmux -L <socket> -f <conf> new-session ...`, since the server reads `-f`
-at startup, before it creates the session. Both change the launch, and
-the first also leaves a sessionless tmux server running on our socket for
-the life of the box. Neither was shipped; they are written down so the
-next person starts from the measurement rather than from `start-server`.
+**SO THE FIRST PANE IS NOW BORN AT THE FULL DEPTH, FROM A `-f` CONFIG THE
+SERVER READS BEFORE IT MAKES THE PANE.** tmux reads a `-f` file when it
+STARTS THE SERVER, which on a cold socket happens inside the
+`new-session` invocation itself and strictly before the session is
+created. That is the only window there is. Measured through a real
+`TmuxBackend.start()` on a cold socket, the first pane's own
+`#{history_limit}` goes **2000 to 50000**.
+`src/core/tmux_server_config.py` renders and atomically writes it,
+`TmuxBackend._server_config_argv` places it, and
+`tests/test_cold_socket_born_at_depth_real_tmux.py` measures the PANE
+rather than the option table, because #87 already proved those two can
+disagree.
+
+**IT COSTS ZERO EXTRA TMUX PROCESSES, WHICH IS THE WHOLE REASON IT WON.**
+`-f` is two more argv elements on a call that was being made anyway.
+Counted at base and at head: a COLD launch spends **8 at both**, a warm
+one **6 at both**. Cold is two above the six quoted higher up because the
+pre-spawn batch cannot reach a server that is not running, so
+`run_optional_batch` re-runs its two commands individually - #87's
+fallback, not this. The spawn is still its own invocation and still
+carries its own return code; nothing is batched into it, and the env
+injection ordering is untouched.
+
+**EVERY FAILURE PATH DEGRADES TO THE PRE-FIX LAUNCH, AND tmux's OWN
+BEHAVIOUR WAS MEASURED RATHER THAN ASSUMED.** A missing `-f` file, an
+unreadable one (mode 000) and a MALFORMED one all give `rc=0` and a
+working session; on a warm socket `-f` is ignored outright. The malformed
+case is the one to know: tmux DISCARDS THE WHOLE CONFIG SILENTLY, so a
+valid line placed before the bad one does not apply either and nothing is
+printed. That is why `render_config` refuses a token it cannot express
+instead of quoting it hopefully, and why the test measures the pane
+afterwards. If the file cannot be written at all, `_server_config_argv`
+returns `[]` and the launch is byte-identical to what it was: losing
+scrollback depth is survivable, refusing a session is not.
+
+**THE FILE IS RE-DERIVED ON EVERY LAUNCH, SO A STALE ONE IS IMPOSSIBLE.**
+It lives at `<state_dir>/cloude-tmux.conf` and its body is rendered from
+the same argv fragments the pre-spawn and post-spawn batches send, so all
+three places that state these two options read one definition. Nothing
+migrates it on upgrade and nothing cleans it up; the next launch
+overwrites it with what the running build believes.
+
+**AND `-f` REPLACES tmux's OWN DEFAULT CONFIG LOAD, WHICH IS DESIRED AND
+IS ALSO A REAL CHANGE.** Per tmux(1), given a config on the command line
+tmux does not read `/etc/tmux.conf` or `~/.tmux.conf`. This file already
+states the intent - CloudeCode carries its own explicit tmux settings and
+deliberately does not source a personal config, because one references
+plugins that do not exist on another machine - so until now a COLD
+CloudeCode socket was quietly doing the opposite. Measured on the
+developer's box: none of the three default paths exists, so nothing there
+was being inherited and nothing is lost. On a box that HAS one, that
+config stops reaching our socket.
+
+**THE REJECTED ALTERNATIVE, KEPT SO IT IS NOT RE-PROPOSED.**
+`start-server` ALONE does not work - the batch exits 0 and the server,
+having no sessions, is gone before the next tmux process connects. Adding
+`set-option -s exit-empty off` to that list DOES work, measured, and
+leaves a tmux server with zero sessions alive on our socket for the life
+of the box. Adam rejected that on 2026-09-10 for exactly that reason.
 
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
