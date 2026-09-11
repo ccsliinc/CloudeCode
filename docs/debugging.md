@@ -134,3 +134,54 @@ Worth knowing about the shape: a family only contributes a pinned row when
 it has NO wrappers. So any check written on the pinned-family path is
 silently unreachable for a family the user has authored a wrapper for -
 which is every family in a real install eventually.
+
+## Running a throwaway instance without touching your real state
+
+Use this whenever you start a server to test something. Without it a dev
+or test run opens, and can WRITE, the files your live install depends on.
+
+```bash
+CLOUDE_STATE_DIR=/tmp/cloude-throwaway \
+LOG_DIRECTORY="" \
+AUTH_CONFIG_FILE=/tmp/cloude-throwaway/config.json \
+CLOUDE_CORPUS_INGEST=0 \
+CLOUDE_DB_INTEGRITY_CHECK=0 \
+venv/bin/python3 -m uvicorn src.main:app --host 0.0.0.0 --port 5001
+```
+
+What each one is for, because three of the five are not obvious:
+
+- `CLOUDE_STATE_DIR` moves the state directory, and on its own it now
+  moves every state FILE with it. That was not always true. Until issue
+  113 the per-file resolver still pinned `refresh_tokens.db`,
+  `session_metadata.json`, `pinned_themes.json` and `unread_state.json`
+  to `LOG_DIRECTORY` whenever a copy already existed there, and since
+  `LOG_DIRECTORY` is populated from the repo's own `.env` it was set for
+  an operator who had never chosen it. A throwaway server therefore held
+  the real 159 KB `refresh_tokens.db` open read-write for its whole life,
+  and actually wrote the real `pinned_themes.json`.
+- `LOG_DIRECTORY=""` is now belt and braces rather than the fix. An empty
+  value has always been enough on its own, which was the workaround
+  before 113, and it costs nothing to keep saying it.
+- `AUTH_CONFIG_FILE` is the one `CLOUDE_STATE_DIR` does NOT cover. It
+  defaults to `./config.json`, relative to the working directory, so a
+  server started from the checkout reads and writes the checkout's real
+  `config.json` whatever the state directory says. Point it somewhere
+  else or your throwaway instance edits your real projects, wrappers and
+  pinned preferences.
+- `CLOUDE_CORPUS_INGEST=0` stops the background transcript archiver
+  walking your real `~/.claude/projects` corpus, which is about 19,000
+  files.
+- `CLOUDE_DB_INTEGRITY_CHECK=0` stops the daily `PRAGMA integrity_check`
+  re-walking a multi-gigabyte database you did not want it reading.
+
+Verify it took, before you trust it:
+
+```bash
+CLOUDE_STATE_DIR=/tmp/cloude-throwaway venv/bin/python3 -c \
+  "from src.config import Settings; s=Settings(); print(s.get_refresh_tokens_path())"
+```
+
+That must print a path under the throwaway directory. If it prints
+anything under your `LOG_DIRECTORY`, the isolation is not in force and
+the run will touch your real files.
