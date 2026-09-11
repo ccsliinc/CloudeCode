@@ -29,6 +29,14 @@ const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..'
 // the module's own fallback (immediate render) branch.
 const RENDER_BATCH_SRC = fs.readFileSync(
     path.join(ROOT, 'client/js/toast-render-batch.js'), 'utf8');
+// issue #39 (server half) - the version-arbitration gate `add()` reads at
+// call time. Loaded like RENDER_BATCH_SRC above and for the same reason:
+// a stub that omitted it would silently measure `add()`'s no-module
+// fallback (always replace) rather than the shipped version-compare path,
+// and every out-of-order/duplicate assertion in this suite family would
+// be testing nothing.
+const VERSION_ARBITRATION_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-version-arbitration.js'), 'utf8');
 const SRC = fs.readFileSync(path.join(ROOT, 'client/js/toast.js'), 'utf8');
 // issue #55 split ToastManager's class body across three files that each
 // extend ToastManager.prototype (client/js/api-toasts.js's pattern for
@@ -200,6 +208,7 @@ export function makeEnv(narrow = false) {
     vm.runInContext(SUMMARY_SRC, sandbox, { filename: 'session-status-summary.js' });
     vm.runInContext(GROUP_SRC, sandbox, { filename: 'toast-session-group.js' });
     vm.runInContext(RENDER_BATCH_SRC, sandbox, { filename: 'toast-render-batch.js' });
+    vm.runInContext(VERSION_ARBITRATION_SRC, sandbox, { filename: 'toast-version-arbitration.js' });
     vm.runInContext(SRC, sandbox, { filename: 'toast.js' });
     vm.runInContext(GROUPING_SRC, sandbox, { filename: 'toast-grouping.js' });
     vm.runInContext(RENDER_SRC, sandbox, { filename: 'toast-render.js' });

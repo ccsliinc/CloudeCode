@@ -121,7 +121,24 @@ Object.assign(ToastManager.prototype, {
       // the id the user will ack is the id the server holds. The
       // backfill/WS race this branch was written for still resolves to one
       // card, because re-storing identical content renders identically.
+      //
+      // BUT "arrive again" IS NOT "arrive newest" (issue #39). Hook events
+      // are unordered, duplicated and droppable, so the WS frame and the
+      // cross-session poll can deliver the SAME id out of order - a
+      // duplicated older frame landing after a newer one already applied.
+      // Overwriting unconditionally would let that stale delivery regress
+      // a card the user is looking at. ToastVersionArbitration is the
+      // gate, read at call time like toast-session-group.js beside it: a
+      // lower version is discarded, an equal one is a no-op (nothing
+      // changed, so nothing is scheduled), and only a higher version - or
+      // one either side cannot compare - replaces. See that module for
+      // why a missing version is never read as version zero.
       if (this._byId.has(toast.id)) {
+        const held = this._byId.get(toast.id);
+        if (window.ToastVersionArbitration
+            && !window.ToastVersionArbitration.shouldReplace(held, toast)) {
+          return;
+        }
         this._byId.set(toast.id, toast);
         this._scheduleRender();
         return;

@@ -22,6 +22,27 @@ Repo: Adoom666/CloudeCodeDev. 53 open at start, 48 now.
 
 ## Held — needs Adam
 
+- #54 phase 7 control-mode input channel. MEASURED AND NOT PROMOTED, pending a
+  ruling. The 5 ms bar is cleared comfortably: delivery to the pane process is
+  p50 8.880 ms through a `send-keys` subprocess against p50 0.164 ms through a
+  persistent `tmux -C` channel, a p50 saving of 8.717 ms, reproduced to within
+  0.06 ms across two matched interleaved runs of 300 iterations per arm on a box
+  at load average 12.5 to 13.8. A bare `/usr/bin/true` spawn costs p50 4.661 ms
+  on the same path, so about half of what the current transport pays is process
+  creation that buys nothing. All five correctness cases in the issue pass
+  against the prototype, including 531 of 531 bytes exactly once and in order
+  through a 500 byte no-gap burst, and a 4 byte emoji surviving intact because
+  `send-keys -H` carries hex and never touches the line protocol's quoting.
+  THE QUESTION FOR ADAM IS WHERE THE CLIENT LIVES, not whether it is faster.
+  One shared client costs 2592 KiB but must attach to a scratch session, and a
+  scratch session keeps the tmux server alive on the socket after every real
+  session is gone (measured against `exit-empty on`), which is the condition
+  rejected on 2026-09-10. One client per session is lifecycle neutral (measured:
+  the server exits normally when the attached session is killed) and costs
+  130848 KiB across 50 processes at 50 sessions. Numbers are in
+  `docs/webui-performance-and-session-menu-plan.md` under phase 7. No production
+  code changed.
+
 - #64 CI disabled deliberately. Adam's own comment on the issue says do not close it.
   Now documented in CLAUDE.md + docs/ci.md. Left open per his instruction.
 - #66 home card overflow menu: touches client/js/launchpad.js, which ccsliinc's
@@ -658,3 +679,88 @@ test_project_theme.py and test_session_theme_precedence.py (34 together). All
 pass. ruff on every changed file reports only the three errors already present
 at HEAD (verified against `git show HEAD:src/core/session_manager.py`).
 **A FULL-SUITE NUMBER IS OWED ON A QUIET BOX.**
+
+[ISSUE-39B] [2026-09-11]: Server half of issue #39 landed (client half was
+`f0e07de`, PR #104, `feat/39-toast-render-batch`). Claim re-confirmed before
+starting: issue #39 links to PR #104 only, PR #104 is still OPEN/draft,
+authored by us, no competing PR exists.
+
+`Toast.version` (src/models.py) is a monotonic per-record int, default 1.
+`SessionManager.record_toast` (src/core/session_manager.py) bumps it on the
+supersede path ONLY when body/color/session_label/session_name actually
+differ from what is held - an identical re-raise (the common duplicated-Stop
+case) leaves it unchanged. `SessionManager.ack_toast` bumps it once on the
+acked transition, guarded by the same `if t.acknowledged: return False` that
+already makes that method idempotent against a duplicate ack, so a duplicated
+ack cannot double-bump. `src/api/routes.py` needed NO CHANGES: every toast
+broadcast/response already serializes the full pydantic `Toast` object
+(`ToastNewMessage(toast=toast)`, `response_model=Toast`,
+`response_model=List[Toast]`), so `version` rides along automatically -
+verified this against the issue text and it is the one place the handover
+note's file list ("src/api/routes.py, the toast backfill endpoint") turned
+out not to need an edit.
+
+Client arbitration (`ToastManager.add()`'s known-id branch, which previously
+overwrote unconditionally) is gated through a NEW pure module,
+`client/js/toast-version-arbitration.js` (`shouldReplace(held, incoming)`),
+not inlined into `client/js/toast-lifecycle.js` - that file was already past
+its 500-line guideline (547 lines) per CLAUDE.md's own note, so the logic
+went into its own module the same way `toast-render-batch.js` and
+`toast-session-group.js` already do, read at call time off
+`window.ToastVersionArbitration`, no load-order requirement. Wired into
+`client/index.html` beside `toast-render-batch.js`. Rule: higher version
+replaces, equal is a no-op, lower is discarded; a version missing on EITHER
+side (legacy server, or a locally-minted toast like the attachment receipt)
+falls back to "always replace" - the exact pre-#39 behavior - because
+treating absent as zero would let a real update be discarded as "older than
+nothing" or freeze a legacy card on its first content forever. Copied the
+strictly-higher-wins discipline directly from `client/js/preferences.js`'s
+`preferences.changed` revision handling per CLAUDE.md, not reinvented.
+
+Tests: `tests/test_toast_version.py` (12 new, server side - version starts at
+1, real change bumps, identical re-raise does not, three-in-a-row stays
+pinned at 1 (not just "moved"), repeated real changes bump exactly once each,
+color-only change counts as real, duplicate hook-delivered creation does not
+double-count, duplicate ack and duplicate auto-ack do not double-bump,
+unrelated toasts/kinds keep independent version histories).
+`tests/test_toast_version_arbitration.node.mjs` (11 new, client side -
+higher/equal/lower through both the raw module and through `add()`, a
+three-deliveries-out-of-order convergence case, the missing-version fallback,
+and two invariant checks that the x-n badge count and dismiss-all's record
+count are unaffected by arbitration). `tests/lib_toast_dom_stub.mjs` (shared
+node harness) now also loads `toast-version-arbitration.js` into its sandbox,
+same reasoning as its existing SUMMARY_SRC/GROUP_SRC comment: without it the
+shipped `add()` would silently exercise its no-module fallback and every
+out-of-order assertion would test nothing.
+
+NEGATIVE CONTROL WATCHED RED, per protocol: mutated `shouldReplace` to
+`(v || 0)` (treating absent as zero), re-ran the node suite - the negative
+control case and its paired `add()` case both failed as expected (9/11), the
+other 9 unaffected cases stayed green (confirming the mutation was narrow and
+the rest of the suite is not vacuously passing). Reverted with `cp` from a
+pre-mutation backup and confirmed the revert was BYTE-IDENTICAL (`diff`) to
+the shipped file before re-running to 11/11 green. The mutated version was
+never left on disk or committed.
+
+Results: python `tests/test_toast_version.py` + all 8 existing toast python
+suites = 140 passed, 0 failed (was 128 passed before this change, confirming
+zero regressions). Node: all 8 toast `.node.mjs` suites (7 pre-existing + the
+1 new one) = 128 individual cases passed, 0 failed. `node --check` clean on
+every touched/created JS file
+(toast-lifecycle.js, toast-version-arbitration.js, toast.js unchanged,
+lib_toast_dom_stub.mjs, test_toast_version_arbitration.node.mjs). ruff on
+`src/models.py` + `src/core/session_manager.py`: 4 pre-existing errors, same
+4 before and after my edits (compared via `git stash`) - zero new lint
+findings. Did NOT run the full python suite per instruction (owed on a quiet
+box; last known baseline referenced elsewhere in this file is 6406
+passed / 2 failed from tonight's earlier run).
+
+Files touched: `src/models.py` (Toast.version field), `src/core/session_manager.py`
+(record_toast + ack_toast version bumps), `client/js/toast-lifecycle.js`
+(integration point in `add()`), `client/index.html` (script tag), plus the
+three new/modified test files above. `src/api/routes.py` untouched -
+confirmed unnecessary. Did not touch the issue-69 update-checker files
+(macOS/update-check.js, macOS/main.js, docs/DECISIONS.md,
+tests/test_update_check.node.mjs, tests/test_version_and_update_check.py) or
+`docs/webui-performance-and-session-menu-plan.md`, which were already
+modified in the working tree before this task started.

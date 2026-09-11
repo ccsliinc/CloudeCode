@@ -2668,11 +2668,32 @@ class SessionManager:
         if superseded is not None:
             # REPLACE IN PLACE, KEEPING THE ID. See _find_supersedable_toast
             # for which records qualify and why the id must not change.
+            #
+            # THE VERSION MOVES ONLY ON A REAL CHANGE (issue #39). Compare
+            # BEFORE mutating: a duplicated hook event resupersedes with
+            # identical content ("your turn" fired twice, nothing new to
+            # say) and must not bump the version, or every client holding
+            # this toast re-renders for nothing - the exact waste issue
+            # #39 exists to remove. `created_at` and `session_name` are
+            # deliberately excluded from this comparison for `created_at`
+            # (a timestamp is not content) but `session_name` DOES count:
+            # a rename between two Stops is a real fact about the same
+            # notification. `title` is never compared - it is part of the
+            # match key `_find_supersedable_toast` already applied, so it
+            # is always equal here.
+            content_changed = (
+                superseded.body != body
+                or superseded.color != color
+                or superseded.session_label != session_label
+                or superseded.session_name != session_name
+            )
             superseded.body = body
             superseded.color = color
             superseded.session_label = session_label
             superseded.session_name = session_name
             superseded.created_at = datetime.utcnow()
+            if content_changed:
+                superseded.version += 1
             bucket.remove(superseded)
             bucket.insert(0, superseded)  # newest-first
             toast = superseded
@@ -2681,6 +2702,8 @@ class SessionManager:
                 session_id=session_id,
                 toast_id=toast.id,
                 kind=kind,
+                version=toast.version,
+                version_bumped=content_changed,
             )
         else:
             toast = Toast(
@@ -2693,6 +2716,7 @@ class SessionManager:
                 session_label=session_label,
                 session_name=session_name,
                 created_at=datetime.utcnow(),
+                version=1,
                 acknowledged=False,
             )
             bucket.insert(0, toast)  # newest-first
@@ -3261,12 +3285,19 @@ class SessionManager:
                     return False
                 t.acknowledged = True
                 t.ack_reason = reason
+                # A REAL TRANSITION, BUMPED ONCE. Guarded by the same
+                # `if t.acknowledged: return False` above that makes this
+                # whole method idempotent - a duplicated ack event for an
+                # already-acked record returns before reaching this line,
+                # so the version cannot move twice for one fact.
+                t.version += 1
                 self._prune_toasts(session_id)
                 logger.info(
                     "toast_acked",
                     session_id=session_id,
                     toast_id=toast_id,
                     reason=reason,
+                    version=t.version,
                 )
                 return True
         return False

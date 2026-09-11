@@ -93,6 +93,39 @@ DAR passed after revisions covering terminal ordering, stale navigation, notific
 - Promote either only after repeated, matched measurements show at least 5 ms improvement in user-visible median latency above measurement variation, without material tail-latency, CPU, memory, throughput, or correctness regression.
 - Preserve existing transport fallbacks. An uncertain command acknowledgement must never trigger automatic replay.
 
+**Measured, 2026-09-11, issue #54 (the control-mode half).** Interleaved A/B in
+one process on a throwaway socket, tmux 3.6a, box at load average 12.5 to 13.8
+with about 1400 processes. Two matched runs of 300 iterations per arm agreed to
+0.06 ms on the median.
+
+| arm | p50 | p90 | p99 |
+|---|---|---|---|
+| `send-keys` subprocess, delivery to the pane process | 8.880 ms | 26.303 ms | 83.843 ms |
+| persistent `tmux -C` channel, delivery to the pane process | 0.164 ms | 0.548 ms | 26.486 ms |
+| saving | **8.717 ms** | 25.755 ms | 57.357 ms |
+
+The spawn versus delivery split, which is the whole argument: a bare
+`/usr/bin/true` through the same asyncio path costs p50 4.661 ms, so roughly
+half the `send-keys` cost is fork and exec that buys nothing, and the rest is a
+tmux client connecting, running one command and being reaped. The control arm
+pays p50 0.024 ms to write the line and p50 0.276 ms to see its own `%end`
+acknowledgement, so it is still an order of magnitude cheaper WITH a read-back
+acknowledgement than the subprocess is without one.
+
+**The 5 ms bar is cleared on the median by about 75 percent of headroom, and it
+is NOT promoted, because the cost is not latency.** A shared control client has
+to be attached somewhere, and a dedicated scratch session for it keeps the tmux
+server resident on the socket after every real session has gone: measured, with
+`exit-empty on`, the server survives the last real session and dies only when
+the scratch session dies too. That is the same standing condition Adam rejected
+on 2026-09-10 for `set-option -s exit-empty off`. A client attached to a real
+session instead is lifecycle neutral (measured: the server exits normally when
+that session is killed) but then it is one 2.6 MB process per session, 130848
+KiB at 50 sessions, against 2592 KiB for one shared client. That fork needs a
+ruling before any implementation, so the numbers are recorded here and the
+prototype was not promoted. Correctness was not the blocker: all five of the
+issue's cases pass against the prototype.
+
 ## Global themes and app settings
 
 The required outcome is one persistent set of preferences for this Cloude Code installation, available from every authenticated client. Switching computers, clearing browser storage, opening a private window, or restarting the server must not lose the saved settings. This is shared server persistence, not synchronization between separate Cloude Code server installations.

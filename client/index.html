@@ -886,6 +886,13 @@
          reads `window.ToastRenderBatch` at CALL time, well after every
          script on the page has loaded. -->
     <script src="/static/js/toast-render-batch.js"></script>
+    <!-- issue #39 (server half) - compares a toast's server-stamped
+         monotonic `version` so a duplicated or out-of-order hook-fed
+         update cannot regress a card already applied. Pure and
+         dependency-free like toast-render-batch.js beside it: no order
+         requirement relative to toast.js, because toast-lifecycle.js
+         reads `window.ToastVersionArbitration` at CALL time. -->
+    <script src="/static/js/toast-version-arbitration.js"></script>
     <script src="/static/js/toast.js"></script>
     <!-- issue #55 - toast.js had grown past the 1000-line guideline, so
          its class body is split across three files along the seams the
