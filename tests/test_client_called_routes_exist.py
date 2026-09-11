@@ -45,6 +45,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 CLIENT_JS = ROOT / "client" / "js"
+#: The svelte client. client/js is no longer the whole client: slice 7
+#: deleted client/js/launchpad.js and the home screen now lives here, so
+#: a scanner that reads only client/js goes SILENT on the first raw
+#: fetch anyone writes in a .ts or .svelte file rather than failing.
+WEB_SRC = ROOT / "web" / "src"
 API_PREFIX = "/api/v1"
 
 # The extractor must find at least this many distinct call sites. It is a
@@ -95,20 +100,27 @@ def _client_call_sites() -> set[str]:
     Two syntaxes are covered, which between them are how this client
     addresses the API: ``this.call('<path>')`` inside the APIClient (the
     path is relative to ``/api/v1``), and any literal ``/api/v1/...``
-    string or template anywhere under client/js (the handful of call
-    sites that build a URL and fetch it directly).
+    string or template anywhere under client/js OR web/src (the handful
+    of call sites that build a URL and fetch it directly). Test files
+    under web/src are skipped: a fixture URL is not a call site.
 
     A template whose FIRST segment is an interpolation is skipped - the
     path is not knowable statically, so asserting on it would be
     asserting on a guess.
 
     Inputs:
-        None (reads client/js from disk).
+        None (reads client/js and web/src from disk).
     Outputs:
         set[str]: normalised paths, each already prefixed with /api/v1.
     """
     found: set[str] = set()
-    for js in sorted(CLIENT_JS.rglob("*.js")):
+    sources = list(CLIENT_JS.rglob("*.js"))
+    for pattern in ("*.ts", "*.svelte"):
+        sources += [
+            p for p in WEB_SRC.rglob(pattern)
+            if ".test." not in p.name
+        ]
+    for js in sorted(sources):
         src = js.read_text(encoding="utf-8", errors="replace")
         # Strip block and line comments so a path mentioned in prose
         # cannot be mistaken for a call. This repo has already shipped a
@@ -231,3 +243,58 @@ def test_the_sessions_route_the_404_was_reported_on_is_routable() -> None:
 def test_named_session_routes_stay_routable(path: str) -> None:
     """Guard the three the launchpad's session list is built on."""
     assert _normalise(path) in _server_paths(), f"{path} is no longer routed"
+
+
+def test_the_web_src_arm_actually_fires(tmp_path, monkeypatch):
+    """NEGATIVE CONTROL for the svelte half of the scanner.
+
+    Description: a scanner that reads a tree and finds nothing looks
+      exactly like a scanner pointed at the wrong tree, and until slice 7
+      this contract only ever read ``client/js``. web/src makes its one
+      real API call through the legacy ``window.API``, so the web/src arm
+      currently contributes ZERO paths on a clean tree - which is the
+      precise condition under which a broken arm is invisible. This plants
+      a call in a stand-in web/src and proves the arm reports it, for a
+      ``.ts`` and a ``.svelte`` file, so the day someone writes a raw
+      fetch in the svelte client this contract fails instead of shrugging.
+    Inputs: tmp_path (Path), monkeypatch (pytest fixture).
+    Output: None.
+    """
+    fake = tmp_path / "web-src"
+    (fake / "lib").mkdir(parents=True)
+    (fake / "lib" / "planted.ts").write_text(
+        "export const go = () => fetch('/api/v1/planted/ts/route');\n",
+        encoding="utf-8",
+    )
+    (fake / "lib" / "Planted.svelte").write_text(
+        "<script>fetch('/api/v1/planted/svelte/route');</script>\n",
+        encoding="utf-8",
+    )
+    # A test file must NOT count: a fixture URL is not a call site.
+    (fake / "lib" / "ignored.test.ts").write_text(
+        "it('x', () => fetch('/api/v1/planted/from/a/test'));\n",
+        encoding="utf-8",
+    )
+    # And a path named only in a COMMENT must not count either, which is
+    # the failure mode this repo has already shipped once.
+    (fake / "lib" / "prose.ts").write_text(
+        "// see /api/v1/planted/in/a/comment for why\nexport const x = 1;\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("tests.test_client_called_routes_exist.WEB_SRC", fake)
+
+    found = _client_call_sites()
+
+    assert "/api/v1/planted/ts/route" in found, (
+        "the web/src arm did not report a planted .ts call site; it is "
+        "pointed at the wrong tree or matching the wrong shape"
+    )
+    assert "/api/v1/planted/svelte/route" in found, (
+        "the web/src arm did not report a planted .svelte call site"
+    )
+    assert "/api/v1/planted/from/a/test" not in found, (
+        "a web/src TEST file was scanned as if it were a call site"
+    )
+    assert "/api/v1/planted/in/a/comment" not in found, (
+        "a path named in a comment was read as a call site"
+    )
