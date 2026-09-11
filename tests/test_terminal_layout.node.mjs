@@ -418,26 +418,28 @@ test('pinning the sidebar fits the terminal and sends the new size to tmux', asy
 });
 
 // ---------------------------------------------------------------------------
-// Behaviour: transitionend-timed refit, and its robustness to a rapid
-// double-toggle interrupting the CSS transition mid-flight.
+// Behaviour: the docked box settles IMMEDIATELY (session-sidebar.css no
+// longer animates padding-left), and requestFit's own debounce - not a
+// transitionend wait - is what still coalesces a rapid toggle.
 // ---------------------------------------------------------------------------
 
-test('pin measures the POST-transition box, not the pre-transition one', async () => {
+test('pin measures the box in the same frame it toggles - nothing left to wait out', async () => {
     const s = makeSandbox({ withPin: true, width: 1200 });
     s.Layout.install(s.controller);
-    s.termEl.clientWidth = 1170; // pre-transition (undocked) box
+    s.termEl.clientWidth = 1170; // pre-dock box
     s.termEl.clientHeight = 673;
     s.Pin.init();
     await settle(400);
     const before = { cols: s.controller.term.cols, rows: s.controller.term.rows };
 
-    s.Pin.toggle(); // clicking measures nothing yet - no fixed-delay fit fired
-    assert.equal(s.wire.length, s.wire.length, 'no synchronous resize on click');
-    // The box only reaches its docked width once the CSS transition ends;
-    // model that by NOT updating clientWidth until transitionend fires.
+    // session-sidebar.css no longer animates padding-left, so the docked
+    // box exists the instant the class toggles - model that by setting
+    // clientWidth to its final docked value right here, synchronously,
+    // rather than waiting for a transitionend that no longer fires.
+    s.Pin.toggle();
     s.termEl.clientWidth = 850;
-    s.termScreenEl.fireTransitionEnd('padding-left');
-    await settle(20); // requestFit's own 100ms debounce, not the fallback ceiling
+    // requestFit's own debounce is the only remaining delay before the
+    // measurement is taken and shipped.
     await settle(s.Layout.DEBOUNCE_MS + 20);
 
     const after = { cols: s.controller.term.cols, rows: s.controller.term.rows };
@@ -451,12 +453,12 @@ test('pin measures the POST-transition box, not the pre-transition one', async (
 test('a rapid pin-then-unpin sends ZERO resizes - net state equals where it started', async () => {
     // An even number of toggles always returns to the starting state, so
     // the CORRECT behavior is nothing on the wire at all - not "one
-    // resize to the right place after briefly sending a wrong one". This
-    // is what actually proves there is no race: if the superseded first
-    // toggle's geometry sync had fired independently (the bug this
-    // hardens against), it would have measured the still-1170px box
-    // BEFORE the dedup gate ever saw the real change, and this assertion
-    // would already have failed on the intermediate frame.
+    // resize to the right place after briefly sending a wrong one". Each
+    // toggle calls requestFit('sidebar-pin') synchronously, and its own
+    // debounce timer is RESET rather than stacked (see requestFit in
+    // terminal-layout.js), so a rapid pair produces exactly one measured
+    // flush, after both toggles have already run - reading the box only
+    // once it is back at its starting width.
     const s = makeSandbox({ withPin: true, width: 1200 });
     s.Layout.install(s.controller);
     s.termEl.clientWidth = 1170;
@@ -468,13 +470,9 @@ test('a rapid pin-then-unpin sends ZERO resizes - net state equals where it star
     s.Pin.toggle(); // pinned
     s.Pin.toggle(); // unpinned - net effect is unpinned, same as the start
     assert.equal(s.bodyClasses.has('session-sidebar-pinned'), false);
-
-    // Per the CSS Transitions spec an interrupted transition never fires
-    // transitionend for the property it never reached - only the ONE that
-    // actually completes does. Model that: exactly one event, for the
-    // final (unpinned) state, box already back at its original width.
+    // Both toggles already happened; the box is back at its original
+    // width by the time this runs, with no animation in between it.
     s.termEl.clientWidth = 1170;
-    s.termScreenEl.fireTransitionEnd('padding-left');
     await settle(s.Layout.DEBOUNCE_MS + 40);
 
     assert.equal(s.wire.length, before,
@@ -482,6 +480,12 @@ test('a rapid pin-then-unpin sends ZERO resizes - net state equals where it star
 });
 
 test('a rapid pin-unpin-pin (odd count) sends exactly ONE resize, for the final settled layout', async () => {
+    // Three calls to requestFit('sidebar-pin') in the same tick each reset
+    // the same debounce timer (see requestFit in terminal-layout.js), so
+    // only the LAST one's timer ever fires, and it measures whatever the
+    // box is by then - the fully-settled, thrice-toggled result, since
+    // there is no animation left for any of the three to be "mid-flight"
+    // in any more.
     const s = makeSandbox({ withPin: true, width: 1200 });
     s.Layout.install(s.controller);
     s.termEl.clientWidth = 1170;
@@ -495,8 +499,7 @@ test('a rapid pin-unpin-pin (odd count) sends exactly ONE resize, for the final 
     s.Pin.toggle(); // unpinned
     s.Pin.toggle(); // pinned again - net effect DOES change vs the start
     assert.equal(s.bodyClasses.has('session-sidebar-pinned'), true);
-    s.termEl.clientWidth = 850; // the box actually reached once settled
-    s.termScreenEl.fireTransitionEnd('padding-left');
+    s.termEl.clientWidth = 850; // the box the docked state settles at
     await settle(s.Layout.DEBOUNCE_MS + 40);
 
     const sent = s.wire.slice(beforeWire);
@@ -506,32 +509,6 @@ test('a rapid pin-unpin-pin (odd count) sends exactly ONE resize, for the final 
     assert.equal(sent[0].cols, after.cols, 'the one frame matches the settled grid');
     assert.ok(after.cols < before.cols,
         `pin must narrow the grid: before=${before.cols}x${before.rows} after=${after.cols}x${after.rows}`);
-});
-
-test('a rapid triple-toggle via the fallback timer (no transitionend at all) still lands on the final state', async () => {
-    // Models prefers-reduced-motion: the transition duration drops to 0s
-    // and no transitionend event ever fires, so only the fallback ceiling
-    // in session-sidebar-pin.js can deliver the resize.
-    const s = makeSandbox({ withPin: true, width: 1200 });
-    s.Layout.install(s.controller);
-    s.termEl.clientWidth = 1170;
-    s.termEl.clientHeight = 673;
-    s.Pin.init();
-    await settle(400);
-    const before = s.wire.length;
-
-    s.Pin.toggle(); // pinned
-    s.Pin.toggle(); // unpinned
-    s.Pin.toggle(); // pinned again - net effect is pinned
-    assert.equal(s.bodyClasses.has('session-sidebar-pinned'), true);
-    s.termEl.clientWidth = 850; // the box that is actually reached, eventually
-
-    await settle(400); // past the 250ms fallback ceiling plus its own debounce
-
-    const sent = s.wire.slice(before);
-    assert.equal(sent.length, 1, `exactly one resize must be sent, got ${sent.length}`);
-    assert.equal(sent[0].reason, 'sidebar-pin');
-    assert.equal(sent[0].cols, s.controller.term.cols, 'must match the final settled grid');
 });
 
 test('re-applying the SAME docked state is a no-op, not a wasted resize', async () => {
@@ -546,7 +523,6 @@ test('re-applying the SAME docked state is a no-op, not a wasted resize', async 
     await settle(400);
     s.Pin.toggle(); // pinned
     s.termEl.clientWidth = 850;
-    s.termScreenEl.fireTransitionEnd('padding-left');
     await settle(s.Layout.DEBOUNCE_MS + 40);
     const beforeWire = s.wire.length;
     const beforeFits = s.fits.length;
@@ -554,10 +530,9 @@ test('re-applying the SAME docked state is a no-op, not a wasted resize', async 
     s.Pin.apply(); // re-apply, nothing changed
     s.Pin.apply();
     s.Pin.apply();
-    // Past the fallback ceiling (250ms) PLUS requestFit's own 100ms
-    // debounce - a spurious call schedules its measurement in two hops,
-    // not one, and a shorter wait here would clear before the second.
-    await settle(450);
+    // Past requestFit's own debounce - a spurious call would still
+    // schedule a measurement, not deliver one synchronously.
+    await settle(s.Layout.DEBOUNCE_MS + 40);
 
     // wire.length alone would not catch a wasted-but-deduped fit: the
     // geometry never moved, so even a spurious refit's pty_resize would

@@ -222,7 +222,9 @@ function boot(opts) {
     const load = (rel) => vm.runInContext(
         fs.readFileSync(path.join(ROOT, 'client', 'js', rel), 'utf8'),
         sandbox, { filename: rel });
-    // Same order as index.html: registry, then navigation, then app.
+    // Same order as index.html: the var writer, then registry, then
+    // navigation, then app.
+    load('theme-var-writer.js');
     load('themes/registry.js');
     load('theme-navigation.js');
     load('app.js');

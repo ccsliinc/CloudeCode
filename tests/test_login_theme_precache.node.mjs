@@ -89,6 +89,9 @@ function load(store) {
     sandbox.window = sandbox;
     vm.createContext(sandbox);
     vm.runInContext(
+        fs.readFileSync(path.join(ROOT, 'client', 'js', 'theme-var-writer.js'), 'utf8'),
+        sandbox, { filename: 'theme-var-writer.js' });
+    vm.runInContext(
         fs.readFileSync(path.join(ROOT, 'client', 'js', 'themes', 'registry.js'), 'utf8'),
         sandbox, { filename: 'registry.js' });
     return { sandbox, painted, dataset: documentElement.dataset, backing };

@@ -1141,6 +1141,9 @@
          BEFORE app.js, whose show*() methods call ScreenChrome.apply(). -->
     <script src="/static/js/screen-chrome.js"></script>
 
+    <!-- The shared CSS-var diff writer registry.js calls into for both
+         :root and #terminal-screen. Must load BEFORE themes/registry.js. -->
+    <script src="/static/js/theme-var-writer.js"></script>
     <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
          App.init() can call Themes.init() / ThemeSelector.mount(). -->
     <script src="/static/js/themes/registry.js"></script>
@@ -1486,6 +1489,9 @@
     <script src="/static/js/archive-reader-paging.js"></script>
     <script src="/static/js/archive-reader-select.js"></script>
     <script src="/static/js/archive-reader-body.js"></script>
+    <!-- The reused-row node cache. Must load before archive-reader.js,
+         which asks window.ArchiveRowCache for one per reader instance. -->
+    <script src="/static/js/archive-row-cache.js"></script>
     <script src="/static/js/archive-reader.js"></script>
     <script src="/static/js/archive-search-render.js"></script>
     <script src="/static/js/archive-search.js"></script>

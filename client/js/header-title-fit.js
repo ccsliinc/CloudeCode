@@ -234,6 +234,22 @@ const HeaderTitleFit = {
     _el: null,
 
     /**
+     * Cached result of availableWidth(el), or null when nothing usable is
+     * cached yet. availableWidth() is several getComputedStyle() and
+     * getBoundingClientRect() reads chained together - each one a forced
+     * layout - and its result depends ONLY on the header's own geometry
+     * (the h1's flex slot and its fixed-size siblings), never on the
+     * title's OWN text: slotWidth() is deliberately derived from the
+     * PARENT box and siblings rather than from `el`'s rendered width, see
+     * its own comment. So a title change alone can never invalidate this
+     * number, and re-measuring on every setTitle() - which used to run on
+     * every rename, every session switch, every navigation - was cost
+     * with no corresponding fact to justify it.
+     * @type {?number}
+     */
+    _cachedWidth: null,
+
+    /**
      * Start tracking the header title element and refit it whenever the
      * available width can have changed. Idempotent.
      *
@@ -249,7 +265,7 @@ const HeaderTitleFit = {
         this._el = el;
         if (!el.dataset.fullTitle) el.dataset.fullTitle = el.textContent || '';
 
-        const refit = () => this.refresh();
+        const refit = () => { this.invalidateWidth(); this.refresh(); };
         window.addEventListener('resize', refit);
         window.addEventListener('orientationchange', refit);
         // The header reflows when the control cluster folds at 768px, which
@@ -257,8 +273,49 @@ const HeaderTitleFit = {
         if (typeof window.ResizeObserver === 'function' && el.parentElement) {
             new window.ResizeObserver(refit).observe(el.parentElement);
         }
+        // A late-loading font can change every character's rendered width
+        // without moving any box the ResizeObserver above watches. Iconic
+        // system fonts are ready immediately and this fires with nothing
+        // to do; a custom @font-face swap is the case it actually catches.
+        if (window.document && window.document.fonts && window.document.fonts.ready
+                && typeof window.document.fonts.ready.then === 'function') {
+            window.document.fonts.ready.then(refit);
+        }
         this.refresh();
         console.log('[HeaderTitleFit] initialized');
+    },
+
+    /**
+     * Drop the cached available width, so the next refresh() re-measures
+     * instead of trusting a number a layout-affecting event just made
+     * stale. Exposed (not just internal) so a caller with its own reason
+     * to distrust the cache - a future one this module does not yet
+     * listen for - has a way to say so without reaching into `_cachedWidth`.
+     *
+     * @returns {void}
+     */
+    invalidateWidth() {
+        this._cachedWidth = null;
+    },
+
+    /**
+     * The header's available width for the title, from cache when one is
+     * held, freshly measured otherwise.
+     *
+     * A measurement of 0 or less is NEVER cached: that reading means "not
+     * laid out yet" (a hidden screen, fonts still loading), which is a
+     * fact about THIS instant, not a stable answer to remember and keep
+     * handing back on every later call.
+     *
+     * @param {Element} el  The `#header-title-text` span.
+     * @returns {number} Available width in CSS pixels, or a non-positive
+     *   number when it could not be determined.
+     */
+    _measuredWidth(el) {
+        if (this._cachedWidth !== null) return this._cachedWidth;
+        const w = availableWidth(el);
+        if (w > 0) this._cachedWidth = w;
+        return w;
     },
 
     /**
@@ -286,7 +343,7 @@ const HeaderTitleFit = {
         const el = this._el;
         if (!el) return;
         const full = el.dataset.fullTitle || '';
-        const width = availableWidth(el);
+        const width = this._measuredWidth(el);
         if (!(width > 0)) {
             // Header not laid out yet (hidden screen, fonts still loading).
             // Leave the full text in place; CSS ellipsis covers this frame.

@@ -108,9 +108,16 @@
  * own ResizeObserver (terminal.js), so nothing has to be told about this.
  */
 
+/* NO TRANSITION HERE, ON PURPOSE. This box is what session-sidebar-pin.js
+ * measures to refit the terminal, and an animated padding-left used to
+ * make that measurement wait out a 160ms transition (transitionend, or a
+ * fallback timer if reduced motion dropped it) before the terminal could
+ * be told its real size. The final geometry now lands in the same frame
+ * the class toggles, so the refit can read it immediately; only
+ * requestFit's own short debounce (unchanged, see terminal-layout.js)
+ * still coalesces a rapid pin/unpin sequence into one resize. */
 body.session-sidebar-pinned .screen {
     padding-left: var(--sidebar-dock-w);
-    transition: padding-left 160ms ease;
 }
 
 /* THE HOME SCREEN NEEDS ITS OWN RULE, and it is not a duplicate.
@@ -163,7 +170,6 @@ body.session-sidebar-pinned #launchpad-screen .home-bar {
  * body class below that), so there is no phone case to override. */
 body.session-sidebar-pinned .header {
     padding-left: calc(var(--sidebar-dock-w) + var(--header-pad-x));
-    transition: padding-left 160ms ease;
 }
 
 body.session-sidebar-pinned .session-sidebar-panel {

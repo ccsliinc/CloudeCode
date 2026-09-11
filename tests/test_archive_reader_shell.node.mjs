@@ -76,6 +76,7 @@ function loadModules(doc) {
         'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
         'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
+        'archive-row-cache.js',
         'archive-reader.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),
@@ -91,11 +92,14 @@ function loadModules(doc) {
  */
 function harness() {
     const env = createEnvironment();
-    // Height oracle. The reader recreates its row elements on EVERY
-    // paint, so a rect stubbed onto a node after one render is gone by
-    // the next one. Installing it at createElement time is the only way
-    // to give a freshly painted row a height, which is what a real
-    // browser does for free.
+    // Height oracle. A row's element is now REUSED across paints when
+    // nothing about it changed (archive-row-cache.js), so a rect stubbed
+    // on AFTER creation would still work for a reused node - but a row
+    // that is rebuilt (a body arriving, a selection move, a disclosure
+    // change) gets a brand new element, and a rect stubbed onto the OLD
+    // one would not follow it. Installing the oracle at createElement
+    // time covers both a freshly built row and a reused one uniformly,
+    // which is what a real browser does for free either way.
     let heightFor = null;
     const realCreate = env.document.createElement.bind(env.document);
     env.document.createElement = (tag) => {

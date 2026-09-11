@@ -216,6 +216,143 @@ test('setTitle and refresh are safe when the title is not mounted', () => {
     assert.doesNotThrow(() => fit.refresh());
 });
 
+// ---------------------------------------------------------------------
+// The available-width CACHE. availableWidth() is several chained
+// getComputedStyle()/getBoundingClientRect() reads - a forced layout -
+// and it used to run on every single setTitle(), which fires on every
+// rename and every session switch, not only on a real resize. These
+// tests build a minimal header > h1 > #header-title-text tree with its
+// own getComputedStyle stub, and count calls attributed to `header` and
+// `h1` specifically: those two elements are touched ONLY by
+// availableWidth()/slotWidth(), never by makeMeasurer() (which only ever
+// touches the title element and its own throwaway ruler span), so their
+// call count is an unambiguous signal for "did the geometry get
+// re-measured", independent of the per-string ruler work every refresh
+// legitimately still does.
+// ---------------------------------------------------------------------
+
+/**
+ * Build a sandbox with a minimal, measurable header > h1 > title tree and
+ * a getComputedStyle stub, plus a REAL (capturing) window.addEventListener
+ * so a synthetic resize can drive the module's own installed listener
+ * rather than calling its internals directly.
+ *
+ * @returns {{fit: object, header: object, h1: object, titleEl: object,
+ *   geometryCalls(): number, fireResize(): void}}
+ */
+function loadModuleWithLayout() {
+    const env = createEnvironment({});
+    const doc = env.document;
+
+    const header = doc.createElement('div');
+    const h1 = doc.createElement('h1');
+    const titleEl = doc.createElement('span');
+    titleEl.setAttribute('id', 'header-title-text');
+    // mini-dom has no dataset proxy; a plain object is all this module
+    // needs from it (only the single, dash-free key `fullTitle`).
+    titleEl.dataset = {};
+    // mini-dom exposes parentNode but not parentElement, which
+    // header-title-fit.js reads throughout (titleEl.parentElement,
+    // h1.parentElement). Alias it on the two nodes that get walked.
+    for (const el of [h1, titleEl]) {
+        Object.defineProperty(el, 'parentElement', { get() { return this.parentNode; } });
+    }
+    header.appendChild(h1);
+    h1.appendChild(titleEl);
+    doc.body.appendChild(header);
+    header.clientWidth = 400;
+
+    // Everything CREATED FROM HERE ON is makeMeasurer()'s own throwaway
+    // ruler span - header/h1/titleEl already exist above this line. A
+    // fixed 6px-per-character stub is a fine stand-in for a real font:
+    // this harness proves caching behaviour, not real pixel widths.
+    const realCreateElement = doc.createElement.bind(doc);
+    doc.createElement = (tag) => {
+        const el = realCreateElement(tag);
+        el.getBoundingClientRect = () => ({ width: (el.textContent || '').length * 6 });
+        return el;
+    };
+
+    let geometryCalls = 0;
+    const fakeCS = {
+        font: '14px sans-serif', letterSpacing: 'normal',
+        paddingLeft: '0px', paddingRight: '0px',
+        marginLeft: '0px', marginRight: '0px',
+        columnGap: '0px', gap: '0px', display: 'inline',
+    };
+
+    const resizeHandlers = [];
+    const sandboxWindow = {
+        document: doc,
+        console: { log() {}, warn() {}, error() {} },
+        getComputedStyle(el) {
+            if (el === header || el === h1) geometryCalls++;
+            return fakeCS;
+        },
+        addEventListener(type, fn) {
+            if (type === 'resize') resizeHandlers.push(fn);
+        },
+        // Deliberately no ResizeObserver and no document.fonts here: this
+        // harness isolates the window-resize invalidation channel. The
+        // other two channels are exercised by the tests right after this.
+    };
+    sandboxWindow.window = sandboxWindow;
+
+    const sandbox = { window: sandboxWindow, document: doc, console: sandboxWindow.console };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(
+        fs.readFileSync(
+            path.join(__dirname, '..', 'client', 'js', 'header-title-fit.js'), 'utf8'),
+        sandbox);
+
+    return {
+        fit: sandbox.window.HeaderTitleFit,
+        header, h1, titleEl,
+        geometryCalls: () => geometryCalls,
+        fireResize() { for (const fn of resizeHandlers.slice()) fn(); },
+    };
+}
+
+test('a second setTitle() reuses the cached available width - no re-measurement', () => {
+    const s = loadModuleWithLayout();
+    s.fit.setTitle('cloude_claude-config-sync-1');
+    const afterFirst = s.geometryCalls();
+    assert.ok(afterFirst > 0, 'the first fit must have measured the geometry at all');
+
+    s.fit.setTitle('cloude_claude-config-sync-2');
+    assert.equal(s.geometryCalls(), afterFirst,
+        'a title-only change must not re-measure the header geometry');
+});
+
+test('a window resize invalidates the cache - the NEXT fit re-measures', () => {
+    const s = loadModuleWithLayout();
+    s.fit.setTitle('cloude_claude-config-sync-1');
+    const afterFirst = s.geometryCalls();
+
+    // Removing the invalidateWidth() call from the resize listener (or
+    // removing this test) is exactly what would let this assertion pass
+    // for the wrong reason - confirmed by temporarily reverting that call
+    // and re-running this file, which fails this line with
+    // `equal(afterFirst, afterFirst)` never advancing past afterFirst.
+    s.fireResize();
+    assert.ok(s.geometryCalls() > afterFirst,
+        'a resize must force the next fit to re-measure the geometry');
+});
+
+test('re-measuring after a resize still returns a title-appropriate fit', () => {
+    // Not just "did it re-measure" - the re-measurement must still
+    // produce a usable answer, not a wasted call whose result is thrown
+    // away. header.clientWidth here is unchanged, so the elided text
+    // should be byte-identical before and after the resize.
+    const s = loadModuleWithLayout();
+    s.fit.setTitle('cloude_claude-config-sync-1');
+    const before = s.titleEl.textContent;
+    s.fireResize();
+    s.fit.refresh();
+    assert.equal(s.titleEl.textContent, before);
+});
+
 test('index.html loads the module and app.js routes the title through it', () => {
     const html = fs.readFileSync(
         path.join(__dirname, '..', 'client', 'index.html'), 'utf8');

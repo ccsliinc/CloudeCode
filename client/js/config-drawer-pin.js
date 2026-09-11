@@ -66,15 +66,6 @@ console.log('[ConfigDrawerPin Module] Loading...');
      */
     const BODY_CLASS = 'config-drawer-docked';
 
-    /**
-     * How long the docked-layout padding takes to animate, per
-     * config-drawer.css (`transition: padding-right 160ms ease`). The
-     * refit is requested after this so it measures the settled box rather
-     * than a mid-transition one.
-     * @type {number}
-     */
-    const LAYOUT_SETTLE_MS = 200;
-
     /** @type {boolean} The persisted preference, as loaded. */
     let pinned = false;
     /** @type {?Element} The pin button, once wired. */
@@ -147,14 +138,16 @@ console.log('[ConfigDrawerPin Module] Loading...');
 
         // Docking pads `.screen` by the drawer width, so the terminal's box
         // changes and tmux has to be told. TerminalLayout.requestFit is the
-        // ONE resize pipeline; do not add another.
+        // ONE resize pipeline; do not add another. config-drawer.css no
+        // longer animates that padding, so the box already holds its
+        // final geometry in this same frame - the fixed-delay guess this
+        // used to wrap the call in only added latency once there was
+        // nothing left to wait out. requestFit's own debounce (unchanged)
+        // still coalesces a rapid toggle into one resize.
         if (docked !== lastDocked) {
             lastDocked = docked;
             if (window.TerminalLayout) {
-                setTimeout(
-                    () => window.TerminalLayout.requestFit('config-drawer-pin'),
-                    LAYOUT_SETTLE_MS,
-                );
+                window.TerminalLayout.requestFit('config-drawer-pin');
             }
         }
 
