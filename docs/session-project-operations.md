@@ -7,6 +7,17 @@ is computed - is a separate document and is not covered here.
 Derived by reading `src/`, `client/js/` and `macOS/` at branch
 `fix/ended-sessions-visibility`. Verified 2026-08-26.
 
+**BRANCH SCOPE, added 2026-09-11.** Every `client/js/launchpad.js` citation
+below is true on `release/1.2.1`, which is what live runs. That file is DELETED
+on `feat/svelte-slice-7`, where the launchpad was rebuilt in Svelte under the
+web tree and is served from a committed bundle. When the 1.3 line merges, these
+citations need re-pointing rather than deleting: the behaviour was ported, not
+dropped. The paths are named in `CLAUDE.md`, section "The 1.3 line", and are
+deliberately not spelled here - `tests/test_docs_operations_chart_drift.py`
+asserts that every path this file cites exists in the tree, and a path from
+another branch would make that guard fail for the wrong reason. That guard
+caught exactly this on the first attempt, which is the guard working.
+
 ## How to read the citations, and the drift test that enforces them
 
 Every node and edge below carries the file and symbol it was derived from, in

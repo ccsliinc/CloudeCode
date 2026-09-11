@@ -6,6 +6,13 @@ symbol it was read out of. If a citation and this prose disagree, the citation
 wins - and `tests/test_status_model_chart_drift.py` fails the build when the
 state names here and the constants in the code stop matching.
 
+**BRANCH SCOPE, added 2026-09-11.** Every `client/js/launchpad.js` citation
+below is true on `release/1.2.1`, which is what live runs. That file is DELETED
+on `feat/svelte-slice-7`, where the launchpad lives under `web/src/lib/launchpad/`
+and is built into `client/dist/app.js`. When the 1.3 line merges, these
+citations need re-pointing rather than deleting: the behaviour was ported, not
+dropped. See `CLAUDE.md`, "The 1.3 line".
+
 ## There are FOUR state machines, not one
 
 They are independent. A session has a value in all four at once, and no value

@@ -4,6 +4,13 @@ What the lights mean, what moves them, and where each fact is stored. This
 is the single source of truth for the status model; if code and this file
 disagree, one of them is a bug.
 
+**BRANCH SCOPE, added 2026-09-11.** Every `client/js/launchpad.js` citation
+below is true on `release/1.2.1`, which is what live runs. That file is DELETED
+on `feat/svelte-slice-7`, where the launchpad lives under `web/src/lib/launchpad/`
+and is built into `client/dist/app.js`. When the 1.3 line merges, these
+citations need re-pointing rather than deleting: the behaviour was ported, not
+dropped. See `CLAUDE.md`, "The 1.3 line".
+
 ## The vocabulary lives in one file
 
 Every status string this app can show is spelled once, in

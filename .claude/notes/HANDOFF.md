@@ -1,20 +1,31 @@
 # HANDOFF - CloudeCode app development
 
-Written 2026-09-07, UPDATED 2026-09-08 (late round, `07bbbb8..54731f9`,
-closed out and confirmed live), UPDATED AGAIN 2026-09-09 (status-light and
-housekeeping round, `922e400..dfddbdc`, closed out and confirmed live).
-Re-scoped from
+Written 2026-09-07. UPDATED 2026-09-08 (late round), 2026-09-09 (status-light
+round), and REWRITTEN 2026-09-11 for the 1.2 / 1.2.1 releases and the two
+rewrites now waiting behind them. Re-scoped from
 `Infrastructure/.claude/notes/handoff-2026-09-06-cloudecode-migration.md`, which
 was written for someone continuing the MacBook-to-mini MIGRATION. This one is
 written for someone continuing APP DEVELOPMENT.
 
 Everything below was measured on the dates given, not inferred. Where something
-is unproven it says so in those words.
+is unproven it says so in those words. Where a figure was RE-MEASURED for this
+rewrite on 2026-09-11 it is labelled `re-measured`; everything else is quoted
+from a dated record in `.claude/TODO.md` and labelled `on record`.
 
 Read `CLAUDE.md` in the repo root first - it is the architecture and the
 conventions, and this file deliberately does not repeat it. Read
-`.claude/TODO.md` second, starting with its `## OPEN - index`. This file is the
-operational half: where things run, how to deploy, and what will lie to you.
+`.claude/notes/NEXT-SESSION.md` second if you only have five minutes; it is the
+one-page version of sections 8 and 9 below. Read `.claude/TODO.md` third,
+starting with its `## OPEN - index`. This file is the operational half: where
+things run, how to deploy, and what will lie to you.
+
+**THE ONE THING TO KNOW BEFORE YOU READ ANYTHING ELSE.** There are now THREE
+lines of this project and they disagree about basic facts. `release/1.2.1` is
+what LIVE RUNS and what this file and `CLAUDE.md` describe by default.
+`feat/svelte-slice-7` (the client rewrite) and `feat/backend-decomposition` (the
+backend rewrite) are finished but UNMERGED and UNDEPLOYED, and on them whole
+files named in these documents no longer exist. Section 8 is the map. A claim
+here without a branch beside it is a claim about `release/1.2.1`.
 
 ---
 
@@ -22,16 +33,18 @@ operational half: where things run, how to deploy, and what will lie to you.
 
 | Thing | Location |
 |---|---|
-| Source checkout (authoritative) | `/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development/CloudeCode`, branch `v1.1` |
+| Source checkout (authoritative) | `/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development/CloudeCode`, branch `release/1.2.1` |
 | Live production server dir | mini: `~/Library/Application Support/cloude-code-menubar/server` |
 | Live production app bundle | mini: `/Applications/Cloude Code.app/Contents/Resources` |
 | Live URL | `http://10.0.1.150:8000` |
 | Staging (v1.1) | port 8001, state `~/Library/.../CloudeCode-v1.1`, tmux socket `cloude-v11`. Disposable. |
 | Deploy script | `scripts/deploy-mini.sh`; `--target live` is REQUIRED, the default target is v11 |
 | Live tmux socket | `cloude` |
-| Database | `~/Library/Application Support/CloudeCode/cloude.db`, schema v23, ~4.5 GB (4.68 GB with a 195 MB WAL as measured 2026-09-05) |
-| Archive corpus database | mini: `/Users/jsugamele/ClaudeArchive/`, 21 GB, NOT readable by the production app |
+| Database | `~/Library/Application Support/CloudeCode/cloude.db`, **5,365,055,488 bytes (5.0 GiB), re-measured 2026-09-11 09:57** |
+| Pre-v26 database backup | `cloude.db.bak-v25-20260910T154341Z`, 5,143,568,384 bytes, beside it (re-measured) |
+| Archive corpus database | mini: `/Users/jsugamele/ClaudeArchive/` was released to archive-nas 2026-09-09; do not assume it is still on disk |
 | Wrapper scripts (rendered) | `~/Library/Application Support/CloudeCode/agent_wrapper_scripts/<id>.zsh` |
+| 1.3.0 preview server (fixtures) | mini: `http://10.0.1.150:5057/`, pid 97386, UP re-measured 2026-09-11. Fixtures, not the owner's sessions; reads live, writes refused. |
 
 **BOTH deploy targets must be written.** The packaged app copies its bundle
 Resources over the server dir on every start, so writing only the server dir is
@@ -39,27 +52,43 @@ silently reverted at next launch. `deploy-mini.sh --target live` does both; a
 hand `scp` must do both explicitly.
 
 **Everything here runs on mac-mini-m4 (10.0.1.150).** There is no other host in
-this project.
+this project. The mini's boot volume had **110 GiB free**, re-measured
+2026-09-11, which matters because the database backup gate in section 9 needs
+room for a 5 GiB `VACUUM INTO` beside the original.
 
-**WHAT LIVE ACTUALLY RUNS, updated 2026-09-09: repo HEAD is `dfddbdc`,
-CONFIRMED live and deployed - not in progress. This is the end of the
-2026-09-09 status-light round (`922e400..dfddbdc`, 13 commits): the LED
-rebuilt as one element (fill for the inner state, a box-shadow ring plus
-glow for the outer, concentric at every fractional position), idle
-carrying its own grey fill, hook-less sessions reading their own
-transcript for status, a single `derive_read_state` function deciding
-`finished_unread` versus `idle` on every path so the outer ring means
-activity alone, the sidebar group-header roll-up fixed
-(`signalsFor` reconciles `status` on children against `activity_status`
-on the fold), toasts auto-answered by the hook event that resolves them,
-and a view clearing an open permission flag - with an open one, past 20
-seconds, now verified against the pane before it is trusted. Verified by
-the deploy script's own hash check (529/529 files on both destinations)
-plus a live read: boot held 18 sessions plus 1 benign skip against 19
-live tmux sessions, zero hook-token rejections in the post-deploy window.
-See section 8 for the full commit-by-commit list, what got closed, and
-what did not. The prior end state (`54731f9`, the 2026-09-08 late round)
-is kept below for history.
+**WHAT LIVE ACTUALLY RUNS, re-measured 2026-09-11: version 1.2.1 on BOTH
+halves.** `GET /health` answers 200. `/Applications/Cloude Code.app` reports
+`CFBundleShortVersionString` **1.2.1**, and `tmux -L cloude list-sessions | wc -l`
+returns **19**. The repo commit behind it is `d074bbc`, tagged `v1.2.1`, pushed
+to `origin` and `adamdev`, published with an installer.
+
+The BOTH matters, because it was the failure of the previous two rounds. There
+are two independently movable version numbers:
+
+- the **source**, which `deploy-mini.sh --target live` writes into the server
+  dir and the bundle's `Resources`, and
+- the **Electron bundle**, whose `app.getVersion()` becomes
+  `CLOUDE_APP_VERSION` in the server's spawn env
+  (`macOS/server-manager.js:917`) and is what `GET /api/v1/version` and the
+  footer render.
+
+A source deploy ships `git ls-files src client` and **cannot rewrite
+`app.asar`**, so a perfect deploy can leave the footer reading an old version
+forever. That happened twice: 1.2.0 source over a 1.0.33 bundle, and 1.2.1
+source over a 1.2.0 bundle. Both were closed by rebuilding the bundle
+(`cd macOS && npm install`, then
+`CSC_IDENTITY_AUTO_DISCOVERY=false npm run package`) and reinstalling it.
+`macOS/package.json` is the ONLY hand-written version source; everything else
+derives from it, so neither rebuild changed a line of code.
+
+**Schema is v26** (`src/core/db_models.py:53`, `CURRENT_SCHEMA_VERSION = 26`),
+added by Adam's durable session mute. The live database itself was NOT read for
+this rewrite: the ssh session has no TCC grant for that path, so
+`sqlite3 file:...?mode=ro` returns "unable to open database file (14)". The
+`cloude.db.bak-v25-...` file dated the same minute as the 1.2.1 deploy is strong
+evidence the live file migrated v25 to v26 in that deploy, but it is inference,
+not a read. Anyone who needs the live schema version should read it from a
+terminal with Full Disk Access, or through the app.
 
 ---
 
@@ -111,14 +140,40 @@ check before chasing a server-side explanation for "my changes are not showing":
 look for a STATIC-ASSET request from that client's IP after the restart
 timestamp. If there is none, the fix is a hard reload, not the server.
 
-**The supervisor gives up after 3 unexpected stops.** A dead server can STAY
-dead while the page looks completely normal, because the UI gives no signal when
-the server dies. Recover with:
+**RESTART THE APP WITH `bootout` THEN `bootstrap`. NEVER `kickstart -k`.**
+This file used to prescribe `kickstart -k` and that instruction was WRONG; the
+correction is kept here rather than quietly swapped, and there is a matching
+entry in section 10.
 
-    launchctl kickstart -k gui/501/com.cloudecode.menubar
+    launchctl bootout gui/$(id -u)/com.cloudecode.menubar
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudecode.menubar.plist
 
-That took about 15 seconds on the last deploy. The missing down-indicator is
-itself an open item.
+`kickstart -k` SIGKILLs Electron, which ORPHANS the python server still holding
+port 8000. The app that starts back up fingerprints that orphan, `decideAdoption`
+answers `mismatch`, and `server-manager.js` will neither start nor stop it: a
+dead end wearing a correct log line. `bootout` lets the app's own teardown take
+the server child with it. Measured across both 2026-09-10 bundle rebuilds: port
+8000 free about **2 seconds** after bootout, `/health` back at 200 within **15 to
+19 seconds** of the bootstrap. Sessions on `tmux -L cloude` are untouched by any
+of it, confirmed by an unchanged session count both times.
+
+**POLL `/health`, DO NOT SAMPLE IT.** On the 1.2.1 deploy the new process bound
+:8000 immediately and did not answer for about **54 seconds**, because startup
+work holds the event loop (`boot_readopt_complete` and `status_seed_warm` both
+land after the socket exists). A single curl inside that window returns `000`
+and reads exactly like a dead server. One probe at 32 seconds read 000 on a
+deploy that was completely healthy.
+
+    for i in $(seq 1 60); do
+      printf '%s ' "$i"
+      curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health
+      sleep 2
+    done
+
+**The supervisor still gives up after 3 unexpected stops,** and a dead server
+can STAY dead while the page looks completely normal, because the UI gives no
+signal when the server dies. The missing down-indicator is still an open item.
+Recovery is the bootout/bootstrap pair above.
 
 **`com.cloudecode.menubar` on port 8000 is the live agent.**
 `com.cloudecode.v11` on 8001 was disabled 2026-08-31 (`launchctl bootout` plus
@@ -459,6 +514,25 @@ remaining piece.
 Each with its mechanism, because the mechanism is what tells you whether your
 fix covers it.
 
+**A FAILED WRITE IS INVISIBLE TO A SIGHTED USER, AND IT IS ON LIVE 1.2.1
+TODAY.** Found 2026-09-11 because the owner clicked "new group" on the 1.3.0
+preview and reported it broken. It was not broken: the preview correctly
+REFUSED the write and said so, and he could not see the refusal. The sentence is
+produced correctly and reaches the page verbatim - announced through
+`session-sidebar-group-actions.js`'s `announce()` into `#session-sidebar-live`,
+which the stylesheet clips to `width:1px; height:1px; clip:rect(0,0,0,0)`.
+That element exists for assistive technology. **So a screen reader user HEARS
+the failure and a sighted user gets SILENCE**, which is the opposite of the
+usual defect. Measured on four of four controls driven: sidebar group create,
+group rename and delete from the menu, launchpad archive, launchpad restart
+picker. In every case the live region read the full sentence while nothing
+rendered. Not every control was driven; four were, four swallowed. This is the
+LEGACY sidebar and launchpad error path, so the rewrite did not introduce it and
+the rewrite does not fix it either - the sidebar is deliberately outside the
+launchpad migration. The fix is to route `announce()`'s ERROR path to a toast
+while KEEPING the live-region announcement; replacing the live region would
+regress the screen-reader path to match the visual one.
+
 **A row reads `running` over a pane whose agent has exited.** The SessionEnd
 hook is cancelled on every clean exit - it fires while claude is tearing down,
 its command is a `curl -sS -m 2`, and claude cancels pending hooks as it exits.
@@ -598,351 +672,423 @@ so. An earlier session cycled all 23 themes against the live app and left the
 owner's theme on whichever one it stopped at, with no prior value on record to
 restore.
 
-**Tests and syntax.** `venv/bin/python3 -m pytest -q` from the repo root; system
-python3 has no fastapi. **Baseline as of 2026-09-08 morning: 3 failed / 4874
-passed / 12 skipped**, the three being `test_home_write_guard`,
-`test_state_dir_resolution` and `test_version_probe`, all environmental and all
-pre-existing. Node: 169 files, only `test_archive_full_page_mode.node.mjs`
-fails. **SUPERSEDED by the end of the day: 5491 passed / 3 failed (the same
-three) / 21 skipped, node 191 files (still only that one failure). Read
-`CLAUDE.md`'s test-baseline bullet for the current number, not this one -
-this paragraph is the morning starting point, kept for the symlink lesson
-below.** The number in `CLAUDE.md` was stale by an order of magnitude because
-the repo `venv` symlink pointed at a deleted `venv.nosync`, which is the exact
-failure `CLAUDE.md` warns about: the suite limps along undercounting instead of
-failing outright. Check the symlink before trusting any count that looks
-nothing like the above. `node --check` every JS file you touch. A fresh git
-worktree has NO `config.json` (it is gitignored), and its absence manufactures
-collection errors that look exactly like pre-existing code bugs - seed it from
-`config.example.json` before trusting any baseline measured in a worktree.
+**Tests and syntax, RE-MEASURED 2026-09-11 for this rewrite.** Run
+`venv/bin/python3 -m pytest -q -p no:randomly` from the repo root; system
+python3 has no fastapi.
+
+| suite | branch | result | who measured |
+|---|---|---|---|
+| pytest | `release/1.2.1` | **5,708 passed / 2 failed / 19 skipped** in 214.5s | re-measured 2026-09-11 |
+| node (`tests/*.node.mjs`, globbed as CI does) | `release/1.2.1` | **200 suites, 200 pass, 0 fail** | re-measured 2026-09-11 |
+| `scripts/ci/check-js-syntax.sh` | `release/1.2.1` | **227 files parsed cleanly** | re-measured 2026-09-11 |
+| pytest | `feat/backend-decomposition` @ `19ac32d` | 6,520 passed / 2 failed / 54 skipped, 6,576 collected | on record |
+| vitest | `feat/svelte-slice-7` @ `f28faef` | 1,334 | on record, see the caveat below |
+
+The two pytest failures are the known environmental pair and are NOT yours:
+`test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
+and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
+`test_state_dir_resolution.py`, which older copies of this file name as a third,
+now passes.
+
+**`CLAUDE.md` carried 5,656 / 2 / 19 and "197 node suites" until this rewrite,
+and both were stale** by the row-menu round. Corrected in the same change. Take
+your own baseline on a clean tree before you judge your own run; this figure has
+now been stale three times.
+
+**The vitest figure is the one number in this table I could not re-measure.**
+1,334 is what the slice 7 record states at commit `f28faef`. Two commits landed
+after it on that branch (`b79605d`, the two browser-proof fixes, and `82b8cb2`,
+docs) and neither re-recorded a count. Re-measure with
+`cd web && npm ci && npx vitest run` before quoting it. The owner's own summary
+of this session said 1,335; the written record says 1,334, and neither of us has
+measured the branch tip.
+
+**A fresh `git worktree` has NO `config.json` (it is gitignored), and its absence
+manufactures 19 failures plus 26 errors** - 401s from the test client and
+FileNotFoundError from the route tests, every one of them an app that could not
+start, every one of them clearing the moment the file is copied in. Do not
+attribute a failure to a code change until the same run has been done on the
+base commit in the same directory. A worktree may also need its `venv` symlink
+recreated; the repo `venv` is a symlink to `venv.nosync` and a worktree does not
+inherit it.
+
+**A broken `venv` symlink lets the suite limp along UNDERCOUNTING rather than
+failing outright.** That is how the baseline in `CLAUDE.md` was once stale by an
+order of magnitude (4,647 against a real 5,491). If the number you see looks
+nothing like the table above, check the symlink before you believe it.
+
+**One test is measured FLAKY under a full run:**
+`test_respawn_refreshes_pane_env.py::test_the_session_environment_itself_is_updated`
+drives the real `cloude` tmux socket. A lone failure there with no code change
+behind it is not a regression; re-run before chasing it.
+
+`node --check` every JS file you touch. `CLOUDE_REAL_HOOK_TESTS=1` opts in to
+`tests/test_led_real_hooks.py`, which launches a REAL claude on a throwaway
+socket; it spends real Claude turns and about 50 seconds and is the only test
+that measures the LED against a live agent.
 
 ---
 
-## 8. CURRENT GIT STATE
+## 8. CURRENT GIT STATE - the branch map, and what is done versus in flight
 
-Branch `v1.1`, pushed to `origin/v1.1` (git-workflow protocol followed:
-`git pull --rebase` then push, no force). HEAD is `dfddbdc`, CONFIRMED
-live - not in progress, not a log-line claim. The deploy script's own
-hash check passed (529/529 files matched on both destinations) and a
-post-deploy read of the live app confirmed it: boot held 18 sessions
-plus 1 benign skip against 19 live tmux sessions, zero hook-token
-rejections in the post-deploy window.
+The main checkout sits on **`release/1.2.1`**. That is the release line and the
+only thing that has ever been deployed. Everything else listed here is work that
+exists only as a branch.
 
-**This round is `922e400..dfddbdc`, 13 commits, all deployed and
-confirmed** (the status-light round plus the day's disk/backup
-housekeeping). See the commit table below for what each one did. The
-prior round (`07bbbb8..54731f9`, 21 commits) is kept further down for
-history.
+**REMOTES, and the rule is easy to get backwards.** `adamdev`
+(`Adoom666/CloudeCodeDev`) is the PRIMARY development repo and the only issue
+tracker either side has; `origin` (`ccsliinc/CloudeCode`) is the backup mirror
+AND the public distribution point, because it is the public repo and the one
+carrying published releases. "Primary" means development, not distribution.
+**NEVER push to `upstream` (`Adoom666/CloudeCode`)**; its push URL is the
+sentinel `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone and
+must never be repaired. Push order for new work: `adamdev` first, then `origin`.
 
-**WHAT TO DO FIRST NEXT SESSION, in this order:**
+### The branch map
 
-1. **Verify live actually equals HEAD before touching anything.** Run
-   `./scripts/deploy-mini.sh --verify-only --target live`. Note the trap
-   in the flag itself: `--verify-only` WITHOUT `--target live` checks the
-   v11 staging target by default and reports `== DEPLOY FAILED ==` for
-   the live one - a bare `--verify-only` run is not a verification of
-   live at all, it is a verification of a target nobody asked about.
-2. **Run the real-hook test once.**
-   `CLOUDE_REAL_HOOK_TESTS=1 venv/bin/python3 -m pytest tests/test_led_real_hooks.py -q`.
-   It launches a REAL claude on a throwaway tmux socket and asserts the
-   status LED against hooks it actually fired - about 50 seconds, spends
-   real turns, and is the only test in the suite that measures the LED
-   against a live agent rather than a stub.
-3. **Then the open list, in value order:**
-   1. the websocket push (`src/api/websocket.py` still carries no project
-      or session-list message type, so state is polled, not pushed -
-      re-measure whether polling is still the real cost before designing
-      this)
-   2. the big-file splits (`session_manager.py` ~7,700 lines, `routes.py`
-      4,022, `tmux_backend.py` 2,542, `launchpad.js` 6,472, `terminal.js`
-      2,422 - all past the 500-line guideline)
-   3. the HTML-escape helper copy-pasted across 9 JS files (dedupe
-      candidate)
-   4. `PTYBackend` legacy branches remaining in 6 core files, trimmable
-      now that tmux is the only backend that runs
-   5. the periodic agent-infer sweep (item 3's one-shot inference at
-      boot/adopt/first-hook is built; nothing re-checks a session that
-      was already live when it shipped)
-   6. toast history is process memory only, not durable, so it does not
-      survive a restart
-   7. no bar raised for a WS drop while the user is PRESENT (only the
-      60-second-away sleep/wake bar exists)
-   8. `--name` is dropped on a restart's resume (the app's own row title
-      survives via `sessions.title`, claude's own name does not)
-   9. `FALLBACK_PROJECTS_ROOT` still hardcodes `/Users/jsugamele`
-      (`src/core/project_directory.py:85`)
-   10. `record_claude_lifecycle_event` answers `LINEAGE_UNRESOLVED` for
-       sessions created inside the real-hook test harness
-   11. the LED ring/glow are fixed px, not relative to the dot size
-   12. the adopted-id tracker key item: a pane whose claude holds an
-       adopted id while the row holds a `ses_` id has two tracker keys:
-       the toast path remaps the split, `session_view_clears` now covers
-       `permission_open` too, but nothing has audited every OTHER tracker
-       flag for the same split - confirm or rekey the tracker on remap
-   13. gitleaks not installed on the mini
-   14. restic password rotation and the `.orig` script with an inline
-       password (owner's call, deferred with the rest of credential
-       rotation until this project is finished)
-   15. watch restic repo growth from the nightly 4.6 GB dump
-   16. the archive README on the NAS records a stale size/hash for
-       `cloude.db`
-   17. `refresh_tokens.db` now sits on the NAS (credential material, owner
-       aware)
-
-**This round's commits (`922e400..dfddbdc`, 13 commits), newest first, all
-deployed and confirmed live:**
-
-| commit | what it did |
-|---|---|
-| `dfddbdc` | a view clears an open `permission_open`, and a flag left open past 20 seconds is verified against the pane's own dialog markers before it is trusted (`session_permission_verify{,_apply}.py`) - root cause of the Media Compression incident was the toast path remapping an adopted pane's id while the activity tracker did not |
-| `389ae5b` | toasts are auto-answered by the hook event that resolves them: `UserPromptSubmit` acks every open toast on the session, `PreToolUse` acks permission, `Stop` acks permission and notice but never its own; a `toast.ack` frame plus a per-poll reconcile, with an open/dismissed/answered reason in history |
-| `8e78f5d` | sidebar group-header roll-up fixed: children carried `status`, the fold read `activity_status` - `signalsFor` now reconciles the two names for one field so a folded group summarises correctly |
-| `880247f` | `finished_unread` versus `idle` is derived from the unread flag on every path by one function, `derive_read_state`; the outer ring now means activity alone, and the outer `unread` state is retired |
-| `5e13cb1` | a view clears an open notice; hook-less sessions (13 of 19, started by hand with no hook env) get a transcript-driven ladder (mtime inside 120s = working, a new turn end lights unread once, then idle); a terminal-header LED; `status_source` (hook/transcript/tmux/seed_row/none) rides the tooltip |
-| `bc12886` | idle gets its own grey fill, distinct from `unknown`'s hollow rim; the ring is 1.5px with a feathered edge, glow blur 6px |
-| `922e400` | the LED becomes one element: the fill is the inner state, a box-shadow ring plus glow is the outer, concentric at every fractional position (fixes the sub-pixel drift a separate `::after` pseudo-element had) |
-| `d419000` | docs: 18 legacy `cloude.db` backup files moved to Trash, v24 kept |
-| `611780a` | docs: restic now covers `Development` and the app data dir |
-| `36e55c2` | docs: v24 backup and scratch dbs moved to Trash |
-| `7587d96` | docs: ClaudeArchive released to Trash, multihost.db archived to archive-nas |
-| `f77a978` | docs: disk cleanup closed - 38 GiB to 147 GiB free |
-
-Housekeeping today, no commit behind any of it because it is disk and backup
-work, not code: 32 GB of db backups and 37 GB of ClaudeArchive released after
-byte-verified copies landed on archive-nas (10.0.1.237, TrueNAS,
-`/mnt/ARCHIVE/vault/85_cloud-exports/claude/`); `multihost.db` archived there
-with a full sha256; restic (`rest://10.0.10.80:8000/mini-m4`, daily 03:30) now
-covers `Development` and the app data dir with a `VACUUM INTO` db dump, two
-verify-loop bugs fixed, the backup script committed (`2f26e45`) and pushed to
-Gogs after fixing a repo-local `core.sshCommand` that had been pinning a
-read-only deploy key; APFS local snapshots thinned; free space 38 GiB to
-147 GiB.
-
-Full commit-by-commit detail for THIS round (`922e400..dfddbdc`) is in
-`TODO.md`'s dated 2026-09-09 closing section, including the re-measured test
-baseline (5609 passed / 3 failed / 21 skipped, the same three environmental
-failures as always) and the node count (191 tracked files, one known
-failure). See `CLAUDE.md`'s test-baseline bullet for the number to quote
-going forward.
-
-**Git housekeeping done this round, no code behind it.** 184 local
-branches merged into `v1.1` were deleted (`git branch -d`, branch count
-207 -> 16), 7 stale worktrees whose branches were already merged were
-removed, and a plain `git gc` ran clean: `.git` 163M -> 135M. Two things
-were deliberately left alone: `feat/gui-fork` (git refused `-d` - merged
-to `v1.1`'s HEAD but not to its own `origin/feat/gui-fork`, not
-force-deleted) and the `editor-project-roots` worktree (dirty, an
-uncommitted change to `client/css/config-editor.css` sits in it). The sha
-of every ref before any deletion was recorded first, so any branch can be
-recreated - the recovery file's path is in `TODO.md`'s dated
-"Local branch/worktree prune + gc" entry, in a scratchpad directory that
-is not durable across sessions; do not assume it still exists without
-checking.
-
-**Remote rule, restated because it is easy to get backwards: push only
-to `origin` (ccsliinc/CloudeCode) or `adamdev` (CloudeCodeDev). NEVER
-`upstream` (Adoom666/CloudeCode)** - its push URL is disabled by
-construction on the owner's clone.
-
-Full commit-by-commit list and item mapping for THIS round (`07bbbb8..
-54731f9`) is in `TODO.md`'s dated 2026-09-08 "late round" closing
-section, including the re-measured test baseline (5491 passed / 3
-failed / 21 skipped, the three failures the same environmental ones as
-always) and the node count (191 tracked files, one known failure). See
-`CLAUDE.md`'s test-baseline bullet for the number to quote going
-forward.
-
-**This round's commits (`07bbbb8..54731f9`, 21 commits), newest first, all
-deployed and confirmed live:**
-
-| commit | what it did | punchlist |
+| Branch | What it holds | State |
 |---|---|---|
-| `54731f9` | the sidebar-rejoin and adopt paths each had their own bare rAF wait above the websocket connect; both now race `TerminalLayoutWait` instead | item 11 |
-| `43ef512` | a terminal bind clears the same instance-keyed unread flag the stop hook and the manual mark write, via `unread_identity.py`'s one epoch source | item 11 |
-| `c360cfc` | boot epoch race: a session the legacy metadata reconcile registered first now gets its epoch recorded instead of silently skipped | - |
-| `c39dd14` | unread collapsed to one instance-keyed flag; every `dotHtml` call site now passes the `unread`/`startup_gate` signals it was silently dropping | item 11 |
-| `1f9b437` | status seeding: a resting claude reads `idle` from its row or transcript tail instead of `unknown`, and can never seed `working` | - |
-| `46c4872` | a dead session can be recreated on the same row, resuming its conversation (`session_recreate.py`, keyed on `session_uuid`) | item 22 |
-| `41382ee` | a hand-started session's wrapper is inferred from its process once, at boot/adopt/first-hook, rendered as a dashed guess pill | item 3 (partial - no periodic sweep yet) |
-| `a74988a` | home page: project count sits by the fold arrow, archive button matches the pencil (stroke icon) | - |
-| `54475f3` | toasts raise from any screen, dismiss per session with an expiring ring, plus a toast history page under settings | items 7, 8 |
-| `a9d0da2` | after 60s away, a bar offers full history / summary / just continue | - |
-| `1d03f28` | the unread-count badge dropped from the sidebar summary LED (the outer ring already says it) | - |
-| `537c10c` | docs: closed the two status findings, recorded the reaper gap | - |
-| `cafb50c` | `SubagentStop` never counts as activity, only decrements depth with a floor; a dead pane drops to Recent rather than lingering | item 4 |
-| `2174b0d` | sidebar group headers: count first in a fixed gutter, kebab on every header including pinned and other | - |
-| `3c640fa` | 21 one-off verify scripts (7,649 lines) archived to `scripts/archive/verify/`, 8 kept (CI-called or reusable) | - |
-| `07bbbb8` | LED halo rendered concentric with the dot at every size (one shared inset on all four sides) | - |
+| `release/1.2.1` | what live runs, `v1.2.1` tagged and published | DEPLOYED |
+| `release/1.2` | the 1.2 merge, `v1.2.0` tagged and published | superseded |
+| `feat/svelte-slice-7` | the whole client rewrite, slices 1 to 7 | DONE, unmerged, undeployed |
+| `feat/backend-decomposition` | the whole backend rewrite, 13 slices | DONE to S7, unmerged, undeployed |
+| `docs/backend-plan-v2` | the plan those slices follow (`.claude/notes/backend-decomposition-plan.md`) | reference |
+| `docs/plugin-policy` | the TIP of the governance line: `docs/DECISIONS.md`, `docs/KEPT-BEHAVIOURS.md`, `docs/kept-behaviours/ccsliinc.md`, the guard | unmerged |
+| `feat/work-protocol` | the ancestor of the above; do not read it instead of `docs/plugin-policy` | superseded by it |
+| `docs/repo-of-record` | the adamdev-is-primary ruling and the mirror record | unmerged |
+| `fix/update-checker-target` | both update checkers repointed, 33 draft releases deleted | unmerged |
+| `docs/team-workflow` | the Issues-plus-Projects evaluation | unmerged, a proposal |
+| `docs/handoff-restart-fix` | the kickstart correction; its `docs/deploy-mini.md` hunk is now on THIS branch | partially absorbed |
+| `feat/i18n-foundation`, `feat/svelte-slice-2..6`, `feat/svelte-1.3*` | the intermediate slice branches | history, all in slice 7 |
+| `main` (local) | `fd9e0a8`, 321 commits BEHIND `origin/main` | do not treat as current |
+| `coord` | the retired orphan coordination branch | FROZEN, nothing new goes there |
 
-Item 9 (pin floats a row regardless of group, ungrouped stays legal) was
-decided by the owner this round with no commit behind it - see section 9.
-Item 4 and item 11 were also verified live this round with no code change
-of their own; the verification entries are in `TODO.md`'s dated sections
-for 2026-09-08 ("item 4 measured" and the unread deploy record).
+**`docs/DECISIONS.md` DOES NOT EXIST ON `release/1.2.1`,** and neither does
+`docs/KEPT-BEHAVIOURS.md`, `docs/kept-behaviours/` or `.claude/skills/work/`.
+They live only on the docs branches above. So the governance documents that bind
+both developers are invisible to anyone who reads only the release line. That is
+worth fixing and it is a decision, not a chore: merging those branches is a
+separate act from merging the rewrites.
 
-Full commit-by-commit list and item mapping for the late round (12 commits,
-`455d692..8ee40d1`) is in `TODO.md`'s dated 2026-09-08 "late round closed out"
-section. The consequential ones, newest first:
+**FOUR UNMERGED BRANCHES EACH EDIT `docs/DECISIONS.md`.** `feat/work-protocol`
+started it, `docs/plugin-policy` and `docs/repo-of-record` each appended to the
+same blob deliberately so they merge clean, and `fix/update-checker-target`
+carried the blob across again. Read them in commit-time order before believing
+any single copy: `feat/work-protocol` 14:34, `docs/plugin-policy` 15:21,
+`docs/repo-of-record` 15:43, `fix/update-checker-target` 16:14, all 2026-09-10.
+Where two disagree the later one wins, and the update-checker entry is the one
+that disagrees with an earlier one.
 
-| commit | what it did | deployed? |
+### DONE, measured
+
+**1.2 shipped.** Two divergent lines merged onto `release/1.2`: the owner's
+`v1.1` and Adam's `adamdev/master` at `887b8fc`. 17 conflicted files, resolved
+one at a time against six owner decisions (section 9). The auto-merged files
+were the more dangerous half: FOUR of them merged cleanly and CONTRADICTED a
+decision. Tagged `v1.2.0`, deployed, Electron bundle rebuilt at 1.2.0.
+
+**1.2.1 shipped, and it is a performance release.** Adam's session-listing work
+merged, plus two gaps of ours, plus his mute and theme fixes, plus one reconciled
+row menu. Measured on live before and after, on the mini against loopback, on
+record:
+
+| measurement | 1.2.0 | 1.2.1 | change |
+|---|---|---|---|
+| `sessions/list` p50 | 272.9 ms | 83.0 ms | 3.3x faster |
+| `/health` p50 while a listing is in flight | 175.8 ms | 23.4 ms | 7.5x |
+| `/health` p50 quiet | 34.4 ms | 31.4 ms | flat |
+| listings completed in the probe window | 33 | 68 | about 2x |
+
+**The finding is the head-of-line blocking, not the p50.** On 1.2.0 a no-op
+`/health` cost 175.8 ms under load against 34.4 ms quiet, a 5.1x penalty for
+being unlucky about timing. On 1.2.1 there is no measurable penalty at all. The
+confounder cuts the right way: the AFTER server had been up 4 minutes against
+2.7 hours, so its caches were COLDER. The doubled completion count is the
+number to trust because it is independent of the timings.
+
+Tagged `v1.2.1`, deployed, Electron bundle rebuilt at 1.2.1, and both `v1.2.0`
+and `v1.2.1` PUBLISHED on `ccsliinc/CloudeCode` with the CI-built DMG, a sha256
+and a "how to go back" block. **Verified as a downloader, not as an uploader:**
+each asset was fetched back from its public unauthenticated URL after publishing
+and re-hashed, and both matched. A silently truncated upload is the failure that
+only shows up when somebody actually needs to downgrade.
+
+**The client rewrite is COMPLETE on `feat/svelte-slice-7`.** Seven slices.
+`client/js/launchpad.js` is DELETED: **6,526 lines on `release/1.2.1`, absent on
+`feat/svelte-slice-7`** (re-measured). Svelte 5 plus TypeScript plus Tailwind
+built by Vite into a COMMITTED fixed-name bundle at `client/dist/app.js` and
+`app.css`, so `client/` still has no build step at serve time. Re-measured on the
+branch: **26 `.svelte` components, 109 `.ts` files, 47 test files** under
+`web/src`. With it: one string catalog both trees read
+(`client/js/i18n/catalog.en.js`, a plain ES module of flat dotted keys, with a
+pseudo-locale as the coverage test), a typed build-time plugin surface registry
+with FOUR surfaces (`session-card-action`, `launchpad-panel`, `sidebar-item`,
+`status-source`) and mark-unread as its first plugin, and a TypeScript port of
+the status LED with a drift guard pinning it to the shipped legacy module.
+
+**The backend rewrite is at S7 of 9 on `feat/backend-decomposition`,** 13 slice
+commits across TWO plans. Re-measured across the branches:
+
+| file | `release/1.2.1` | `feat/backend-decomposition` |
 |---|---|---|
-| `6934965` | a superseded hook token is recovered once, never re-minted (self-heal for the 4,325-rejection storm) | in progress at time of writing |
-| `cc885d6` | `question` split into `question` (blocked, PermissionRequest) and `notice` (not blocked, Notification) | in progress at time of writing |
-| `e7a212e` | LED halo recalibrated a second time per owner feedback: 1.7/0.3 down to 1.3 scale / 1.5px fixed glow | in progress at time of writing |
-| `8ee40d1` | LED halo shrunk to match its actual 9px render size (~35px peak down to ~21px) | yes |
-| `e8cbc79` | docs: herdr teardown candidates, the real-hook LED test idea | n/a, docs |
-| `d6e4883` | docs: status light findings, plus a project-tree gutter alignment fix | yes |
-| `4215ad0` | restored the two-ring LED, byte-for-byte, after `3732bdf` reverted it in passing | yes |
-| `3732bdf` | wired the recent section's collapse toggle; ALSO reverted 15 LED files as a side effect (see the hazard below) | yes |
-| `0fc23a5` | a two-ring LED (inner = chat status, outer = activity/attention), and the tmux `running` fallback stops claiming unmeasured `working` | yes (via `4215ad0`'s restore) |
-| `2b0ed7d` | `sessions.kind` (interactive/automated/unknown, schema v25); lists show the owner's work, not the machine's | yes |
-| `026c7ac` | wording purge: archive/remove replaces delete/deleted everywhere a person reads it | yes |
-| `4ae9965` | docs: import noise counts, the dead epoch fallback, attribution invariant closed | n/a, docs |
-| `e73c1a7` | an archived catch-all project must not swallow every session (attribution invariant, part 2) | yes |
-| `7bd55fd` | a session may never hold a project id and say it has none (attribution invariant, part 1) | yes |
-| `ee3133c` | deep links accept fork labels and other free-form names | yes |
+| `src/core/session_manager.py` | 8,340 | **7,294** |
+| `src/api/routes.py` | 4,387 | **106** |
+| `src/config.py` | 2,112 | a package, `src/config/` (23 modules) |
+| `src/models.py` | 2,495 | a package, `src/models/` (17 modules) |
 
-Older, from earlier in the day, kept for the record:
+The shape is a composition root, `src/core/composition.py::build_services`,
+which constructs every collaborator in dependency order and hands back a frozen
+`AppServices`; `lifespan` calls it and puts the result on `app.state.services`.
+FOUR typed `Protocol` ports at the genuine substitution points, in
+`src/core/sessions/ports.py`: **`Clock`, `SettingsReader`, `TmuxReader`,
+`SessionRecordStore`**, with live implementations in `src/core/live_ports.py`.
+`src/api/routes.py` is now an aggregator of about forty sibling route modules.
 
-| commit | what it did | deployed? |
-|---|---|---|
-| `1a28b23` | docs: document the startup-gate ledger constructor | n/a, docs |
-| `fadeb66` | boot: a session entered during re-adopt keeps being current | NO |
-| `2b93428` | restart: an imported row with no tmux session can now be restarted (one gets created) | NO |
-| `dcf8b02` | rename: stop reporting a push as landed when the resumed transcript was not there yet | NO |
-| `9cdcb90` | status: detect a session parked on an unanswered startup prompt (punchlist 19) | NO |
-| `b18f018` | import: bring in every real conversation this app had never accounted for (punchlist "import") | NO, script; the 895-row import it ran is a database change, not a deploy |
-| `bca7069` | boot: hold every surviving session, not just the last one (punchlist 17) | NO |
-| `ee5d547` | perf: stop repainting the whole project tree every 5s (punchlist 13) | NO |
-| `24d25b9` | groups: key group membership on the session, not a recycled tmux name (punchlist 10) | NO |
-| `06bacd6` | naming: one name per session, read the one typed into the pane | NO |
-| `9adaac9` | deploy: mirror src/client instead of merging with ditto (punchlist 23) | NO |
-| `a4eeef1` | projects: a new project can pick its own folder (punchlist 14, 18a) | NO |
-| `2071963` | lineage: a second claude under one pane is not a fork of ours | NO |
-| `bc65ef4` | upload-sweeper: read the real `ProjectsView.writable` attribute (punchlist 24) | NO |
-| `43e8fc2` | sidebar: group menu no longer paints behind the sidebar panel (punchlist 6) | NO |
-| `9009588` | folder-picker: wrap a long path instead of overrunning its box (punchlist 18) | NO |
-| `8dd54a8` | lineage recovery for the conversation id the `SessionStart` hook failed to record, plus the dry-run backfill tool | YES, deployed earlier today |
-| `0793eb1` | the restart picker's option text no longer paints over the next row | YES, deployed earlier today |
-| `0b12edf` | a restart RESUMES the same conversation, on every rung that can | yes |
-| `f95a9ed` | restart a session whose pane is still ALIVE, `respawn-pane -k` in place | yes |
-| `83b6377` | the picker's `max-height` got its `dvh` twin | yes |
-| `32052d1` | pick the wrapper at restart, and land back in the session. **Committed by a SECOND agent, see the hazard below** | yes |
-| `c9271da` | restart resumed a transcript that does not exist, and close left the row nowhere (section 6) | yes |
-| `8212e30` | the group chip left the sidebar row, its action moved into the kebab | yes |
-| `cddc823` | the row icons folded into one borderless kebab, three ways to open it | yes |
-| `c779afb` | the deploy script repaired: tar over ssh, a clean tree that deploys, self-verifying bytes (section 2) | yes |
-| `a6b6b91` | the theme bleed: every navigation now owns the theme | yes |
+**Process changed too.** Coordination moved off the `coord` orphan branch onto
+Adam's GitHub issue plus draft-PR protocol (`.claude/skills/work/`, on the docs
+branches): an assignee is a declaration with nothing behind it, a draft PR has a
+branch and a commit, and ties resolve by lowest PR number because that counter is
+monotonic and server-side. A core-versus-plugin policy landed with a MECHANISM
+rather than a norm: `scripts/check_kept_behaviours.py` plus
+`tests/test_kept_behaviours_guard.py`, where each kept behaviour declares short
+literal ANCHORS and the guard fails when one is gone. Replayed against the tree
+of `8898f07` it names all FOUR behaviours that week's two removals took, and says
+nothing about the other four entries. gitleaks is a second scan gate beside
+`scripts/scan_secrets.py` (`gitleaks 8.30.1` present locally, re-measured). And
+**33 stale draft releases were deleted from `ccsliinc/CloudeCode`, reclaiming
+4,095,684,007 bytes (3.81 GiB)** - addressed by RELEASE ID and never by tag,
+because `v1.0.31` exists twice and a tag-addressed delete there could have taken
+the published twin. A release object is not a tag, and that was PROVEN: the
+`git ls-remote --tags` listings from both remotes diff empty before and after.
 
-Also today, with no commit behind them because they are database operations,
-not code: 895 conversations imported as archived sessions (59 archived
-projects created, 13 scratch conversations excluded, 224 `agent-*.jsonl`
-subagent files correctly identified as non-sessions and skipped, 319 files
-with no recoverable cwd) - dry-run report at
-`.claude/notes/import-dry-run-2026-09-08.md`; `agent_type` filled on 15
-running rows; 8 conversation-id fills applied; the three "phantom pair" rows
-corrected (see section 10's new correction below); two ghost rows retired.
-None of this needed a deploy - it is already true of the live database.
+### IN FLIGHT
 
-**HAZARD: two Claude Code sessions were editing this branch at once.** A second
-session worked `v1.1` concurrently for part of 2026-09-07 and committed
-`32052d1`. It has since exited. Nothing was found clobbered, but two agents on
-one branch is how work gets clobbered, and the second agent's commits are
-indistinguishable from the first's in the log. If something in this range does
-what you did not expect, that is the likely explanation. Before starting work
-here, check that no other session is live on the branch.
+- **`integration/1.3.0`** is being assembled as this is written: the merge of
+  `feat/svelte-slice-7` with `feat/backend-decomposition`. It did not exist as a
+  ref on either remote at 2026-09-11 10:00. Check for it before assuming.
+- **Backend v2 S8** (the adoption and create paths) and **S9** (delete
+  `session_manager.py` outright, not empty it). S8 is the highest-risk slice and
+  is held for the 1.3.1 round.
+- The governance and update-checker docs branches, all unmerged, listed above.
 
-**HAZARD, confirmed again 2026-09-08 late round: eight to ten agents committed
-on this one branch in the same day.** Two real incidents, both recovered: a
-stale-tree commit (`3732bdf`) that reverted 15 files of unrelated LED work
-(fixed in `4215ad0`, see the commit table above), and separately a
-`git reset --hard` that dropped a commit outright. **The rule going forward:
-every agent builds its commit from HEAD plus its own hunks via a private git
-index, verifies `git diff origin/v1.1 --stat` shows only the paths it actually
-touched before committing, and never runs `git reset --hard` on this branch.**
+### BLOCKED, and by what
 
-**`a6b6b91`, the theme bleed, is worth one line of mechanism** because the
-shape recurs: three copy-pasted theme restores in `app.js`, plus two
-session-entry paths written as `if (pinned) apply()` with NO else. A missing
-else is not a missing feature, it is state left over from the last thing. There
-is now ONE total function, `applyForTarget()`, in
-`client/js/theme-navigation.js`, and every navigation goes through it.
+- **S8 is blocked on Adam's open issues #28 and #32**, both still labelled
+  `blocked` at last check. The plan text says #28; the release plan in
+  `TODO.md` says #32 and names `_session_info_for`. Both numbers appear in the
+  record and I did not resolve which is the real blocker; check GitHub.
+- **The kept-behaviours policy is symmetric on paper and one-sided in
+  practice.** `docs/kept-behaviours/ccsliinc.md` has 8 entries; Adam has no
+  file, so a commit of OURS that removes something of his fires nothing. Asked
+  for on `Adoom666/CloudeCodeDev` #63 and #15; no answer on record.
+- **1.3.1 (the Adam integration) is deliberately blocked behind the owner
+  actually USING 1.3.0.** His master is 153-plus commits past our 1.2.1 base and
+  most of it lands in client code we deleted or rewrote, so it is a DESIGN
+  merge, not a textual one. Doing it first means two unknowns at once.
+
+### WHAT TO DO FIRST NEXT SESSION, in this order
+
+The short version of this list, plus the traps, is `.claude/notes/NEXT-SESSION.md`.
+
+1. **Verify live actually equals what you think before touching anything.**
+   `./scripts/deploy-mini.sh --verify-only --target live`. The trap is in the
+   flag: `--verify-only` WITHOUT `--target live` checks the v11 staging target
+   by default and reports `== DEPLOY FAILED ==` for the live one, so a bare run
+   verifies a target nobody asked about.
+2. **Find out whether `integration/1.3.0` exists and what it contains.** If
+   another agent finished it, validate the combined tree with per-chain controls
+   so any regression is attributable to one side.
+3. **Take the database backup to archive-nas. It is a GATE, not a chore** - see
+   section 9. `VACUUM INTO`, never `cp`; sha256 both ends.
+4. **Run THE TWO LIVE BOOT CHECKS after deploying 1.3.0.** No suite substitutes
+   for them, and they are what caught the 22-rows-for-21-panes defect:
+   `boot_readopt_complete`'s held plus skipped against
+   `/opt/homebrew/bin/tmux -L cloude list-sessions | wc -l`, and the
+   `/sessions/list` row count checked SEPARATELY from that log line. The backend
+   slices touch the boot re-adopt path and have NEVER run against a live server.
+5. **Then the open list**, roughly in value order: the visible-error-path bug in
+   section 6 (it is on live today); the away-bar layout bug; the seven manual
+   pixel harnesses that still load the deleted `launchpad.js`; the websocket
+   push channel (`src/api/websocket.py` still carries no project or session-list
+   message type, so state is polled - re-measure whether polling is still the
+   cost now the loop is free); the four remaining name-keyed per-row datastore
+   readers on `/sessions/list` (`test_listing_pass_datastore_cost.py` pins the
+   ceiling at `4N + 2`); the two `src/` files over 500 lines that the rewrite
+   will NOT delete (`session_notification_policy.py` 563,
+   `notifications/idle_watcher.py` 513); the periodic agent-infer sweep; toast
+   history being process memory only; `--name` dropped on a restart's resume;
+   `FALLBACK_PROJECTS_ROOT` hardcoding `/Users/jsugamele`.
+
+### HAZARD: many agents, one branch, and a rebase that proves nothing
+
+Eight to ten agents committed on one branch in a single day during the
+2026-09-08 round, and two incidents came out of it: a stale-tree commit
+(`3732bdf`) that reverted 15 files of unrelated LED work, and a
+`git reset --hard` that dropped a commit outright. **The rule: every agent builds
+its commit from HEAD plus its own hunks via a private git index, verifies
+`git diff <base> --stat` shows only the paths it actually touched before
+committing, and never runs `git reset --hard` on a shared branch.**
+
+This session added the harder version of the same lesson: **a clean merge or
+rebase is not evidence.** The dangerous staleness never conflicts. It showed up
+three times in one week - four files that auto-merged and contradicted an owner
+decision; an auto-merged hunk repointing `session-sidebar-clicks.js` from the
+KEBAB to the ROW, which would have handed `runRestart` a `null` and made every
+restart report "unknown" with nothing failing; and the `data-row-status` versus
+`data-row-menu-status` spelling, where a validator mutated the reader back to
+the old name, ran all 200 node suites, and got ZERO failures.
+
 ---
 
 ## 9. OWNER DECISIONS - the settled ones, then the ones still open
 
-The settled ones are not to be relitigated.
+The settled ones are not to be relitigated. Rulings that bind BOTH developers
+also live in `docs/DECISIONS.md` on `docs/plugin-policy`; that file is the
+shared record and this section is the local one.
+
+### Settled, standing
 
 - Sync stays iCloud. His words: "i want icloud" / "stay with icloud".
 - He will not work the same session on two computers.
 - `OP_SERVICE_ACCOUNT_TOKEN` rotation is deferred by his explicit decision:
-  "not until we finish this project. because it will happen again." Rotation is
-  a 1Password WRITE and needs him.
+  "not until we finish this project. because it will happen again."
 - Codex OpenAI sign-out is his: "ill take care of that part when ready."
-  `auth.json` and the three sqlite files holding live bearer tokens were
-  deliberately left untouched.
 - The RSA private key and `MESH_PASS`: "put it in the backlog."
 - Merging the `(old path)` project rows directly in the database is authorised:
-  "this is a me thing it can be done via database". **Take a verified backup
-  first - every pre-existing backup in that directory is 65-115 KB against a
-  4.5 GB database and would be useless as a rollback.**
+  "this is a me thing it can be done via database". Take a verified backup
+  first.
 - Installing the browser extension for `--chrome` is his call.
 - CloudeCode DB copies in the NAS archive: "no i dont need them."
+- **Adam is the tie-breaker for every party.** Verbatim: "i'm the tie-breaker on
+  everything as i own the code." Agents have no standing to negotiate with each
+  other; surface both positions to him verbatim and work the non-intersecting
+  parts meanwhile.
+
+### The six 1.2 decisions, 2026-09-09
+
+Settled during the `v1.1` plus `adamdev/master` merge. They are the reason four
+cleanly-auto-merged files had to be reverted.
+
+1. **UNREAD MODEL: HIS.** Unread rides the OUTER ring as a still GREEN ring, the
+   `done` bucket stays, and his status-key legend ships. Verbatim answer when
+   shown both models: "1. his". Kept from ours: the one-element box-shadow
+   geometry (no pseudo-element, so concentric is the only geometry available)
+   and the grey `idle` fill. **Anything you read anywhere claiming the outer
+   `unread` state was RETIRED is describing the model that LOST.**
+2. **MANUAL MARK-UNREAD: KEPT, behind `ui.show_mark_unread_control`,** default
+   true. One gate: `markUnreadHtml` returns `''`, so every surface hides it
+   together. An unreadable config leaves the control SHOWN - a flag that hides
+   things must fail open.
+3. **ROW CONTROLS: OURS.** The kebab WITH restart on a live row.
+4. **DEAD ROWS GO TO RECENT: OURS.** Verbatim 2026-09-08: "they go into recent,
+   they can disappear."
+5. **CI: HIS,** taken as-is.
+6. **VERSION: 1.2.0.**
+
+### The row menu, 2026-09-10
+
+**"reconcile the two menus into ONE superset",** then the correction that shaped
+the whole round: **"dont remove the rename. i said merge not take everything."**
+
+That correction became the general rule: WHERE HIS CHANGE REMOVES A BEHAVIOUR OF
+OURS, WE KEEP OURS AND ADD HIS ALONGSIDE, and a genuine either-or stops for the
+owner rather than being decided inside a merge.
+
+The shipped menu on a LIVE row, in order: rename, mark unread, move to group,
+fork session, new session in folder, mute notifications, SEPARATOR, restart the
+agent, close session. Pin is INLINE. On a DEAD row: inline restart and remove,
+no menu. Rename has THREE doors (double-click, F2, the menu item) onto ONE
+editor; the ~250 ms hold on a click on a renameable name is the known price of
+keeping the gesture, not an oversight.
+
+Third instruction, and it set the effort budget: **"dont forget we are rewriting
+this. so much of this is going to be rewritten properly."** The vanilla
+`client/js` menu is THROWAWAY. The TESTS were written to full care instead,
+because they are the specification the Svelte rewrite has to satisfy.
+
+### Repo of record and the update checker, 2026-09-10
+
+- **`adamdev` (`Adoom666/CloudeCodeDev`) is the primary development repo;
+  `origin` (`ccsliinc/CloudeCode`) is the backup mirror and stays the public
+  distribution point.** Primary means development, not distribution.
+- **Both update checkers point at Adam's main repo, `Adoom666/CloudeCode`.**
+  This SUPERSEDES an earlier same-day note saying `macOS/update-check.js` was
+  "already correct" pointing at ccsliinc. `src/core/update_check.py` needed no
+  edit because it already pointed there; only the menubar JS moved.
+  **The consequence, flagged not buried:** that repo publishes v1.0.36 as its
+  latest, so a 1.2.1 install is told the latest is OLDER than what it runs. It
+  does NOT prompt a downgrade - verified in both implementations, 1.2.1 sorts
+  above 1.0.36 so `status` reads `current` - but the reported figure is wrong
+  and the upgrade link opens a release older than the running build. Filed as
+  `Adoom666/CloudeCodeDev` #69 because the coupling is partly his to make.
+- **33 stale draft releases deleted.** Verbatim: "2. i think this is safe so why
+  not." FLAGGED AND NOT ACTED ON: `v1.0.34`, `v1.0.35` and `v1.0.36` on
+  `ccsliinc` are also drafts carrying DMGs, roughly another 370 MB, OUTSIDE the
+  authorised range. They need their own decision.
+
+### The 1.3 release plan, 2026-09-11
+
+Verbatim: "ok, update git and lets get this finished and then make a 1.3.1", and
+on testing: **"if shit isnt working we can only test by working."**
+
+- **1.3.0 is OURS**: the two rewrites merged, validated, backed up, deployed,
+  and then USED by the owner on real sessions. His using it is a RELEASE STEP,
+  not an optional one - the fixture preview could not find the broken group
+  control until he clicked it, and it cannot find anything that needs a real
+  pane. Then tag and publish with an installer, a sha256 and a downgrade block.
+- **1.3.1 is Adam integrated**, deliberately AFTER he has used 1.3.0.
+
+### The database backup GATE, 2026-09-11
+
+Verbatim: **"once we are confident on the code, we take a database backup to the
+archive NAS. this way i can test the site live."** It is a gate, not a chore: it
+is what makes live testing safe, and it happens AFTER the combined tree
+validates and BEFORE the deploy.
+
+- `VACUUM INTO`, never a file copy. The database is over 5 GiB and a running
+  server is writing it; a straight `cp` of an open SQLite file can capture a
+  torn page. `/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh`
+  already does it this way and is the pattern.
+- Destination archive-nas `10.0.1.237`, TrueNAS SCALE, ssh user
+  **`truenas_admin`** (a bare `ssh 10.0.1.237` fails), path
+  `/mnt/ARCHIVE/vault/85_cloud-exports/claude/`.
+- **VERIFY THE COPY, do not trust the transfer.** sha256 both ends. An
+  unverified backup is a belief, and the whole point is that the owner can break
+  the live install and get back.
+- Record the ROLLBACK in the same place, so it is one command and not a
+  reconstruction: redeploy `release/1.2.1` (tagged, published, known good), and
+  for the bundle move
+  `/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538` back, then
+  `bootout` and `bootstrap`. NEVER `kickstart -k`.
+
+### STILL OPEN, waiting on him
+
+1. Rotate `~/.config/restic/mini-m4.pw` into 1Password, and decide whether
+   restic's scope should widen. Deferred with the rest of credential rotation.
+2. Confirm the LED states in the reference gallery
+   (https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627),
+   in particular the resized halo. Not revisited.
+3. Where the update checker SHOULD point, now that ccsliinc has real published
+   releases. The current answer (Adam's repo) is ruled but produces a wrong
+   "latest" figure; #69 asks him.
+4. `v1.0.34` / `v1.0.35` / `v1.0.36` drafts on ccsliinc, roughly 370 MB.
+5. Whether `.gitignore`'s `.claude/*` should keep excluding notes by default.
+   Force-adding works but is INVISIBLE: a new note is silently untracked again
+   unless somebody remembers `-f`. Two options on record - narrow the ignore to
+   the genuinely local paths, or keep it and add a guard test that fails when a
+   file under `.claude/notes/` is untracked. The second is cheaper and matches
+   how this repo already guards things.
+6. `STARTUP_TAIL_RECHECK_SECONDS = 30` as an acceptable worst case for noticing
+   a session that becomes stuck LATER. First looks are unthrottled.
+7. What "show full history" is supposed to do, versus "show summary", on the
+   away bar.
 
 **Browser control, and the only route to it.** Claude in Chrome is PAIRED and
-INSTALLED (`pairedDeviceName = Browser 2`,
-`hasCompletedClaudeInChromeOnboarding = true`), but
-`claudeInChromeDefaultEnabled = false`, so browser tools exist ONLY in a session
-launched with `--chrome`, which is the `claude-chrome` wrapper. Tools BIND AT
-SESSION START, so browser control cannot be added to a conversation already
-running. **The wrapper picker is the intended route: restart a session and
-choose `claude-chrome`.** That is what the picker was built for.
-
-### DECISIONS STILL WAITING ON HIM, updated 2026-09-08 evening
-
-Two of the three that were open this morning are now CLOSED, one not as
-originally planned.
-
-1. **CLOSED.** The 8 confident backfill FILLs (rows 14, 15, 16, 17, 19, 23,
-   24, 25) were authorised and written.
-2. **CLOSED, but not as a merge.** Re-examination of the 4 "duplicate" pairs
-   (7/4, 9/11, 10/12, 38/39) found the earlier note had it backwards: the
-   LIVE rows in 9/11, 10/12 and 38/39 already held the real conversation ids,
-   and it was their dead twins holding phantom ones. The dead twins were
-   retired (archived), not merged over the live rows. Ghost rows 44 and 47
-   (no session or transcript behind them) were retired too. Remaining
-   phantom-uuid rows: 41 (kept deliberately) and 46 (a newborn session whose
-   transcript has not landed yet - re-check it, do not treat it as settled).
-3. **CLOSED.** Deploying today's commits is done, not in progress. Live runs
-   `8ee40d1` (the late round, `455d692..8ee40d1`); confirmed by boot holding
-   19 sessions and every running session carrying a project. See section 8.
-
-**Opened earlier in the day:**
-
-4. Rotate `~/.config/restic/mini-m4.pw` (a plaintext restic repository
-   password, surfaced during the Desktop backup inventory) into 1Password,
-   and decide whether restic's scope should widen beyond `ai-setup` and
-   `docker-management` to cover the Desktop. Owner's call on both, per the
-   standing decision to defer credential rotation until this project is
-   finished. Still open.
-5. **CLOSED.** Delete `~/Desktop/Backups` on this Mac - the owner deleted it
-   himself, along with the two empty test folders left over from the day's
-   verification work.
-
-**NEW, opened in the late round, none started:**
-
-6. Confirm the LED states rendered in the reference gallery
-   (https://claude.ai/code/artifact/aac4e1df-56aa-44e7-a444-6d1e1fc48627),
-   in particular the resized halo shipped in `8ee40d1`. Still open - not
-   revisited this round.
-
-**CLOSED in the 2026-09-08 late round (`07bbbb8..54731f9`):**
-
-7. **CLOSED.** Punchlist item 9 (group everything including pinned).
-   Owner's decision, verbatim in substance: pin is a flag that floats the
-   row to the top; ungrouped stays legal; no migration needed. The only
-   residue is a check that a pinned row floats regardless of its group,
-   which is untracked verification work, not a decision.
+INSTALLED but `claudeInChromeDefaultEnabled = false`, so browser tools exist
+ONLY in a session launched with `--chrome`, which is the `claude-chrome`
+wrapper. Tools BIND AT SESSION START, so browser control cannot be added to a
+conversation already running. The wrapper picker is the intended route: restart
+a session and choose `claude-chrome`.
 
 ---
 
@@ -950,6 +1096,65 @@ originally planned.
 
 Recorded rather than quietly dropped, per the convention that a wrong entry plus
 its correction beats a clean lie.
+
+### New in the 2026-09-11 rewrite
+
+- **This file prescribed `launchctl kickstart -k` and that was WRONG.** Both
+  2026-09-10 bundle rebuilds measured it SIGKILLing Electron and orphaning the
+  python server on port 8000, which the next app refuses to adopt as a version
+  mismatch. Section 2 now prescribes `bootout` then `bootstrap`, and
+  `docs/deploy-mini.md` carries the same correction.
+- **The `CLAUDE.md` test baseline was stale for the third time.** It read
+  5,656 / 2 / 19 and "197 node suites"; re-measured on `release/1.2.1` on
+  2026-09-11 it is **5,708 / 2 / 19** and **200 node suites, 200 passing**.
+  Corrected in the same change. Three times is a pattern, not bad luck: take
+  your own baseline.
+- **`cloude.db` is not 4.5 GB any more.** This file said ~4.5 GB; re-measured
+  2026-09-11 it is **5,365,055,488 bytes (5.0 GiB)**. The backup-gate entry in
+  `TODO.md` also says "roughly 4.5 GB" and is stale the same way. Size the
+  `VACUUM INTO` and the NAS transfer against 5 GiB.
+- **`src/api/routes.py` was 4,387 lines, not 4,397.** The brief for this rewrite
+  said 4,397; re-measured on `release/1.2.1` it is 4,387, and 106 on
+  `feat/backend-decomposition`. The decomposition plan's own table also says
+  4,387.
+- **The frontend test count is 1,334 on record, not 1,335,** and it was recorded
+  at `f28faef` with two commits landing after it that never re-recorded a count.
+  Nobody has measured the branch tip. Labelled unverified in section 7 rather
+  than quoted as a fact.
+- **The draft-release cleanup reclaimed 4,095,684,007 bytes (3.81 GiB), not
+  "4.2 GB", across 33 drafts.** Both the count and the size are on record with a
+  written audit artifact at
+  `docs/audits/2026-09-10-ccsliinc-draft-release-deletion.md`.
+- **The backend suite did not go "5,609 to 6,520".** 5,609 was the 2026-09-09
+  figure this file and `CLAUDE.md` both carried BEFORE the 1.2 merge. The
+  measured control on the branch's own 1.2.1 base is **5,708** (re-measured),
+  and the branch tip is **6,520** (on record). The improvement is real; the
+  starting number was the wrong one.
+- **The governance documents are not where the brief said.**
+  `docs/kept-behaviours/` is a DIRECTORY holding one party file
+  (`ccsliinc.md`); the policy document itself is `docs/KEPT-BEHAVIOURS.md`; and
+  the current tip of that line is **`docs/plugin-policy`**, not
+  `feat/work-protocol`, which is its ancestor.
+- **The update-checker ruling reversed an earlier same-day note.**
+  `docs/repo-of-record` (15:43) recorded `macOS/update-check.js` as "already
+  correct" pointing at ccsliinc; `fix/update-checker-target` (16:14) repointed
+  it at `Adoom666/CloudeCode` so both checkers agree. The later one is the
+  ruling. Two unmerged branches now say different things about the same file.
+- **`CLAUDE.md` naming `client/js/launchpad.js` as a file that must not grow is
+  NOT a stale claim on `release/1.2.1`.** The brief for this rewrite said the
+  file no longer exists; it exists and is **6,526 lines** on the release line
+  and on live. It is deleted only on `feat/svelte-slice-7`. Writing "it does not
+  exist" into `CLAUDE.md` on the release branch would have been a new false
+  claim in the file every agent reads first, so `CLAUDE.md` now states both
+  facts with the branch beside each.
+- **`cp -i` does not simply hang.** Re-measured 2026-09-11 on this machine:
+  with stdin closed, `cp -i a b` onto an existing `b` prints
+  `overwrite b? (y/n [n]) not overwritten`, **exits 1, and copies nothing**.
+  With an inherited stdin nobody answers it blocks on the prompt instead.
+  Either way the file is not copied, and the first shape is worse because it
+  looks like a command that ran.
+
+### Carried forward from earlier rounds
 
 - **The Brave extension finding was WRONG.** The claim that the Anthropic
   extension was "installed in none of Brave's three profiles" read Brave's
@@ -959,43 +1164,43 @@ its correction beats a clean lie.
   absence.
 - **The three "missing hook scripts" were a FALSE ALARM.** 84,217 files scanned
   on the mini, zero references. The on-screen errors are transcript attachments
-  from 2026-04-23 being replayed by `--resume`. The related claim that
-  `archive-context.sh` feeds `claude_session_uuid` was also wrong; that is a
-  whole subsystem fed by the managed curl hooks POSTing to
-  `/api/v1/hooks/claude-event`, which is live and firing.
+  from 2026-04-23 being replayed by `--resume`.
 - **The re-measured lag figure superseded the first one.** An early sample said
-  a stall every ~20s lasting ~9.5s. The clean-baseline measurement on the quiet
-  box gives 12.05s every 20.0s, and by the time it was fixed the stall had
-  grown to 14.5s. It scaled with the file, which is itself the evidence it was
-  the pragma.
-- **The openrsync diagnosis was WRONG**, and the corrected version is in
-  section 2. `deploy-mini.sh` did not fail because openrsync rejects
-  `--files-from=- --relative`; it handles that fine, proven by a successful
-  copy. It failed on a remote destination containing SPACES. Both live
-  destinations contain spaces and the v11 staging path does not, so
-  **`--target live` could never work while `--target v11` always did**, which
-  is the asymmetry that let it hide.
+  a stall every ~20s lasting ~9.5s; the clean baseline gives 12.05s every 20.0s,
+  and by the time it was fixed the stall had grown to 14.5s. It scaled with the
+  file, which is itself the evidence it was the pragma.
+- **The openrsync diagnosis was WRONG.** `deploy-mini.sh` did not fail because
+  openrsync rejects `--files-from=- --relative`; it failed on a remote
+  destination containing SPACES. Both live destinations contain spaces and the
+  v11 staging path does not, so `--target live` could never work while
+  `--target v11` always did.
 - **The tmux identity premise was WRONG.** Killing and respawning does NOT move
   the instance triple. Measured on tmux 3.7c: `session_created` held at
   **1788821572** and `pane_id` at **`%0`** across `respawn-pane -k`, and only
-  `pane_pid` changed. The reason is structural rather than lucky:
-  `session_created` belongs to the SESSION and `-k` replaces the PANE'S
-  PROCESS. `session_instance_rekey.py` measures it either side anyway, because
-  a measurement that can stop being true is not a thing to assume.
+  `pane_pid` changed.
 - **"Media Compression's conversation is gone" was WRONG, and the app said it
   too.** The transcript `82854c0e-a423-4591-a34f-a14cb92fbf41.jsonl` exists and
-  is 73,190,422 bytes. The mechanism is the phantom-uuid trap in section 4: the
-  app's message was locally truthful about a uuid that had nothing to do with
-  the session.
-- **The `CLAUDE.md` pytest baseline was stale by an order of magnitude**, and a
-  broken `venv` symlink is why. Corrected numbers in section 7.
+  is 73,190,422 bytes. The app's message was locally truthful about a uuid that
+  had nothing to do with the session.
 - **`com.imc.cloude-code` is the wrong agent name** for this app, in
   Infrastructure `CLAUDE.md` hazard 40. The live one is
   `com.cloudecode.menubar`.
+- **The LED ruling in `docs/DECISIONS.md` was recorded INVERTED** and is
+  corrected in `3736c7f` against the shipped code. `docs/kept-behaviours/ccsliinc.md`
+  carried the same inversion, ported straight out of `coord`'s `wants/` file,
+  and is corrected in place with a note saying so. **`wants/` and `settled/` on
+  `coord` are FROZEN**, so anything else ported out of them needs re-verifying
+  against code before it reaches a file that binds both teams.
+- **`data-row-status` in our own kept-behaviours file was stale** and is
+  corrected to `data-row-menu-status`: the 2026-09-10 reconcile moved us onto
+  Adam's trigger spelling.
+- **The 1.2.0 release notes did NOT credit Adam with a large share, on purpose.**
+  Between `v1.0.36` and `v1.2.0` he authored 2 of 40 non-merge commits; between
+  `v1.2.0` and `v1.2.1` he authored 9 of 18. The brief for that task said a
+  large share of BOTH came from him; that is right for 1.2.1 and wrong for
+  1.2.0, and the published notes say the measured thing.
 - Earlier in the migration: UTC timestamps were read as local and led to a wrong
   conclusion about which sessions post-dated the row-reuse fix (they PREDATE it
   by 1h38m); a proposal to delete all 6 archived DB rows would have orphaned
-  lineage, because rows 4 and 5 are parents of live sessions and roots of
-  archives holding 24,790 records; and a token-minting shell quoting bug made
-  both endpoints return 401 while the parser read the error body as an empty
-  list, producing a false zero.
+  lineage; and a token-minting shell quoting bug made both endpoints return 401
+  while the parser read the error body as an empty list, producing a false zero.

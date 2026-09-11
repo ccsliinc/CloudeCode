@@ -84,13 +84,33 @@ It is a plain bash test (same shape as `tests/test_resolve_port.sh`) since
 there is no pytest bridge for shell functions; it prints PASS/FAIL per
 case and exits non-zero if any case fails.
 
-## Restarting the live app: `launchctl kickstart`, not quit-and-reopen
+## Restarting the live app: `bootout` then `bootstrap`, not `kickstart -k`, not quit-and-reopen
 
 `deploy-mini.sh --target live` does NOT relaunch the Electron app: it kills
 the pid owning port 8000 and lets the menubar app respawn the server. That
 is enough for a code deploy. When you need to restart the APP itself, use:
 
-    launchctl kickstart -k gui/$(id -u)/com.cloudecode.menubar
+    launchctl bootout gui/$(id -u)/com.cloudecode.menubar
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudecode.menubar.plist
+
+**This used to say `launchctl kickstart -k`, and that was wrong.** `kickstart
+-k` sends SIGKILL to Electron, which orphans the python server still holding
+port 8000; the app that starts back up fingerprints that orphan, calls it a
+version mismatch, and refuses to either start or stop it. Measured across the
+1.2.0 and 1.2.1 Electron bundle rebuilds (2026-09-10, see `.claude/TODO.md`
+and the "how to go back" section of the v1.2.0 and v1.2.1 GitHub release
+bodies): `bootout` lets the app's own teardown take the server child with it,
+port 8000 was free about 2 seconds after bootout both times, and `/health`
+was back at 200 within 15 to 19 seconds of the following bootstrap. Poll it,
+do not sample it once - startup holds the event loop for roughly 54 seconds
+after it binds the port, so one early curl can return 000 and look exactly
+like a dead server while the app is starting normally:
+
+    for i in $(seq 1 60); do
+      printf '%s ' "$i"
+      curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/health
+      sleep 2
+    done
 
 Do **not** restart it with `osascript` quit plus `open -a`. That path
 starts the app as a fresh GUI launch, which macOS registers under an ad
@@ -99,8 +119,14 @@ of the real `com.cloudecode.menubar` label. The app runs and serves
 normally, so nothing looks wrong - but the ad hoc job's stdout goes to
 `/dev/null`, so `/tmp/cloudecode-menubar.log` silently stops growing and
 the next person to debug a boot problem finds a log that ends hours ago
-with no error explaining why. `kickstart -k` stops and restarts the real
-job in place, keeping the label and the log.
+with no error explaining why. `bootout` then `bootstrap` stops and restarts
+the real job in place, keeping the label and the log, same as `kickstart -k`
+did for this specific purpose - the difference that matters is only how it
+behaves when a server child is holding a port underneath it.
+
+Your tmux sessions on `tmux -L cloude` are not touched by any of this restart;
+that was confirmed unchanged (same session count, none restarted or closed)
+across both 2026-09-10 rounds.
 
 Verify after any restart:
 

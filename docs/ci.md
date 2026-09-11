@@ -98,7 +98,11 @@ both because `rsvg-convert` was absent. Both now run.
 
 ### Measured baseline
 
-Run 32738204216, 2026-08-24, commit `e16cb17`:
+Run 32738204216, 2026-08-24, commit `e16cb17`. **These are a DATED CI
+RECORD, not the current baseline.** The suite has roughly doubled since;
+`release/1.2.1` reads 5,708 passed / 2 failed / 19 skipped locally,
+re-measured 2026-09-11. Quote `CLAUDE.md`'s test-baseline bullet for the
+current number and this table only for what that run measured:
 
 | Leg | Result |
 |---|---|
