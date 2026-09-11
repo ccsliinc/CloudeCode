@@ -6902,3 +6902,42 @@ it happens AFTER the combined tree validates and BEFORE the deploy.
 
 Depends on: `integration/1.3.0` validating. Blocks: the live deploy and all
 live testing of the rewrite.
+
+## 2026-09-11 - BUG (real, not the demo): a failed write is INVISIBLE to a sighted user
+
+Found because the owner clicked "new group" on the 1.3.0 preview and reported
+it broken. It was not broken: the preview correctly REFUSED the write and said
+so. He could not see the refusal.
+
+- [ ] The error sentence is produced correctly and reaches the page verbatim.
+  It is announced through `session-sidebar-group-actions.js`'s `announce()`
+  into `#session-sidebar-live`, which the stylesheet clips to
+  `width:1px; height:1px; clip:rect(0,0,0,0)`. That element exists for assistive
+  technology. So a SCREEN READER USER HEARS the failure and a SIGHTED USER GETS
+  SILENCE. The accessible path works and the visual path is missing, which is
+  the opposite of the usual defect.
+- MEASURED on four of four controls driven: sidebar group create, group
+  rename/delete from the menu, launchpad archive, launchpad restart picker.
+  In every case the live region read the full sentence while nothing rendered.
+  Not every control was driven; four were, four swallowed.
+- THIS IS THE LEGACY SIDEBAR AND LAUNCHPAD ERROR PATH, so it is present on
+  LIVE 1.2.1 today, not something the rewrite introduced. The sidebar is
+  deliberately outside the launchpad migration.
+- [ ] Fix: a failure must reach a visible surface as well as the live region.
+  The app already has a toast system with a global poll and per-session
+  dismissal; routing `announce()`'s ERROR path to a toast while keeping the
+  live-region announcement is the small version. Do NOT replace the live region,
+  or the screen-reader path regresses to match the visual one.
+- [ ] Add a test that fails when an error path writes ONLY to a clipped element.
+  This project already fails builds on patterns (remote assets, literal NUL
+  bytes, unresolved names); the same shape applies. A negative control is
+  mandatory: the test must fire on a real swallowed error and stay quiet when a
+  visible surface is used.
+- Related, same class, found the same way: an endpoint check is not a page
+  check. The preview was reported as needing no auth because
+  `/api/v1/auth/status` returned authenticated; the CLIENT keeps its own gate
+  and rendered a login screen anyway. Verify what the screen shows, not what the
+  route answers.
+
+Preview for the owner: `http://10.0.1.150:5057/` (fixtures, not his sessions;
+reads live, writes refused). Stop it with `kill 97386`.
