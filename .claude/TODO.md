@@ -6867,3 +6867,38 @@ test by working."
   current.
 - The untracked `web/` in the main checkout is 104 MB of node_modules left from
   when the tree sat on `feat/svelte-web`. Nothing in it is trackable. Harmless.
+
+## 2026-09-11 - GATE: database backup to archive-nas BEFORE live 1.3.0 testing
+
+Owner's instruction, verbatim: "once we are confident on the code, we take a
+database backup to the archive NAS. this way i can test the site live."
+
+So the backup is a GATE, not a chore: it is what makes live testing safe, and
+it happens AFTER the combined tree validates and BEFORE the deploy.
+
+- [ ] Take the backup with `VACUUM INTO`, not a file copy. The live database is
+      roughly 4.5 GB and is being written by a running server; a straight `cp`
+      of an open SQLite file can capture a torn page. The existing restic job
+      (`/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh`)
+      already uses `VACUUM INTO` for exactly this reason and is the pattern.
+- [ ] Destination: archive-nas 10.0.1.237, TrueNAS SCALE, ssh user
+      `truenas_admin` (a bare `ssh 10.0.1.237` fails), path
+      `/mnt/ARCHIVE/vault/85_cloud-exports/claude/`. Pool had 8.5 TB free.
+      Defined in the Infrastructure project's `config/servers.yaml`.
+- [ ] VERIFY THE COPY, do not trust the transfer: sha256 both ends and compare,
+      the way the 2026-09-09 archive round did. An unverified backup is a
+      belief, and the whole point of this gate is that the owner can break the
+      live install and get back.
+- [ ] Also record what the ROLLBACK actually is, in the same place as the
+      backup, so it is one command and not a reconstruction: redeploy
+      `release/1.2.1` (tagged, published, known good), and for the app bundle
+      move back `/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538`
+      then `launchctl bootout` and `bootstrap`. NEVER `kickstart -k`; it
+      SIGKILLs Electron and orphans the python server on port 8000, which the
+      next app refuses to adopt.
+- [ ] Note the nightly restic job also covers the app data dir, so there IS a
+      second copy, but it is a scheduled snapshot rather than a point-in-time
+      taken immediately before the change. Take the explicit one anyway.
+
+Depends on: `integration/1.3.0` validating. Blocks: the live deploy and all
+live testing of the rewrite.
