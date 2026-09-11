@@ -344,11 +344,19 @@ console.log('[TerminalMetrics Module] Loading...');
             }
             if (t.cols <= 0 || t.rows <= 0) return {};
             // Fit first so the numbers describe what the renderer will
-            // actually use post-connect, not a stale pre-layout grid.
-            try {
-                if (ctl.fitAddon) ctl.fitAddon.fit();
-            } catch (err) {
-                console.warn('TerminalMetrics: pre-read fit failed', err);
+            // actually use post-connect, not a stale pre-layout grid -
+            // and THROUGH THE GUARD, which is the whole point of this
+            // module. A raw fit here measured the character cell without
+            // asking whether xterm.css had applied, and these numbers
+            // are posted to the server as the pane's BIRTH geometry: a
+            // grid derived from an unstyled cell would birth a real tmux
+            // pane at a size matching nothing on screen. A refusal keeps
+            // the last known good grid, which is always the better
+            // failure, and the caller still gets a usable answer.
+            const fitted = guardedFit(ctl);
+            if (!fitted.fitted) {
+                console.warn('TerminalMetrics: pre-read fit skipped, reason='
+                    + fitted.reason);
             }
             return { cols: t.cols, rows: t.rows };
         } catch (err) {

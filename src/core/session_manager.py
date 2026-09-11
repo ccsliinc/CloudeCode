@@ -3322,7 +3322,7 @@ class SessionManager:
 
     # ---- session lifecycle ----------------------------------------------
 
-    async def flush_pending_terminal_command(self, session_id: str) -> None:
+    async def flush_pending_terminal_command(self, session_id: str) -> str:
         """Type this session's pending terminal command, once, on attach.
 
         Description: resolves the pending id against config.json (never
@@ -3347,17 +3347,27 @@ class SessionManager:
           re-runs the command. Best-effort: a write failure must never
           break an otherwise-good session, so it is logged and swallowed.
         Inputs: session_id (str) - the session being attached to.
-        Output: None.
+        Output: str - what happened, in one of three words, so a caller
+          can SAY it rather than only log it. ``none``: nothing was
+          pending, the configured row is gone, or the session has no
+          backend, so nothing was typed and the pane is at a bare prompt.
+          ``issued``: the bytes were written. ``failed``: a command was
+          pending and every write attempt raised. The readiness message
+          carries this, which is the whole reason it is returned - a
+          swallowed failure that nobody is told about is how a user ends
+          up at a prompt they did not ask for with no explanation.
+        Example:
+            outcome = await sm.flush_pending_terminal_command("ses_1")
         """
         command_id = self.pending_terminal_commands.pop(session_id, None)
         if not command_id:
-            return
+            return "none"
         command = settings.get_terminal_command(command_id)
         if command is None:
-            return
+            return "none"
         backend = self.backends.get(session_id)
         if backend is None:
-            return
+            return "none"
 
         payload = (command.command + "\n").encode("utf-8")
         last_error: Optional[str] = None
@@ -3370,7 +3380,7 @@ class SessionManager:
                     command_id=command.id,
                     attempt=attempt,
                 )
-                return
+                return "issued"
             except (OSError, RuntimeError, ValueError) as e:
                 # A just-started pane can briefly not be addressable yet.
                 last_error = str(e)
@@ -3383,6 +3393,7 @@ class SessionManager:
             error=last_error,
             attempts=_TERMINAL_COMMAND_WRITE_ATTEMPTS,
         )
+        return "failed"
 
     async def create_session(
         self,

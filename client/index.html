@@ -1125,6 +1125,29 @@
          back to the plain same-id retry, which is what every close
          reached before the named branches existed. -->
     <script src="/static/js/terminal-reconnect-policy.js"></script>
+    <!-- What happens to what you typed before the pane could hear it.
+         The attach handshake DISCARDS binary frames until it has the
+         client's dims, so the window before `terminal.ready` is deaf and
+         not merely slow. Holds input by CONNECTION generation, flushes
+         on ready, rejects the whole batch over 64 KiB, and never replays
+         after an ambiguous disconnect. Must load BEFORE terminal.js; if
+         it is missing every input path sends straight through, which is
+         exactly the behaviour that shipped. -->
+    <script src="/static/js/terminal-input-buffer.js"></script>
+    <!-- The two BOUNDED waits between a click and a connected terminal:
+         has the vendored xterm bundle loaded, and can the grid be
+         measured from a container that really has a box. Both replace
+         fixed sleeps, both are polled on a TIMER rather than a frame so a
+         backgrounded tab still resolves them. Must load BEFORE
+         terminal.js, which throws on its absence at init: there is no
+         terminal to degrade into. -->
+    <script src="/static/js/terminal-readiness.js"></script>
+    <!-- The ordered pre-connect screen paint: bounded layout wait,
+         guarded fit, parser reset, raw octets. Both session entry paths
+         used to carry a byte-identical copy. Must load BEFORE
+         terminal.js; if it is missing the capture is skipped and the
+         live stream still comes up. -->
+    <script src="/static/js/terminal-scrollback-paint.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Punchlist item 1: after a measured absence, OFFER full history, a
          summary of what happened, or just carry on, instead of the app
@@ -1161,6 +1184,14 @@
          because slash-commands.js is already past the 500-line budget. -->
     <script src="/static/js/slash-favorites.js"></script>
     <script src="/static/js/slash-commands.js"></script>
+    <!-- Starts the palette WITHOUT the WebSocket waiting for it. The two
+         fetches it makes used to sit directly above the terminal connect,
+         on the critical path between a click and a connected pane, and
+         the list is a property of the session's AGENT rather than of the
+         socket. Carries the navigation token so a palette landing after
+         the user has left cannot populate another session's menu. Must
+         load AFTER slash-commands.js, whose modal it drives. -->
+    <script src="/static/js/slash-commands-boot.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->
     <script src="/static/js/router.js"></script>

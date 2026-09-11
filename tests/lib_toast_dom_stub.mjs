@@ -297,8 +297,12 @@ export function fakeTerminal(Klass, sessionId) {
         sent: [],
         ws: { readyState: 1, send: (b) => { self.sent.push(b); } },
     };
+    // _sendUserBytes is the ONE seam every keystroke-shaped path goes
+    // through now: it offers the bytes to the pre-ready input buffer and
+    // only then touches the socket. Without it on this stand-in the
+    // methods under test throw rather than sending.
     for (const name of ['_unwrapSession', '_sessionId', '_noteUserInputToSession',
-        'sendKeyToTerminal', 'insertText', '_writeSynthetic']) {
+        '_sendUserBytes', 'sendKeyToTerminal', 'insertText', '_writeSynthetic']) {
         if (typeof P[name] !== 'function') {
             throw new Error(`terminal.js has no ${name}() any more`);
         }

@@ -2681,42 +2681,30 @@ class Launchpad {
             if (window.TerminalController && !window.TerminalController.term) {
                 await window.TerminalController.init();
             }
-            // 3. Yield two animation frames so the layout actually
-            //    flushes before fitAddon measures the container.
-            await new Promise((r) =>
-                requestAnimationFrame(() => requestAnimationFrame(r))
-            );
-            // 4. Fit + read measured geometry. Wrap in try/catch -
-            //    fit can throw if the container isn't laid out yet;
-            //    we tolerate and fall back to 0 (server treats 0 as
-            //    "skip pre-resize").
-            let cols = 0;
-            let rows = 0;
-            try {
-                if (
-                    window.TerminalController &&
-                    window.TerminalController.fitAddon &&
-                    typeof window.TerminalController.fitAddon.fit === 'function'
-                ) {
-                    window.TerminalController.fitAddon.fit();
-                }
-                cols =
-                    (window.TerminalController &&
-                        window.TerminalController.term &&
-                        window.TerminalController.term.cols) ||
-                    0;
-                rows =
-                    (window.TerminalController &&
-                        window.TerminalController.term &&
-                        window.TerminalController.term.rows) ||
-                    0;
-            } catch (fitErr) {
-                // Tolerated - fall through with 0/0; server skips
-                // the pre-resize and behavior is identical to the
-                // pre-fix path for THIS request (same-width clients
-                // are unaffected anyway).
-                console.warn('rejoin pre-fit failed', fitErr);
-            }
+            // 3. Let layout flush before anything is measured. BOUNDED:
+            //    a bare double-rAF await never resolves in a tab the
+            //    browser is not painting, and the session fetch and the
+            //    terminal entry are both below it, so that wait does not
+            //    delay this path - it cancels it. Gotcha 9.
+            await (window.TerminalLayoutWait
+                ? window.TerminalLayoutWait.settleFrames(2)
+                : Promise.resolve());
+            // 4. Read the measured geometry through TerminalMetrics,
+            //    which owns both the fit and the guard in front of it.
+            //    Reaching into TerminalController.fitAddon from the
+            //    launchpad was a layering violation AND an unguarded fit:
+            //    these numbers become the pane's BIRTH geometry, so a
+            //    grid derived from a cell measured before xterm.css
+            //    applied would birth a real tmux pane at a size matching
+            //    nothing on screen. currentGrid answers {} when it cannot
+            //    be trusted, and the server treats 0 as "skip the
+            //    pre-resize", which is the pre-fix behaviour for this
+            //    request.
+            const grid = window.TerminalMetrics
+                ? window.TerminalMetrics.currentGrid()
+                : {};
+            const cols = grid.cols || 0;
+            const rows = grid.rows || 0;
 
             const info = await window.API.getSession(rowSessionId, {
                 includeScrollback: true,
@@ -5566,22 +5554,29 @@ class Launchpad {
                 }
             }
 
+            // ENTER THE SESSION FIRST, DECORATE AFTER. The session is what
+            // the user clicked; the project repaint is bookkeeping they
+            // did not ask for, and nothing in its result is needed to
+            // render the terminal. Dispatched before the repaint, the
+            // user lands in their new session immediately instead of
+            // watching a list redraw first.
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session, nav }
+            }));
+
             // Repaint the project tree from the list we just changed.
             // renderProjectList() draws from the cached this.projects, and
             // the 5s poller repaints from that cache without ever refilling
             // it - so without this the new project stays invisible until some
-            // other action reloads. Guarded on its own: the session was
-            // created, and a failed repaint must not read as a failed create.
+            // other action reloads. STILL AWAITED, so a caller that runs
+            // after this function does not race the refresh, and still
+            // guarded on its own: the session was created, and a failed
+            // repaint must not read as a failed create.
             try {
                 await this.loadProjects();
             } catch (error) {
                 console.error('Launchpad: Failed to refresh projects after session create:', error);
             }
-
-            // Trigger session-created event
-            window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session, nav }
-            }));
 
         } catch (error) {
             console.error('Launchpad: Failed to create session:', error);
@@ -6007,20 +6002,26 @@ class Launchpad {
         try {
             this.updateStatus('detaching from current session...');
             await window.API.detachSession();
-
-            // Wait a moment, then create new. Same race-avoidance rationale
-            // as ``detachAndOpenProject``. Honor the agentType so the
-            // re-create lands on the same CLI the user originally picked.
-            setTimeout(() => {
-                if (agentType) {
-                    this.createNewSessionWithAgent(agentType);
-                } else {
-                    this.createNewSession();
-                }
-            }, 500);
         } catch (error) {
             console.error('Launchpad: Failed to detach session:', error);
             this.showError('failed to detach session: ' + error.message);
+            return;
+        }
+        // No delay, and its own try/catch, both for the reasons spelled
+        // out in ``detachAndOpenProject``. The identical copy of that
+        // timer lived here too, and fixing one of a pair is how the
+        // other one survives.
+        // Honor the agentType so the re-create lands on the same CLI the
+        // user originally picked.
+        try {
+            if (agentType) {
+                await this.createNewSessionWithAgent(agentType);
+            } else {
+                await this.createNewSession();
+            }
+        } catch (error) {
+            console.error('Launchpad: Failed to create a session after detach:', error);
+            this.showError('failed to create session: ' + error.message);
         }
     }
 
@@ -6433,15 +6434,28 @@ class Launchpad {
         try {
             this.updateStatus('detaching from current session...');
             await window.API.detachSession();
-
-            // Wait a moment, then open project. The brief delay lets the
-            // server finish clearing its backend handles before the new
-            // create-session call lands - avoids a race where we try to
-            // create while the old backend is still tearing down.
-            setTimeout(() => this.selectProject(project), 500);
         } catch (error) {
             console.error('Launchpad: Failed to detach session:', error);
             this.showError('failed to detach session: ' + error.message);
+            return;
+        }
+        // NO DELAY, BECAUSE THE AWAIT ABOVE ALREADY IS THE WAIT. This
+        // used to sleep 500 ms "to let the server finish clearing its
+        // backend handles". It already has: detach_session awaits
+        // detach_current_session, which awaits the idle watcher's stop
+        // and the reader task's cancellation before the handler returns,
+        // so the response just awaited IS the completion signal. The
+        // timer was waiting for something that had already happened.
+        //
+        // Its own try/catch, because it is its own failure: the timer
+        // escaped the block above, so an error here used to be an
+        // unhandled rejection, and folding it in would report a failed
+        // OPEN as a failed detach.
+        try {
+            await this.selectProject(project);
+        } catch (error) {
+            console.error('Launchpad: Failed to open project after detach:', error);
+            this.showError(`failed to open ${project.name}: ${error.message}`);
         }
     }
 
