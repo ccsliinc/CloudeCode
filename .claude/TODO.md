@@ -6256,3 +6256,565 @@ the three cost-ceiling suites `test_listing_seed_row_cost.py`,
 The two `src/` follow-ups recorded above (`session_notification_policy.py`
 563, `notifications/idle_watcher.py` 513) are UNCHANGED and still open -
 that code is not being rewritten, so they still want a real split.
+
+---
+
+## 2026-09-10 DEPLOY RECORD - release/1.2.1 at d074bbc to live (mac-mini-m4, port 8000)
+
+Deployed the merged 1.2.1 line from the release worktree, branch
+`release/1.2.1`, HEAD `d074bbc`, working tree clean. TAGGED `v1.2.1` AND
+PUSHED to `origin` and `adamdev`. All gates passed.
+
+**Deploy.** `./scripts/deploy-mini.sh --target live` selected "working tree
+is CLEAN, so deploying the committed state", 551 files, staged and hash
+checked 551/551 before production was touched, wrote the app bundle
+Resources then the server dir, pruned both, and re-verified after the
+restart. Banner `== DEPLOYED ==`. The re-run
+`./scripts/deploy-mini.sh --verify-only --target live` exited 0 with
+`== VERIFIED ==`, 551/551 on both destinations, mirror-clean, nothing
+copied. The pre-deploy verify showed the expected 1.2.0 drift, including
+eight files reading `target MISSING` that are new in this release.
+
+**The restart was the app's own, and no kickstart was needed.** Electron
+(pid 66329) stayed up throughout and its python child was replaced,
+66351 to 93038, at 2026-09-10T15:43:22Z. The `bootout` / `bootstrap`
+dance the 1.2.0 round needed was not required here because nothing
+SIGKILLed Electron, so nothing orphaned a server onto port 8000.
+
+**A HEALTH READ AT 32 SECONDS RETURNED 000 AND THAT WAS NOT A FAILURE.**
+The new process bound :8000 immediately but did not answer until
+15:44:16Z, about 54 seconds after spawn, because startup work held the
+event loop (`boot_readopt_complete` lands at 15:44:05.166Z and
+`status_seed_warm` at 15:44:05.210Z, both after the socket exists). A
+single probe inside that window reads exactly like a dead server. It was
+resolved by POLLING rather than by concluding from one sample, which is
+the only reason this record does not say the deploy failed. If a future
+round sees 000 here, poll for a minute before believing it.
+
+**Boot, 2026-09-10T15:44:05Z.** `boot_readopt_complete` held 18, skipped 1,
+failed 0, live_count 19. held + skipped = 19 = `tmux -L cloude
+list-sessions | wc -l` = 19. `id_sources` all `hook_token` (18), zero
+`legacy_row`, zero `derived`, `no_row` 0, so no id was minted and no hook
+token was rotated. `status_seed_warm` seeded 19 of 19 examined.
+
+**Hooks after the restart.** Zero `hook_post_rejected_invalid_token`, zero
+`hook_post_rejected_non_loopback`, zero 403s and zero 410s on
+`/api/v1/hooks/claude-event`. 6 hook POSTs accepted, all 200. Zero
+tracebacks and zero error-level lines in the post-restart window. Read off
+uvicorn's own access lines, so "none rejected" is distinguishable from
+"none received", which is the whole point of quoting the accepted count
+beside the rejected one.
+
+**Endpoints.** `GET /api/v1/features` returns
+`ui.show_mark_unread_control: true`. `GET /api/v1/sessions/list` returns
+19 rows for 19 live tmux sessions (idle 12, finished_unread 5, working 1,
+unknown 1; sources transcript 11, tmux 4, seed_row 3, hook 1).
+`GET /api/v1/version` reports `current_version` **1.2.0, and that is
+EXPECTED, not a failed deploy**: the field is `CLOUDE_APP_VERSION`, which
+the Electron shell sets from the PACKAGED bundle's `app.getVersion()`, and
+the bundle was deliberately not rebuilt this round. No source deploy can
+move it. The footer paints v1.2.0 for the same reason and from the same
+origin. The bearer was minted on the mini from `TOTP_SECRET` in the live
+install's `.env` via pyotp against `POST /api/v1/auth/verify`; the secret
+never left that box and neither it nor the token was printed. Negative
+control in the same pass on every measurement: a bogus bearer returns 401,
+so each 200 is evidence of the credential and not of an open endpoint.
+
+### The measurement, which is the point of this release
+
+Read-only, run ON the mini against loopback so network variance is out of
+it. 20 sequential `GET /api/v1/sessions/list`; 30 `/health` while quiet;
+30 `/health` while a `sessions/list` is CONTINUOUSLY in flight, which is
+the head-of-line blocking probe. Three warmup calls discarded. The BEFORE
+pass independently reproduced the figures already on record for 1.2.0
+(p50 272.9 against the recorded 270.1), which is what makes the two passes
+comparable rather than two different experiments.
+
+| measurement | 1.2.0 before | 1.2.1 after | 1.2.1 confirm | change |
+|---|---|---|---|---|
+| sessions/list p50 | 272.9 ms | 83.0 ms | 86.8 ms | 3.3x faster |
+| sessions/list p99 | 539.2 ms | 218.5 ms | 113.6 ms | 2.5x to 4.7x |
+| health p50, quiet | 34.4 ms | 31.4 ms | 29.2 ms | flat |
+| health p99, quiet | 197.4 ms | 47.4 ms | 39.4 ms | 4.2x |
+| health p50, under listing | 175.8 ms | 23.4 ms | 20.0 ms | 7.5x |
+| health p99, under listing | 655.4 ms | 54.8 ms | 62.8 ms | 11.9x |
+| listings completed in the probe window | 33 | 68 | 64 | about 2x |
+
+**THE HEAD-OF-LINE BLOCKING IS GONE, and that is the finding, not the
+p50.** On 1.2.0 a no-op `/health` cost 175.8 ms at p50 while a listing was
+running against 34.4 ms quiet, a 5.1x penalty for being unlucky about
+timing. On 1.2.1 it is 23.4 ms under load against 31.4 ms quiet, so there
+is NO measurable penalty at all. A concurrent listing no longer parks the
+event loop.
+
+**Attributable, with the confounder named.** Nothing else changed on the
+box between the two passes, both ran the same script against the same 19
+sessions, and the AFTER pass was repeated at a five minute interval with
+the same shape, so it is not a one-off. The one confounder that cuts the
+right way: the AFTER server had been up about 4 minutes against roughly
+2.7 hours for BEFORE, so its caches were COLDER, which works against the
+improvement rather than manufacturing it. Sample size is small (n=20 for
+the listing, n=30 per health condition), so read p99 as indicative;
+p50 and the load-versus-quiet ratio are the numbers to trust, and the
+tripled completion count is independent of the timings entirely.
+
+### Browser, live app, hard reloaded twice
+
+A tab open across a deploy does not refetch static assets, and the owner's
+own tab proved it: it was still reporting `meta cloude-app-version`
+**v1.0.33**. All checks below were run in a SEPARATE tab, hard reloaded,
+and the tab was closed afterwards. That the bytes are fresh is proven by
+PRESENCE rather than by a claim: `SessionEntryToasts`,
+`SessionRowActionsConfirm`, `SessionRowMenuActions`, `SessionRowMenuItems`
+and `SessionRowMenuOpen` are all defined on `window`, and every one of
+those five files read `target MISSING` in the pre-deploy verify.
+
+The Chrome MCP tab reports `document.hidden === true` even when fronted,
+so every interaction was driven through the app's OWN entry points
+(`SessionRowMenuOpen.open(kebab)`, the exact call
+`session-row-menu-gestures.js:216` makes) rather than physical clicks,
+which do not reach the element in that state.
+
+- a PASS. The kebab on live row `cloude_Media_Compression` opens a menu of
+  exactly 8 items and exactly 1 separator, in this order: rename, clear
+  unread flag, move to group, fork session, new session in folder, mute
+  notifications, SEPARATOR, restart the agent, close session. That is the
+  reconciled superset in the order `session-row-menu-items.js` declares.
+  The second item reads "clear unread flag" rather than "mark unread for
+  followup" because that row IS currently unread and the label states the
+  RESULT of activating it, which is the documented behaviour, not a
+  discrepancy. Pin is INLINE on the row
+  (`session-sidebar-row-pin`, title "pin to top") and `pin` appears
+  nowhere in the menu text.
+- b PASS. "restart the agent" opens the picker, which reads
+  `this row currently reads "working"`. That is a MEASURED status, not
+  `unknown`. The four gates were observed in force at the same time: the
+  arm checkbox renders UNCHECKED, and all six wrapper radios report
+  `disabled: true`. CANCELLED without restarting. Proven server-side
+  rather than by intent: zero `POST /api/v1/sessions/respawn` and zero
+  `POST .../recreate` in the whole window, and the only related request
+  is one read-only
+  `GET /api/v1/sessions/restart/preview?session_name=cloude_Media_Compression`
+  returning 200.
+- c PASS. A `dblclick` on the row name element enters rename mode:
+  `SessionSidebarRename.isEditing()` true, an input present, FOCUSED, and
+  carrying the current value "Media Compression". Escape exited it, the
+  editor is gone, `isEditing()` is false and the title is unchanged.
+  Nothing was committed, proven server-side: zero title/rename PATCHes and
+  zero `claude_rename_pushed` in the window. Note the handler requires the
+  event target to be inside `[data-row-name]`; a dispatch aimed at the row
+  container one level up is silently ignored, which reads exactly like a
+  dead control.
+- d PASS, and STATE WAS RESTORED. Run on `cloude_Fantasy_Hockey_2026`, the
+  oldest row that is genuinely idle and read (the single oldest by
+  `last_work_at` is Media Compression, but it reads `working`, so it was
+  not used). Recorded BEFORE the touch: `notifications_muted: False`. The
+  menu item is enabled and clickable; clicking it drove
+  `PATCH /api/v1/sessions/records/e8b81c54-.../notifications` to 200 and
+  the server then held `notifications_muted: True`. Reopening the menu
+  showed the label had flipped to "unmute notifications". Clicking that
+  restored `notifications_muted: False`, the value it started at. Exactly
+  2 PATCHes were issued against that uuid and nothing else was written.
+- e PASS. Zero CSP violations across a full hard reload plus 6 seconds,
+  both on a `securitypolicyviolation` listener and in the console reader.
+  THE NEGATIVE CONTROL IS WHAT MAKES THE ZERO MEAN ANYTHING: an injected
+  image from `cdn.jsdelivr.net` raised exactly one `img-src` violation on
+  that same listener, and the element was removed afterwards. Live header
+  carries no third-party origin in any directive:
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+  connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self' data:;
+  frame-ancestors 'none';`
+  Note the console reader only starts capturing when it is first called,
+  so the page had to be reloaded AGAIN after arming it; the first "no
+  messages" answer was a CANNOT DETERMINE wearing a pass.
+
+**The owner's sessions.** 19 before, 19 after, and the sorted session-name
+lists are byte-identical, so none was lost, renamed or added. Zero
+respawn, zero recreate, zero session DELETE and zero pane input POSTs for
+the entire window. The only writes this deploy made to the owner's data
+are the two mute PATCHes above, which cancel out.
+
+**Tag and push.** `v1.2.1` annotated on `d074bbc`, tag object
+`54d95d1`. Pushed `release/1.2.1` and `v1.2.1` to `origin`
+(ccsliinc/CloudeCode) and `adamdev` (Adoom666/CloudeCodeDev), verified
+independently with `git ls-remote` on both: branch `d074bbc`, tag
+`54d95d1` on each. NOTHING was pushed to `upstream` and its broken push
+sentinel was left exactly as it is; `git ls-remote upstream refs/tags/v1.2.1`
+returns nothing.
+
+**Still open, unchanged by this round:** the version endpoint reports
+`latest_version` 1.0.36 against `https://github.com/Adoom666/CloudeCode.git`,
+the upstream this project may not push to, so a 1.2 install keeps being
+told it is behind a line it does not follow. The Electron bundle is still
+1.2.0 and would need a rebuild to make the footer read 1.2.1.
+
+---
+
+## 2026-09-10 - the electron bundle rebuilt at 1.2.1 and installed on live
+
+Closes the version mismatch left by the 1.2.1 source deploy: live ran 1.2.1
+source while the footer and `GET /api/v1/version` both read 1.2.0. The number
+comes from `CLOUDE_APP_VERSION`, which `macOS/server-manager.js` injects from
+`app.getVersion()`, which reads the PACKAGED `macOS/package.json`. A source
+deploy ships `git ls-files src client` and cannot rewrite `app.asar`, so only a
+bundle rebuild could move it. Same mechanism, same fix, as the 1.2.0 rebuild
+recorded above.
+
+**NO VERSION FILE WAS TOUCHED.** `macOS/package.json` already read 1.2.1, and it
+is the only hand written version source. This round changed no code at all.
+
+**Build.** From the `release/1.2.1` worktree at `ce7267d`:
+`cd macOS && npm install`, then `CSC_IDENTITY_AUTO_DISCOVERY=false npm run
+package`. electron-builder 24.13.3, electron 28.3.3, darwin arm64. The
+`afterPack` hook `macOS/scripts/adhoc-sign.js` ran and self verified
+("signature present and verified (ad-hoc, no identity)"). Outputs
+`macOS/dist/mac-arm64/Cloude Code.app` and
+`macOS/dist/Cloude Code-1.2.1-arm64.dmg`. The .app was installed with `ditto`;
+the dmg is the distributable and was not needed here. Build host is
+mac-mini-m4, which is also the target host.
+
+**BLAST RADIUS MEASURED BEFORE THE SWAP, and it is exactly one file.** The new
+bundle's `Contents/Resources/src` and `Contents/Resources/client` hash byte for
+byte identical to the installed 1.2.0 bundle's:
+src `7ee339d7f5616f67a1fd6beec9cdb22a12f3088c38cf1928c64b9786182bce73`
+(265 files) and client
+`1759da52668d758497f707b0ffb201c137e2f876217fcb399abe5756d68f9aea`
+(312 files), unchanged either side. Only `app.asar` moved,
+`20ee2119...` to `7f091e0d...`, plus the version in Info.plist. So the reinstall
+put back the same source the 1.2.1 deploy had already written.
+
+**Backup, one move from a rollback:**
+`/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538`.
+Nothing was deleted; the owner's settings deny `rm`. Rollback is a single `mv`
+back followed by a bootout/bootstrap.
+
+**The restart was bootout then bootstrap, NOT `kickstart -k`,** for the reason
+recorded in the 1.2.0 entry: `kickstart -k` SIGKILLs Electron and orphans the
+python server on port 8000, which the new bundle then refuses to adopt as a
+mismatch. Measured this round: `launchctl bootout gui/501/com.cloudecode.menubar`
+at 16:05:47Z freed port 8000 in **2 seconds**, and
+`launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.cloudecode.menubar.plist`
+brought `/health` back to 200 at **t+15s**. THE PROBE WAS A POLL, NOT A SAMPLE:
+the 1.2.1 deploy recorded startup holding the event loop for about 54 seconds
+after binding, so a single curl can return 000 and read exactly like a dead
+server.
+
+**Measured after the restart:**
+- 19 tmux sessions on `-L cloude` before and after, and the sorted NAME LISTS
+  diff clean. Nothing was typed into, restarted or closed.
+- `boot_readopt_complete` at 16:06:15.484584Z: `held: 18`, `skipped: 1`,
+  `failed: 0`, `live_count: 19`, `id_sources.hook_token: 18`. Held plus skipped
+  equals 19, the same shape as the last two good deploys.
+- ZERO `hook_post_rejected_invalid_token` after 16:05:47Z. The file holds 7,104
+  of them in total and the most recent is 2026-09-08T20:40:23.231960Z, which is
+  the storm CLAUDE.md already documents, not this round. The only token line
+  after the restart is one `hook_tokens_restored`.
+- Three independent version reads all agree:
+  `CFBundleShortVersionString` **1.2.1** on the installed bundle (and
+  `codesign --verify --deep --strict` on the INSTALLED copy: "valid on disk",
+  "satisfies its Designated Requirement");
+  `CLOUDE_APP_VERSION=1.2.1` in the RUNNING server process env
+  (`ps eww`, pid 28060); and `GET /api/v1/version` returning
+  `{"version": "1.2.1", ...}`. The server dir VERSION file also stamped 1.2.1.
+- Browser evidence, in a tab of our own opened via Claude in Chrome and closed
+  afterwards, the owner's tab untouched: after a hard reload the footer renders
+  `v1.2.1` in `.home-bar__version` and in both `.version` spans, the server
+  rendered `<meta name="cloude-app-version">` reads `v1.2.1`, and `v1.2.1` is
+  the ONLY version shaped string in the whole rendered page text.
+- Zero CSP violations and zero console errors across a full load that produced
+  268 console messages. THE NEGATIVE CONTROL RAN IN THE SAME PASS, because a
+  detector that never fires cannot prove a zero: an injected `img` pointed at
+  `cdn.jsdelivr.net` raised exactly one `img-src` violation on the same
+  listener, and the element was removed afterwards.
+
+**Still open, deliberately not touched this round:** the version endpoint's
+`update` block still points at `https://github.com/Adoom666/CloudeCode.git`,
+the upstream this project may not push to, and reports
+`latest_version: "1.0.36"` against `current_version: "1.2.1"`. Note the
+`status` field reads `current` rather than claiming an update, because 1.2.1
+sorts above 1.0.36, so the visible symptom is a bogus "latest" figure and an
+`upgrade_command` pointing at the forbidden fork's releases page rather than a
+false update prompt. Where the update checker SHOULD point is the owner's call.
+
+---
+
+## 2026-09-10 - v1.2.0 and v1.2.1 PUBLISHED on ccsliinc/CloudeCode
+
+**Before:** both were DRAFTS. The release marked Latest was `v1.0.33` from
+2026-08-29, so anyone landing on the repo saw a two week old build as current,
+and there was no published artifact to downgrade TO.
+
+**Published, both not prerelease:**
+- `v1.2.1` at `d074bbc`, Latest, published 16:21:01Z
+  https://github.com/ccsliinc/CloudeCode/releases/tag/v1.2.1
+- `v1.2.0` at `ecd0669`, not Latest, published 16:21:53Z
+  https://github.com/ccsliinc/CloudeCode/releases/tag/v1.2.0
+
+**THE ARTIFACTS WERE ALREADY THERE, BUILT BY CI FROM THE TAG, and that is the
+copy that was published.** `.github/workflows/release.yml` fires on a `v*` tag
+push and attaches a DMG to the draft it creates, so no rebuild was needed. The
+local `macOS/dist/Cloude Code-1.2.1-arm64.dmg` in this worktree was
+deliberately NOT used: it is built from `ce67957`, two docs-only commits PAST
+the `v1.2.1` tag, and it hashes
+`50a9f8a46753300f013c9eec0ebb351ab5578d2052f0ae4ef7155ad4382d89f1` at
+126,257,121 bytes, which is neither the same bytes nor the same tree as the tag.
+electron-builder DMGs are not byte reproducible, so the two were never going to
+agree; the tag-built one is the one with provenance.
+
+    v1.2.1  Cloude.Code-1.2.1-arm64.dmg  126,246,156 bytes
+            sha256 01ed34e6f41097d24d60ca60f8c73b046cbc5462f0e4749b38c3ba75c2beeb5e
+    v1.2.0  Cloude.Code-1.2.0-arm64.dmg  126,181,438 bytes
+            sha256 9a80057f17c529f5d5b2ed8f7f0a1b3d22e1d5f9b168bfc42546489cc985c305
+
+**Verified as a downloader, not as an uploader.** Each asset was fetched back
+from its PUBLIC unauthenticated URL after publishing and re-hashed: both match
+the sha256 and the byte count above exactly. A silently truncated upload is the
+failure that only shows up at the moment someone actually needs to downgrade,
+which is why the download-back is the check that counts and `gh release view`
+reporting an asset is not. Both DMGs were also mounted: each holds
+`Cloude Code.app` at the right `CFBundleShortVersionString` (1.2.1 and 1.2.0),
+each passes `codesign --verify --deep --strict` as `Signature=adhoc`
+`Identifier=com.cloudecode.menubar`, and each carries the `/Applications`
+symlink so the drag install works.
+
+**Both bodies carry a "how to go back" block** written for someone on a phone or
+a fresh machine: swap the bundle (older DMG, or move the
+`/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538` copy back), then
+`launchctl bootout gui/$(id -u)/com.cloudecode.menubar` followed by
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloudecode.menubar.plist`.
+It says explicitly NOT to use `kickstart -k` and why (SIGKILLs Electron, orphans
+the python server on port 8000, the next app refuses to adopt it as a version
+mismatch), and it tells the reader to POLL `/health` rather than sample it,
+because startup holds the loop about 54 seconds after binding. It also records
+that `tmux -L cloude` sessions survive an app swap.
+
+**`.claude/notes/HANDOFF.md:118` IS STALE AND WAS NOT EDITED THIS ROUND.** It
+still prescribes `launchctl kickstart -k gui/501/com.cloudecode.menubar` as the
+supervisor recovery, which the 1.2.0 and 1.2.1 deploy records in this file
+supersede. Anyone reading HANDOFF first will get the wrong instruction. Fixing
+that line is an open item.
+
+**Credit, measured rather than assumed.** Between `v1.2.0` and `v1.2.1`,
+`psyance` (Adoom666) authored 9 of the 18 non-merge commits, so the 1.2.1 notes
+credit a large share to him and that is accurate. Between `v1.0.36` and
+`v1.2.0` he authored 2 of 40 (the app icon and DMG background `887b8fc`, and the
+README logo and download link `8e7f8b9`), so the 1.2.0 notes credit those two
+things specifically and do NOT claim a large share. The brief for this task said
+a large share of BOTH came from him; that is right for 1.2.1 and wrong for
+1.2.0, and the published notes say the measured thing.
+
+**The stale drafts were left ALONE, as instructed. They are the owner's call.**
+There are 33 of them, `v1.0.0` through `v1.0.32`, not the 6 the brief expected,
+and EVERY ONE carries exactly one DMG at about 118 MB, totalling **3.81 GB** of
+release storage. None is empty. `v1.0.31` exists twice, one published
+(20:37:17Z) and one draft (20:33:48Z) minutes earlier. Separately, tags
+`v1.0.34`, `v1.0.35` and `v1.0.36` are pushed but have NO release object at all.
+Recommendation, for the owner to accept or refuse: keep `v1.0.33` (the last
+published 1.0) and delete the other 32 drafts to reclaim the storage, since a
+draft is invisible to users and its DMG is not reachable by anyone who does not
+have write access, so nothing downstream can be depending on them. The tag and
+the commit are the real history; the draft is just a build artifact.
+
+**THE UPDATE CHECKER STILL POINTS AT THE FORBIDDEN FORK.** `GET /api/v1/version`
+reports `latest_version` resolved from `Adoom666/CloudeCode`, so a 1.2.1 install
+is told the latest release is 1.0.36 and its upgrade link opens the wrong
+project. Now that ccsliinc has real published releases this is worth closing.
+Two lines, both in `src/core/update_check.py`:
+
+    line 76  FALLBACK_REMOTE = "https://github.com/Adoom666/CloudeCode.git"
+    line 81  DEFAULT_UPGRADE_COMMAND = "open https://github.com/Adoom666/CloudeCode/releases/latest"
+
+They would become `https://github.com/ccsliinc/CloudeCode.git` and
+`open https://github.com/ccsliinc/CloudeCode/releases/latest`. The reason the
+FALLBACK is what ships is `resolve_remote()` at `:362`: it prefers a configured
+remote, then `discover_origin_remote(self._root)`, then the fallback, and a
+packaged install's root is the state dir rather than a git work tree, so it has
+no `origin` and always lands on the fallback. Note the visible symptom is a
+bogus "latest" figure and a wrong upgrade link, NOT a false update prompt,
+because 1.2.1 sorts above 1.0.36 and `status` therefore reads `current`.
+NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
+`macOS/main.js:437` and `client/js/launchpad.js:3175` also link to the fork and
+would want the same ruling.
+
+
+## 2026-09-10 - GAME PLAN: four tracks, and the dependency that orders them
+
+Owner's direction, verbatim: "come up with a game plan, lets get this all into
+gear. make sure you keep the git up to date. then lets knock this out, then we
+can tell the other agent we dont want things removed that he or i design that
+we both dont agree upon into plugins. this way we can use the 2 of our wants to
+see whats resonable for main app and whats reasonable for plugins. making
+classsed code and probably should have language vars if we can get this to be
+bigger and people want to use this"
+
+**THE DEPENDENCY THAT ORDERS EVERYTHING:** language variables must land BEFORE
+svelte slices 2 to 7. Every screen hardcodes its strings today. Porting six
+more screens and retrofitting translation afterwards rewrites every file twice
+and touches every file the migration just wrote. So i18n is a gate, not a
+follow-up.
+
+### Track A - backend to first-class python
+- [x] v1 plan, 12 slices, `.claude/notes/backend-decomposition-plan.md`
+- [x] S1 `4e911b6` ProbeHealthRecorder, S2 `c170eb6` themes, S3 `bb7abb0` toast
+      inbox, S4 `09284df` SessionRegistry, S5 `209947d` AttachmentSidecars
+- [x] MEASURED PROBLEM: 8,340 to 8,239 across five slices, 101 net lines, and
+      two of the last three slices GREW the file. Cause is the preserved facade
+      (74 public names, no-arg ctor for 107 bare test constructions) plus the
+      docstring rule: a 20-line body out costs ~70 lines of documented
+      delegating property back in.
+- [ ] v2 plan IN FLIGHT on `docs/backend-plan-v2`: composition root with
+      injected collaborators, Protocol boundaries at tmux/store/clock/fs, the
+      facade given a DELETE DATE with its ~575 call sites migrated, an explicit
+      ruling on the docstring rule for pure forwarding, the OTHER monoliths
+      diagnosed (routes 4,387, tmux_backend 2,801, models 2,495, config 2,112,
+      auth 1,674, db_models 1,663, main 1,406, db_steps 1,402), and a numeric
+      stopping condition per file.
+- [ ] Then resume slices under v2.
+
+### Track B - svelte client, slices 2 to 7
+- [x] toolchain, slice 1, LED port + drift guard, plugin registry, rebased onto
+      1.2.1 and validated: `feat/svelte-1.3-on-121`, 13 commits.
+- [ ] BLOCKED on Track D. Do not start slice 2 until i18n lands.
+
+### Track C - plugin engine and the core-versus-plugin policy
+- [x] registry shipped, four surfaces, mark-unread as the first plugin behind
+      `ui.show_mark_unread_control`.
+- [ ] IN FLIGHT on `docs/plugin-policy`: the owner's governance rule written
+      into `docs/DECISIONS.md` (neither party removes the other's designed
+      behaviour without agreement; a conflict ships BOTH, one as a plugin or a
+      setting; the two kept-behaviour lists decide core versus plugin; a
+      graduation and demotion path so the policy is not a ratchet), plus a
+      MECHANISM that would actually have caught this week's two removals, with
+      a firing and a quiet control.
+- [ ] Ask Adam for `docs/kept-behaviours/adoom666.md`; the policy is symmetric
+      and useless with one side filled in.
+
+### Track D - language variables (NEW, and it gates Track B)
+- [ ] IN FLIGHT on `feat/i18n-foundation`: catalog format and location, key
+      scheme that survives the rewrite, interpolation and plurals via built-in
+      `Intl` rather than a dependency, ONE source read by BOTH the legacy client
+      and svelte (a second table is a dual path and is forbidden), locale
+      selection, loud missing-key behaviour, a pseudo-locale as the coverage
+      test, and one real surface ported as the worked example.
+- [ ] Server-emitted strings (toast bodies, refusal sentences, picker copy):
+      scope decision required, not silent omission.
+
+### Governance, to tell Adam once Track C lands
+Neither party removes a behaviour the other designed without agreement. A
+design disagreement ships BOTH, one as a plugin contribution or a setting, each
+defaulting to its own preference. The two kept-behaviour lists are the input
+that decides core versus plugin. Evidence, both directions: his row menu
+removed restart, mark-unread and group filing; our own side nearly deleted the
+owner's double-click rename by following his commit's intent.
+
+### Git hygiene
+- Main checkout moved OFF the stale `feat/svelte-web` onto `release/1.2.1`
+  today; the finished `release-1.2.1` worktree was removed. `feat/svelte-web`
+  carries the LOSING led model's text and fooled a worker into writing an
+  inverted ruling into the shared `docs/DECISIONS.md`. Do not read docs from it.
+- Every branch pushes to `origin`; releases and coord also to `adamdev`. NEVER
+  `upstream`.
+
+## 2026-09-10 - BACKLOG (refined): the sleep/wake AWAY BAR is full width and overlapping when the sidebar is out
+
+Supersedes and sharpens the earlier "idle warning goes full width" entry: the
+owner has now identified the actual component and its content, so this is the
+away bar, not a generic idle notice.
+
+Owner's report, verbatim: "the idle bar is wide when the sidebar is out and its
+overlapping. away 2 hr 49 min / close / show full history / show summary / just
+continue / this pane is a full-screen app, so tmux kept no scrollback for it:
+full history repaints the current screen and replace"
+
+- [ ] SYMPTOM: the bar spans the full viewport width when the sidebar is out
+  (pinned/open and holding layout space), and it OVERLAPS rather than sitting
+  beside. It presumably sizes against the viewport instead of the content
+  column, so the sidebar's gutter is never subtracted. UNCONFIRMED: whether it
+  is fixed-position or a flow element with a width rule, and WHAT it overlaps
+  (the sidebar, the terminal, or the header). Measure before fixing; do not
+  guess which of those it is.
+- The component is the sleep/wake bar shipped 2026-09-08: `client/js/terminal-away-bar.js`
+  and `terminal-away-gap.js`, fed by `src/core/session_away_report.py` and
+  `GET /api/v1/sessions/away/summary`. The sidebar gutter token is
+  `--sidebar-gutter`.
+- CONTENT OBSERVED, useful for reproducing: heading "away 2 hr 49 min", then
+  the controls close / show full history / show summary / just continue, then
+  the explanatory sentence "this pane is a full-screen app, so tmux kept no
+  scrollback for it: full history repaints the current screen and replace".
+- [ ] SECOND, POSSIBLY SEPARATE DEFECT: that explanatory sentence reads
+  truncated ("and replace", not "and replaces ..."). Determine whether the
+  string itself is cut in the source or whether the element is clipping its
+  text. If the element is clipping, that is the same layout bug and closes with
+  it; if the string is wrong in the source, it is a copy fix and independent.
+- Fix belongs in the SVELTE rewrite if the terminal screen has moved by the
+  time this is picked up (it is the LAST slice, per
+  `.claude/notes/svelte-migration-launchpad.md`, so it will be vanilla for a
+  while). A CSS-only fix in the current client is acceptable and expected to be
+  thrown away.
+- Related open question from an earlier session, still unanswered: what "show
+  full history" is supposed to do, versus "show summary".
+
+## 2026-09-10 - TWO GATES before the backend line can reach a release
+
+Recorded now so they are not discovered at merge time.
+
+- [ ] **BOOT PATH VERIFICATION IS UNMEASURED.** v2 slice S3 (owned-tmux ledger,
+  `2c24423`) touches the boot re-adopt path, and nothing has been deployed, so
+  the plan's own live proofs were never run: `boot_readopt_complete` held plus
+  skipped against `/opt/homebrew/bin/tmux -L cloude list-sessions | wc -l`, and
+  the `/sessions/list` row count checked SEPARATELY from that log line. Those
+  two checks are exactly what caught the 22-rows-for-21-panes defect, where the
+  boot log read perfect while one pane carried two backends and two tailers on
+  one FIFO. A green suite is not a substitute. Run both against live before this
+  line merges to a release branch.
+- [ ] **ADAM'S MASTER HAS MOVED AND MUST BE INTEGRATED.** `feat/backend-
+  decomposition` sits on the 1.2.1 base and carries 12 slice commits; his master
+  has 11 commits our line does not. That integration is a real merge, not
+  bookkeeping, and it is the natural moment to run the boot verification above.
+  Do NOT do it as a side effect of tidying a branch name.
+- Bookkeeping already corrected: draft PR #19's head `feat/12-backend-
+  decomposition` holds only the claim commit; the real work is
+  `feat/backend-decomposition` @ `2c24423`. Commented on the PR rather than
+  force-repointing it, because repointing means the merge above.
+
+### A rule this session paid for twice
+`git checkout -- <path>` to revert a mutation destroyed uncommitted work in two
+separate slices (v1 S3 and v2 S3), both times recovered by re-running the
+worker's own script. When reverting a deliberate mutation, revert only the
+mutated hunk, or stash first, or work in a copy. A revert that also discards
+real edits is indistinguishable from a successful revert until the tests move.
+
+## 2026-09-10 - NOTE: the backend slice numbers collide across two plans
+
+A stale worker read `feat/backend-decomposition` and concluded another session
+had appeared on its branch. It had not. The confusion is real and will repeat,
+so it is written down.
+
+TWO PLANS, BOTH NUMBERING FROM ZERO:
+- Plan v1 (`.claude/notes/backend-decomposition-plan.md` as first written, 12
+  slices) produced: `4e911b6` probe health, `c170eb6` themes, `bb7abb0` toast
+  inbox, `09284df` session registry, `209947d` attachment sidecars.
+- Plan v2 (the SAME file, rewritten on `docs/backend-plan-v2`, commit `d70bb98`,
+  9 slices) produced: `8f77fa4` S0 composition root and four ports, `1cc7046`
+  S1 the facade forwarder deletion, `c4db6c2` S2 `src/models.py` into a package,
+  `2c24423` S3 owned-tmux ledger.
+
+So "s3" means the toast inbox in one plan and the owned-tmux ledger in the
+other, and a commit message saying S2 could mean the theme cluster or the
+models repackage. When reading a slice commit, check its DATE against which
+plan was current, or read the commit body, which names what actually moved.
+
+WHY v2 EXISTS, since a reader of v1 will not know: v1 preserved a facade keeping
+74 public names and a no-argument constructor, so five slices moved 101 net
+lines and two of the last three GREW the file, because a 20-line body out cost
+about 70 lines of documented delegating property back in. v2 deletes the facade
+instead, which is what made the file finally move (8,340 to 7,725 so far).
+
+- [ ] When the backend line is next touched, consider renumbering v2's remaining
+  slices to continue from v1 rather than restarting, or drop numbers entirely
+  and name them. The collision has already cost one worker a false alarm.
+
+Incidental, from the same round: an unrelated v1 worker re-ran its own two
+suites against current HEAD and got 58/58, independently confirming its
+invariants survived v2's forwarder deletion. A worker cross-checking a LATER
+worker's change is better evidence than either checking itself, and it was free.
