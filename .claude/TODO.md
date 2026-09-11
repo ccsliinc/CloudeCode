@@ -9698,3 +9698,117 @@ so. He could not see the refusal.
 
 Preview for the owner: `http://10.0.1.150:5057/` (fixtures, not his sessions;
 reads live, writes refused). Stop it with `kill 97386`.
+
+---
+
+## 2026-09-11 - integration/1.3.0: both of our chains merged, measured against per-chain controls
+
+`integration/1.3.0` off `release/1.2.1` at `942638e`. Adam's line is NOT in
+this branch and is the next round (1.3.1), per the release plan above.
+
+**Order: backend first, then client.** The backend chain is the smaller diff
+(16 commits) and its structural moves are what the client's references must
+resolve against, so merging it first makes the client merge the step that can
+expose cross-chain staleness, and therefore attributable. It also lands
+`docs/DECISIONS.md` and the new route-mount test before the client arrives, so
+both are available as instruments.
+
+**Conflicts, four files across the two merges, all resolved additively.**
+`.claude/TODO.md` twice and `CLAUDE.md` once: every side was a pure append of
+dated entries with ZERO heading overlap, kept in full and verified by diffing
+the heading set against both parents each time. `CLAUDE.md`'s stack table took
+the client's new "Compiled frontend" row AND the backend's `src/config/` path.
+`client/js/launchpad.js` was a modify/delete: the delete wins, the backend side
+held one comment line repointing a removal note, and that note survives in the
+two node tests that carry it.
+
+**THE BASE MOVED TWICE WHILE THIS RAN.** `release/1.2.1` went
+`4d8aa76` -> `12d9dcc` -> `942638e` mid-session, all TODO appends from another
+session on the main checkout. Pinned to `942638e` and re-pointed once rather
+than chasing it. Re-check before the PR merges.
+
+**The numbers, each against a control MEASURED on the chain tip first.**
+
+    pytest        backend tip 19ac32d   6520 passed /  2 failed / 54 skipped
+                  client  tip 82b8cb2   5715 passed /  6 failed / 19 skipped
+                  MERGED               6527 passed /  6 failed / 54 skipped
+    vitest        client tip 1335 / MERGED 1335, 47 files
+    svelte-check  client tip 0 errors / MERGED 0 errors, 401 files
+    node suite    client tip 171/171  / MERGED 171/171
+
+**ZERO NEW FAILURES. The merged six are the SAME six the client tip already
+had**, and running the client chain's own pytest is what proved it. The
+backend control is the pre-existing environmental pair
+(`test_home_write_guard`, `test_version_probe`). The other FOUR are the client
+chain's own, all one root cause - `client/js/launchpad.js` and
+`tests/test_recent_deleted_sessions.node.mjs` were deleted and three things
+still point at them:
+
+- `tests/test_ui_flags_setting.py::test_the_client_actually_probes_the_flag`
+  **IS CATCHING A REAL BUG AND WAS LEFT RED ON PURPOSE.** Nothing in
+  `web/src` calls `UIFlags.ensure()`; only `client/js/session-sidebar-fetch.js`
+  does. So on the SVELTE HOME SCREEN the probe never runs,
+  `showMarkUnreadControl()` answers its default `true` forever, and
+  `ui.show_mark_unread_control: false` is dead on that surface. That is the
+  "a setting nothing reads is not a setting" failure the test exists for, and
+  it contradicts the standing ruling that the control ships behind that flag.
+  Repointing the test would have destroyed the evidence; fixing it is a
+  behaviour change in the client chain's own subsystem and belongs to its
+  author, not to a merge.
+- `tests/test_docs_operations_chart_drift.py` (2): `docs/session-project-operations.md`
+  still cites `client/js/launchpad.js`.
+- `tests/test_recent_deleted_sessions_runs.py`: a python wrapper whose node
+  sibling was deleted. Its coverage WAS ported -
+  `web/src/lib/launchpad/recent-visibility.test.ts` says so in its header - so
+  this one is dead weight, the same shape the client chain already retired in
+  `tests/test_project_list_render_guard_runs.py`.
+
+**Collection delta fully accounted, zero coverage removed.** Union of the two
+tips is 6598, merged collects 6587. The 11: one is
+`test_project_list_render_guard_runs.py`, deleted by the client chain; the
+other ten are absent from the backend tip too, being renamed or re-parametrised
+by the decomposition. Coverage in those areas GREW -
+`test_no_unresolved_names` 265 params on the client tip to 347, route-table
+assertions 2 to 92 plus 147 new `test_api_route_modules` cases.
+
+**The four cross-chain checks, the ones a clean merge cannot vouch for.**
+- LED parity + drift guard + behaviour: 39 tests pass. The fixture reads the
+  REAL `client/js/status-led.js` and `session-status-ui.js` off disk, and the
+  suite carries its own NEGATIVE CONTROL proving the comparison can fail.
+  Neither chain touched `status-led.js`.
+- i18n pseudo-locale coverage guard: 289 tests in `coverage.test.ts`, 324
+  across `web/src/lib/i18n/`. All pass.
+- Every route the client calls still mounts: `test_api_route_modules.py` 146
+  passed / 1 skipped against `src.main.app`, `test_client_called_routes_exist.py`
+  7 passed. The assembled app answers 88 OpenAPI paths and all four the client
+  consumes are present under `/api/v1/`.
+- **NO FIELD MOVED LEVEL.** An AST diff of the base `src/models.py` against the
+  new `src/models/` package finds EVERY class field-identical - `Session` 11,
+  `SessionInfo` 21, `SessionRecord` 27, `AttachableSession` 16, and no class
+  differing anywhere in the sweep. The decomposition was a pure move. Confirmed
+  a second way off the live pydantic models, and every field
+  `web/src/lib/sessions/types.ts` reads sits on the level it expects.
+
+**KNOWN GAP, not fixed here.** `tests/test_client_called_routes_exist.py`
+scans `client/js/**/*.js` ONLY. It never looks at `web/src`, so it is green and
+proves nothing about the new home screen. Harmless TODAY because `web/src`
+makes exactly one API call and does it through the legacy `window.API`; every
+other `/sessions/...` mention there is a docstring. It stops being harmless the
+day someone writes a raw `fetch` in a `.svelte` file.
+
+**Bundle freshness PASSES**: `npm run build` leaves
+`git status --porcelain client/dist` empty and `scripts/web-build-check.sh`
+exits 0 reading BUNDLE CURRENT. Also: 191 `client/js` files `node --check`
+clean, `scripts/scan_secrets.py` exit 0 over 1636 files, the four listing cost
+ceilings 16 passed, secret-scan pre-commit hook run on every commit.
+
+Version set to **1.3.0** in `macOS/package.json`, still the single
+hand-written source after the config repackage. NOT tagged, NOT deployed.
+
+**Stale doc found, left alone.** `CLAUDE.md` still describes the LED as having
+retired the outer `unread` state onto the inner dot. `docs/DECISIONS.md` records
+the owner choosing the OPPOSITE on 2026-09-09 ("1. his"), and the shipped
+`client/js/status-led.js:123` agrees with the ruling - `unread` IS in
+`OUTER_STATES`. The CODE is correct and the merge did not touch it; only the
+prose is describing the branch that lost. Flagged rather than edited, because
+DECISIONS is Adam's to restate.
