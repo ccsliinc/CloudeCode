@@ -54,6 +54,8 @@ from src.core.agent_family_display import resolve_family_for_display
 from src.core.agent_wrapper_display import resolve_wrapper_for_display
 from src.core.session_agent_evidence import choose_agent_evidence
 from src.core.session_theme_resolution import resolve_theme
+from src.core import listing_gather
+from src.core.listing_prefetch import ListingPrefetch
 from src.core import session_agent_infer_apply
 from src.core.session_agent_infer import restart_agent_type
 from src.core.hook_token_recovery import (
@@ -105,6 +107,7 @@ from src.core.session_status_source import (
     STATUS_SOURCE_TMUX,
 )
 from src.core.unread_store import UnreadStore
+from src.core.unique_tmp_path import unique_tmp_path
 from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import (
     SweepOutcome,
@@ -1801,12 +1804,15 @@ class SessionManager:
     def _write_metadata_atomic(self, data: dict) -> None:
         """Durable, crash-consistent metadata write.
 
-        Protocol: write to a sibling ``.tmp`` file → ``f.flush()`` →
-        ``os.fsync(fd)`` → ``os.replace(tmp, final)``. ``os.replace`` is
-        the only rename primitive guaranteed atomic across POSIX and
-        Windows. ``fsync`` before the rename prevents a kernel panic
-        from stranding a zero-byte file at the final path (which, on
-        ext4 ``data=ordered``, is a real scenario).
+        Protocol: write to a UNIQUELY NAMED sibling temp file (see
+        ``src/core/unique_tmp_path.py`` - atomic and serialized are
+        different properties, and a fixed ``.tmp`` name only ever had
+        the first) → ``f.flush()`` → ``os.fsync(fd)`` →
+        ``os.replace(tmp, final)``. ``os.replace`` is the only rename
+        primitive guaranteed atomic across POSIX and Windows. ``fsync``
+        before the rename prevents a kernel panic from stranding a
+        zero-byte file at the final path (which, on ext4
+        ``data=ordered``, is a real scenario).
 
         The directory's own ``fsync`` (for rename durability) is skipped
         - this is metadata, not a source of truth for money. Losing
@@ -1816,19 +1822,29 @@ class SessionManager:
         """
         path = settings.get_session_metadata_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp = unique_tmp_path(path)
 
-        with tmp.open("w") as f:
-            json.dump(data, f, indent=2, default=str)
-            f.flush()
+        try:
+            with tmp.open("w") as f:
+                json.dump(data, f, indent=2, default=str)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError as exc:
+                    # tmpfs and some network FS don't support fsync; log
+                    # and continue - the rename is still atomic per POSIX.
+                    logger.debug("metadata_fsync_unsupported", error=str(exc))
+
+            os.replace(str(tmp), str(path))
+        except OSError:
+            # The temp name is unique per write, so a failure that left
+            # it behind would litter the state directory with one
+            # orphan per failure instead of reusing a single dead file.
             try:
-                os.fsync(f.fileno())
-            except OSError as exc:
-                # tmpfs and some network FS don't support fsync; log and
-                # continue - the rename is still atomic per POSIX.
-                logger.debug("metadata_fsync_unsupported", error=str(exc))
-
-        os.replace(str(tmp), str(path))
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def _save_session_metadata(self, session: Optional[Session] = None):
         """Save session metadata atomically, including the owned-set.
@@ -1902,20 +1918,24 @@ class SessionManager:
 
         Copies ``Settings.update_settings_config()``: the pre-write bytes
         go to ``pinned_themes.json.bak`` (one generation, overwritten each
-        call) BEFORE anything else, then temp file, ``fsync``,
-        ``os.replace``. The backup is not decoration here. This file is
-        the durable record of every session's theme, and
-        ``_load_pinned_themes`` deliberately starts from an EMPTY map when
-        it cannot parse what is on disk - so without a backup, one corrupt
-        read followed by one pin would write that empty map over the
-        user's entire set of pins with nothing left to recover from. A
-        reading that did not happen is not a reading of nothing.
+        call) BEFORE anything else, then a UNIQUELY NAMED temp file (see
+        ``src/core/unique_tmp_path.py``), ``fsync``, ``os.replace``. The
+        backup is not decoration here. This file is the durable record of
+        every session's theme, and ``_load_pinned_themes`` deliberately
+        starts from an EMPTY map when it cannot parse what is on disk -
+        so without a backup, one corrupt read followed by one pin would
+        write that empty map over the user's entire set of pins with
+        nothing left to recover from. A reading that did not happen is
+        not a reading of nothing. The unique temp name changes none of
+        that: it is the same backup, the same fsync, the same replace,
+        with a temp name a second writer cannot also pick.
 
         Every failure is logged and swallowed: a preferences file that
         will not write must not take a session pin, an adopt or a destroy
         down with it.
         """
         path = settings.get_pinned_themes_path()
+        tmp: Optional[Path] = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
@@ -1931,7 +1951,7 @@ class SessionManager:
                         path=str(path),
                         error=str(exc),
                     )
-            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp = unique_tmp_path(path)
             with tmp.open("w") as f:
                 json.dump(self.pinned_themes, f, indent=2)
                 f.flush()
@@ -1942,6 +1962,14 @@ class SessionManager:
             os.replace(str(tmp), str(path))
         except (OSError, TypeError, ValueError) as exc:
             logger.error("failed_to_save_pinned_themes", error=str(exc))
+            # The temp name is unique per write, so a failure that left
+            # it behind would litter the state directory with one orphan
+            # per failure instead of reusing a single dead file.
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     # ---- read/unread persistence (feat/hook-driven-status) ---------------
     #
@@ -2192,9 +2220,11 @@ class SessionManager:
         through ``set_pinned_theme``.
 
         Empty/None ``theme_id`` deletes the dotfile (clears the default).
-        Otherwise writes ``<theme_id>\\n`` with mode 0o644 via
-        ``tmp + os.replace`` so a crash mid-write can never leave a
-        half-written file at the canonical path.
+        Otherwise writes ``<theme_id>\\n`` with mode 0o644 via a
+        uniquely named temp file (``src/core/unique_tmp_path.py``) plus
+        ``os.replace`` so a crash mid-write can never leave a
+        half-written file at the canonical path, and two writers can
+        never stream into the same temp fd.
 
         Raises:
             FileNotFoundError: ``working_dir`` does not exist.
@@ -2230,7 +2260,7 @@ class SessionManager:
                     raise
             return
 
-        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp = unique_tmp_path(path)
         try:
             with tmp.open("w", encoding="utf-8") as f:
                 f.write(f"{theme_id}\n")
@@ -4942,6 +4972,7 @@ class SessionManager:
         session_id: str,
         status_map: Optional[dict] = None,
         instance_index: Optional[Any] = None,
+        prefetch: Optional[ListingPrefetch] = None,
     ) -> Optional[SessionInfo]:
         """Build SessionInfo for a specific live session, or None.
 
@@ -4962,6 +4993,29 @@ class SessionManager:
         (a single-session caller) the seed does exactly what it always
         did, so this is a saving on the pass and never a change of
         answer.
+
+        ``prefetch`` IS THE SAME IDEA FOR THREE OF THE FOUR NAME-KEYED
+        READS, and it is a change of WHERE they ran, never of WHAT they
+        answer. The label, the row identity and the durable activity
+        state were each read here with their OWN SQLite connection, per
+        session, on the event loop. A listing caller runs the SAME three
+        readers, with the same queries and the same recency rules, in a
+        worker thread and passes the result. THEY ARE NOT FOLDED INTO
+        ``instance_index``: those are name-keyed with a "newest instance
+        of this name" rule while the index is keyed on the full triple,
+        and answering one from the other would be a silent behaviour
+        change in the duplicate-name case nobody looks at.
+
+        THE FOURTH, ``is_owned_tmux_name``, IS STILL READ HERE, LIVE, PER
+        ROW. It is the only one of the four an ADOPTION can move, and an
+        adoption can now land while the gather thread runs, so gathering
+        it would drop ``created_by_cloude`` off a freshly adopted row for
+        one poll cycle. See that method's docstring.
+
+        ABSENT IS NOT AN ANSWER. A name the prefetch was not built over -
+        including every name when no prefetch is passed at all - falls
+        through to the live read it always made, so ``get_session_info``
+        and every other single-session caller is byte-identical.
 
         The returned ``SessionInfo.session.pty_pid`` is resolved LIVE off
         that same status map (see the ``live_pid`` block below) rather than
@@ -5175,7 +5229,11 @@ class SessionManager:
         # it is fresh enough to still describe now - a stale `working`
         # is a lie about right now, and returns not-measured instead.
         if not self._activity_tracker.hooks_seen(session_id):
-            restored = self._restored_activity_state(tmux_session_name)
+            restored = (
+                prefetch.restored_state_for(tmux_session_name)
+                if prefetch is not None and prefetch.has(tmux_session_name)
+                else self._restored_activity_state(tmux_session_name)
+            )
             # A PERSISTED STATE MAY NEVER OVERRIDE A MEASURED ONE.
             # The store already refuses to hand BACK a `dead` (only
             # tmux can see a pane die), but the reverse was
@@ -5322,7 +5380,11 @@ class SessionManager:
         # and stores the bare family token, so a session launched as
         # claude-chrome came back holding "claude" and painted a dashed
         # guess pill next to a row that recorded the exact wrapper.
-        row_identity = self._identity_for_live_name(tmux_session_name)
+        row_identity = (
+            prefetch.identity_for(tmux_session_name)
+            if prefetch is not None and prefetch.has(tmux_session_name)
+            else self._identity_for_live_name(tmux_session_name)
+        )
         evidence = choose_agent_evidence(
             memory_agent_type=sess.agent_type,
             memory_from_fingerprint=sess.agent_type_via_fingerprint,
@@ -5367,7 +5429,11 @@ class SessionManager:
             # carries none, which the client renders by falling back to
             # the tmux name - so a session with no label looks exactly
             # like it did before labels existed.
-            label=self._label_for_tmux_name(tmux_session_name),
+            label=(
+                prefetch.label_for(tmux_session_name)
+                if prefetch is not None and prefetch.has(tmux_session_name)
+                else self._label_for_tmux_name(tmux_session_name)
+            ),
             session_row_id=row_identity["id"] if row_identity else None,
             parent_session_id=(
                 row_identity["parent_session_id"] if row_identity else None
@@ -5404,8 +5470,7 @@ class SessionManager:
             # id is not. Same source AttachableSession uses, so the two
             # payloads can never disagree about the same session.
             created_by_cloude=bool(
-                tmux_session_name
-                and self.is_owned_tmux_name(tmux_session_name)
+                tmux_session_name and self.is_owned_tmux_name(tmux_session_name)
             ),
         )
 
@@ -5421,31 +5486,121 @@ class SessionManager:
     async def list_session_infos(self) -> list[SessionInfo]:
         """SessionInfo for every live session, oldest first.
 
-        TWO BULK READS UP FRONT, AND NEITHER IS OPTIONAL TO THE COST.
-        This body is entirely SYNCHRONOUS inside ``async def``, so for as
-        long as it runs the event loop does nothing else - it cannot read
-        the tmux pipe carrying terminal output, cannot spawn the
-        ``send-keys`` that delivers a keystroke, and cannot answer another
-        request. Anything in here that is paid PER SESSION is therefore
-        terminal latency multiplied by the session count. The tmux
-        listing is read once (``status_map``); the ``sessions`` row is
-        read once (``instance_index``), for the status seed that used to
-        open a SQLite connection per session.
+        THE EXPENSIVE PURE READS ARE GATHERED OFF THE EVENT LOOP, AND
+        EVERY WRITE STAYS ON IT. This body used to be entirely
+        SYNCHRONOUS inside ``async def``, so for as long as it ran the
+        server did nothing else - it could not read the tmux pipe
+        carrying terminal output, could not spawn the ``send-keys`` that
+        delivers a keystroke, and could not answer another request.
+        Measured 2026-09-11 with 14 live sessions, the app's ``/health``
+        read p50 74.8 ms and p99 1262 ms against an idle control server's
+        p50 1.2 ms on the same box at the same instants.
+
+        THREE STAGES, AND THE ORDER IS THE CLAIM.
+        1. SNAPSHOT, on the loop: :meth:`_listing_snapshot` copies what
+           the gather needs out of the live dictionaries into tuples.
+        2. GATHER, in a thread: one ``tmux list-panes -a``, one
+           instance-index query, and THREE of the four name-keyed
+           stored-row reads. Measured with 4 live sessions that is 13 of
+           the pass's 17 SQLite connections off this loop. The fourth,
+           ownership, stays here because it is the only one an ADOPTION
+           moves and the loop being free is what lets an adoption land
+           mid-pass. The thread is handed bound methods and the snapshot
+           and can reach nothing else - see
+           ``src/core/listing_gather.py``.
+        3. The per-row loop, back on the loop, UNCHANGED. Every write
+           the pass makes - the activity tracker's signals, the unread
+           epoch memo, the permission and startup-gate ledgers, the seed
+           cache and the durable activity-state write - is a
+           read-modify-write against state the hook route mutates
+           concurrently, and moving one needs an apply stage that
+           re-validates at write time. That is not attempted here.
+
+        ``self.sessions`` IS READ AFTER THE GATHER, DELIBERATELY. A
+        session created while the thread ran appears in this pass with no
+        prefetch entry and falls through to the live per-row reads, which
+        is exactly the behaviour it had before; a session removed while
+        the thread ran is simply absent. Reading the set after the gather
+        makes the ROW SET fresher, never staler.
         """
-        status_map = self._build_tmux_status_map()
-        instance_index = self._instance_index_for_listing(
-            socket=self._tmux_socket_name(),
-            names=self._seed_candidate_tmux_names(),
+        snapshot = self._listing_snapshot()
+        gathered = await asyncio.to_thread(
+            listing_gather.gather_listing_inputs,
+            self._listing_readers(),
+            snapshot,
         )
+        listing_gather.log_gather(gathered, snapshot.decorated_names)
         out: list[SessionInfo] = []
         for sid in list(self.sessions.keys()):
             info = self._session_info_for(
-                sid, status_map=status_map, instance_index=instance_index
+                sid,
+                status_map=gathered.status_map,
+                instance_index=gathered.instance_index,
+                prefetch=gathered.prefetch,
             )
             if info is not None:
                 out.append(info)
         await self._flush_startup_toasts()
         return out
+
+    def _listing_snapshot(self) -> "listing_gather.ListingSnapshot":
+        """Copy what the gather thread needs out of live state. ON THE LOOP.
+
+        Description: THE BOUNDARY. Everything past this point the thread
+          sees is a tuple or a string, so a container the event loop
+          mutates can never be read - or iterated - from the worker. Both
+          name lists are derived here rather than in the thread because
+          both walk ``self.sessions`` / ``self.backends`` and consult the
+          activity tracker, which the hook route writes.
+
+          The two lists are DIFFERENT SETS and both are needed.
+          ``seed_candidate_names`` is already filtered by ``hooks_seen``,
+          because the status seed is the only consumer of the instance
+          index and it is reached only for a session no hook has spoken
+          for; building the index wider would open a connection to answer
+          nobody. ``decorated_names`` is every name, because the label,
+          the row identity and the durable activity state are read for
+          every row regardless.
+        Inputs: none.
+        Output: listing_gather.ListingSnapshot - immutable.
+        Example: mgr._listing_snapshot().socket -> 'cloude'
+        """
+        return listing_gather.ListingSnapshot(
+            socket=self._tmux_socket_name(),
+            seed_candidate_names=tuple(self._seed_candidate_tmux_names()),
+            decorated_names=tuple(
+                name for _sid, name in self._listed_tmux_names_by_session()
+            ),
+        )
+
+    def _listing_readers(self) -> "listing_gather.ListingReaders":
+        """Bundle the pure readers the gather thread is allowed to call.
+
+        Description: bound methods and nothing else. Each was audited as
+          a pure read - it opens its own SQLite connection or spawns its
+          own subprocess, uses it, closes it, and returns a value without
+          touching shared mutable state. Handing these over rather than
+          ``self`` is what makes the thread's reach a property of the
+          signature instead of a convention somebody has to remember.
+
+          A BOUND METHOD STILL CARRIES ``self``, SO THE AUDIT IS BACKED
+          BY A TEST. Nothing in this signature stops a future edit adding
+          a ``self.sessions`` read inside one of these bodies, which
+          would put a live container back in the thread silently.
+          ``tests/test_listing_off_the_loop.py`` wraps the manager's live
+          containers in thread recorders and drives THIS bundle through
+          ``asyncio.to_thread``, so that edit fails the build.
+        Inputs: none.
+        Output: listing_gather.ListingReaders.
+        Example: mgr._listing_readers().build_status_map()
+        """
+        return listing_gather.ListingReaders(
+            build_status_map=self._build_tmux_status_map,
+            build_instance_index=self._instance_index_for_listing,
+            label_for_name=self._label_for_tmux_name,
+            identity_for_live_name=self._identity_for_live_name,
+            restored_activity_state=self._restored_activity_state,
+        )
 
     def _seed_candidate_tmux_names(self) -> list[str]:
         """The tmux names whose stored row this pass could actually read.
@@ -6380,6 +6535,18 @@ class SessionManager:
           instance and now reused by a different, unowned instance reads
           as owned here until the epoch reaches this call site. The
           attachable listing, which does have the epoch, is not lossy.
+
+          BOTH RUNGS ARE READ LIVE, ON THE LOOP, EVERY TIME, AND THE
+          DATASTORE RUNG IS THE REASON. An ADOPTION never touches
+          ``owned_tmux_sessions`` - ``adopt_external_session`` says so
+          itself, and the only three ``.add`` sites are the boot
+          backfill, create and rename - so the datastore is the ONLY rung
+          an adoption moves. The listing pass now frees the loop while it
+          gathers, which is precisely what lets an adoption land
+          mid-pass, so a gathered datastore answer would report a freshly
+          adopted session unowned for one poll cycle. This reader is
+          therefore deliberately excluded from the listing prefetch; see
+          ``src/core/listing_gather.py``.
         Inputs: name (str | None) - a tmux session name.
         Output: bool - False for None or an empty name.
         Example: mgr.is_owned_tmux_name('cloude_a')

@@ -1137,20 +1137,67 @@ remembered verdict would flap the row between a measured answer and `unknown`
 on alternating polls, which is worse than the cost it saves. Do not move that
 capture up into the unconditional path.
 
-**THE LISTING PASS RUNS ON THE EVENT LOOP, SO ITS COST IS TERMINAL LATENCY.**
-This is the rule the two paragraphs above and the section below all serve.
-`list_session_infos` is `async def` whose body is entirely SYNCHRONOUS, so for
-as long as it runs the server does nothing else at all: it cannot read the tmux
-pipe carrying terminal output, cannot spawn the `send-keys` that delivers a
-keystroke, and cannot answer another request. Measured 2026-09-09, 13 live
-sessions: **27 tmux subprocesses and 1008 ms per pass** (one bulk
-`list-panes -a` at 282 ms, then `has-session` x13 at 377 ms and `capture-pane`
-x13 at 349 ms), polled every 5s by the sidebar and again by the launchpad. The
-user reported it as typing lag and as a sidebar click taking two seconds; the
-click's own endpoint measured **45-64 ms**, so essentially all of that two
-seconds was queueing. The control that proves the mechanism is
+**THE LISTING PASS USED TO RUN ENTIRELY ON THE EVENT LOOP, SO ITS COST WAS
+TERMINAL LATENCY. ITS EXPENSIVE READS NOW RUN IN A WORKER THREAD.** This is
+the rule the two paragraphs above and the section below all serve, and the
+history is kept because every cost-reduction round in this section was aimed
+at it. `list_session_infos` was `async def` whose body was entirely
+SYNCHRONOUS, so for as long as it ran the server did nothing else at all: it
+could not read the tmux pipe carrying terminal output, could not spawn the
+`send-keys` that delivers a keystroke, and could not answer another request.
+Measured 2026-09-09, 13 live sessions: **27 tmux subprocesses and 1008 ms per
+pass** (one bulk `list-panes -a` at 282 ms, then `has-session` x13 at 377 ms
+and `capture-pane` x13 at 349 ms), polled every 5s by the sidebar and again by
+the launchpad. The user reported it as typing lag and as a sidebar click taking
+two seconds; the click's own endpoint measured **45-64 ms**, so essentially all
+of that two seconds was queueing. The control that proved the mechanism is
 `GET /sessions/records`, which does its work in a threadpool: its own cost is
 5.8 ms and its p99 was 161 ms, all of it spent waiting to be served.
+
+**THE PASS IS THREE STAGES NOW, AND THE ORDER IS THE CLAIM.** SNAPSHOT on the
+loop (`_listing_snapshot`, copying the names and the socket out of the live
+dictionaries into tuples), GATHER in `asyncio.to_thread`, then the per-row loop
+back on the loop, UNCHANGED. `src/core/listing_gather.py` is the thread body
+and `src/core/listing_prefetch.py` the name-keyed decorations. Measured with 4
+live sessions, **13 of the pass's 17 SQLite connections** now open off the
+loop, along with the one bulk `tmux list-panes -a`. The file drawer's shallow
+read, in the paragraph below, is the worked example this copies.
+
+**EVERY WRITE DELIBERATELY STAYED ON THE LOOP, AND THE REASON IS NOT
+TIDINESS.** Twelve of them - the activity tracker's signals, the unread epoch
+memo, the permission-verify and startup-gate ledgers with their once-per-instance
+toast claims, the status seed's cache and the durable
+`_persist_settled_activity_state` write - are each a READ-MODIFY-WRITE against
+in-memory state the hook route mutates on the loop at the same time. The
+permission pair is the one that makes a torn read SILENT rather than loud:
+`permission_open` and `permission_opened_at` are SET in one order and CLEARED
+in the opposite one, so a thread reading them mid-transition sees a coherent
+looking half-state and no exception is raised anywhere. Moving those needs an
+APPLY stage that re-validates at write time, in the manner of
+`config_writer.commit`'s fresh read inside the lock. That is a real refactor of
+a 400-line function and **A PARTIAL, CORRECT IMPROVEMENT BEATS A COMPLETE,
+RACY ONE.**
+
+**AND THE SINGLE-FLIGHT COALESCER IS WHY TWO GATHERS CANNOT OVERLAP.**
+`src/core/single_flight.py` makes a caller asking for a listing while one is
+in flight AWAIT that pass rather than start its own, which it was built for a
+different reason (15 polling clients were each paying for an identical answer,
+giving the endpoint a measured period of about 0.85 s rather than 5 s). It
+matters here too: with the loop free during a gather, without it a second
+request would start a SECOND thread reading the same rows.
+
+**THE SAFETY PROPERTY IS A TEST, NOT AN AUDIT, BECAUSE A BOUND METHOD CARRIES
+`self`.** `ListingReaders` hands the thread bound methods and nothing else,
+which narrows what `listing_gather` itself can reach and narrows NOTHING about
+what a reader's own body may grow into: a `self.sessions` read added inside
+`_label_for_tmux_name` would put a live container back in the thread and no
+signature would say so. So `tests/test_listing_off_the_loop.py` wraps the six
+live containers (`sessions`, `backends`, `_instance_epochs`, `pinned_themes`,
+`_hook_tmux_names`, `_activity_tracker`) in thread recorders, drives the REAL
+`_listing_readers()` bundle through `asyncio.to_thread`, and fails naming the
+container and the thread. It carries its own negative control, and that control
+was WATCHED GOING RED against a live read injected into a real reader before it
+shipped.
 
 **THE FILE DRAWER'S TREE SCAN WAS THE SAME DEFECT ON A SECOND PATH, AND IT
 WAS NOT A SUBPROCESS OR A SQLITE PROBLEM.** `GET /config-files/tree` was an
@@ -1284,18 +1331,44 @@ hook would pay one connection to answer nobody. `hooks_seen` is a
 NECESSARY condition and not a sufficient one, so that gate may over-include
 and must never under-include.
 
-**FOUR PER-ROW READERS REMAIN ON THIS PASS AND ARE DELIBERATELY NOT
-FOLDED IN.** Measured and attributed by caller, 19 sessions:
-`_restored_activity_state` 19, `_identity_for_live_name` 19,
-`_label_for_tmux_name` 19, `_owned_instances_from_db` 19. Every one is
-NAME-KEYED with a recency rule ("the newest instance of this name") while
-the index is keyed on the full instance triple, so answering them from it
-would be a silent behaviour change in the duplicate-name case nobody
-looks at. Closing them means giving them the epoch the pass already holds,
-or a second name-keyed bulk read; that is real work and was not done here.
-`tests/test_listing_pass_datastore_cost.py` pins the ceiling at `4N + 2`
-and its failure message names WHICH reader grew - **raising that bound is
-re-introducing the defect with the alarm switched off.**
+**FOUR PER-ROW READERS REMAIN ON THIS PASS AND ARE STILL DELIBERATELY NOT
+FOLDED IN; THREE OF THEM MOVED OFF THE LOOP INSTEAD.** Measured and
+attributed by caller, 19 sessions: `_restored_activity_state` 19,
+`_identity_for_live_name` 19, `_label_for_tmux_name` 19,
+`_owned_instances_from_db` 19. Every one is NAME-KEYED with a recency rule
+("the newest instance of this name") while the index is keyed on the full
+instance triple, so answering them from it would be a silent behaviour
+change in the duplicate-name case nobody looks at. THAT IS STILL TRUE and
+nothing was folded in. What changed is WHERE the first three run: they are
+the body of `build_listing_prefetch`, called once per name in the gather
+thread, with the same queries and the same selection rules, so it is a
+change of where the work happens and never of what it answers.
+
+**THE FOURTH, OWNERSHIP, STAYS ON THE LOOP, AND AN ADOPTION IS THE REASON.**
+`is_owned_tmux_name` is a two-rung ladder, the in-memory
+`owned_tmux_sessions` set then the datastore, and an ADOPTION MOVES ONLY THE
+DATASTORE - `adopt_external_session` says so in its own docstring, and the
+only three `.add` sites are the boot backfill, create and rename. So the
+datastore is exactly the rung an adoption lands on, and it is the rung a
+prefetch would freeze. Freeing the loop is what makes an adoption able to
+land WHILE the gather runs at all, so prefetching this one would drop
+`created_by_cloude` off a freshly adopted row for a whole poll cycle - the
+threading change would have INTRODUCED that race. It cost 4 of the pass's 17
+datastore opens at 4 sessions, so the other three carry the clear majority of
+the saving, and leaving it on the loop makes the staleness question GONE
+rather than documented. A test that faked the adoption by calling
+`owned_tmux_sessions.add` was green while vouching for nothing, and is
+replaced by one driving the DATASTORE rung through a real pass.
+
+`tests/test_listing_pass_datastore_cost.py` pins the ceiling at the EXACT
+measured `4N + 1` with NO headroom, re-measured 2026-09-11 over three
+consecutive runs, and its failure message names WHICH reader grew. The spare
+open it used to carry meant the alarm was simply off while the pass sat under
+the bound. **Raising that bound is re-introducing the defect with the alarm
+switched off.** Note what it does and does not measure: it counts
+CONNECTIONS, which stopped being the same thing as STALLS the moment 13 of
+the 17 moved into a thread. `tests/test_listing_off_the_loop.py` is the file
+that proves WHERE they run.
 
 **THE PERMISSION VERIFY WAS CHECKED AND ITS GATE WAS ALREADY RIGHT, WHICH
 IS WORTH KEEPING BECAUSE THE OBVIOUS READ WAS WRONG.**

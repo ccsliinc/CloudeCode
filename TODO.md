@@ -413,3 +413,248 @@ is owed on a quiet box; not run here given load.
 [ISSUE-39] [2026-09-11]: New test tests/test_toast_render_batch.node.mjs (8 cases): burst-add collapses to one render pass, a second burst after a flush gets its own single pass, dismissAll collapses to one render pass, the batch still flushes when rAF never fires (hidden tab), a committed NEGATIVE CONTROL proving a bare-rAF-only scheduler never flushes in that same scenario, grouping/winner-pick/xn-badge semantics unchanged under batching, the attachment receipt still renders as its own card, and a supersession reusing an id refreshing that card in place. Manually mutated the shipped client/js/toast-render-batch.js to strip the timer fallback (bare rAF only) and confirmed exactly the two hidden-tab-dependent tests went red, then reverted and reconfirmed green.
 [ISSUE-39] [2026-09-11]: Extended tests/lib_toast_dom_stub.mjs to also load toast-render-batch.js into the shared sandbox so every existing toast suite exercises the real wiring; its stub requestAnimationFrame is synchronous so all existing suites remain byte-identical in observable timing (schedule() resolves synchronously under that stub, same as calling _render() directly before this change). Ran all 20 node suites that mention "toast": 100% pass, no regressions. Full python suite NOT run (box load ~250 per instruction); owed on a quiet box.
 [ISSUE-39] [2026-09-11]: docs/notifications.md updated: file table (toast-render.js description, new toast-render-batch.js row, toast-lifecycle.js description), tests table (new suite), and a new "Rendering many toasts at once (issue #39)" section explaining the batching mechanism.
+
+---
+
+## [P38-LISTING-THREAD] 2026-09-11
+
+### PHASE 1 INVENTORY - what `SessionManager.list_session_infos` actually does
+
+Counts: **6 pure reads (a)**, **7 concurrent-mutable in-memory reads (b)**,
+**8 in-memory writes by the pass (c)**, **4 durable writes by the pass (d)**.
+All citations are `src/core/session_manager.py` unless named otherwise, at the
+state of this change.
+
+**(a) PURE READS - safe in a thread. All six are now gathered off the loop.**
+
+| Read | Site | Cost |
+|---|---|---|
+| bulk `tmux list-panes -a` | `_build_tmux_status_map` :4767 | 1 subprocess; measured p50 24.0 ms, max 140.1 ms on the live socket with 14 sessions |
+| instance index (triple-keyed) | `_instance_index_for_listing` :6699 | 1 SQLite connection, or 0 when no seed candidate |
+| stored label (name-keyed) | `_label_for_tmux_name` :6612 | 1 connection PER ROW |
+| row identity (name-keyed) | `_identity_for_live_name` :6658 | 1 connection PER ROW |
+| durable activity state (name-keyed) | `_restored_activity_state` :3072 | 1 connection PER ROW |
+| owned instance set (whole-table, takes no name) | `_owned_instances_from_db` :5700 | 1 connection PER ROW for an answer that does not vary by row |
+
+Measured SQLite open+select on this box: p50 1.13 ms, max 6.78 ms. At `4N+2`
+with 14 sessions that is ~58 connections, ~65 ms p50, all on the event loop.
+
+**(b) READS OF IN-MEMORY STATE THE EVENT LOOP MUTATES CONCURRENTLY.** Every
+one of these is a CONCURRENT-WRITE HAZARD and every one was left on the loop.
+
+| State | Owner | Written from the loop by | Read at |
+|---|---|---|---|
+| `SessionSignals.permission_open` / `permission_opened_at` | `SessionActivityTracker._signals` (`src/core/session_activity.py`) | the hook route, `claude_event_hook`. **THE PAIR IS SET IN ONE ORDER AND CLEARED IN THE OPPOSITE ORDER, so a threaded read can see half a transition, silently** | :5152, :5207, :5214 |
+| `SessionSignals.notice_open` | same | `clear_notice` / `record_event` | :5214 |
+| `SessionSignals.subagent_depth`, `turn_open`, heartbeat stamps | same | `record_hook_event` | :5214 |
+| `self.sessions` / `self.backends` | manager | create, adopt, close, reaper | :5526 (loop) |
+| `self._unread_epochs` | manager | `unread_identity.remember` | :5186 |
+| `self.owned_tmux_sessions` | manager | adopt, create | :5469 via `is_owned_tmux_name` |
+| `self.log_buffers` / `self.command_counts` | manager | the pty reader | :5418, stats block |
+
+**(c) IN-MEMORY WRITES PERFORMED BY THE PASS ITSELF.** Eight, all kept on the loop.
+
+1. `unread_identity.remember(self._unread_epochs, ...)` :5188 - memoise the measured tmux epoch for the unread key.
+2. `verify_open_permission` :5152 (dead path) - clears `permission_open` against a measured-dead pane.
+3. `verify_open_permission` :5207 (live path) - clears the flag when a `capture-pane` shows no dialog; writes the permission ledger.
+4. `self._activity_tracker.resolve` :5214 - resolves and can expire the heartbeat.
+5. `seeded_display` :5272 - writes the 60s seed cache and can SET the unread flag.
+6. `self._startup_gate_for` :5331 - writes `StartupGateLedger` (first-hook time, tail verdict, tail age).
+7. `self._pending_startup_toasts.append` :4962 - claims a once-per-instance toast.
+8. `self._listing_fingerprint_cache` (via the agent evidence path) - memoises a pane fingerprint per instance triple.
+
+**(d) DURABLE WRITES PERFORMED BY THE PASS.** Four, all kept on the loop.
+
+1. `self._persist_settled_activity_state` :5301 - writes `sessions.activity_state`.
+2. The unread store file, via `seeded_display` rung 0's auto-unread claim.
+3. The startup-gate toast record (`toast_store`).
+4. The permission-verify ledger's recorded verdict.
+
+**Subprocesses still on the loop, deliberately:** `backend.is_alive()` :5098
+(only for a row the listing did not name, i.e. a row about to be dropped);
+`capture-pane` inside the permission verify and the startup gate (both
+throttled, both entangled with a write).
+
+### WHAT SHIPPED: a PARTIAL split. GATHER threaded, DECIDE and APPLY untouched.
+
+- `src/core/listing_prefetch.py` (NEW) - the four name-keyed reads as one
+  immutable lookup table, with `has()` / `owned_read` keeping "not read" apart
+  from "read and found nothing". Does NOT fold them into `InstanceIndex`: those
+  are name-keyed with a recency rule and the index is triple-keyed, and
+  answering one from the other is the silent duplicate-name behaviour change
+  CLAUDE.md forbids. Same readers, same queries, different thread.
+- `src/core/listing_gather.py` (NEW) - `ListingSnapshot` (taken ON THE LOOP),
+  `ListingReaders` (bound methods only, so the thread cannot reach a live
+  container), `gather_listing_inputs` (the thread body, reads only its two
+  arguments).
+- `src/core/session_manager.py` - `list_session_infos` is snapshot then
+  `await asyncio.to_thread(gather)` then the unchanged per-row loop;
+  `_listing_snapshot` / `_listing_readers` added; `_session_info_for` takes an
+  optional `prefetch`; `is_owned_tmux_name` takes an optional `prefetch` that
+  supplies ONLY its database rung.
+
+### STALENESS RULE, PER ITEM
+
+- **Every prefetched value: no rule needed, because NOTHING IS WRITTEN BACK.**
+  Each is a decoration derived from a stored row, exactly as it was when read
+  per row. Taking it earlier changes which moment a label reflects and cannot
+  make one wrong. There is no apply stage here by construction.
+- **`is_owned_tmux_name`: the in-memory set is read LIVE, only the DB rung is
+  gathered.** An adoption landing while the gather thread runs is therefore
+  still seen. Snapshotting the in-memory set would have lost it silently.
+- **`owned_read=False` falls back to the datastore.** A read that did not
+  happen is not a reading of nothing.
+- **A name the prefetch never covered falls through to the live per-row read**,
+  which is byte-identically the pre-change behaviour. This is what covers a
+  session registered while the gather ran.
+- **The row set (`self.sessions`) is read AFTER the gather**, making it fresher
+  rather than staler.
+- **`_owned_instances_from_db` collapses from N identical whole-table reads to
+  1.** Under the blocked loop that was already a no-op; off the loop it makes
+  the pass MORE self-consistent, not less.
+
+### REFUSED, AND WHY
+
+Threading the DECIDE/APPLY stages was **refused**. All eight in-memory writes
+and all four durable writes are read-modify-writes against state the hook route
+mutates concurrently, and the permission pair's opposite set/clear order means a
+torn read there is silent and wrong. Moving them needs a real apply stage with
+per-write re-validation in the manner of `config_writer.commit`'s fresh read
+inside the lock. That is the 400-line refactor the prior audit named and it was
+not attempted. A locking shortcut was also refused: a lock held across a 291 ms
+pass is the same blocking under a different name.
+
+### TESTS
+
+`tests/test_listing_off_the_loop.py` (NEW, 15 tests, all passing). Structural,
+never timed, modelled on `tests/test_config_files_shallow.py`. The negative
+control was **watched go red**: with `gather_listing_inputs` called
+synchronously the structural test fails with "the event loop never got to run
+while the gather was in progress: the gather is ON the loop".
+
+Cost ceilings unchanged and passing: `test_listing_pass_datastore_cost.py`,
+`test_listing_subprocess_cost.py`, `test_listing_seed_row_cost.py`. Per-pass
+datastore opens go `4N+2` to `3N+2`, so the ceiling is met with more room, not
+less. **A FULL-SUITE NUMBER IS OWED ON A QUIET BOX.**
+
+[P36-P37-HARDEN] [2026-09-11T04:59:31Z]: TASK A (four temp-name sites) - all
+four confirmed and fixed, all LATENT ONLY today (each save function is fully
+synchronous with no `await`, and every caller runs on the single uvicorn
+event loop, so two writes cannot interleave yet - identical shape to the
+unread_store fix in f0e07de). `SessionManager._write_metadata_atomic`
+(session_metadata.json), `SessionManager._save_pinned_themes`
+(pinned_themes.json, `.bak` behaviour preserved unchanged), and
+`SessionManager.set_project_theme` (`<working_dir>/.cc.theme`, already had
+failure cleanup, only the name changed) in src/core/session_manager.py;
+`config_files_io.atomic_write` (the file editor's write chokepoint,
+cleanup-on-failure ADDED where it was missing) in
+src/core/config_files_io.py. Created src/core/unique_tmp_path.py as the one
+shared helper (pid+random-suffix) and rewired unread_store.py's own local
+`_unique_tmp_path` onto it too, so there is one copy of the rule across all
+five call sites instead of two. All four negative controls watched RED
+(reverted to the fixed `.tmp` name one at a time, confirmed test failure,
+reverted back) before being left green. New suite:
+tests/test_unique_tmp_writers.py (14 tests, all passing).
+
+[P36-P37-HARDEN] [2026-09-11T04:59:31Z]: TASK B (real_tmux marker hole) -
+confirmed and fixed: `tests/conftest.py`'s `_SOCKET_GUARD_NAMES` was missing
+`"derive_test_socket"`, so any module doing ONLY
+`from tests.socket_guard import derive_test_socket` (no other socket_guard
+name, no `tmux_test_socket` fixture) escaped the `real_tmux` marker entirely.
+This was NOT a one-file hole - measured via real `pytest --collect-only -m
+real_tmux` before/after: 11 files / 144 tests marked before, 31 files / 348
+tests marked after (+20 files, +204 tests), all newly gained, none lost.
+Newly-marked files beyond test_recreate_gate_real_tmux.py: test_attach_paint,
+test_capture_cursor_real_tmux, test_cold_socket_born_at_depth_real_tmux,
+test_cold_socket_options_real_tmux, test_listing_liveness_socket_scope,
+test_pane_locale_spawn, test_respawn_refreshes_pane_env, test_server_status,
+test_session_respawn_api, test_session_restart_live,
+test_session_restart_resumes_the_conversation,
+test_session_restart_wrapper_choice, test_shell_init,
+test_tmux_backend_respawn, test_tmux_pipe_rotation,
+test_tmux_remain_on_exit_ordering, test_tmux_respawn_real,
+test_workspace_env_reaches_terminal, test_ws_startup_paint (all .py). Total
+suite collection count is unaffected by this fix (tests only move between
+the `real_tmux` / `not real_tmux` buckets); the 6391 vs 6409 total seen
+across before/after runs is the OTHER concurrent agent's uncommitted work
+landing test files mid-session, unrelated to this change. New suite:
+tests/test_real_tmux_marker_derivation.py (2 tests, subprocess-driven against
+the real conftest.py, both passing). Negative control watched RED (removed
+the added name, confirmed the positive-case test failed, restored it).
+**A FULL-SUITE NUMBER IS OWED ON A QUIET BOX** for both tasks.
+
+### POST-REVIEW ROUND - the three changes an adversarial review required
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 1, the blocker. Removed the ownership
+read from the listing prefetch entirely. `SessionManager.adopt_external_session`
+states in its own docstring that it does NOT add to `owned_tmux_sessions`, and
+the only three `.add` sites are the boot backfill (`:1601`), create (`:3845`)
+and rename (`:4582`), so an ADOPTION moves ONLY the datastore rung - which is
+exactly the rung the prefetch was freezing. Freeing the loop is what makes an
+adoption able to land mid-gather at all, so the threading change had
+INTRODUCED a window where `created_by_cloude` dropped off a freshly adopted row
+for one poll cycle. Measured before deciding, 4 live sessions, attributed by
+caller: the pass opened 14 connections with ownership prefetched
+(`_owned_instances_from_db` 1) and 17 with it on the loop (that reader 4), so
+ownership is 4 of 17 and the other three readers carry 13 of 17 - a clear
+minority, which is what the decision was conditioned on. `is_owned_tmux_name`
+lost its `prefetch` keyword and reads both rungs live again;
+`ListingPrefetch.owned_instances` / `.owned_read` and
+`ListingReaders.owned_instances_from_db` are gone.
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 1, the misleading test. Deleted
+`test_a_name_owned_while_the_gather_ran_is_still_reported_owned`, which faked
+the adoption by calling `owned_tmux_sessions.add(...)` - a mechanism production
+never uses for adoption - so it was green while vouching for nothing. That is
+this repo's own "a guard whose only exercised caller sets the flag it checks"
+shape. Replaced by
+`test_an_adoption_landing_during_the_gather_is_reported_owned`, which drives
+the REAL pass and moves the DATASTORE answer from inside the gather window,
+plus `test_ownership_is_never_answered_from_the_prefetch`, which reads the
+dataclass field tables (a `hasattr` on the class cannot answer this: a field
+with no default is not a class attribute).
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 2, rotted docs corrected in the same
+change per gotcha 8. CLAUDE.md: "THE LISTING PASS RUNS ON THE EVENT LOOP"
+rewritten to describe the three stages, with the history kept because every
+cost round in that section was aimed at it, plus new paragraphs on why the
+twelve writes stayed on the loop (the permission pair's set-order and
+clear-order are opposites, which makes a torn read SILENT), on the single-flight
+coalescer preventing two gathers overlapping, and on the safety property being
+a test rather than an audit. "FOUR PER-ROW READERS REMAIN" rewritten: still
+four, still not folded in, three now in the thread and ownership deliberately
+not. `tests/test_listing_pass_datastore_cost.py` module docstring corrected -
+it claimed every connection was opened with the loop blocked, which stopped
+being true for 13 of 17; its assertion message said the same thing and was
+corrected too.
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 3, the ceiling re-measured and the
+tripwire added. `MAX_DATASTORE_OPENS_PER_LISTING` was `4N + 2` while the pass
+cost less, so the alarm was simply off. Re-measured after FIX 1 at exactly
+`4N + 1` (17 at 4 sessions) on three consecutive runs and set to that with NO
+headroom; watched it go RED at `4N` and confirmed the failure still names the
+caller that grew. Renamed that test from `..._three_connections_per_row` to
+`..._four_connections_per_row`, which was already wrong before this round.
+New `test_the_gather_thread_touches_no_live_shared_container` wraps `sessions`,
+`backends`, `_instance_epochs`, `pinned_themes`, `_hook_tmux_names` and
+`_activity_tracker` in thread recorders and drives the REAL `_listing_readers()`
+bundle through `asyncio.to_thread`. It exists because `ListingReaders` holds
+BOUND METHODS and a bound method carries `self`, so the existing
+`test_the_gather_reaches_nothing_but_its_two_arguments` drives lambdas and
+cannot see a reader body growing a `self.sessions` read. NEGATIVE CONTROL
+WATCHED RED: injected `len(self.sessions)` into the real
+`SessionManager._label_for_tmux_name`, the tripwire failed naming
+`{'sessions': ['asyncio_0']}`, then reverted and byte-compared the file against
+its pre-injection copy. A committed control test carries the same proof.
+
+[P38-LISTING-THREAD] [2026-09-11]: Ran tests/test_listing_off_the_loop.py (16),
+test_listing_pass_datastore_cost.py (2), test_listing_subprocess_cost.py,
+test_listing_liveness_socket_scope.py, test_listing_seed_row_cost.py,
+test_single_flight.py (42 together), test_session_rename.py,
+test_unique_tmp_writers.py, test_real_tmux_marker_derivation.py,
+test_docs_index.py, test_session_ownership_origin.py (52 together),
+test_config_files*.py and the four unread suites (155 together),
+test_project_theme.py and test_session_theme_precedence.py (34 together). All
+pass. ruff on every changed file reports only the three errors already present
+at HEAD (verified against `git show HEAD:src/core/session_manager.py`).
+**A FULL-SUITE NUMBER IS OWED ON A QUIET BOX.**

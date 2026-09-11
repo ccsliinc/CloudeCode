@@ -8,14 +8,16 @@ tmux name itself (this module has no way to do that), and delegates the
 actual flag storage here. Mirrors the on-disk shape and atomic-write
 protocol ``SessionManager._save_pinned_themes`` already uses, so anyone
 who has read that code recognizes this one immediately - with ONE
-deliberate divergence: the temp file is named uniquely per write, for the
-reason ``_unique_tmp_path`` sets out. ``_save_pinned_themes`` and the two
-other fixed-``.tmp`` writers in ``session_manager.py`` still carry the
-shared name; they are the same latent shape and were left alone here
-rather than widened into an unrelated change.
+deliberate divergence: the temp file is named uniquely per write, via
+``unique_tmp_path`` (see ``src/core/unique_tmp_path.py`` for why).
 
 Why server-side, not localStorage: the user drives this from both a phone
 browser and a desktop browser, and the unread flag must follow him.
+
+The unique-temp-name rule this module first applied that shape to now
+lives in ``src/core/unique_tmp_path.py`` - the three other fixed-``.tmp``
+writers named above were widened to the same helper in the same change
+that created it, so there is one copy of the rule rather than five.
 
 Why keyed on the INSTANCE, not on the session_id and not on the tmux name
 alone: a session_id dies on detach/destroy/restart, so it is too short-
@@ -32,50 +34,26 @@ from __future__ import annotations
 
 import json
 import os
-import uuid
 from pathlib import Path
 from typing import Optional
 
 import structlog
 
+from src.core.unique_tmp_path import unique_tmp_path
+
 logger = structlog.get_logger()
 
-
-def _unique_tmp_path(path: Path) -> Path:
-    """A temp sibling of ``path`` that no concurrent writer can also pick.
-
-    Description: ATOMIC AND SERIALIZED ARE DIFFERENT PROPERTIES, and this
-      store only ever had the first. ``os.replace`` guarantees a reader
-      sees whole old bytes or whole new bytes, and it guarantees nothing
-      about two writers streaming into ONE shared temp file before either
-      of them renames it - which is what a fixed ``<name>.tmp`` is. Five
-      call paths write this store: the ``Stop`` hook branch of
-      ``SessionManager.record_hook_event``, the manual mark-unread
-      control, the listing pass's transcript turn-end claim in
-      ``session_transcript_status_read``, the WebSocket view-clear in
-      ``session_view_clears``, and the boot reconcile's ``prune``. They
-      cannot interleave TODAY, because every one of them runs on the
-      single uvicorn event loop and ``_save`` contains no ``await``; that
-      is a property of today's threading, not of this module, and the
-      pending move of the listing pass into a worker thread would end it.
-      A unique name costs nothing and removes the question, so it is the
-      same pid-plus-random-suffix rule
-      ``config_writer._replace_atomically`` already applies to
-      config.json rather than a second spelling of it.
-
-      The name is also why the caller must clean up after a failed write:
-      a fixed name self-limits to one orphan, a unique one would leave a
-      fresh corpse in the state directory on every failure.
-    Inputs: path (Path) - the destination file.
-    Output: Path - a sibling of ``path`` in the same directory, so
-      ``os.replace`` stays a rename within one filesystem.
-    Example:
-        >>> _unique_tmp_path(Path("/s/unread_state.json")).name
-        'unread_state.json.4321.9f0a1b2c.tmp'   # pid and suffix vary
-    """
-    return path.with_suffix(
-        f"{path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
-    )
+# Five call paths write this store: the ``Stop`` hook branch of
+# ``SessionManager.record_hook_event``, the manual mark-unread control,
+# the listing pass's transcript turn-end claim in
+# ``session_transcript_status_read``, the WebSocket view-clear in
+# ``session_view_clears``, and the boot reconcile's ``prune``. They
+# cannot interleave TODAY, because every one of them runs on the single
+# uvicorn event loop and ``_save`` contains no ``await``; that is a
+# property of today's threading, not of this module, and the pending
+# move of the listing pass into a worker thread would end it. The
+# unique name (``unique_tmp_path``) costs nothing and removes the
+# question regardless of whether today's threading holds.
 
 
 class UnreadStore:
@@ -136,7 +114,7 @@ class UnreadStore:
         tmp: Optional[Path] = None
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _unique_tmp_path(self._path)
+            tmp = unique_tmp_path(self._path)
             with tmp.open("w") as f:
                 json.dump(self._data, f, indent=2)
                 f.flush()

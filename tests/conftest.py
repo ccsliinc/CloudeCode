@@ -403,6 +403,7 @@ _SOCKET_GUARD_NAMES = frozenset(
         "TmuxSocketGuardError",
         "assert_safe_socket_name",
         "classify_tmux_argv",
+        "derive_test_socket",
     }
 )
 

@@ -7,30 +7,49 @@ takes the PASS-LEVEL number, against real tmux, and it is the measurement
 that catches a cost the reader-level test cannot see: a new per-row
 datastore read added anywhere else in ``_session_info_for``.
 
-WHAT IT MEASURED WHEN IT WAS FIRST RUN, attributed by caller, with 4 live
+WHAT IT MEASURES, attributed by caller, re-measured 2026-09-11 with 4 live
 sessions. This is recorded because it is the honest state of the route
 rather than a target that was hit:
 
-    _restored_activity_state   4    one connection per session
-    _identity_for_live_name    4    one connection per session
-    _label_for_tmux_name       4    one connection per session
-    _owned_instances_from_db   4    one connection per session
-    _instance_index_for_listing 1   ONE for the whole pass
+    _restored_activity_state   4    one per session, IN A WORKER THREAD
+    _identity_for_live_name    4    one per session, IN A WORKER THREAD
+    _label_for_tmux_name       4    one per session, IN A WORKER THREAD
+    _instance_index_for_listing 1   ONE for the whole pass, in the thread
+    _owned_instances_from_db   4    one per session, ON THE EVENT LOOP
     read_instance_row          0    was one per session before this round
 
-So FOUR per-row readers remain and the round removed a fifth. They are NOT
-folded into the index, deliberately: all four are NAME-KEYED with a
-recency rule ("the newest instance of this name") while the index is keyed
-on the full instance triple, so answering them from it would be a silent
-behaviour change in the duplicate-name case nobody looks at - precisely
-the class of change this project's own notes forbid. Closing them means
-either giving them the epoch the pass already holds, or a second
-name-keyed bulk read. That is real work and not a patch-release change.
+THIS COUNTS CONNECTIONS, NOT STALLS, AND THE TWO STOPPED BEING THE SAME
+THING. Until the listing gather moved off the loop, every connection here
+was opened with the event loop unable to read the tmux pipe, deliver a
+keystroke or answer another request, so the total WAS the stall. Now 13
+of the 17 are opened inside ``asyncio.to_thread`` and cost the loop
+nothing - see ``src/core/listing_gather.py`` and
+``tests/test_listing_off_the_loop.py``, which is the file that proves
+WHERE they run. This one still measures HOW MANY, because a read that is
+cheap to the loop is not free: it is still disk, still SQLite contention
+with the writers, and a fifth per-row reader is still a design question
+somebody has to answer rather than inherit.
 
-SO THE BOUND HERE IS DELIBERATELY LOOSE AND IS A CEILING ON A ROUTE THAT
-IS KNOWN TO BE IMPERFECT. It exists to fail when a FIFTH per-row reader
-appears, not to assert the route is clean. Tightening it is the follow-up;
-RAISING IT IS NOT.
+THE FOUR ON THE LOOP ARE THE OWNERSHIP READ, AND THEY ARE DELIBERATE.
+``is_owned_tmux_name`` is the only one of the four name-keyed readers an
+ADOPTION can move, because an adoption never touches the in-memory
+``owned_tmux_sessions`` set and only writes the datastore. The loop being
+free is exactly what lets an adoption land mid-pass, so gathering that
+read would report a freshly adopted session unowned for a poll cycle.
+
+None of the four are folded into the index, deliberately: all four are
+NAME-KEYED with a recency rule ("the newest instance of this name") while
+the index is keyed on the full instance triple, so answering them from it
+would be a silent behaviour change in the duplicate-name case nobody
+looks at - precisely the class of change this project's own notes forbid.
+Closing them means either giving them the epoch the pass already holds,
+or a second name-keyed bulk read. That is real work and not a
+patch-release change.
+
+SO THE BOUND HERE IS THE EXACT MEASURED COST AND CARRIES NO HEADROOM. It
+exists to fail when a FIFTH per-row reader appears, not to assert the
+route is clean. RAISING IT IS RE-INTRODUCING THE DEFECT WITH THE ALARM
+SWITCHED OFF.
 """
 
 from __future__ import annotations
@@ -73,14 +92,20 @@ LIVE_SESSIONS = 4
 
 #: The most datastore connections one ``/sessions/list`` pass may open.
 #:
-#: MEASURED, NOT PICKED, and it is a CEILING ON A KNOWN-IMPERFECT ROUTE
-#: rather than a claim that the route is clean - see the module docstring
-#: for the four name-keyed per-row readers still on it. Measured at
-#: ``4 * N + 1`` with one open of headroom. A FIFTH per-row reader pushes
-#: it to ``5 * N + 1`` and fails this, which is the sensitivity that makes
-#: it worth having. If this ever needs raising, the read that raised it
-#: belongs in a bulk index instead.
-MAX_DATASTORE_OPENS_PER_LISTING = 4 * LIVE_SESSIONS + 2
+#: MEASURED, NOT PICKED: re-measured 2026-09-11 at exactly ``4 * N + 1``,
+#: the same number on three consecutive runs, which is the four
+#: name-keyed per-row readers plus the one bulk instance index. It is a
+#: CEILING ON A KNOWN-IMPERFECT ROUTE rather than a claim the route is
+#: clean - see the module docstring for what those four are.
+#:
+#: NO HEADROOM, DELIBERATELY. It carried one spare open, and while the
+#: pass was cheaper than the bound the alarm was simply off: a new read
+#: could land and nothing would say so. A bound equal to the measurement
+#: is the only kind that binds. A FIFTH per-row reader pushes this to
+#: ``5 * N + 1`` and a new per-pass read to ``4 * N + 2``, and both fail
+#: here naming the caller that grew. If this ever needs raising, the read
+#: that raised it belongs in a bulk index instead.
+MAX_DATASTORE_OPENS_PER_LISTING = 4 * LIVE_SESSIONS + 1
 
 
 def _tmux(*args: str) -> subprocess.CompletedProcess:
@@ -225,17 +250,19 @@ def live_manager(tmp_path, monkeypatch):
 
 @requires_tmux
 @pytest.mark.asyncio
-async def test_the_listing_pass_opens_no_more_than_three_connections_per_row(
+async def test_the_listing_pass_opens_no_more_than_four_connections_per_row(
     live_manager,
     monkeypatch,
 ):
-    """A FOURTH per-row datastore reader on this pass must fail the build.
+    """A FIFTH per-row datastore reader on this pass must fail the build.
 
-    The pass is synchronous inside ``async def``, so every connection it
-    opens is opened with the event loop unable to read the tmux pipe,
-    deliver a keystroke, or answer another request. Three per-row readers
-    remain here for a reason recorded in the module docstring; a fourth
-    would be new and unexamined.
+    Four per-row readers remain here for a reason recorded in the module
+    docstring; a fifth would be new and unexamined. Thirteen of the
+    seventeen connections are now opened in a worker thread and cost the
+    event loop nothing, which is measured by
+    ``tests/test_listing_off_the_loop.py`` rather than here - this file
+    counts connections, and a connection that does not stall the loop is
+    still disk and still SQLite contention with the writers.
     """
     manager, names = live_manager
     counter = _DatastoreOpenCounter()
@@ -250,10 +277,12 @@ async def test_the_listing_pass_opens_no_more_than_three_connections_per_row(
         f"one /sessions/list pass opened the datastore {counter.count} "
         f"times for {LIVE_SESSIONS} sessions, over the "
         f"{MAX_DATASTORE_OPENS_PER_LISTING} it is allowed. By caller: "
-        f"{counter.by_caller}. Each of these is blocking SQLite on the "
-        "event loop, which the user feels as lag in the TERMINAL rather "
-        "than as a slow list. Put the read in the bulk index instead of "
-        "raising this bound."
+        f"{counter.by_caller}. Most of these run in a worker thread and "
+        "cost the event loop nothing, so this is disk and SQLite "
+        "contention with the writers rather than terminal lag - but a "
+        "reader that is ALSO on the loop is felt as lag in the TERMINAL "
+        "rather than as a slow list. Put the read in the bulk index "
+        "instead of raising this bound."
     )
 
 
