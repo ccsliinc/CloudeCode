@@ -34,6 +34,7 @@
 import { HOME_KEYS, failureReason } from '../../../../client/js/labels/home-screen.js';
 import { findRunningSessionBySlug } from './deep-link';
 import { showError, updateStatus, explainRefusedProject } from './status-report';
+import { beginNav, currentNav, keepNav, withNav } from './nav-generation';
 import type { NavHost, SessionLike } from './nav-host';
 import type { ProjectRow, RunningSessionRow } from '../sessions/types';
 import type { Translate } from './recent';
@@ -76,6 +77,11 @@ export async function returnToActiveSession(
     host: NavHost,
     t: Translate,
 ): Promise<void> {
+    // THE INTENT, DECLARED BEFORE ANY AWAIT. This path awaits twice -
+    // the terminal prepare (which is itself xterm init plus a layout
+    // settle plus a fit) and the session fetch - and a card click landing
+    // in either of them must win.
+    const nav = beginNav('session:' + String(sessionId ?? ''));
     try {
         const { cols, rows } = await host.prepareTerminal();
         const info = await host.getSession(sessionId, {
@@ -83,6 +89,7 @@ export async function returnToActiveSession(
             cols,
             rows,
         });
+        if (!keepNav(nav, 'launcher rejoin')) return;
         if (info) host.returnToExistingTerminal(info as SessionLike);
     } catch (error) {
         showError(t(HOME_KEYS.returnFailed, { reason: failureReason(error, t) }), t);
@@ -112,6 +119,11 @@ export async function attachRunningSession(
     host: NavHost,
     t: Translate,
 ): Promise<void> {
+    // THE INTENT, DECLARED BEFORE THE POST. Every session-created
+    // dispatcher declares its navigation here so a row clicked while this
+    // request is in flight wins; app.js's session-created listener is the
+    // one place that checks it.
+    const nav = beginNav('attach:' + tmuxName);
     try {
         const response = await host.adoptSession(tmuxName, true);
         const session = (response.session || response) as SessionLike;
@@ -150,12 +162,12 @@ export async function attachRunningSession(
             }
         }
 
-        host.announceSessionCreated({
+        host.announceSessionCreated(withNav({
             session,
             initialScrollbackB64,
             fifoStartOffset,
             adopted: true,
-        });
+        }, nav));
     } catch (error) {
         showError(t(HOME_KEYS.attachFailed, { reason: failureReason(error, t) }), t);
     }
@@ -214,8 +226,16 @@ export async function openProjectByName(
     t: Translate,
 ): Promise<void> {
     resolvingDeepLink = true;
+    // READS the generation the router declared for this deep link, never
+    // begins one. The retry ladder below can spend well over a second,
+    // and a conversation row clicked inside that window must win. The two
+    // handlers it dispatches to declare their own generation once this
+    // check passes, which is correct: the check is what proves this deep
+    // link is still the navigation on screen.
+    const deepLinkNav = currentNav();
     try {
         const session = await resolveDeepLink(name, host);
+        if (!keepNav(deepLinkNav, 'deep-link resolve')) return;
         if (session) {
             if (session.is_active) {
                 await returnToActiveSession(session.session_id || null, host, t);
@@ -256,6 +276,10 @@ export async function selectProject(
     providerChoice: Record<string, unknown> | null | undefined = undefined,
 ): Promise<void> {
     const name = String(project?.name ?? '');
+    // THE INTENT, DECLARED BEFORE THE POST, and before the provider
+    // picker too: the picker is an await the user can sit in for as long
+    // as they like, which is the widest window on this screen.
+    const nav = beginNav('project:' + name);
     if (resolvingDeepLink) {
         const error = new Error(t(HOME_KEYS.deepLinkRefusesCreate, { name }));
         console.error('CloudeWeb: BLOCKED create-session during deep-link resolution:', error);
@@ -287,7 +311,7 @@ export async function selectProject(
         else if (choice?.agentType) payload.agent_type = choice.agentType;
 
         const session = await host.createSession(payload);
-        host.announceSessionCreated({ session, project });
+        host.announceSessionCreated(withNav({ session, project }, nav));
     } catch (error) {
         console.error('CloudeWeb: failed to open project:', error);
         const message = error instanceof Error ? error.message : String(error ?? '');
@@ -320,10 +344,26 @@ export async function detachAndOpenProject(
         updateStatus(t(HOME_KEYS.statusDetaching));
         await host.detachSession();
         await host.wait(DETACH_SETTLE_MS);
-        await selectProject(project, host, t);
     } catch (error) {
         console.error('CloudeWeb: failed to detach session:', error);
         showError(t(HOME_KEYS.detachFailed, { reason: failureReason(error, t) }), t);
+        return;
+    }
+    // THE OPEN GETS ITS OWN CATCH, BECAUSE IT IS ITS OWN FAILURE. Folded
+    // into the block above, a project that failed to OPEN was reported to
+    // the user as a session that failed to DETACH - a sentence naming the
+    // wrong step, about a detach that had in fact just succeeded.
+    try {
+        await selectProject(project, host, t);
+    } catch (error) {
+        console.error('CloudeWeb: failed to open the project after detach:', error);
+        showError(
+            t(HOME_KEYS.openFailed, {
+                name: String(project?.name ?? ''),
+                reason: failureReason(error, t),
+            }),
+            t,
+        );
     }
 }
 
@@ -348,10 +388,22 @@ export async function detachAndCreateNew(
         updateStatus(t(HOME_KEYS.statusDetaching));
         await host.detachSession();
         await host.wait(DETACH_SETTLE_MS);
-        await createNew(agentType || null);
     } catch (error) {
         console.error('CloudeWeb: failed to detach session:', error);
         showError(t(HOME_KEYS.detachFailed, { reason: failureReason(error, t) }), t);
+        return;
+    }
+    // Its own catch, for the reason spelled out in `detachAndOpenProject`.
+    // IT LOGS AND DOES NOT RAISE A SECOND BANNER: `createProjectFlow`
+    // catches its own failures and calls `showError` itself, so anything
+    // arriving here is a throw that flow did not expect, and a banner
+    // here would double up on the common path. Logged rather than
+    // swallowed, because an unexpected throw is exactly what a later
+    // reader needs to see.
+    try {
+        await createNew(agentType || null);
+    } catch (error) {
+        console.error('CloudeWeb: failed to create a session after detach:', error);
     }
 }
 
@@ -362,11 +414,14 @@ export async function detachAndCreateNew(
  * Example: await connectToExistingSession(host, t);
  */
 export async function connectToExistingSession(host: NavHost, t: Translate): Promise<void> {
+    // THE INTENT, DECLARED BEFORE THE GET, for the reason given on every
+    // other dispatcher here.
+    const nav = beginNav('existing');
     try {
         updateStatus(t(HOME_KEYS.statusConnecting));
         const data = await host.getSession();
         const session = ((data as { session?: SessionLike }).session || data) as SessionLike;
-        host.announceSessionCreated({ session });
+        host.announceSessionCreated(withNav({ session }, nav));
     } catch (error) {
         console.error('CloudeWeb: failed to get the existing session:', error);
         showError(t(HOME_KEYS.connectFailed, { reason: failureReason(error, t) }), t);

@@ -158,7 +158,6 @@ async function browserPrepareTerminal(): Promise<{ cols: number; rows: number }>
     const controller = win?.TerminalController as
         | {
               term?: { cols?: number; rows?: number } | null;
-              fitAddon?: { fit?: () => void } | null;
               init?: () => Promise<unknown>;
           }
         | undefined;
@@ -167,13 +166,35 @@ async function browserPrepareTerminal(): Promise<{ cols: number; rows: number }>
     }
     await twoFrames();
     try {
-        if (controller?.fitAddon && typeof controller.fitAddon.fit === 'function') {
-            controller.fitAddon.fit();
-        }
-        return {
-            cols: controller?.term?.cols || 0,
-            rows: controller?.term?.rows || 0,
-        };
+        // THROUGH THE METRICS OWNER, NEVER `fitAddon.fit()` FROM HERE.
+        // This function used to reach into `TerminalController.fitAddon`
+        // and fit it directly, then read `term.cols`/`term.rows`. Two
+        // things were wrong with that and only the first is obvious.
+        //
+        // It is a layering violation: `TerminalMetrics` exists to be the
+        // one reader of the grid, and `terminalDims()` in this very file
+        // already went through it, so one module was asking two different
+        // ways.
+        //
+        // The one that bites: a RAW fit measures the character cell
+        // without asking whether xterm.css has applied.
+        // `TerminalMetrics.currentGrid()` owns `guardedFit`, which does
+        // ask. These numbers are posted as the pane's BIRTH geometry, so
+        // a grid derived from an unstyled cell births a real tmux pane at
+        // a size matching nothing on screen - the Brave-shields failure
+        // CLAUDE.md records, reached by a different road.
+        //
+        // `currentGrid()` answers `{}` when it cannot be trusted, which
+        // becomes 0/0 here, and the server reads 0 as "skip the
+        // pre-resize". That is the same tolerated outcome the raw path
+        // fell back to, so a refusal costs this request nothing it was
+        // not already prepared to lose.
+        const metrics = win?.TerminalMetrics as
+            | { currentGrid?: () => { cols?: number; rows?: number } }
+            | undefined;
+        const grid =
+            metrics && typeof metrics.currentGrid === 'function' ? metrics.currentGrid() : {};
+        return { cols: grid.cols || 0, rows: grid.rows || 0 };
     } catch (error) {
         // Tolerated: fall through with 0/0. The server skips the
         // pre-resize and the behaviour is identical to what every
