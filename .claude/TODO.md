@@ -6941,3 +6941,146 @@ so. He could not see the refusal.
 
 Preview for the owner: `http://10.0.1.150:5057/` (fixtures, not his sessions;
 reads live, writes refused). Stop it with `kill 97386`.
+
+## 2026-09-11 - documentation brought current for the compact, and what it corrected
+
+The owner is about to compact the conversation, so everything not in a file is
+gone. Three documents rewritten or updated on `docs/handoff-1.3`, cut from
+`release/1.2.1`, in its own worktree.
+
+### What was written
+
+- **`.claude/notes/HANDOFF.md` REWRITTEN, 1,001 to 1,206 lines.** Sections 1, 8,
+  9 and 10 replaced wholesale; section 2's restart block, section 6 and section
+  7's baselines replaced in place; sections 3, 4, 5 and the rest of 6 and 7 left
+  BYTE IDENTICAL, because they are still true and rewriting them would have been
+  churn with a chance of losing something. Spliced with an anchored script that
+  refuses a non-unique anchor rather than cutting a guessed line range.
+- **`CLAUDE.md` updated**, 2,089 to 2,362 lines. A branch-scope warning at the
+  top, a new "The 1.3 line" section, four new gotchas (11 to 14), and nine
+  corrections listed below.
+- **`.claude/notes/NEXT-SESSION.md` NEW, 120 lines.** The state in five lines,
+  the three things to do next, the gates, the traps.
+
+### The nine false or incomplete claims found in CLAUDE.md
+
+1. **The pytest baseline read 5,656 / 2 / 19. RE-MEASURED: 5,708 / 2 / 19** on
+   `release/1.2.1` with `-p no:randomly`, 214.5s. Stale since the row-menu
+   round. That figure has now been wrong three separate times.
+2. **The node count read "197 tracked suites". RE-MEASURED: 200 suites, 200
+   passing**, globbed exactly as CI does. `check-js-syntax.sh` parses 227 files.
+3. **THE `/sessions/list` WRAPPER FIELD LIST WAS MISSING SIX FIELDS**, including
+   the two newest, `notifications_muted` (schema v26) and `status_source`. This
+   is the most dangerous of the nine: the whole point of that section is that a
+   field read at the wrong level answers `undefined` silently, and a field the
+   document never lists reads exactly the same way. The list is now derived from
+   `class SessionInfo` rather than remembered.
+4. **FIVE LINE REFERENCES HAD DRIFTED**, all of them pointing at import lines or
+   comments: `session_backend.py:32` (really `:39`), `tmux_backend.py:163`
+   (`:264`), `:84` / `:87` for the two socket constants (`:120` / `:173`),
+   `pty_session.py:293` (`:294`), and `launchpad.js:3878` for
+   `_buildProjectSessionGroups` (`:3937`). Corrected, and a standing note added
+   that the path and the symbol are the durable half of a reference.
+5. **The 500-line "must not grow" list was branch-blind.** It named files the
+   1.3 branches delete and omitted the two `src/` files that are newly over the
+   line and that the rewrite will NOT touch:
+   `session_notification_policy.py` (563) and `notifications/idle_watcher.py`
+   (513). Those two are now the ones flagged as genuinely worth splitting.
+6. **The push rule did not carry the repo-of-record ruling.** `adamdev` is
+   primary and the only issue tracker, `origin` is the mirror AND the public
+   distribution point, so the ORDER is adamdev then origin. Added with the trap
+   it creates: `.claude/skills/work/SKILL.md`'s claim block says
+   `git push -u origin`, which is right on Adam's clone and silently wrong here.
+7. The stack table carried no `web/`, no string catalog and no note that the
+   1.3 bundle is COMMITTED, which is what keeps `script-src 'self'` intact.
+8. There was no description anywhere in `CLAUDE.md` of the composition root, the
+   four ports, the plugin registry, the i18n layer or the coordination protocol.
+9. Four traps that cost this session real time were recorded nowhere a future
+   agent reads first. Now gotchas 11 to 14.
+
+### And the brief itself was wrong in six places, checked rather than copied
+
+- `routes.py` was **4,387** lines, not 4,397 (and 106 on the decomposition
+  branch). The plan's own table agrees with 4,387.
+- The frontend test count on record is **1,334** at `f28faef`, not 1,335, and
+  two commits landed after it without re-recording, so the branch tip is
+  UNMEASURED. Labelled unverified rather than quoted.
+- The draft cleanup reclaimed **4,095,684,007 bytes (3.81 GiB) across 33
+  drafts**, not "4.2 GB".
+- The backend suite did not go "5,609 to 6,520". 5,609 was the pre-1.2 figure;
+  the measured control on the branch's own base is **5,708** and the tip is
+  6,520.
+- The governance docs are on **`docs/plugin-policy`**, not `feat/work-protocol`
+  (its ancestor), and `docs/kept-behaviours/` is a directory holding one party
+  file while the policy itself is `docs/KEPT-BEHAVIOURS.md`.
+- **`client/js/launchpad.js` HAS NOT BEEN DELETED ON THE RELEASE LINE.** The
+  brief said `CLAUDE.md` was stale for naming it; it is 6,526 lines on
+  `release/1.2.1` and on live, and deleted only on `feat/svelte-slice-7`.
+  Writing "it does not exist" into the file every agent reads first would have
+  been a NEW false claim, which is the exact failure this round existed to
+  prevent. Both facts are now stated with the branch beside each.
+
+### Other docs corrected
+
+- **`docs/deploy-mini.md`**: the `launchctl kickstart -k` restart instruction
+  replaced with `bootout` then `bootstrap`, plus the poll loop. Taken as the
+  blob from `84f344d` on `docs/handoff-restart-fix` rather than rewritten, so
+  that branch merges clean. `HANDOFF.md:118` carried the same wrong instruction
+  and is fixed in the rewrite, with a corrections entry.
+- **`docs/ci.md`**: the 2026-08-24 run figures (2,415 / 2,416) are now labelled
+  a DATED CI RECORD rather than a baseline, pointing at the current number.
+- **`docs/session-status.md`, `docs/session-status-model.md`,
+  `docs/session-project-operations.md`**: a BRANCH SCOPE note saying their
+  `launchpad.js` citations hold on `release/1.2.1` and need RE-POINTING, not
+  deleting, when 1.3 merges. The behaviour was ported, not dropped.
+
+### Re-measured for this round, so the next reader does not have to
+
+- Live: `/health` 200, bundle `CFBundleShortVersionString` **1.2.1**,
+  **19** tmux sessions on `-L cloude`.
+- `cloude.db` **5,365,055,488 bytes (5.0 GiB)** at 09:57, beside a
+  `cloude.db.bak-v25-20260910T154341Z` of 5,143,568,384 bytes. **The backup-gate
+  entry above says "roughly 4.5 GB" and is stale**; size the `VACUUM INTO`
+  against 5 GiB. Mini boot volume has 110 GiB free.
+- The 1.3.0 preview server on `10.0.1.150:5057` is UP, pid 97386.
+- The README's own download link resolves **200 anonymously**, and the
+  `v1.2.1` release is published (not draft, not prerelease) carrying
+  `Cloude.Code-1.2.1-arm64.dmg` at **126,246,156 bytes**, matching the byte
+  count recorded at publish time. Public distribution verified as a downloader.
+- `CURRENT_SCHEMA_VERSION = 26` read from `src/core/db_models.py:53`. **The LIVE
+  database's schema was NOT read**: ssh has no TCC grant for that path and
+  `sqlite3 file:...?mode=ro` returns error 14. The `bak-v25` file dated to the
+  1.2.1 deploy minute is evidence of the v25 to v26 migration, not a reading.
+- `cp -i` onto an existing target with stdin closed prints `not overwritten`,
+  **exits 1 and copies nothing**; with an inherited stdin it blocks on the
+  prompt. The silent-refusal shape is the worse of the two because it looks like
+  a command that ran.
+
+### Open, left deliberately
+
+- `integration/1.3.0` did not exist as a ref on either remote at 10:00 and was
+  NOT waited for; another worker is building it. Nothing here merges anything.
+- The governance branches are still unmerged, so `docs/DECISIONS.md`,
+  `docs/KEPT-BEHAVIOURS.md` and `.claude/skills/work/` are invisible to anyone
+  reading only the release line. Merging them is a decision, not a chore.
+- **FOUR unmerged branches each edit `docs/DECISIONS.md`** and one of them
+  reverses another on the update-checker target. Commit-time order is
+  `feat/work-protocol` 14:34, `docs/plugin-policy` 15:21, `docs/repo-of-record`
+  15:43, `fix/update-checker-target` 16:14, all 2026-09-10. Later wins.
+- The backend plan says S8 is blocked on issue **#28**; the release plan above
+  says **#32**. Both appear in the record and neither was resolved here.
+
+### The guard caught the documentation round, which is the point of the guard
+
+The first version of the BRANCH SCOPE note in `docs/session-project-operations.md`
+cited `client/dist/app.js`, a path that exists on `feat/svelte-slice-7` and not
+on `release/1.2.1`. `tests/test_docs_operations_chart_drift.py::test_every_cited_file_exists`
+went RED and named the file. Reworded to name the branch in prose and point at
+`CLAUDE.md` for the paths, with a sentence in the note explaining why the paths
+are deliberately not spelled there. Re-run green, 5 passed.
+
+Worth recording for its shape: a documentation change is a change, and it can
+break a build. This repo already fails builds on patterns - remote assets,
+literal NUL bytes, unresolved names, cited paths - and a docs-only round is not
+exempt from running the suite. A round that had skipped pytest "because it only
+touched markdown" would have pushed a red tree.
