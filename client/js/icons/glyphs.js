@@ -35,7 +35,7 @@ export const GLYPH_SIZE = 16;
 /**
  * One drawable element of a glyph.
  *
- * Description: `tag` is `path` or `rect`; every other key is an SVG
+ * Description: `tag` is `path`, `rect` or `circle`; every other key is an SVG
  *   attribute, in the SVG's own kebab-case spelling so both renderers
  *   emit it verbatim.
  * @typedef {Object<string, string|number>} GlyphElement
@@ -92,6 +92,139 @@ export const GLYPHS = {
             stroke: 'currentColor',
             'stroke-width': '1.5',
             'stroke-linecap': 'round',
+        },
+    ],
+    /** Close. Two crossed strokes. In this app an X means "stop the
+     *  running process, keep the record"; the trash can means "forget the
+     *  record, stop nothing". The two are bound to different operations in
+     *  client/js/session-row-actions.js and must never be confusable. */
+    close: [
+        {
+            tag: 'path',
+            d: 'M4 4L12 12',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+        },
+        {
+            tag: 'path',
+            d: 'M12 4L4 12',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+        },
+    ],
+    /** Remove from the list. A trash can. See `close` for the semantics
+     *  the two glyphs are bound to; drawing either one for the other is a
+     *  lie the user acts on before reading the tooltip. */
+    trash: [
+        {
+            tag: 'path',
+            d: 'M3 4.5H13',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+        },
+        {
+            tag: 'path',
+            d: 'M5.5 4.5V3.25C5.5 2.83579 5.83579 2.5 6.25 2.5H9.75C10.1642 2.5 10.5 2.83579 10.5 3.25V4.5',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+        },
+        {
+            tag: 'path',
+            d: 'M4.5 4.5L5 12.75C5 13.1642 5.33579 13.5 5.75 13.5H10.25C10.6642 13.5 11 13.1642 11 12.75L11.5 4.5',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+        },
+        {
+            tag: 'path',
+            d: 'M6.5 6.75V11',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+        },
+        {
+            tag: 'path',
+            d: 'M9.5 6.75V11',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+        },
+    ],
+    /** Restart the agent. A CIRCULAR ARROW, deliberately, not a play
+     *  triangle: play reads as "begin something new", and this puts a
+     *  process back into a pane that already exists and keeps its
+     *  scrollback, its name and its place in the list. It sits beside a
+     *  destructive neighbour, so the shape has to say "again". */
+    restart: [
+        {
+            tag: 'path',
+            d: 'M13 8A5 5 0 1 1 11.4 4.3',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+        },
+        {
+            tag: 'path',
+            d: 'M12.9 1.9V5.1H9.7L12.9 1.9Z',
+            fill: 'currentColor',
+        },
+    ],
+    /** Mark unread, "not flagged" state. A plain envelope outline. */
+    'envelope-outline': [
+        {
+            tag: 'rect',
+            x: '2',
+            y: '3.5',
+            width: '12',
+            height: '9',
+            rx: '1.25',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+        },
+        {
+            tag: 'path',
+            d: 'M2.5 4.25L8 8.5L13.5 4.25',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+        },
+    ],
+    /** Mark unread, "flagged" state. The same envelope plus a solid dot,
+     *  so the two states differ by SHAPE and not by colour alone. */
+    'envelope-filled': [
+        {
+            tag: 'rect',
+            x: '2',
+            y: '3.5',
+            width: '12',
+            height: '9',
+            rx: '1.25',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+        },
+        {
+            tag: 'path',
+            d: 'M2.5 4.25L8 8.5L13.5 4.25',
+            stroke: 'currentColor',
+            'stroke-width': '1.5',
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+        },
+        {
+            tag: 'circle',
+            cx: '12.5',
+            cy: '3.5',
+            r: '2.5',
+            fill: 'currentColor',
+            stroke: 'var(--color-bg, #000)',
+            'stroke-width': '0.75',
         },
     ],
 };

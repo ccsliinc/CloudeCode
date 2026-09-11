@@ -420,9 +420,22 @@ export const sessionStore = {
      * Example: await sessionStore.loadRunningSessions(t)
      */
     async loadRunningSessions(t: Translate): Promise<void> {
-        // Reset the verdict for this poll tick, so a probe that recovers
-        // is not still wearing the previous tick's failure.
-        runningSessionsListing = emptyListing();
+        // THE VERDICT IS NOT RESET HERE, AND THAT IS SLICE 5's HALF OF
+        // THE SAME FIX. This method opened by assigning
+        // `runningSessionsListing = emptyListing()` - "so a probe that
+        // recovers is not still wearing the previous tick's failure" -
+        // and then assigned the real verdict after the await. The
+        // assignment below is UNCONDITIONAL, so the reset changed nothing
+        // about the answer and everything about how many times it was
+        // published: on a screen whose probe is failing, every tick
+        // removed the NEEDS ATTENTION block and put it back, and flipped
+        // the count between a number and "could not be determined".
+        //
+        // A string renderer could not tell, because it painted once at
+        // the end from whatever the fields held. The running-sessions
+        // list is a component now and it is the ONLY surface that renders
+        // this verdict, so every intermediate state is a repaint. Same
+        // rule as the row set below: hold it in a local, publish once.
         // The owner's UI switches, measured once per page load. Memoized
         // onto one promise inside that module, so a poll costs nothing
         // after the first tick. `session-sidebar-fetch.js` makes the same

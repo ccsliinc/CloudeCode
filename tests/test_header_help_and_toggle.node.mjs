@@ -137,49 +137,24 @@ ok(/:has\(#session-sidebar-toggle:not\(\.hidden\)\)/.test(css),
     + 'toggle is actually rendering');
 
 // ---------------------------------------------------------------------
-// 68. THE RENAME AFFORDANCE: three states, never an omission.
+// 68. THE RENAME AFFORDANCE: ported out in slice 5, and where it went.
 // ---------------------------------------------------------------------
-ok(/_renderRenamePencilHtml\(s, escapedName\)\s*\{/.test(js),
-    'the rename pencil renderer is gone');
-ok(/const renamePencil = this\._renderRenamePencilHtml\(s, escapedName\);/.test(js),
-    'the running-session row no longer routes through the three-state renderer');
-ok(!/const renamePencil = s\.session_id\s*\n?\s*\?/.test(js),
-    'the pencil is gated on session_id again, which silently omits the '
-    + 'control for a session the app owns but has not got open - the '
-    + 'reported bug');
-ok(/running-session-rename-unavailable/.test(js),
-    'the unavailable pencil state is gone, so the control is being omitted again');
-ok(/s\.created_by_cloude == null/.test(js),
-    'ownership is being tested truthily; `!s.created_by_cloude` folds a '
-    + 'genuine null (server_status.py ships one) into "external" and '
-    + 'invents an answer the datastore never gave');
-ok(/CANNOT DETERMINE/.test(js),
-    'the third outcome is not named anywhere in the rename affordance');
-ok(/aria-disabled="true"/.test(js),
-    'the unavailable pencil is not marked disabled for assistive tech');
-
-// The reason must reach a screen reader, not only a hovering mouse.
-// Anchor on the DEFINITION, not the name: the call site
-// `this._renderRenamePencilHtml(s, escapedName)` appears earlier in the
-// file, and slicing from there measured the wrong function entirely.
-const renderer = js.slice(js.indexOf('\n    _renderRenamePencilHtml(s, escapedName) {'));
-const rendererBody = renderer.slice(0, renderer.indexOf('\n    }'));
-ok(rendererBody.includes('aria-label="${this._escapeHtml(reason)}"'),
-    'the unavailable reason is not exposed as an aria-label');
-// Only a `return ''` matters. The `: ''` inside the body is the
-// SessionStatusUI fallback for the glyph itself, which is a missing ICON,
-// not a missing control - the <span> is still rendered around it.
-ok(!/return\s*'';/.test(rendererBody) && !/return\s*``;/.test(rendererBody),
-    'the renderer can still return an empty string, i.e. draw nothing');
-ok((rendererBody.match(/return `<span/g) || []).length === 2,
-    'the renderer no longer has exactly two <span> return paths (live and '
-    + 'unavailable); a third or a missing one means a state was dropped');
-
-// The two states must not share a class, or the disabled one could reach
-// the live click path.
-ok(/e\.target\.closest\('\.running-session-rename-unavailable'\)/.test(js),
-    'the unavailable pencil does not swallow its own click, so clicking a '
-    + 'control the UI called unavailable falls through and opens the session');
+// This block held ten source-shape assertions over `launchpad.js` -
+// the three-state pencil, the `== null` ownership test, the two return
+// paths, the separate class for the disabled state, the click it
+// swallows. Every one of them was a grep for an EXPRESSION, which is the
+// only thing a string builder gives a test to hold onto, and the string
+// builder is gone: the card is
+// web/src/lib/launchpad/RunningSessionRow.svelte and the decision is
+// web/src/lib/launchpad/running-row.ts::renamePencilView.
+//
+// The RULES are unchanged and are asserted as BEHAVIOUR now, in
+// web/src/lib/launchpad/running-row.test.ts (all three states, the reason
+// key each carries, the `== null` third outcome, the two classes) and in
+// RunningSessions.behaviour.test.ts (the control is never absent, the
+// disabled one carries its reason in `title` and `aria-label` and no
+// `data-rename-sid`). A port that satisfies those is correct whatever it
+// renders, which is what a grep for `return \`<span` could never say.
 
 // ---------------------------------------------------------------------
 // 53b. THE ADD MENU.

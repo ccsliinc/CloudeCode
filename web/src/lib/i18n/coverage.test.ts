@@ -61,6 +61,14 @@ import {
 import { ATTENTION_REASON } from '../launchpad/project-groups';
 import { FAMILY_PILL_KEYS, familyPillView } from '../launchpad/agent-family-pill';
 import {
+    RUNNING_SESSION_KEYS,
+    listingAttentionDetail,
+    relativeAge,
+    rowActionFailed,
+    runningCountLabel,
+    runningCountUnavailableLabel,
+} from '../../../../client/js/labels/running-session.js';
+import {
     PROJECT_WORK_UNRECORDED_KEY,
     SESSION_WORK_UNRECORDED_KEY,
     workAttrs,
@@ -128,6 +136,23 @@ const PORTED_FILES = [
     'web/src/lib/launchpad/NoProjectGroup.svelte',
     'web/src/lib/launchpad/AttentionGroup.svelte',
     'web/src/lib/launchpad/AgentFamilyPill.svelte',
+    // Slice 5, the running-sessions list. The assembler first, then every
+    // module and component the list is built from. The plugin is on the
+    // list because slice 5 moved its two labels into the catalog: the
+    // card renders that contribution as an inline control, and every
+    // user-visible string on this surface goes through the string layer.
+    'client/js/labels/running-session.js',
+    'web/src/lib/launchpad/running-row.ts',
+    'web/src/lib/launchpad/running-actions.ts',
+    'web/src/lib/launchpad/running-host.ts',
+    'web/src/lib/launchpad/running-chrome.ts',
+    'web/src/lib/launchpad/RunningSessions.svelte',
+    'web/src/lib/launchpad/RunningSessionRow.svelte',
+    'web/src/lib/launchpad/RunningSessionName.svelte',
+    'web/src/lib/launchpad/StartupGateBadge.svelte',
+    'web/src/lib/launchpad/WrapperPill.svelte',
+    'web/src/lib/sessions/session-label.ts',
+    'web/src/lib/plugins/mark-unread/index.ts',
 ];
 
 interface I18nLike {
@@ -311,7 +336,7 @@ describe('a ported file may not carry a hardcoded sentence', () => {
 
     test('the list of ported files is not empty and the files exist', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(27);
+        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(39);
         for (const rel of PORTED_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }
@@ -635,5 +660,123 @@ describe('the PROJECT TREE really reads the catalog too', () => {
         for (const key of Object.values(ATTENTION_REASON)) {
             expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
         }
+    });
+});
+
+
+// ---- guard 1, applied to slice 5's surface ---------------------------
+
+describe('the RUNNING SESSIONS surface really reads the catalog too', () => {
+    /**
+     * A pseudo-locale translator over the derived pseudo catalog.
+     *
+     * Inputs: none. Output: `(key, params) => string`.
+     */
+    function pseudoT(): (k: string, p?: Record<string, unknown> | null) => string {
+        const i18n = createI18n({ locale: PSEUDO_LOCALE }) as I18nLike;
+        return (k, p) => i18n.t(k, p);
+    }
+
+    test('the heading count is fully pseudo-localised, in both outcomes', () => {
+        const t = pseudoT();
+        for (const n of [0, 1, 2, 19]) {
+            const rendered = runningCountLabel(n, t);
+            expect(isPseudo(rendered), `${n} -> ${rendered}`).toBe(true);
+            expect(pseudoCount(rendered), `${n}`).toBe(1);
+        }
+        expect(isPseudo(runningCountUnavailableLabel(t))).toBe(true);
+    });
+
+    test('the count still formats, and a plural set is really being selected', () => {
+        const t = pseudoT();
+        expect(runningCountLabel(1234, t)).toContain('1,234');
+        // The one-form and the other-form are DIFFERENT messages in the
+        // pseudo catalog, so a ternary that happened to return the same
+        // string for both would not be caught by the span check alone.
+        expect(runningCountLabel(1, t)).not.toBe(runningCountLabel(2, t));
+    });
+
+    test('EVERY AGE BUCKET is a message, and the unknown one is its own', () => {
+        // `${n}s ago` built by concatenation is untranslatable twice over:
+        // the unit and the word order are both part of the sentence.
+        const t = pseudoT();
+        const now = 2_000_000_000_000;
+        const at = (secondsAgo: number) => relativeAge(
+            Math.floor(now / 1000) - secondsAgo, t, now,
+        );
+        for (const secondsAgo of [5, 90, 7200, 200000]) {
+            const rendered = at(secondsAgo);
+            expect(isPseudo(rendered), `${secondsAgo} -> ${rendered}`).toBe(true);
+            expect(pseudoCount(rendered), `${secondsAgo}`).toBe(1);
+        }
+        // A MISSING EPOCH IS ITS OWN MESSAGE, never a zero.
+        const unknown = relativeAge(null, t, now);
+        expect(isPseudo(unknown)).toBe(true);
+        expect(unknown).not.toContain('0');
+    });
+
+    test('the four age buckets say four different things', () => {
+        // NEGATIVE CONTROL. Four keys that all resolved to one message
+        // would pass every span check above.
+        const t = pseudoT();
+        const now = 2_000_000_000_000;
+        const at = (s: number) => relativeAge(Math.floor(now / 1000) - s, t, now);
+        const rendered = new Set([at(5), at(90), at(7200), at(200000)]);
+        expect(rendered.size).toBe(4);
+    });
+
+    test('the attention detail wraps the SERVER text without translating it', () => {
+        // The distinction the whole layer rests on: this app's own words
+        // are messages, and the server's own sentence is DATA that has to
+        // survive verbatim. The outer message is pseudo-localised, the
+        // detail inside it is not.
+        const t = pseudoT();
+        const rendered = listingAttentionDetail(
+            { ok: false, reason: 'http_503',
+                detail: 'the server answered HTTP 503', sources: ['live'] },
+            t,
+        );
+        expect(isPseudo(rendered), rendered).toBe(true);
+        expect(rendered).toContain('the server answered HTTP 503');
+        expect(rendered).toContain('http_503');
+        // ONE message, because the detail, the source and the reason are
+        // all data rather than copy.
+        expect(pseudoCount(rendered)).toBe(1);
+    });
+
+    test('and BOTH of its fallbacks are messages, not literals', () => {
+        // The count is what catches this: a hardcoded fragment passed as a
+        // PARAMETER is wrapped by the outer message, so the span check
+        // cannot see it. Two messages here, not one.
+        const t = pseudoT();
+        const rendered = listingAttentionDetail(
+            { ok: false, reason: null, detail: null, sources: [] }, t,
+        );
+        expect(isPseudo(rendered), rendered).toBe(true);
+        expect(pseudoCount(rendered)).toBe(3);
+    });
+
+    test('a failed row action names the action through the catalog', () => {
+        const t = pseudoT();
+        const rendered = rowActionFailed(t('session.action.close'), 'HTTP 500', t);
+        expect(isPseudo(rendered), rendered).toBe(true);
+        expect(pseudoCount(rendered)).toBe(2);
+        expect(rendered).toContain('HTTP 500');
+    });
+
+    test('a session LABEL is NOT pseudo-localised, because it is the user\'s text', () => {
+        expect(pseudoT()(RUNNING_SESSION_KEYS.wrapperTitle, { label: 'claude (chrome)' }))
+            .toContain('claude (chrome)');
+    });
+
+    test('every key this surface asks for exists in the catalog', () => {
+        for (const key of Object.values(RUNNING_SESSION_KEYS)) {
+            expect(Object.prototype.hasOwnProperty.call(enCatalog, key), key).toBe(true);
+        }
+    });
+
+    test('and the surface asks for more than a handful of them', () => {
+        // A guard over an empty key set would pass forever.
+        expect(Object.keys(RUNNING_SESSION_KEYS).length).toBeGreaterThanOrEqual(40);
     });
 });

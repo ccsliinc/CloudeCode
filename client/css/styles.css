@@ -2884,6 +2884,13 @@ body.home-header-active {
     letter-spacing: 0.12em;
     font-weight: 700;
     color: var(--color-warning, #d79921);
+    /* CASING IS THE STYLESHEET'S JOB. The markup used to carry the
+     * literal words NEEDS ATTENTION in capitals; slice 5 moved them into
+     * the string catalog, whose voice rule is lowercase, so the shout
+     * lives here instead. Same precedent as `.badge`, which slice 4
+     * moved for the same reason. A translation that wants a different
+     * casing rule changes this line, not the message. */
+    text-transform: uppercase;
 }
 
 .running-sessions-attention__title {

@@ -12,10 +12,11 @@
  *
  * THE LABELS ARE THE SHIPPED ONES, BYTE FOR BYTE - "clear unread flag"
  * and "mark unread for followup", the same two strings the deleted table
- * entry returned and the same two `markUnreadHtml` still puts in the
- * launchpad control's `title`. `session-card-actions.test.ts` loads that
- * real builder and compares, so the two surfaces cannot come to say
- * different words for one action.
+ * entry returned and the same two `markUnreadHtml` still puts in a
+ * control's `title`. Slice 5 moved them into the string catalog;
+ * `session-card-actions.test.ts` loads that real builder and compares, so
+ * the catalog and the legacy module cannot come to say different words
+ * for one action.
  *
  * THE SHORTCUT IS `U` AND THE ORDER PUTS IT SECOND, which is where the
  * owner's 2026-09-10 superset ruling placed it: rename, mark unread,
@@ -23,10 +24,12 @@
  * close. Nothing about that ruling changed here; only the list the item
  * comes from moved.
  *
- * THE LAUNCHPAD'S COPY IS UNTOUCHED. `client/js/launchpad.js` draws an
- * inline envelope control on its running-sessions rows through
- * `markUnreadHtml`, with its own handler (`_handleMarkUnread`). That
- * screen has not been migrated, so it keeps its path.
+ * THE LAUNCHPAD'S SECOND COPY IS GONE AS OF SLICE 5. `client/js/
+ * launchpad.js` used to draw its own inline envelope control through
+ * `markUnreadHtml`, with its own handler (`_handleMarkUnread`), because
+ * that screen had not been migrated. The running-sessions card is a
+ * component now and it renders THIS contribution, so the flag is read
+ * once, by this `enabled`, for both surfaces.
  *
  * THE FLAG STAYS THE GATE. `ui.show_mark_unread_control` (config.json,
  * served on `GET /api/v1/features`, cached by `client/js/ui-flags.js`) is
@@ -35,6 +38,8 @@
  * ON, which is `ui-flags.js`'s own rule: a probe that could not run must
  * never be the reason a control disappears.
  */
+import { t } from '../../i18n/index.svelte';
+import { RUNNING_SESSION_KEYS } from '../../../../../client/js/labels/running-session.js';
 import type {
     Contribution,
     Plugin,
@@ -75,12 +80,24 @@ const action: SessionCardAction = {
     shortcut: 'U',
 
     /**
-     * The label names the RESULT of activating it - "clear unread flag"
-     * when the flag is set, "mark unread for followup" when it is not.
+     * The label names the RESULT of activating it, not its state.
+     *
+     * THROUGH THE CATALOG SINCE SLICE 5, because the running-sessions card
+     * renders this contribution as an inline control and every
+     * user-visible string on that surface goes through the string layer.
+     * The reactive `t` is used rather than the plain one: a contribution
+     * is described at paint time inside a component, so it repaints on a
+     * locale change like everything beside it.
+     *
+     * THE WORDS ARE UNCHANGED, and ../session-card-actions.test.ts holds
+     * them against the real `SessionStatusUI.markUnreadHtml` so the two
+     * cannot drift.
      * Inputs: row. Output: string.
      */
     label(row: SessionCardRow): string {
-        return row.unread ? 'clear unread flag' : 'mark unread for followup';
+        return t(row.unread
+            ? RUNNING_SESSION_KEYS.unreadClear
+            : RUNNING_SESSION_KEYS.unreadSet);
     },
 
     /**

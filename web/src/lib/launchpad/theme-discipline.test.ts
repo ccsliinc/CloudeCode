@@ -35,7 +35,7 @@ import { describe, expect, test } from 'vitest';
 const repoRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 
 /**
- * Every file slice 4 added or took over.
+ * Every file slices 4 and 5 added or took over.
  *
  * APPEND TO THIS WHEN A SLICE ADDS A COMPONENT. A file not listed is
  * simply not covered, and the count assertion at the bottom is what
@@ -58,7 +58,34 @@ const SLICE_FILES = [
     'web/src/lib/launchpad/project-tree-host.ts',
     'web/src/lib/launchpad/agent-family-pill.ts',
     'web/src/lib/launchpad/tree-collapse.svelte.ts',
+    // Slice 5, the running-sessions list. The card is the surface most
+    // likely to reach for a theme, because it is the one that RENDERS a
+    // session's pinned theme as a cue - so it is the one that most needs
+    // holding to reading the field rather than applying it.
+    'web/src/lib/launchpad/RunningSessions.svelte',
+    'web/src/lib/launchpad/RunningSessionRow.svelte',
+    'web/src/lib/launchpad/RunningSessionName.svelte',
+    'web/src/lib/launchpad/StartupGateBadge.svelte',
+    'web/src/lib/launchpad/WrapperPill.svelte',
+    'web/src/lib/launchpad/running-row.ts',
+    'web/src/lib/launchpad/running-actions.ts',
+    'web/src/lib/launchpad/running-host.ts',
+    'web/src/lib/launchpad/running-chrome.ts',
 ];
+
+/**
+ * The files that legitimately touch an element by id.
+ *
+ * Description: a section's heading is a SIBLING of its mount and stays
+ *   legacy markup until slice 7, so its count badge and its visibility
+ *   are WRITTEN rather than rendered - from exactly one module per
+ *   section, which is what keeps every other file unable to reach outside
+ *   its own container.
+ */
+const CHROME_FILES = new Set([
+    'web/src/lib/launchpad/project-chrome-control.ts',
+    'web/src/lib/launchpad/running-chrome.ts',
+]);
 
 /** Strip comments, so a file may EXPLAIN the rule it is obeying. */
 function code(src: string): string {
@@ -116,6 +143,7 @@ describe('no component inlines its own status dot', () => {
         for (const rel of [
             'web/src/lib/launchpad/ProjectSessionRow.svelte',
             'web/src/lib/launchpad/EndedSessionRow.svelte',
+            'web/src/lib/launchpad/RunningSessionRow.svelte',
         ]) {
             expect(read(rel), rel).toContain(`<${LED_COMPONENT}`);
         }
@@ -143,19 +171,20 @@ describe('no component reaches into another component\'s DOM', () => {
         // the mount and lives in legacy markup until a later slice - so
         // it is written rather than rendered, from exactly one module.
         for (const rel of SLICE_FILES) {
-            if (rel.endsWith('project-chrome-control.ts')) continue;
+            if (CHROME_FILES.has(rel)) continue;
             expect(read(rel), rel).not.toContain('getElementById');
             expect(read(rel), rel).not.toContain('querySelector');
         }
-        expect(read('web/src/lib/launchpad/project-chrome-control.ts'))
-            .toContain('getElementById');
+        for (const rel of CHROME_FILES) {
+            expect(read(rel), rel).toContain('getElementById');
+        }
     });
 });
 
 describe('the list itself stays honest', () => {
     test('every listed file exists, and the list is not empty', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(SLICE_FILES.length).toBeGreaterThanOrEqual(16);
+        expect(SLICE_FILES.length).toBeGreaterThanOrEqual(25);
         for (const rel of SLICE_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }

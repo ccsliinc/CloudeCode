@@ -7584,3 +7584,148 @@ finding two assignments instead of one. Reverted byte-identical.
   many times it publishes on the way there. The new source-rule test lives in
   slice 4's directory because that is where the subscriber is; if slice 5 adds a
   second subscriber it belongs somewhere shared.
+
+---
+
+## 2026-09-10 - SLICE 5, THE RUNNING SESSIONS LIST (issue #90, PR #91)
+
+Branched off `feat/svelte-slice-4` at `e5662d8`. The home screen's flat list of
+live sessions is `web/src/lib/launchpad/RunningSessions.svelte` now.
+
+`client/js/launchpad.js` 4,093 to 3,023 lines, **1,032 gone**: the fifteen
+methods the plan named, `_lastRunningSig`, and two orphan docblocks slice 4 left
+behind when it deleted the tree-row renderers they described. Two whole files
+deleted with their script tags: `client/js/session-list-busy-guard.js` (its own
+header said slice 5 deletes it) and `client/js/launchpad-wrapper-pill.js` (one
+caller, so it moved rather than stayed). `_deriveRunningSessionDisplayName`
+survives as a four-line shim because `app.js:1403` derives a deep-link slug from
+it; the rule itself is `web/src/lib/sessions/session-label.ts`.
+
+### The double-publish audit, and what it found
+
+Slice 4's defect was the ROW SET published twice per tick. Audited every path
+this slice touches for the same shape and found it ONE FIELD OVER:
+`loadRunningSessions` opened with `runningSessionsListing = emptyListing()` and
+assigned the real verdict after the same await. The later assignment is
+UNCONDITIONAL, so the reset changed nothing about the answer and everything
+about how many times it was published - and this list is the ONLY surface that
+renders that verdict, so nothing before it could have caught it. On a screen
+whose probe is failing, every 5s tick removed the NEEDS ATTENTION block and put
+it back and flipped the heading between a number and "could not be determined".
+Fixed; `running-tick-mutations.test.ts` holds it as a source-shape assertion AND
+as a measured count, and re-asserts slice 4's row-set rule from this surface
+because two subscribers now depend on it.
+
+Nothing else published twice. The chrome writes (`setCount`,
+`setSectionVisible`) are `$effect`s over `$derived` values, so an unchanged tick
+recomputes and writes nothing.
+
+### Measured in Brave, production CSP, 127.0.0.1:5057
+
+`tests/manual/running-sessions-mutation-harness.html`, served by
+`scripts/lib_csp_static_server.py`'s handler, 45 rows over 9 projects, driven
+through the real `loadRunningSessions`.
+
+| window | records | nodes |
+|---|---|---|
+| 12 idle ticks | **0** | **0** |
+| 12 ticks, ONE status change | **5**, all attributes | **0** |
+| 12 ticks, failing probe | **0** | **0** |
+| busy: rename editor open + status change | **10**, all attributes | **0** |
+| NEGATIVE CONTROL: one legacy `innerHTML` rebuild | 1 | **2,439** |
+| NEGATIVE CONTROL: twelve of them | 12 | **29,256** |
+
+The five are the LED's own `class`, `data-inner`, `data-outer`, `title`,
+`aria-label` on ONE `status-dot`. Busy case: the editor kept its node and its
+half-typed text AND the dot updated, which the guard could not do - it skipped
+the paint. Menu case: with `SessionRowMenuOpen.isOpen()` forced true (the
+guard's other trigger, and a GLOBAL one, so a sidebar menu froze this list too)
+the dot still moved, because nothing consults that predicate any more.
+
+CSP: exactly one violation in every run, the deliberate off-origin image, and it
+is planted from the listener's own script rather than the markup - an `<img>` in
+the HTML is fetched during parse, before a deferred listener exists, so its
+violation is never collected and the control silently proves nothing.
+
+TWO CAVEATS, STATED RATHER THAN BURIED. The tab reported
+`visibilityState: hidden` on every phase with `hasFocus()` true, which is an
+occluded window rather than a backgrounded tab; a microtask-only control using
+no timer at all returned identical counts, so the throttle is not in the
+numbers. And the `innerHTML` negative control REPLACES the nodes Svelte owns, so
+every reading after it is about a detached tree - it must run last, and the
+harness header now says so. That cost a round: three post-control readings
+looked like a component that had stopped updating.
+
+### Mutations
+
+| # | mutation | result |
+|---|---|---|
+| 1 | publish the listing verdict twice per tick | RED, 2 tests (shape + measured count) |
+| 2 | inline the LED markup instead of `ledStateFor` | RED, 5 tests across 4 files |
+| 3 | hardcode mark unread instead of the plugin bridge | RED, 3 tests |
+| 4 | drop restart from a live row | **GREEN - the test was wrong** |
+
+All four reverted byte-identical (sha256 checked). Mutation 4 is the one worth
+keeping: it went through `browserRunningHost.actionsFor`, and nothing tested
+that function. The component tests drive a RECORDING host and the parity test
+drives the legacy module DIRECTLY, so neither crossed the seam between them.
+`web/src/lib/launchpad/running-host.test.ts` now hangs the real legacy modules
+on the real `window` under jsdom and asserts the host answers exactly what the
+module answers, id for id and in order; mutation 4 re-applied turns it red on
+two cases. A pass-through needs a test of its own.
+
+### Tests
+
+Vitest 787 to **995**, 37 files. Node 187 files / 0 failures to **180 / 0**.
+`svelte-check --threshold error` 0 errors and 0 warnings.
+
+Seven node files deleted, their assertions ported to behaviour tests:
+`test_agent_family_pill`, `test_launchpad_wrapper_pill`,
+`test_launchpad_rename_edits_label`, `test_running_sessions_unknown`,
+`test_session_label_rendering`, `test_dead_pane_not_running`,
+`test_row_action_confirm_names_label`. Nine more trimmed at the launchpad case
+and pointed at where it went.
+
+### i18n
+
+43 keys, all under `session.*`, extending rather than duplicating -
+`session.badge.tmux`, `session.badge.external` and the family-pill keys are
+reused from slice 4. `client/js/labels/running-session.js` is the assembler.
+Four buckets for the relative age and a plural set for the count, both through
+`Intl`; no zero key, because the section HIDES on a measured zero and copy no
+translator can see in context is worse than none.
+
+The pseudo-locale coverage guard caught TWO literals the eye did not:
+`'the api client is not loaded'` thrown from the host (a thrown sentence is
+still a sentence, and `reasonFrom` prints it on screen - it is
+`ApiUnavailableError` with a catalog message now) and a class list that its
+heuristic reads as prose (the array form fixes it). 12 files appended to
+`PORTED_FILES`.
+
+`.running-sessions-attention__head` gained `text-transform: uppercase`, the same
+move slice 4 made for `.badge`: casing is the stylesheet's job so the catalog
+can keep the voice rule.
+
+- [x] Slice 5 shipped, measured in a real browser, four mutations run.
+- [x] The slice 3 follow-up above ("if slice 5 adds a second subscriber the
+  source rule belongs somewhere shared") is answered the cheap way for now: the
+  rule is asserted in BOTH surfaces' tick tests, over the same method. A shared
+  file would be one more thing to find; two assertions over one function are
+  cheaper than one assertion nobody can locate.
+- [ ] `SessionStatusUI.markUnreadHtml` now has NO caller. It is kept
+  deliberately as the anchor both parity tests compare the catalog against, and
+  that is written into the code. If a later slice wants it gone, the words have
+  to move somewhere a test can still reach independently.
+- [ ] The four `surface === 'launchpad'` branches in
+  `client/js/session-row-menu-actions.js` were never reachable - nothing passes
+  that surface, which IS issue #66 - and two of them named methods this slice
+  deleted. `runClose` and `runRename` now say so instead of calling a dead name;
+  `repaintSurface` was repointed at the store. Whoever takes #66 wires the menu
+  to the Svelte row, not to `window.Launchpad`.
+- [ ] `running-host.ts::resolveSessionId` is still a name-keyed round trip
+  (`x.tmux_session === tmuxName`), moved from `launchpad.js` unchanged. It is
+  NOT registered in `test_no_name_keyed_session_row_lookup.node.mjs` because
+  that scanner's pattern is single-line and this call is written across
+  several - registering it would be a dead entry failing the test the other
+  way. Named in that file's prose instead. The real fix is a durable key on the
+  live row, which is its own change.

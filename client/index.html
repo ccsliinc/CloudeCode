@@ -114,6 +114,9 @@
     <!-- The launch-wrapper pill on a running-session row. After
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
+    <!-- The wrapper pill's styling. The module that used to build its
+         markup was deleted in slice 5; the class names are unchanged and
+         web/src/lib/launchpad/WrapperPill.svelte renders them now. -->
     <link rel="stylesheet" href="/static/css/launchpad-wrapper-pill.css" />
     <!-- The "needs a keypress" badge on a session parked at an unanswered
          startup prompt. After styles.css so it inherits the theme
@@ -935,17 +938,14 @@
          BEFORE launchpad.js, which calls window.ProjectCreateFolder
          .validateName / .choose during the create flow. -->
     <script src="/static/js/project-create-folder.js"></script>
-    <!-- The launch-wrapper pill on a running-session row. Must load
-         BEFORE launchpad.js, which calls window.LaunchpadWrapperPill.html
-         while painting the row. Pure string rendering, no state, no
-         events - it reads nothing else, so this is its only constraint. -->
-    <script src="/static/js/launchpad-wrapper-pill.js"></script>
-    <!-- Whether a repaint of the project tree is worth doing at all. Must
-         load BEFORE launchpad.js, whose renderProjectList() and
-         renderRunningSessions() both consult it on every 5s poll tick.
-         Pure decision logic - markup and screen state in, a verdict out -
-         so this is its only ordering constraint. -->
-    <script src="/static/js/session-list-busy-guard.js"></script>
+    <!-- SLICE 5 DELETED TWO SCRIPTS THAT USED TO LOAD HERE, and both are
+         worth naming so nobody re-adds them. launchpad-wrapper-pill.js
+         drew the launch-wrapper pill and had exactly one caller, so it
+         moved into the bundle with the row it belongs to. And
+         session-list-busy-guard.js answered "is the user mid-edit inside
+         the list we are about to wipe", which only had an answer while
+         this list was rebuilt with innerHTML; a component's rows are not
+         rebuilt, so there is no repaint to guard. -->
     <script src="/static/js/launchpad.js"></script>
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it

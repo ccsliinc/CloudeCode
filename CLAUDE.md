@@ -46,6 +46,10 @@ under `/static` exactly as it serves everything else.
 | Slice 1, the attribution prompt card | `web/src/lib/launchpad/AttributionPrompt.svelte`, `attribution.ts` |
 | Slice 2, the recent sessions section | `web/src/lib/launchpad/RecentSessions.svelte`, `recent.ts`, `recent-actions.ts`, `recent-chrome.ts`, `recent-visibility.ts` |
 | Slice 3, the session data layer | `web/src/lib/sessions/store.svelte.ts`, `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`, `env.ts`, `types.ts` |
+| Slice 4, the project tree | `web/src/lib/launchpad/ProjectTree.svelte` and its six children, `project-{groups,node,chrome,chrome-control,tree-host}.ts`, `tree-collapse.svelte.ts` |
+| Slice 5, the running sessions list | `web/src/lib/launchpad/RunningSessions.svelte`, `RunningSessionRow.svelte`, `RunningSessionName.svelte`, `StartupGateBadge.svelte`, `WrapperPill.svelte`, `running-{row,actions,host,chrome}.ts`, `web/src/lib/sessions/session-label.ts` |
+| The copy those two print | `client/js/labels/project-tree.js`, `client/js/labels/running-session.js` |
+| The shared icon geometry, as DATA | `client/js/icons/glyphs.js` |
 | The copy the data layer prints | `client/js/labels/session-listing.js` |
 | Put the REAL bundle in a node test's sandbox | `tests/helpers/cloude-web-sandbox.mjs` |
 | Per-device UI preferences, on the legacy keys | `web/src/lib/ui/prefs.svelte.ts` |
@@ -181,10 +185,15 @@ compiled, never half of each.
   `Adoom666/CloudeCodeDev`). 787 legacy lines gone: thirteen methods and
   the twelve instance fields they wrote, out of `client/js/launchpad.js`.
   See "The launchpad's session data layer" below.
-- **Slices 4 to 7** - PAUSED pending the 1.2 merge with Adam. See the
-  2026-09-09 release-plan entry in `.claude/TODO.md`: his work sits in the
-  status, toast and sidebar cluster, which is slices 4 and 5, and porting it
-  before the merge ports it twice.
+- **Slice 4, the project tree** - DONE (issue #76, PR #77).
+- **Slice 5, the running sessions list** - DONE (issue #90, PR #91 on
+  `Adoom666/CloudeCodeDev`). 1,032 legacy lines gone from
+  `client/js/launchpad.js` (4,093 to 3,023): fifteen methods, the
+  `_lastRunningSig` cache and two orphan docblocks slice 4 left behind,
+  plus `client/js/session-list-busy-guard.js` and
+  `client/js/launchpad-wrapper-pill.js` deleted outright with their script
+  tags. See "The running sessions list" below.
+- **Slices 6 and 7** - not started.
 
 **THREE OF SLICE 2's MOVED METHODS HAVE CALLERS THE SLICE DOES NOT OWN, and
 they were not left behind as a second copy.** The project tree's ended rows
@@ -305,6 +314,140 @@ looking exactly like a repaint bug. A BARE `window` reference also THROWS
 where a property read would not, because vitest runs this tree in the
 `node` environment on purpose. `web/src/lib/sessions/env.ts` is the one
 place both are handled; anything new in this tree reads through it.
+
+## The running sessions list
+
+Slice 5 of the launchpad migration. The home screen's flat list of live
+sessions left `client/js/launchpad.js` and is
+`web/src/lib/launchpad/RunningSessions.svelte`, which READS the store
+rather than being told to paint.
+
+**IT REPLACED A REPAINT WITH A SUBSCRIPTION, AND THE THING IT DELETED IS
+WORTH NAMING.** `renderRunningSessions()` built a JSON signature of every
+row, compared it to `_lastRunningSig`, and on a difference wrote
+`#running-sessions-list.innerHTML` and rebound one delegated listener.
+Three things that shape could not do, all structural:
+
+1. A CHANGED TICK WAS NEVER CHEAP. One flipped status dot rebuilt every
+   row on screen.
+2. IT BOUGHT CORRECTNESS WITH STALENESS. `session-list-busy-guard.js`
+   SKIPPED the paint entirely while an inline rename input was open or a
+   row menu was up, because an `innerHTML` write under either destroys
+   what the user is doing. So a status change landing during one was
+   simply not shown. **That file is deleted rather than consumed**: a
+   component's rows are not rebuilt, so there is nothing to guard.
+3. A FIELD LEFT OUT OF THE SIGNATURE STAYED STALE FOREVER.
+   `agent_wrapper_label` and `startup_gate` were each ADDED to that
+   signature after shipping, each because the value changes with nothing
+   else on the row changing at all. A subscription cannot have that bug:
+   the template reads the field, so the field is the dependency.
+
+**MEASURED IN BRAVE UNDER THE PRODUCTION CSP, 2026-09-10**, over a
+9-project, 45-row screen driven through the real `loadRunningSessions`
+(`tests/manual/running-sessions-mutation-harness.html`, served by
+`scripts/lib_csp_static_server.py`'s handler on 127.0.0.1:5057): twelve
+idle ticks cost **0 mutation records and 0 nodes**; twelve ticks
+containing ONE status change cost **5 records, every one an attribute,
+and 0 nodes**; twelve ticks on a FAILING probe also cost 0 and 0. The
+negative control is what makes those numbers mean anything - one
+legacy-style `innerHTML` rewrite of the same rows scores **1 record and
+2,439 nodes**, and twelve of them 29,256. The tab reported
+`visibilityState: hidden` throughout (`hasFocus()` true, so an occluded
+window rather than a backgrounded tab); a microtask-only control that
+uses no timer at all returned the identical counts, so the throttle is
+not in the numbers.
+
+**AND THE BUSY CASE IS THE ONE THE GUARD COULD NOT DO.** With a rename
+editor open and half-typed text in it, a tick carrying a status change
+cost 10 attribute records and 0 nodes, the editor kept its node AND its
+text, and the dot updated. With `SessionRowMenuOpen.isOpen()` forced true
+- the guard's other trigger, which was GLOBAL, so a menu open on the
+sidebar froze the home list too - the dot still updated, because nothing
+consults that predicate any more.
+
+**THE LISTING VERDICT IS PUBLISHED ONCE PER TICK, AND THAT IS SLICE 4's
+DEFECT ONE FIELD OVER.** `e5662d8` fixed the ROW SET: it was assigned in
+fetch order, then again sorted after an await, and a keyed list moved all
+45 rows and moved them back. `loadRunningSessions` was still opening with
+`runningSessionsListing = emptyListing()` and assigning the real verdict
+after the same await. The assignment after it is unconditional, so the
+reset changed nothing about the ANSWER and everything about how many
+times it was published: on a screen whose probe is failing, every tick
+removed the NEEDS ATTENTION block and put it back and flipped the heading
+between a number and "could not be determined". This list is the ONLY
+surface that renders that verdict, so nothing else could have caught it.
+`web/src/lib/launchpad/running-tick-mutations.test.ts` holds both halves,
+as a source-shape assertion AND as a measured count.
+
+**NOTHING RENDERS HTML FROM A STRING, AND FIVE MODULES HAD TO BE SPLIT TO
+KEEP IT THAT WAY.** `SessionRowActions.html`, `SessionStatusUI
+.markUnreadHtml`, `SessionStartupGate.indicatorHtml`,
+`SessionThemeTint.attrs`/`swatchHtml` and `LaunchpadWrapperPill.html` all
+return markup, and there is no `{@html}` anywhere in this migration. Four
+of the five are SHARED with the sidebar row and therefore stay; the card
+consumes their DATA halves (`actionsFor`, `labelFor`, `isAwaiting`,
+`colorsFor`) and renders its own elements.
+`web/src/lib/launchpad/running-copy.parity.test.ts` loads each real module
+in a `vm` sandbox and holds its words against the catalog's, with a
+negative control per comparison, so two carriers cannot become two
+answers. `LaunchpadWrapperPill` had exactly one caller and moved.
+
+**THE FIVE REMAINING ICONS BECAME DATA.** `client/js/icons/glyphs.js` held
+`pencil` and `archive` for exactly this reason; `close`, `trash`,
+`restart` and the two envelopes joined them, and the five builders in
+`session-status-ui.js` are one-line delegates to `glyphSvg` now. ONE set
+of coordinates, two renderers - the alternative is the same button drawn
+two different shapes on two screens. The emitted strings are
+byte-identical to the ones they replaced, which is asserted rather than
+assumed. **Any `vm` sandbox that loads `session-status-ui.js` must inject
+`CloudeGlyphs`** the way `client/js/i18n/boot.js` publishes it, or every
+icon answers the empty string; `tests/helpers/cloude-web-sandbox.mjs`
+does it for every harness that uses it.
+
+**MARK UNREAD ARRIVES THROUGH THE PLUGIN BRIDGE NOW, AND THE SECOND COPY
+IS GONE.** `launchpad.js` drew its own inline envelope control through
+`markUnreadHtml` with its own `_handleMarkUnread`, which is what the
+plugin's own docblock called out as the remaining dual path. The card
+renders `window.CloudeWeb.sessionCardMenuItems(row, ctx)` and activates
+through `runSessionCardAction`, so `ui.show_mark_unread_control` is read
+once, by the contribution's `enabled`, for both surfaces. An EMPTY list
+is what the flag being off looks like and stays silent; an absent
+FUNCTION is a bundle that failed to load and is loud. The contribution's
+two labels moved into the catalog with the rest of this surface and
+`session-card-actions.test.ts` still holds them against the real
+`markUnreadHtml`.
+
+**`markUnreadHtml` NOW HAS NO CALLER AND IS KEPT ON PURPOSE.** It is the
+anchor the two parity tests compare against, so deleting it would delete
+the only independent record of what those words are. It is not dead
+weight; it is the control.
+
+**THE HOST IS THE SEAM, AND A MUTATION PROVED IT NEEDED ITS OWN TEST.**
+`web/src/lib/launchpad/running-host.ts` is the one place this surface
+reaches `window`. Dropping restart from a live row INSIDE it failed
+nothing: the component tests drive a recording host, and the parity test
+drives the legacy module directly, so neither crossed the seam between
+them. `running-host.test.ts` hangs the REAL legacy modules on the real
+`window` under jsdom and asserts the host answers exactly what the module
+answers, id for id and in order. **A pass-through is where a
+pass-through stops passing things through, and it needs a test of its
+own.**
+
+**THE RENAME PENCIL LOST A RUNG THAT COULD NEVER FIRE.** The legacy chain
+was `session_id || tmux_session || name`, and the middle rung has never
+had a value on this surface: every row the merge produces comes from an
+`AttachableSession`, which carries `name` and no `tmux_session`. A rung
+that has never been observed to fire is unmeasured, not proven; this one
+is provably unreachable and was dropped rather than carried forward
+looking like a fallback somebody relies on. The three STATES are
+unchanged and are asserted as behaviour.
+
+**THE SESSION-LABEL RULE NOW HAS A TYPED CALLER IN THIS TREE.**
+`web/src/lib/sessions/session-label.ts` delegates to
+`client/js/session-label.js`, the shared module the sidebar row, the tab
+title, the in-page header and the toast cards all read, and
+`project-tree-host.ts` was repointed at it - it used to call
+`Launchpad._sessionDisplayLabel`, which this slice deleted.
 
 ## The plugin surface registry
 

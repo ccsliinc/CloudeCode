@@ -30,6 +30,7 @@ import { ensurePanel, mountPanel, unmountPanel } from './lib/mount';
 import AttributionPrompt from './lib/launchpad/AttributionPrompt.svelte';
 import RecentSessions from './lib/launchpad/RecentSessions.svelte';
 import ProjectTree from './lib/launchpad/ProjectTree.svelte';
+import RunningSessions from './lib/launchpad/RunningSessions.svelte';
 import {
     archiveSessionRecord,
     browserHost as recentBrowserHost,
@@ -40,6 +41,11 @@ import type { RestartOptions } from './lib/launchpad/recent';
 import { sessionStore } from './lib/sessions/store.svelte';
 import { defaultShouldPoll } from './lib/sessions/poller';
 import { workStampFor } from './lib/sessions/attribution';
+import {
+    derivedDisplayName,
+    sessionDisplayLabel,
+    type NameableRow,
+} from './lib/sessions/session-label';
 import type { RunningSessionRow } from './lib/sessions/types';
 import { uiPrefs } from './lib/ui/prefs.svelte';
 // Imported for its side effect: this is what registers the shipped
@@ -57,6 +63,9 @@ const RECENT_SESSIONS_CONTAINER = 'recent-sessions-list';
 
 /** The id of the container `renderLaunchpadUI()` writes for the tree. */
 const PROJECT_TREE_CONTAINER = 'project-list';
+
+/** The id of the container the launchpad writes for the running list. */
+const RUNNING_SESSIONS_CONTAINER = 'running-sessions-list';
 
 /**
  * The host the three exported RECENT actions use when a legacy caller
@@ -146,6 +155,61 @@ function mountRecentSessions(): void {
  */
 function mountProjectTree(): void {
     ensurePanel(PROJECT_TREE_CONTAINER, ProjectTree, {});
+}
+
+/**
+ * Mount the running-sessions list into the launchpad's own slot.
+ *
+ * Description: THE ONE LINE `client/js/launchpad.js` CALLS for slice 5,
+ *   and it is the whole of `renderRunningSessions()` now. It sits at the
+ *   exact point that method's `innerHTML` write used to run, along with
+ *   the fifteen methods and `_lastRunningSig` deleted in the same commit,
+ *   `client/js/session-list-busy-guard.js` and
+ *   `client/js/launchpad-wrapper-pill.js`.
+ *
+ *   `ensurePanel`, NOT `mountPanel`, for the reason slice 4 gave:
+ *   `loadRunningSessions()` calls this on every 5s poll tick and after
+ *   every row action, and a `mountPanel` here would unmount and rebuild
+ *   the whole list each time - the exact repaint this slice deletes,
+ *   reintroduced by the seam rather than by the renderer.
+ * Inputs: none.
+ * Output: void.
+ * Example: window.CloudeWeb.launchpad.mountRunningSessions();
+ */
+function mountRunningSessions(): void {
+    ensurePanel(RUNNING_SESSIONS_CONTAINER, RunningSessions, {});
+}
+
+/**
+ * The display name for one session row, for a legacy caller.
+ *
+ * Description: `client/js/app.js:1403` derives a deep-link slug from the
+ *   launchpad's own display rule, reused rather than reimplemented, and
+ *   it is the one caller of `_deriveRunningSessionDisplayName` outside
+ *   this surface. It survives as a shim on `Launchpad` until slice 7
+ *   deletes that file; this is where the rule now lives.
+ * Inputs: tmuxName - the literal tmux session name.
+ * Output: string - the `cloude_`-stripped name.
+ * Example: window.CloudeWeb.launchpad.displayNameFor('cloude_api')  // 'api'
+ */
+function displayNameForLegacy(tmuxName: string | null): string {
+    return derivedDisplayName(tmuxName);
+}
+
+/**
+ * The string a HUMAN should see for one session row, for a legacy caller.
+ *
+ * Description: delegates to `client/js/session-label.js`, the shared
+ *   module the sidebar row, the tab title, the in-page header and the
+ *   toast cards all read. Exported because the project tree's rows reach
+ *   it through `project-tree-host.ts`, which called
+ *   `Launchpad._sessionDisplayLabel` until this slice deleted that.
+ * Inputs: row - anything carrying `label` and `name`.
+ * Output: string.
+ * Example: window.CloudeWeb.launchpad.sessionDisplayLabel(row);
+ */
+function sessionDisplayLabelForLegacy(row: NameableRow | null): string {
+    return sessionDisplayLabel(row);
 }
 
 /**
@@ -403,6 +467,23 @@ const CloudeWeb = {
          * `renderProjectList()`'s `innerHTML` write used to be.
          */
         mountProjectTree,
+        /**
+         * SLICE 5: THE RUNNING SESSIONS LIST. One call, idempotent, at
+         * the line `renderRunningSessions()`'s `innerHTML` write used to
+         * be.
+         */
+        mountRunningSessions,
+        /**
+         * THE TWO NAMING RULES THE REST OF THE APP STILL ASKS THIS
+         * SURFACE FOR. `app.js` wants the slug derivation for a deep
+         * link; the project tree wants the full label chain for a row.
+         * Both were methods on `Launchpad` until slice 5 moved them, and
+         * both are exported rather than copied, because a session named
+         * one thing in the tab title and another on a card is a bug this
+         * app has already shipped.
+         */
+        displayNameFor: displayNameForLegacy,
+        sessionDisplayLabel: sessionDisplayLabelForLegacy,
         archivedProjectsVisible,
         /**
          * SLICE 3: THE SESSION DATA LAYER, AND THE ONLY COPY OF IT.

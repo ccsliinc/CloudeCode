@@ -266,40 +266,23 @@ function occurrences(el, name) {
 // with it.
 // =====================================================================
 
-await test('a session whose pane is DEAD is absent from RUNNING', async () => {
-    const { runningList, lp } = await loadBoth({
-        attachable: [
-            live('cloude_Alive'),
-            live('cloude_Corpse', { status: 'dead' }),
-        ],
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    assert.equal(
-        occurrences(runningList, 'cloude_Corpse'), 0,
-        `a dead pane rendered as running: ${runningList.innerHTML}`);
-    assert.ok(
-        occurrences(runningList, 'cloude_Alive') >= 1,
-        'the live session was dropped too, so the filter is too broad');
-    assert.equal(
-        lp.runningSessions.length, 1,
-        'the dead row is still in the running state array');
-});
-
-await test('a session whose pane status is UNKNOWN still renders as running', async () => {
-    // THE THIRD OUTCOME. Only a MEASURED `dead` is dropped. Dropping
-    // `unknown` would assert a death nobody measured - the same invented
-    // verdict in the opposite direction.
-    const { runningList } = await loadBoth({
-        attachable: [live('cloude_Unsure', { status: 'unknown' })],
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    assert.ok(
-        occurrences(runningList, 'cloude_Unsure') >= 1,
-        `an unevaluable pane was dropped as if measured dead: ${runningList.innerHTML}`);
-});
-
 // =====================================================================
-// 4. THE SUPERSEDE DISCLOSURE IS GONE, structurally.
+// THE TWO RENDER CASES MOVED IN SLICE 5.
+//
+// "a session whose pane is DEAD is absent from RUNNING" and "a session
+// whose pane status is UNKNOWN still renders as running" both drove the
+// real `loadRunningSessions` and read back the rendered rows, because the
+// defect they were written for was always visible on screen and never in
+// a log. The running list is a component now, and a `vm` sandbox has no
+// `Element` for it to mount into - so they are asserted against a REAL
+// DOM in web/src/lib/launchpad/running-membership.test.ts, still against
+// the rendered rows, still pairing each dead row with a live one so
+// "hide everything" cannot pass.
+//
+// That file also carries the state-level half, which this one never had:
+// the husk leaves `sessionStore.runningSessions` and not merely the
+// markup, so every other reader of that array - the project tree, a row
+// action, the sort - is holding the same list the screen shows.
 // =====================================================================
 
 await test('no "earlier session" disclosure exists anywhere in the client', async () => {
@@ -345,19 +328,13 @@ await test('no "earlier session" disclosure exists anywhere in the client', asyn
 // 6. THE PARENT-LINK BADGE IS GONE from the running row.
 // =====================================================================
 
-await test('a running row does not render an arrow to the session it replaced', async () => {
-    const { lp } = await loadBoth({
-        attachable: [],
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    const html = lp._renderSessionIdHtml({ session_row_id: 7, parent_session_id: 4 });
-    assert.ok(/#7/.test(html), `the row id itself must still render: ${html}`);
-    assert.ok(!/\u2190/.test(html) && !/&larr;/.test(html),
-        `the parent arrow is still rendered: ${html}`);
-    assert.ok(!/#4/.test(html),
-        `the replaced session is still named: ${html}`);
-    assert.ok(!/fork-of/.test(html), `fork-of markup remains: ${html}`);
-});
+// MOVED IN SLICE 5, and the assertion got STRONGER rather than smaller.
+// `_renderSessionIdHtml` was a string builder and this drove it directly,
+// so it could only prove that ONE function emitted no arrow. The badge is
+// part of the card now, and
+// web/src/lib/launchpad/running-membership.test.ts asserts the same three
+// claims over the WHOLE RENDERED ROW: the id renders, no arrow appears
+// anywhere on it, and the replaced session is not named anywhere on it.
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

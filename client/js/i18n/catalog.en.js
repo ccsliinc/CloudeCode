@@ -355,6 +355,136 @@ export default {
     'session.agent.family.title.inferred_process': 'read from the process running in this pane, not from a launch',
     'session.agent.family.title.unknown': 'could not determine which agent this session is running',
 
+    // ---- the running-sessions list, slice 5 ------------------------------
+    // THE VISIBLE HALF OF THE THREE-OUTCOME RULE. A probe that did not
+    // answer must never render as a measured empty list, so this block is
+    // what "cannot determine" looks like. It carries NO action controls,
+    // which is why none of these keys names one: acting on a session whose
+    // existence we cannot confirm either does nothing or does something to
+    // the wrong thing.
+    // Uppercased by `.running-sessions-attention__head` in the stylesheet.
+    'session.listing.attention.head': 'needs attention',
+    'session.listing.attention.title': 'cannot determine which sessions are running',
+    // The two `{}` slots are the server's own sentence and the probe that
+    // failed. Punctuation lives here, never in a caller's `+`.
+    'session.listing.attention.detail': '{detail} ({sources} probe, {reason})',
+    // Which probe could not be named. Not a gap: it is what an error with
+    // no source attached looks like.
+    'session.listing.attention.sources.unknown': 'session',
+    'session.listing.attention.note': 'any sessions listed below may be incomplete, and none are shown as stopped',
+
+    // The heading's count. A PLURAL SET, not a ternary: `n === 1 ? a : b`
+    // is only correct for two-form languages. There is deliberately NO
+    // zero key - the section HIDES on a measured zero, so "0 running" is
+    // never on screen, and inventing copy for a state nothing renders
+    // would be a message no translator could ever check.
+    'session.running.count': {
+        one: '{count} running',
+        other: '{count} running',
+    },
+    // The heading must never assert a number the app did not measure.
+    'session.running.count.unavailable': 'count could not be determined',
+
+    // ---- the durable row id ----------------------------------------------
+    // Rendered as `#7`. An EXTERNAL session this app never created has no
+    // row, and the badge renders nothing rather than inventing `#?`.
+    'session.row_id.title': 'session id {id}',
+
+    // ---- how old a session is --------------------------------------------
+    // Four buckets, each its own message, because a translation may want a
+    // different unit order or a different space. `unknown` is what an
+    // absent or non-numeric epoch reads as, never a zero.
+    'session.age.seconds': '{count}s ago',
+    'session.age.minutes': '{count}m ago',
+    'session.age.hours': '{count}h ago',
+    'session.age.days': '{count}d ago',
+    'session.age.unknown': 'unknown',
+
+    // ---- the rename pencil, in three states ------------------------------
+    // IT IS NEVER ABSENT. An absent affordance is indistinguishable from a
+    // broken one: the user cannot tell "you may not do this" from "this app
+    // forgot to draw the button". So the two states that cannot act say why.
+    'session.rename.action': 'rename session',
+    'session.rename.unavailable.unopened': 'rename unavailable until this session is open - click the row to open it',
+    'session.rename.unavailable.unadopted': 'rename unavailable until this session is adopted - click the row to adopt it',
+    // THE THIRD OUTCOME. `created_by_cloude` is genuinely nullable, and a
+    // null is not "external" - saying so is different from saying no.
+    'session.rename.unavailable.unknown_owner': 'rename unavailable: cannot determine whether this session is yours, so whether it can be renamed is unknown',
+    'session.rename.input.aria': 'new session label',
+    'session.rename.failed': 'rename failed',
+    'session.rename.failed.in_use': 'name already in use',
+    'session.rename.failed.invalid': 'invalid name',
+    'session.rename.failed.missing': 'session not found',
+    // The rule itself lives in client/js/session-label.js. This is only
+    // what is said when that module is not there to state it.
+    'session.rename.rule_unavailable': 'the label rule is unavailable',
+
+    // ---- forking a running session ---------------------------------------
+    // OWNED sessions only: an external tmux session has no row of ours and
+    // so no conversation to resume, and the server refuses it with a 409.
+    'session.fork.action': 'fork',
+    'session.fork.action.aria': 'fork this session into a new one',
+    'session.fork.action.title': "copy this conversation into a new session and open it - this session is not changed. note: claude code's own /fork runs the copy in the background and leaves you here; this button behaves like its /branch",
+
+    // ---- the destructive row controls ------------------------------------
+    // One control per row, never two of the same kind. The wording is what
+    // the sidebar says for the same operation, because one operation with
+    // two names reads as two features.
+    'session.action.close': 'close session',
+    'session.action.remove': 'remove from the list',
+    'session.action.restart': 'restart the agent',
+    'session.action.failed': '{action} failed: {reason}',
+
+    // ---- the manual unread control ---------------------------------------
+    // The LED says whether a session is unread; this is what SETS it. Both
+    // labels name the RESULT of activating the control, not its state.
+    'session.unread.clear': 'clear unread flag',
+    'session.unread.set': 'mark unread for followup',
+
+    // ---- the startup gate ------------------------------------------------
+    // Painted only on a MEASURED `awaiting_startup_prompt`. `ready` and
+    // `unknown` both render nothing, because not having looked is not
+    // evidence of absence.
+    'session.startup_gate.label': 'needs a keypress',
+    'session.startup_gate.reason': 'this session is waiting at a startup prompt and has not started yet. open it and answer the prompt.',
+
+    // ---- the per-session theme cue ---------------------------------------
+    // `role="img"` with a name rather than `aria-hidden`, so the cue is not
+    // colour-only. The manifest's display name where it has one; the id is
+    // the honest fallback.
+    'session.theme.swatch': 'session theme: {name}',
+
+    // ---- the launch wrapper pill -----------------------------------------
+    // WHICH claude, which the family pill cannot answer: a session started
+    // through `claude (chrome)` and one started through `claude` render the
+    // identical family pill. Renders NOTHING when no wrapper can be named,
+    // which is the opposite of the family pill's rule and is deliberate -
+    // a bare shell was launched through no wrapper at all, so "unknown
+    // wrapper" would report a gap where there is none.
+    'session.wrapper.title': 'launch wrapper: {label}',
+
+    // ---- restarting a running session ------------------------------------
+    // ASK FIRST. The picker states which rung this session would land on
+    // and what it would come back as; these are what is said when it could
+    // not be asked, or when the server refused.
+    'session.respawn.no_picker': 'could not restart "{name}": the restart picker did not load.',
+    'session.respawn.unpredictable': 'could not work out what restarting "{name}" would do, so nothing was started: {reason}',
+    'session.respawn.failed': 'could not restart "{name}": {reason}',
+    // THE SERVER'S `ok` IS THE VERDICT, NOT THE HTTP STATUS, and a 200
+    // carrying `ok:false` with no sentence is still a refusal.
+    'session.respawn.failed.no_reason': 'no reason given',
+    'session.respawn.choice_unsaved': 'restarted "{name}" with {agent}, but the choice could not be saved, so the next restart will not remember it.',
+    'session.respawn.no_reopen': 'the reopen module did not load',
+
+    // ---- entering a session from the home screen -------------------------
+    'session.attach.failed': 'attach failed: {reason}',
+
+    // A LOAD-ORDER FAULT THAT REACHES THE SCREEN. The api client is
+    // loaded well before anything that calls it, so this should never be
+    // seen - and if it is, saying so is better than a row control that
+    // silently does nothing.
+    'session.api.unavailable': 'the page did not finish loading, so nothing was sent',
+
     // ---- generic failure reasons --------------------------------------
     // The `{reason}` slot's value when an error carried no message.
     'error.server_unreachable': 'the server could not be reached',

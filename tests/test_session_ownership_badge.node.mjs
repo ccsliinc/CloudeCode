@@ -382,9 +382,22 @@ await test('adoption still does not claim ownership', () => {
 // ---------------------------------------------------------------------
 
 await test('both surfaces render the same flag as the same badge', () => {
-    assert.match(launchpadSrc, /owned \? 'TMUX' : 'EXTERNAL'/);
+    // THE SIDEBAR ROW IS STILL A STRING BUILDER, so its ternary is still
+    // a grep. THE HOME CARD IS A COMPONENT as of slice 5 and its words
+    // moved into the string catalog with the rest of that surface, so the
+    // check moved with them: the card branches on the same ONE field and
+    // names the same two catalog keys the sidebar's literals spell out.
+    // (`.badge` in styles.css is what uppercases them, which is why the
+    // catalog values are lowercase and the sidebar's literals are too.)
     assert.match(read('client', 'js', 'session-sidebar-rows.js'),
         /r\.created_by_cloude \? 'tmux' : 'external'/);
+    const card = read('web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte');
+    assert.match(card, /owned = \$derived\(!!row\.created_by_cloude\)/);
+    assert.match(card, /badgeTmux/);
+    assert.match(card, /badgeExternal/);
+    const catalog = read('client', 'js', 'i18n', 'catalog.en.js');
+    assert.match(catalog, /'session\.badge\.tmux': 'tmux'/);
+    assert.match(catalog, /'session\.badge\.external': 'external'/);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

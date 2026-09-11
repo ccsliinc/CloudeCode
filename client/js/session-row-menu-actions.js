@@ -146,12 +146,16 @@ console.log('[SessionRowMenuActions Module] Loading...');
                 + '": its row is no longer on screen');
             return;
         }
-        if (ctx.surface === 'launchpad') {
-            var lp = window.Launchpad;
-            if (!lp || typeof lp._handleRenameRunningSession !== 'function') return;
-            lp._handleRenameRunningSession(rowEl, ctx.sessionId);
-            return;
-        }
+        // NO LAUNCHPAD BRANCH, AND THAT IS A STATEMENT OF FACT RATHER
+        // THAN A GAP. The home screen's running-sessions card has never
+        // rendered this menu - `contextFromRow` is called with
+        // `surface: 'sidebar'` by the sidebar row and by nothing else,
+        // which is issue #66 - and slice 5 made its rename editor
+        // component state rather than a method on `window.Launchpad`, so
+        // there is no longer a function here to call. When #66 wires the
+        // menu onto that card it will reach the Svelte row, not this
+        // file. Leaving a branch that named a deleted method would read
+        // like a working path.
         if (window.SessionSidebarRename
             && typeof window.SessionSidebarRename.beginEdit === 'function') {
             window.SessionSidebarRename.beginEdit(rowEl);
@@ -299,12 +303,11 @@ console.log('[SessionRowMenuActions Module] Loading...');
             console.error('[SessionRowMenu] SessionRowActions missing, refusing to act');
             return;
         }
-        if (ctx.surface === 'launchpad') {
-            var lp = window.Launchpad;
-            if (!lp || typeof lp._handleSessionRowAction !== 'function') return;
-            await lp._handleSessionRowAction(ctx.name, ctx.sessionId, actions.ACTION_CLOSE);
-            return;
-        }
+        // See runRename above for why there is no launchpad branch here.
+        // `Launchpad._handleSessionRowAction` was deleted in slice 5; the
+        // running card runs its own close through
+        // web/src/lib/launchpad/running-actions.ts, reached from the
+        // control the card itself rendered.
         var clicks = window.SessionSidebarClicks;
         if (!clicks) return;
         // A DETACHED BUTTON CARRYING THE CAPTURED IDENTITY, not the one
@@ -347,10 +350,17 @@ console.log('[SessionRowMenuActions Module] Loading...');
      */
     function repaintSurface(ctx) {
         if (ctx.surface === 'launchpad') {
-            var lp = window.Launchpad;
-            if (lp && typeof lp.renderRunningSessions === 'function') {
-                lp._lastRunningSig = null;
-                lp.renderRunningSessions();
+            // THE SIGNATURE CACHE IS GONE, so there is nothing to clear.
+            // `_lastRunningSig` existed because the legacy list skipped a
+            // repaint whose fingerprint was unchanged, which meant an
+            // action that changed a field the fingerprint did not cover
+            // had to invalidate it by hand. The list reads the store now:
+            // refetching IS the repaint, and a field the template reads is
+            // a dependency by construction.
+            var web = window.CloudeWeb;
+            if (web && web.launchpad
+                    && typeof web.launchpad.loadRunningSessions === 'function') {
+                web.launchpad.loadRunningSessions();
             }
             return;
         }

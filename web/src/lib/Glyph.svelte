@@ -9,8 +9,8 @@
   coordinates out of client/js/icons/glyphs.js and emits `<path>` and
   `<rect>` elements, so there is nothing to escape and nothing to trust.
 
-  ONE SET OF COORDINATES, TWO RENDERERS. `SessionStatusUI.pencilIconSvg`
-  builds its string from that same module. A copy of the geometry in each
+  ONE SET OF COORDINATES, TWO RENDERERS. Every icon builder in
+  `SessionStatusUI` builds its string from that same module. A copy of the geometry in each
   tree is the DRY violation with the most visible failure mode there is.
 
   NO COLOUR IS SET ANYWHERE. Every stroke is `currentColor`, so the
@@ -62,8 +62,17 @@
 </script>
 
 <svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox={GLYPH_VIEWBOX} fill="none">
-    {#each elements as element (element.d ?? element.x)}
-        {#if element.tag === 'rect'}
+    {#each elements as element (element.d ?? element.cx ?? element.x)}
+        {#if element.tag === 'circle'}
+            <circle
+                cx={element.cx}
+                cy={element.cy}
+                r={element.r}
+                fill={element.fill}
+                stroke={element.stroke}
+                stroke-width={element['stroke-width']}
+            />
+        {:else if element.tag === 'rect'}
             <rect
                 x={element.x}
                 y={element.y}

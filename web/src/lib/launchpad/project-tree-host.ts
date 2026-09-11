@@ -25,6 +25,7 @@
  * legacy singleton being replaced under it, which slice 7 will do.
  */
 import type { ProjectRow } from '../sessions/types';
+import { sessionDisplayLabel } from '../sessions/session-label';
 import type { TreeSessionRow } from './project-groups';
 
 /** The legacy launchpad singleton, as this file uses it. */
@@ -36,7 +37,6 @@ interface LegacyLaunchpad {
     unarchiveProject?: (name: string) => Promise<unknown>;
     _returnToActiveRunningSession?: (sessionId: string | null) => Promise<unknown>;
     _handleAttachRunningSession?: (name: string) => Promise<unknown>;
-    _sessionDisplayLabel?: (row: unknown) => string;
     loadProjects?: () => Promise<unknown>;
 }
 
@@ -212,17 +212,16 @@ export function browserProjectTreeHost(): ProjectTreeHost {
             await fn(sessionUuid);
         },
         displayLabel(row: TreeSessionRow): string {
-            // `_sessionDisplayLabel` is slice 5's and stays in
-            // `launchpad.js` until then. It resolves through
-            // `SessionLabel.resolve`, which is a shared module both trees
-            // already read; reimplementing the fallback chain here would
-            // be a third answer to "what is this session called".
-            const lp = legacy();
-            if (lp && typeof lp._sessionDisplayLabel === 'function') {
-                return lp._sessionDisplayLabel(row);
-            }
-            missing('_sessionDisplayLabel');
-            return row.name || '';
+            // SLICE 5 MOVED THIS OUT OF `launchpad.js`. It used to call
+            // `Launchpad._sessionDisplayLabel`, which was deleted with the
+            // running-sessions list; the rule itself never lived there
+            // either - it resolves through `client/js/session-label.js`,
+            // the shared module the sidebar row, the tab title, the
+            // in-page header and the toast cards all read. Calling it
+            // directly is one hop fewer and one fewer thing to delete in
+            // slice 7. Reimplementing the fallback chain here would be a
+            // third answer to "what is this session called".
+            return sessionDisplayLabel(row);
         },
         async reloadProjects(): Promise<void> {
             const lp = legacy();

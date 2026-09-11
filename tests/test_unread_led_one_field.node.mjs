@@ -165,29 +165,6 @@ function innerOf(html) {
     return m ? m[1] : null;
 }
 
-/**
- * Render the launchpad's running-session CARD for one row, through the
- * real `renderRunningSessions()` and the real LED stack.
- * @param {object} row  One merged session row.
- * @returns {string} The card container's innerHTML.
- */
-function renderCard(row) {
-    const container = el('running-sessions-list-container', { id: 'running-sessions-list' });
-    const section = el('running-sessions-section', { id: 'running-sessions-section' });
-    const { lp, win } = loadLaunchpad({
-        'running-sessions-list': container,
-        'running-sessions-section': section,
-    });
-    // The harness stubs SessionStatusUI with a dot that ignores its
-    // arguments. Swap in the REAL one, or this measures the stub.
-    win.SessionStatusUI = Object.assign({}, win.SessionStatusUI, loadStatusUI());
-    lp.runningSessions = [row];
-    lp.runningSessionsListing = { ok: true, reason: null, detail: null, sources: [] };
-    lp._lastRunningSig = null;
-    lp.renderRunningSessions();
-    return container.innerHTML;
-}
-
 // THE PROJECT-TREE SURFACE MOVED IN SLICE 4, and it is measured where
 // it lives now. `_renderTreeSessionRowHtml` is
 // `ProjectSessionRow.svelte`, which hands the four signals to
@@ -212,9 +189,23 @@ function renderSidebarRow(row) {
     return SidebarRows.rowHtml(row, 'cozy');
 }
 
+// THE LAUNCHPAD CARD MOVED IN SLICE 5, for the same reason the tree row
+// moved in slice 4 and measured the same way. `renderRunningSessions()`
+// is `RunningSessions.svelte`, whose row hands the four signals to
+// `StatusLed.svelte` rather than building a dot string, so there is no
+// markup for this harness to read. The claims are asserted against the
+// RENDERED DOM in
+// web/src/lib/launchpad/RunningSessions.behaviour.test.ts under "the
+// status light": an UNREAD idle row rings `unread`, the same status READ
+// does not, a working row rings `active` whatever the flag says, a dead
+// pane is never painted as something to read, and the control is pressed
+// from the same field the dot is painted from.
+//
+// WHAT SURVIVES HERE IS THE ONE THING NEITHER VITEST FILE CAN SAY: the
+// sidebar row, a string builder, and the shared LED stack it renders
+// through. The cross-surface rule is what the two suites make together.
 const SURFACES = [
     ['sidebar row', renderSidebarRow],
-    ['launchpad card', renderCard],
 ];
 
 // ---------------------------------------------------------------------

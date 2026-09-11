@@ -28,6 +28,8 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
+import { glyphSvg } from '../../client/js/icons/glyphs.js';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
 const BUNDLE = path.join(ROOT, 'client', 'dist', 'app.js');
@@ -109,6 +111,17 @@ export function installCloudeWeb(context) {
         context.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
     }
     if (win !== context && !win.localStorage) win.localStorage = context.localStorage;
+    // THE SHARED ICON GEOMETRY, published the way `client/js/i18n/boot.js`
+    // publishes it in a browser. `client/js/session-status-ui.js` is a
+    // CLASSIC script and cannot import, so every icon it hands back reads
+    // its coordinates from `globalThis.CloudeGlyphs` at call time. Slice 5
+    // moved close, trash, restart and the two envelopes into that data
+    // alongside the pencil and the archive box - one set of coordinates,
+    // two renderers - so a sandbox without it gets the empty string from
+    // every builder and a test that looked for an `<svg>` fails for a
+    // reason that has nothing to do with what it is measuring.
+    if (!context.CloudeGlyphs) context.CloudeGlyphs = { glyphSvg };
+    if (win !== context && !win.CloudeGlyphs) win.CloudeGlyphs = context.CloudeGlyphs;
     vm.runInContext(bundleSource(), context);
     return win.CloudeWeb;
 }

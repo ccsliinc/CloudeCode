@@ -466,7 +466,15 @@ test('an existing call site passing no context gets its old copy back', () => {
     // dialog every other surface in the app shows.
     assert.match(actionsSrc, /function confirm\(action, displayName, context\)/);
     assert.match(actionsSrc, /if \(!context\) return '';/);
-    assert.match(launchpadSrc, /SessionRowActions\.confirm\(resolved, display\)/);
+    // THE HOME CARD'S TWO-ARGUMENT CALL MOVED IN SLICE 5. It was
+    // `SessionRowActions.confirm(resolved, display)` in launchpad.js; the
+    // card is a component now and reaches the same function through
+    // `RunningHost.confirmAction`, still with two arguments, still
+    // getting the old copy back. Naming the new file rather than
+    // dropping the assertion is the point: a call site that stops being
+    // checked is a call site that silently gains a third argument.
+    const runningHostSrc = read('web', 'src', 'lib', 'launchpad', 'running-host.ts');
+    assert.match(runningHostSrc, /mod\.confirm\(action, displayName\)/);
 });
 
 // ---------------------------------------------------------------------

@@ -212,20 +212,37 @@ test('the sidebar row emits the badge', () => {
 });
 
 test('the launchpad card emits the badge', () => {
-    const src = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    assert.match(src,
-        /window\.SessionStartupGate\s*\?\s*window\.SessionStartupGate\.indicatorHtml\(/,
-        'the launchpad card must use the same shared module, or the two '
-        + 'surfaces will drift on when the badge appears');
-    assert.match(src, /\$\{startupGate\}/,
-        'the launchpad must splice the badge into the card markup');
+    // SLICE 5 MADE THE CARD A COMPONENT, so it renders its own element
+    // instead of splicing `indicatorHtml`'s markup - there is no
+    // `{@html}` anywhere in this migration. THE TWO SURFACES STILL MUST
+    // NOT DRIFT on when the badge appears, so the predicate and the words
+    // are held to the shared module's by
+    // web/src/lib/launchpad/running-copy.parity.test.ts, which compares
+    // `SessionStartupGate.LABEL` and `.REASON` against the catalog
+    // messages and `isAwaiting` against the card's own rule.
+    const card = fs.readFileSync(path.join(
+        ROOT, 'web', 'src', 'lib', 'launchpad', 'StartupGateBadge.svelte'), 'utf8');
+    assert.match(card, /session-startup-gate/,
+        'the badge must still carry the class the stylesheet targets');
+    assert.match(card, /awaitingStartup/,
+        'and it must paint on the measured predicate, not a truthy test');
+    const row = fs.readFileSync(path.join(
+        ROOT, 'web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte'), 'utf8');
+    assert.match(row, /<StartupGateBadge/,
+        'the card must splice the badge into the row');
 });
 
 test('both merges carry the field off the wire', () => {
-    for (const file of ['session-sidebar-fetch.js', 'launchpad.js']) {
-        const src = fs.readFileSync(
-            path.join(ROOT, 'client', 'js', file), 'utf8');
+    // THE LAUNCHPAD'S MERGE MOVED IN SLICE 3, to
+    // web/src/lib/sessions/running.ts, where `startup_gate` is one of the
+    // seven fields written UNCONDITIONALLY - never `||`-defaulted,
+    // because its null is a real answer meaning the probe did not run.
+    const merges = [
+        path.join(ROOT, 'client', 'js', 'session-sidebar-fetch.js'),
+        path.join(ROOT, 'web', 'src', 'lib', 'sessions', 'running.ts'),
+    ];
+    for (const file of merges) {
+        const src = fs.readFileSync(file, 'utf8');
         assert.match(src, /startup_gate/,
             `${file} builds its rows field by field, so a field it does not `
             + 'copy simply does not exist on the row it hands the renderer');
@@ -236,9 +253,13 @@ test('the field is read at the WRAPPER level, never inside .session', () => {
     // The single most repeated bug in this project (CLAUDE.md): reading
     // `info.session.startup_gate` returns undefined silently and looks
     // exactly like the backend not sending it.
-    for (const file of ['session-sidebar-fetch.js', 'launchpad.js']) {
-        const src = fs.readFileSync(
-            path.join(ROOT, 'client', 'js', file), 'utf8');
+    const readers = [
+        path.join(ROOT, 'client', 'js', 'session-sidebar-fetch.js'),
+        path.join(ROOT, 'web', 'src', 'lib', 'sessions', 'running.ts'),
+        path.join(ROOT, 'web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte'),
+    ];
+    for (const file of readers) {
+        const src = fs.readFileSync(file, 'utf8');
         assert.ok(!/\.session\.startup_gate/.test(src),
             `${file} must read startup_gate off the SessionInfo wrapper`);
     }
@@ -279,11 +300,28 @@ test('answering the prompt repaints the sidebar list', () => {
 });
 
 test('answering the prompt repaints the launchpad card', () => {
+    // THE STALENESS TRAP THIS GUARDED IS GONE RATHER THAN GUARDED.
+    // The launchpad skipped its repaint whenever a JSON signature of the
+    // row set was unchanged, so a field the signature did not fingerprint
+    // stayed on screen stale forever - and `startup_gate` had to be ADDED
+    // to that signature after shipping, because the badge appears and
+    // disappears with no other field on the row changing at all.
+    //
+    // Slice 5 deleted the signature. The card READS the field, so the
+    // field is a dependency by construction and there is no list of
+    // things to remember to fingerprint. What replaces this assertion is
+    // web/src/lib/launchpad/running-tick-mutations.test.ts, which
+    // measures a tick that changes one value and proves exactly that one
+    // value moved.
     const src = fs.readFileSync(
         path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    assert.match(src, /startup: window\.SessionStartupGate/,
-        'the running-sessions list has the same signature shortcut and the '
-        + 'same staleness trap as the sidebar');
+    assert.ok(!/_lastRunningSig/.test(src),
+        'the running-sessions signature cache is back, and with it the '
+        + 'staleness trap that needed a per-field fingerprint');
+    const row = fs.readFileSync(path.join(
+        ROOT, 'web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte'), 'utf8');
+    assert.match(row, /row\.startup_gate/,
+        'the card must read the field, which is what makes it a dependency');
 });
 
 test('the toast kind is registered as blocking', () => {

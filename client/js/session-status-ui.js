@@ -402,12 +402,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   envelopeOutlineSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function envelopeOutlineSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
-            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '</svg>'
-        );
+        return glyph('envelope-outline');
     }
 
     /**
@@ -420,13 +415,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   envelopeFilledSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function envelopeFilledSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
-            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<circle cx="12.5" cy="3.5" r="2.5" fill="currentColor" stroke="var(--color-bg, #000)" stroke-width="0.75"/>' +
-            '</svg>'
-        );
+        return glyph('envelope-filled');
     }
 
     /**
@@ -444,15 +433,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   trashIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function trashIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M3 4.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M5.5 4.5V3.25C5.5 2.83579 5.83579 2.5 6.25 2.5H9.75C10.1642 2.5 10.5 2.83579 10.5 3.25V4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M4.5 4.5L5 12.75C5 13.1642 5.33579 13.5 5.75 13.5H10.25C10.6642 13.5 11 13.1642 11 12.75L11.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M6.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M9.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('trash');
     }
 
     /**
@@ -471,12 +452,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   closeIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function closeIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('close');
     }
 
     /**
@@ -502,13 +478,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   restartIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function restartIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M13 8A5 5 0 1 1 11.4 4.3" stroke="currentColor" ' +
-            'stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M12.9 1.9V5.1H9.7L12.9 1.9Z" fill="currentColor"/>' +
-            '</svg>'
-        );
+        return glyph('restart');
     }
 
     /**

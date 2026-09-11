@@ -19,6 +19,8 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
+import { glyphSvg } from '../client/js/icons/glyphs.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function readClientJs(name) {
@@ -73,6 +75,14 @@ function loadModules() {
         },
     };
     sandbox.window = sandbox;
+    // THE GLYPH GEOMETRY, published the way client/js/i18n/boot.js
+    // publishes it in a browser. Every icon in session-status-ui.js reads
+    // its coordinates from `globalThis.CloudeGlyphs` at call time, so a
+    // sandbox without it gets the empty string from every builder - and
+    // this file's whole point is that restart and remove draw DIFFERENT
+    // shapes, which two empty strings would satisfy.
+    sandbox.CloudeGlyphs = { glyphSvg };
+    sandbox.globalThis = sandbox;
     sandbox.window.App = {
         showConfirmModal(...args) {
             confirmCalls.push(args);

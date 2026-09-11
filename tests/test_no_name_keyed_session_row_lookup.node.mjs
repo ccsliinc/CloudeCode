@@ -217,21 +217,30 @@ const ALLOWED_MATCHES = {
         'live row that the attachable row also carries, which is its own',
         'change.',
     ].join(' '),
-    'client/js/launchpad.js::.find(x => x.name === name': [
-        'KNOWN BUG, unfixed by this guard. Same shape as the entry above,',
-        'a second call site in the same file. launchpad.js is excluded',
-        'from edits by this task; flagged here, not fixed here.',
-    ].join(' '),
-    'client/js/launchpad.js::.find((s) => s && s.name === tmuxName': [
-        'KNOWN BUG, unfixed by this guard. Same shape, a third call site.',
-        'launchpad.js is excluded from edits by this task; flagged here,',
-        'not fixed here.',
-    ].join(' '),
-    'client/js/launchpad.js::.find(x => x && x.tmux_session === tmuxName': [
-        'KNOWN BUG, unfixed by this guard. Same shape via the',
-        'tmux_session field instead of .name. launchpad.js is excluded',
-        'from edits by this task; flagged here, not fixed here.',
-    ].join(' '),
+    // THREE MORE ENTRIES RETIRED IN SLICE 5, and two of the three really
+    // are gone rather than moved.
+    //
+    // `.find(x => x.name === name)` lived in `_updateRunningSessionAges`,
+    // which walked the painted rows and looked each one back up by the
+    // `data-name` it had just read off the DOM. The card is a component
+    // now and its age is derived from the row object it was rendered
+    // from, so there is nothing to look up.
+    //
+    // `.find((s) => s && s.name === tmuxName)` was `_handleRestartSession`
+    // and `_handleSessionRowAction` resolving a row back from the handle
+    // their delegated click handler had been given. Both are functions
+    // over a row now (web/src/lib/launchpad/running-actions.ts) and the
+    // row is passed in, captured at PAINT time - which is also the frozen
+    // snapshot rule the row menu already holds itself to.
+    //
+    // `.find(x => x && x.tmux_session === tmuxName)` DID SURVIVE, as
+    // `resolveSessionId` in web/src/lib/launchpad/running-host.ts. It is
+    // not registered below because this scanner's pattern is
+    // single-line and that call is now written across several, so
+    // registering it would be a dead entry failing this test for the
+    // opposite reason. It is named here instead: the lookup still
+    // exists, it is still a name-keyed round trip, and it is still the
+    // right shape to fix when `/sessions/list` carries a durable key.
     // TWO ENTRIES RETIRED IN SLICE 4, and the reason is worth the line.
     // `.find(s => s.name === name)` lived in
     // `_bindProjectSessionRowClicks`, which resolved the clicked row back
