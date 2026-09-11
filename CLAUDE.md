@@ -88,6 +88,7 @@ not read all 27.
 | `docs/jsonl-shape-inventory.md` | You are writing a test against the transcript archive and need a real exemplar of a given line shape. |
 | `docs/help-content-audit.md` | You are rewriting the launchpad help copy. |
 | `docs/ui-preferences-inventory.md` | You are building the typed `ui_preferences` sync (or its partial-update or import step). Every durable browser-stored preference, classified as shared / per-viewer-only / already server-owned / secret, with the exact key, composition, writer and reader. |
+| `docs/ui-inventory.md` | A designer or a newcomer needs the complete inventory of every screen, region and control in the app: what each one is for from the user's point of view, what states it can be in, and whether it appears on desktop, on a phone, or on both. Written for someone who does not read code. It is DESCRIPTIVE, not normative: it records what shipped, it does not rule on what should. Where it and the code disagree, the code wins and this file is the thing to fix. |
 
 Two rules keep this table honest. **Unreferenced is not unused**, so do not
 delete or move a file in `docs/` because it looks orphaned. And **a new file in
