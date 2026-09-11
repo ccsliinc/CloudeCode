@@ -368,9 +368,13 @@ console.log('[SessionStatusUI Module] Loading...');
         if (globalThis.UIFlags && !globalThis.UIFlags.showMarkUnreadControl()) {
             return '';
         }
+        // SHORTENED IN THE 1.4.0 MERGE. Moves with `session.unread.clear`
+        // and `session.unread.set` in client/js/i18n/catalog.en.js or not
+        // at all: session-card-actions.test.ts holds this builder's title
+        // against the label the plugin resolves from those keys.
         const label = unread
-            ? 'clear unread flag'
-            : 'mark unread for followup';
+            ? 'clear unread'
+            : 'mark unread';
         const pressed = unread ? 'true' : 'false';
         // tmuxName is the only user-controlled value in this module. A
         // session name is free text, so it can hold a quote, an angle

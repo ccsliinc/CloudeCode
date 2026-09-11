@@ -392,6 +392,7 @@ function looksLikeCopy(literal: string): boolean {
     if (literal.includes('.') && !literal.includes(' ')) return false;
     if (WIRE_LITERALS.has(literal)) return false;
     if (COMMAND_LITERALS.has(literal)) return false;
+    if (LOG_LABELS.has(literal)) return false;
     return /[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(literal);
 }
 
@@ -442,6 +443,34 @@ const COMMAND_LITERALS = new Set([
     'tmux -L cloude new -s mywork; claude',
     'tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec $SHELL"',
     'tmux -L cloude new -s mywork \\"$SHELL -ic \'cld; exec $SHELL\'\\"',
+]);
+
+/**
+ * Names a navigation carries into a DEBUG LOG, and nowhere else.
+ *
+ * THE 1.4.0 MERGE FORCED THIS LIST AND IT IS A THIRD KIND. A wire literal
+ * is what the SERVER says, matched and never rendered. A command literal
+ * is rendered verbatim and never matched. These are neither: they are the
+ * `what` argument of `NavigationGeneration.keep(token, what)`, whose only
+ * consumer is a `console.debug` line in
+ * `client/js/navigation-generation.js` saying which navigation was
+ * discarded as stale. No surface renders one, and a translated one would
+ * make two locales' logs incomparable while helping nobody.
+ *
+ * THEY ARE THE OTHER LINE'S OWN STRINGS, kept byte for byte. They were
+ * the labels `client/js/launchpad.js` passed at these same call sites
+ * before that file was deleted, and matching them is what lets a log from
+ * before the merge be read beside one from after.
+ *
+ * Nothing here may be a sentence, which the negative control asserts, and
+ * the same warning applies as to the two lists above: this is a decision
+ * to be reviewed, not a way around the guard. If you find yourself adding
+ * a string here that a user could ever see, the string is wrong, not the
+ * guard.
+ */
+const LOG_LABELS = new Set([
+    'launcher rejoin',
+    'deep-link resolve',
 ]);
 
 describe('a ported file may not carry a hardcoded sentence', () => {
@@ -504,6 +533,26 @@ describe('a ported file may not carry a hardcoded sentence', () => {
         for (const literal of WIRE_LITERALS) {
             expect(literal.split(/\s+/).length, literal).toBeLessThanOrEqual(5);
             expect(literal, literal).not.toMatch(/[.!?]$/);
+        }
+        // ...and neither is the log-label list. Every entry must be
+        // something the scanner WOULD have flagged, or the list is
+        // carrying dead weight that hides nothing and proves nothing;
+        // none may read as prose; and each must actually be reachable as
+        // a `keep()` label in the tree, so an entry cannot outlive the
+        // call site it was added for.
+        const keepLabels = new Set<string>();
+        for (const rel of PORTED_FILES) {
+            const src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+            for (const m of src.matchAll(/keepNav\(\s*[A-Za-z0-9_]+\s*,\s*'([^']*)'/g)) {
+                if (m[1] !== undefined) keepLabels.add(m[1]);
+            }
+        }
+        for (const label of LOG_LABELS) {
+            expect(/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(label), label).toBe(true);
+            expect(label.split(/\s+/).length, label).toBeLessThanOrEqual(4);
+            expect(label, label).not.toMatch(/[.!?]$/);
+            expect(keepLabels.has(label), `${label} is exempted but no keepNav() uses it`)
+                .toBe(true);
         }
     });
 });

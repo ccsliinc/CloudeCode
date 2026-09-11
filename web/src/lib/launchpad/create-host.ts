@@ -30,6 +30,7 @@
  * value is that there is one of it.
  */
 import { hostWindow } from '../sessions/env';
+import { withNav, type NavToken } from './nav-generation';
 import { t } from '../i18n/index.svelte';
 import { browserNavHost } from './nav-host';
 import { detachAndCreateNew, selectProject } from './navigation';
@@ -111,8 +112,17 @@ export interface CreateHost {
         primaryLabel: string,
         secondaryLabel: string,
     ): Promise<boolean>;
-    /** Tell the rest of the app a session was created. */
-    announceSessionCreated(session: CreatedSession): void;
+    /**
+     * Tell the rest of the app a session was created.
+     *
+     * `nav` is the navigation token the flow declared before its POST.
+     * It is OPTIONAL on the signature and must not be optional in
+     * practice on any path that awaits: `app.js`'s listener waives its
+     * stale-navigation check when `detail.nav` is absent, so a flow that
+     * forgets one is not refused, it is silently unguarded. See
+     * `nav-generation.ts`.
+     */
+    announceSessionCreated(session: CreatedSession, nav?: NavToken): void;
 }
 
 /** The subset of `window.API` these flows call. */
@@ -248,9 +258,11 @@ export function browserCreateHost(): CreateHost {
                 | undefined;
             return app!.showConfirmModal(title, message, details, primaryLabel, secondaryLabel);
         },
-        announceSessionCreated(session) {
+        announceSessionCreated(session, nav) {
             const w = hostWindow() as unknown as Window | undefined;
-            w?.dispatchEvent(new CustomEvent('session-created', { detail: { session } }));
+            w?.dispatchEvent(
+                new CustomEvent('session-created', { detail: withNav({ session }, nav ?? null) }),
+            );
         },
     };
 }

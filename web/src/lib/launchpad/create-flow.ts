@@ -55,6 +55,7 @@ import type { Translate } from '../sessions/types';
 import type { CreateHost, CreatePayload, CreatedSession, ProviderChoice } from './create-host';
 import type { ModalOpeners } from './modals';
 import { validateName } from './project-folder';
+import { beginNav } from './nav-generation';
 
 /** Every way a create attempt can end, named. */
 export type CreateOutcome =
@@ -202,6 +203,11 @@ export async function createProjectFlow(
     agentType: string | null = null,
 ): Promise<CreateResult> {
     const refused: CreateResult = { outcome: 'failed', session: null, payload: null };
+    // THE INTENT, DECLARED BEFORE THE FIRST AWAIT, which on this flow is
+    // the provider picker - a modal the user can sit in indefinitely, and
+    // therefore the widest window on this screen for a second navigation
+    // to land in. See `nav-generation.ts`.
+    const nav = beginNav('create');
     try {
         // Gate: claude or an OpenRouter model, BEFORE anything is asked
         // for and long before anything is written. Null cancels the whole
@@ -251,8 +257,17 @@ export async function createProjectFlow(
             path: String(session.working_dir ?? ''),
             description: details.description || null,
         });
+        // ENTER THE SESSION FIRST, DECORATE AFTER. The session is what the
+        // user asked for; the project-tree repaint is bookkeeping they did
+        // not ask for, and nothing in its result is needed to render the
+        // terminal. Announced before the repaint, the user lands in their
+        // new session immediately instead of watching a list redraw first.
+        //
+        // STILL AWAITED, and still guarded on its own, so a caller that
+        // runs after this function does not race the refresh and a failed
+        // repaint does not read as a failed create.
+        host.announceSessionCreated(session, nav);
         await refreshProjects(host);
-        host.announceSessionCreated(session);
         return { outcome: 'created', session, payload };
     } catch (error) {
         console.error('CloudeWeb: failed to create session:', error);
@@ -289,6 +304,10 @@ export async function createConsoleFlow(
     terminalCommandId: string | null = null,
 ): Promise<CreateResult> {
     const sessionName = `console-${Date.now().toString(36)}`;
+    // THE INTENT, DECLARED BEFORE THE POST. See `nav-generation.ts`: a
+    // dispatcher with no token is waived by app.js's listener rather than
+    // refused, so the guard's absence is invisible from the outside.
+    const nav = beginNav('console');
     try {
         host.updateStatus(t(PROJECT_CREATE_KEYS.createConsoleStatus));
         const payload: CreatePayload = {
@@ -316,7 +335,7 @@ export async function createConsoleFlow(
             path: String(session.working_dir ?? ''),
         });
         await refreshProjects(host);
-        host.announceSessionCreated(session);
+        host.announceSessionCreated(session, nav);
         return { outcome: 'created', session, payload };
     } catch (error) {
         console.error('CloudeWeb: failed to create console session:', error);

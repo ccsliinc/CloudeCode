@@ -126,7 +126,7 @@ export interface SessionCardRow {
  * Example:
  *   const a: SessionCardAction = {
  *       shortcut: 'U',
- *       label: (r) => (r.unread ? 'clear unread flag' : 'mark unread'),
+ *       label: (r) => (r.unread ? 'clear unread' : 'mark unread'),
  *       run: async (r, ctx) => { await patch(r); await ctx.refresh(); },
  *   };
  */

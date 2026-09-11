@@ -296,7 +296,13 @@ test('index.html loads the module before every consumer of it', () => {
     const at = (f) => order.indexOf(f);
     assert.ok(at('navigation-generation.js') >= 0,
         'navigation-generation.js must be in index.html or it is dead code');
-    for (const consumer of ['app.js', 'router.js', 'launchpad.js', 'terminal.js',
+    // `launchpad.js` was on this list and is deleted as of the 1.4.0
+    // merge. The home screen's consumer is now the compiled bundle, which
+    // index.html loads as a DEFERRED MODULE at the very bottom - so it
+    // cannot be checked by position in this list, and it does not need to
+    // be: a deferred module runs after every classic script on the page
+    // by definition. The bundle's own use is covered below.
+    for (const consumer of ['app.js', 'router.js', 'terminal.js',
                             'session-sidebar-clicks.js', 'toast-navigate.js',
                             'session-restart-return.js']) {
         assert.ok(at('navigation-generation.js') < at(consumer),
@@ -322,14 +328,60 @@ test('every entry path declares an intent, and the two App entries only READ one
         ['client/js/session-restart-return.js', 1],
         ['client/js/toast-navigate.js', 1],
         ['client/js/router.js', 1],
-        // Six: the five surfaces that dispatch `session-created`, plus
-        // the launcher's own return-to-a-running-session path.
-        ['client/js/launchpad.js', 6],
     ]) {
         const hits = (read(file).match(/NavigationGeneration\s*\.begin\(/g) || []).length;
         assert.equal(hits, count,
             `${file} must declare exactly ${count} navigation intent(s)`);
     }
+    // THE HOME SCREEN'S SIX MOVED INTO THE COMPILED TREE, and the count
+    // is held because it is the thing that regressed. `client/js/launchpad.js`
+    // declared six - the five surfaces that dispatch `session-created`,
+    // plus the launcher's own return-to-a-running-session path - and when
+    // that file was replaced by web/src the tokens did not come with it.
+    // Nothing failed: app.js's session-created listener reads
+    // `detail.nav != null` BEFORE it checks, so a dispatcher with no
+    // token is WAIVED rather than refused, and the guard was simply
+    // absent on every svelte launch path. A count is what catches that;
+    // a "does it import the module" check would have passed with one
+    // call site wired and five forgotten.
+    for (const [file, count] of [
+        // returnToActiveSession, attachRunningSession, selectProject,
+        // connectToExistingSession. openProjectByName deliberately READS
+        // rather than begins, and is asserted separately below.
+        ['web/src/lib/launchpad/navigation.ts', 4],
+        // createProjectFlow and createConsoleFlow.
+        ['web/src/lib/launchpad/create-flow.ts', 2],
+    ]) {
+        const hits = (read(file).match(/beginNav\(/g) || []).length;
+        assert.equal(hits, count,
+            `${file} must declare exactly ${count} navigation intent(s)`);
+    }
+});
+
+test('EVERY session-created dispatch carries its token, or the guard is waived', () => {
+    // THE DEFECT THIS EXISTS FOR, stated as the rule it broke. app.js's
+    // listener waives its check when `detail.nav` is absent. That
+    // tolerance is correct for a dispatcher that never had a token and is
+    // a trapdoor for one that should. So: every announce on the home
+    // screen's flows passes one, and the KEY is spelled `nav`, because a
+    // dispatch spelling it anything else is waived in exactly the same
+    // silent way.
+    const listener = read('client/js/app.js');
+    assert.match(listener, /e\.detail\.nav\s*!=\s*null/,
+        'app.js reads detail.nav; if that spelling changed, every dispatcher '
+        + 'below is now silently unguarded and this test is the only warning');
+    for (const rel of ['web/src/lib/launchpad/navigation.ts',
+                       'web/src/lib/launchpad/create-flow.ts']) {
+        const src = read(rel);
+        for (const m of src.matchAll(/announceSessionCreated\(([^;]*?)\);/gs)) {
+            assert.ok(/\bnav\b/.test(m[1]),
+                `${rel}: an announce with no navigation token: ${m[1].trim().slice(0, 80)}`);
+        }
+    }
+    // The seam that spells the key, asserted at its source.
+    const seam = read('web/src/lib/launchpad/nav-generation.ts');
+    assert.match(seam, /\{ \.\.\.detail, nav \}/,
+        'withNav must spell the key `nav`, which is what app.js reads');
 });
 
 test('A BOOT PAINT IS NOT A NAVIGATION, or a cold-load deep link dies', () => {
@@ -356,8 +408,8 @@ test('a stale generation never reaches the deep-link rejection banner', () => {
     // nothing. A superseded navigation names something perfectly real -
     // the user simply went elsewhere - and a banner for it is a lie the
     // user has to dismiss.
-    const lp = read('client/js/launchpad.js');
-    const guard = lp.indexOf("keep(deepLinkNav, 'deep-link resolve')");
+    const lp = read('web/src/lib/launchpad/navigation.ts');
+    const guard = lp.indexOf("keepNav(deepLinkNav, 'deep-link resolve')");
     assert.ok(guard > 0, 'openProjectByName must check the deep link is still current');
     const afterGuard = lp.slice(guard, guard + 220);
     assert.ok(!/rejectTarget/.test(afterGuard),

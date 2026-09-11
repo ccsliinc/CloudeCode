@@ -261,7 +261,10 @@
          an ESC[2J that erases the alternate screen. See
          client/css/terminal-away-bar.css. -->
     <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
-<<<<<<< HEAD
+
+    <!-- Item 9's notice banner - calm info tokens, not the alarm-red
+         inline style it shipped with. See client/css/deep-link-notice.css. -->
+    <link rel="stylesheet" href="/static/css/deep-link-notice.css" />
 
     <!-- THE COMPILED TREE'S STYLESHEET (see web/ and CLAUDE.md, "The web/
          build"). Built by vite from web/src into client/dist with a FIXED
@@ -275,11 +278,6 @@
          harmless anywhere: a layered rule loses to every unlayered one in
          this file regardless of order. -->
     <link rel="stylesheet" href="/static/dist/app.css" />
-=======
-    <!-- Item 9's notice banner - calm info tokens, not the alarm-red
-         inline style it shipped with. See client/css/deep-link-notice.css. -->
-    <link rel="stylesheet" href="/static/css/deep-link-notice.css" />
->>>>>>> 6012467
 </head>
 <body>
     <!-- Item 9: deep-link / navigation notice banner. Populated by
@@ -1414,19 +1412,15 @@
          anchor-popover.js. The gesture module must load after the menu
          AND after session-sidebar.js, whose #session-sidebar-list it
          attaches to; it owns right click and long press only, because
-<<<<<<< HEAD
-         -open.js binds the trigger tap itself.
-
-         The plugin bridge only READS window.CloudeWeb, which the deferred
-         module at the bottom of this file publishes; nothing here runs at
-         parse time, and the first row is painted long after that. -->
-=======
          -open.js binds the trigger tap itself. session-row-menu-icons.js
          (the shared builder for each item's prefix glyph, same pattern as
          kebab-icon.js) already loaded earlier, above, for
          session-sidebar-group-actions.js; it is also required here, since
-         session-row-menu.js calls it too. -->
->>>>>>> 6012467
+         session-row-menu.js calls it too.
+
+         The plugin bridge only READS window.CloudeWeb, which the deferred
+         module at the bottom of this file publishes; nothing here runs at
+         parse time, and the first row is painted long after that. -->
     <script src="/static/js/session-row-menu-items.js"></script>
     <script src="/static/js/session-row-menu-plugins.js"></script>
     <script src="/static/js/session-row-menu.js"></script>

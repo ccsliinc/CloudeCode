@@ -369,7 +369,7 @@ test('MARK UNREAD IS STILL OFFERED, and it arrives from the plugin surface', () 
         assert.equal(item.shortcut, 'U');
         assert.equal(item.enabled, true);
         assert.equal(item.label,
-            unread ? 'clear unread flag' : 'mark unread for followup');
+            unread ? 'clear unread' : 'mark unread');
     }
 });
 
