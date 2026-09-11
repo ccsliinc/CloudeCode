@@ -207,6 +207,22 @@ function findHits(root) {
 // does not have to re-derive it from scratch.
 // ---------------------------------------------------------------------
 const ALLOWED_MATCHES = {
+    'web/src/lib/launchpad/navigation.ts::.find((row) => row.name === tmuxName': [
+        'KNOWN BUG, MOVED NOT INTRODUCED. Slice 7 of the svelte migration',
+        'ported this from `_handleAttachRunningSession`, where it stood as',
+        '`.find(r => r.name === tmuxName)`. It resolves the LISTING ROW',
+        'whose label the adopt response does not carry, and `tmuxName` is',
+        'the only handle the adopt was made with - the attach came from a',
+        'row click or a deep link, neither of which has a durable key for',
+        'a session this app has not adopted yet. Listed rather than fixed',
+        'because a MOVE that also changes behaviour is a regression nobody',
+        'can bisect. The blast radius is small and named: the worst case',
+        'is a recreated pane reusing a name and the tab opening with the',
+        'previous session of that name`s label, on a session whose label',
+        'the server did not send. The fix is the same one the entry below',
+        'needs - a durable key on the live row that the attachable row',
+        'also carries.',
+    ].join(' '),
     'web/src/lib/sessions/running.ts::.find((s) => s.name === tmuxName': [
         'KNOWN BUG, MOVED NOT INTRODUCED. This is the same lookup that',
         'stood in launchpad.js as `.find(s => s.name === tmuxName)`,',

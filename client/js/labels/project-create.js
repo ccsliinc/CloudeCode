@@ -116,7 +116,6 @@ export const PROJECT_CREATE_KEYS = {
     createStatus: 'project.create.status',
     createStatusForAgent: 'project.create.status_for_agent',
     createConsoleStatus: 'project.create.console.status',
-    createConsoleDescription: 'project.create.console.description',
     createFailed: 'project.create.failed',
     createFolderFailed: 'project.create.folder_failed',
     uniqueNameFailed: 'project.create.unique_name_failed',

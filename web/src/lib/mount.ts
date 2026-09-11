@@ -149,3 +149,19 @@ export function ensurePanel<Props extends Record<string, unknown>>(
     }
     return mountPanel(id, component, props);
 }
+
+/**
+ * The live handle for one panel, or null when none is mounted.
+ *
+ * Description: `mount()` hands back the component's EXPORTS, which is
+ *   how a panel offers an imperative entry point - slice 7's
+ *   `refresh()` is the first one. Exposed as a lookup rather than by
+ *   returning it from every call site so the map stays the single owner
+ *   of a live handle.
+ * Inputs: id - the container id.
+ * Output: the exports object, or null.
+ * Example: (panelInstance('recent-sessions-list')?.refresh as () => void)?.();
+ */
+export function panelInstance(id: string): Record<string, unknown> | null {
+    return panels.get(id)?.instance ?? null;
+}

@@ -86,11 +86,13 @@ describe('the extracted picker is still one module with one entry point', () => 
         expect(host).not.toMatch(/escapeHtml/);
     });
 
-    test('launchpad.js no longer mentions it at all', () => {
-        // Its delegate, `showFolderPickerModal`, moved with the flow.
-        expect(codeOnly(repoFile('client', 'js', 'launchpad.js'))).not.toMatch(
-            /FolderPickerModal/,
-        );
+    test('launchpad.js is gone, so nothing legacy can reach it', () => {
+        // Slice 6 moved `showFolderPickerModal` with the flow; slice 7
+        // deleted the file it had lived in. The assertion is stronger
+        // than the one it replaces - "that file does not mention the
+        // picker" became "that file does not exist" - and it is what
+        // stops a resurrected launchpad.js reintroducing the delegate.
+        expect(fs.existsSync(path.join(repoRoot, 'client/js/launchpad.js'))).toBe(false);
     });
 
     test('the index page still loads it, and before the bundle', () => {

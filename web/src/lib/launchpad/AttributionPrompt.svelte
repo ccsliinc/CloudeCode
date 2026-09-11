@@ -68,9 +68,16 @@
     /**
      * Fetch the question set and reset the per-render UI state.
      *
+     * EXPORTED AND RENAMED FROM `reload` IN SLICE 7. The legacy shell
+     * refetched this card by REMOUNTING it on every `loadProjects()`;
+     * the shell is a component now and mounts it once, so the refetch
+     * is a call. `refresh` rather than `reload` because `panels.ts`
+     * looks for ONE name across every panel, and one name is what makes
+     * adding a fifth panel free.
+     *
      * Inputs: none. Output: Promise<void>.
      */
-    async function reload(): Promise<void> {
+    export async function refresh(): Promise<void> {
         prompt = await loadPrompt(host);
         picking = false;
         ticked = {};
@@ -107,7 +114,7 @@
     async function adopt(names: string[]): Promise<void> {
         if (names.length === 0) return;
         await adoptAttributed(names, host);
-        await reload();
+        await refresh();
         host.refreshRunningSessions();
     }
 
@@ -121,7 +128,7 @@
     async function decline(names: string[]): Promise<void> {
         if (names.length === 0) return;
         await declineAttributed(names, host);
-        await reload();
+        await refresh();
     }
 
     /**
@@ -138,7 +145,7 @@
     // legacy `loadAttributionPrompt()` ran. Not awaited: the card paints
     // nothing until there is something to paint, and a failed fetch
     // leaves it painting nothing.
-    void reload();
+    void refresh();
 </script>
 
 {#if view.kind === 'unavailable'}

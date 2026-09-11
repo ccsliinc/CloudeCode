@@ -249,11 +249,17 @@
         if (window.SettingsPanel && typeof window.SettingsPanel.close === 'function') {
             window.SettingsPanel.close();
         }
-        if (!window.Launchpad || typeof window.Launchpad.createConsoleSession !== 'function') {
+        // SLICE 7: THE FLOW IS IN THE COMPILED TREE. It used to be
+        // reached through `window.Launchpad.createConsoleSession`, a
+        // one-line forward on a file that no longer exists. Read per
+        // call, never captured: this panel is a classic script and may
+        // evaluate before the bundle does.
+        const web = window.CloudeWeb && window.CloudeWeb.launchpad;
+        if (!web || typeof web.createConsoleSession !== 'function') {
             console.error('TerminalCommandsPanel: launchpad unavailable');
             return;
         }
-        await window.Launchpad.createConsoleSession({ terminalCommandId: target.id });
+        await web.createConsoleSession({ terminalCommandId: target.id });
     }
 
     /**

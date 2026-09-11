@@ -37,7 +37,10 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
-import { loadLaunchpad, el, test, results } from './lib-home-mechanics.mjs';
+// SLICE 7: `loadLaunchpad` is gone with `client/js/launchpad.js`; this
+// suite never called it and only ever used the element stub and the
+// tally.
+import { el, test, results } from './lib-home-mechanics.mjs';
 // SLICE 3: the session data layer lives in the compiled bundle, and the
 // `Launchpad` fields this harness drives are accessors over that one
 // store. The REAL client/dist/app.js is evaluated in this sandbox rather

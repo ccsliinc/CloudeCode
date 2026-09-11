@@ -125,7 +125,9 @@ const menuSrc = read('client', 'js', 'server-controls-menu.js');
 // order is what the page's script tags do too.
 const actionsSrc = read('client', 'js', 'session-row-actions-confirm.js')
     + '\n' + read('client', 'js', 'session-row-actions.js');
-const launchpadSrc = read('client', 'js', 'launchpad.js');
+// SLICE 7: the home bar is HomeScreen.svelte and the server-controls
+// wire is home-chrome.ts. Every claim below is unchanged.
+const { HOME_ALL_SRC: launchpadSrc } = await import('./lib-home-source.mjs');
 const indexHtml = read('client', 'index.html');
 const css = read('client', 'css', 'server-status.css');
 const cssRules = rules(css);
@@ -496,7 +498,7 @@ test('the menu carries no server-restart row', () => {
     assert.ok(!/restartServer/.test(menuSrc));
     assert.ok(!/'serverRestartRow'/.test(menuSrc));
     assert.ok(!/restart server, sessions keep running/.test(menuSrc));
-    assert.ok(!/async restartServer\(\)/.test(launchpadSrc));
+    assert.ok(!/restartServer\s*\(/.test(launchpadSrc));
 });
 
 test('the panel and its stylesheet are both loaded, css after styles.css', () => {

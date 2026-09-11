@@ -950,7 +950,15 @@
          the list we are about to wipe", which only had an answer while
          this list was rebuilt with innerHTML; a component's rows are not
          rebuilt, so there is no repaint to guard. -->
-    <script src="/static/js/launchpad.js"></script>
+    <!-- `client/js/launchpad.js` WAS LOADED HERE AND NO LONGER EXISTS.
+         Slice 7 of the Svelte migration deleted it: the home screen is
+         web/src/lib/launchpad/HomeScreen.svelte, mounted into the empty
+         #launchpad-screen div above by client/dist/app.js at the bottom
+         of this file. What is left of `window.Launchpad` is a shim that
+         bundle publishes - eight members, each with a named caller in
+         this tree - so the scripts below that still address it keep
+         working unchanged. Do not re-add a script tag here: there is no
+         file behind it. -->
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
          attaches showProviderModal() onto the window.Launchpad instance. -->

@@ -183,6 +183,28 @@ const PORTED_FILES = [
     'web/src/lib/launchpad/EditProjectModal.svelte',
     'web/src/lib/launchpad/ProjectFolderModal.svelte',
     'web/src/lib/launchpad/ProjectNameModal.svelte',
+    // Slice 7, the shell and the navigation glue. The assembler first,
+    // then the markup and every module beside it. The NAVIGATION files
+    // are on the list for a reason of their own: slice 6 found a create
+    // flow that THREW its english rather than rendering it, and
+    // `selectProject`'s deep-link refusal is the same shape - a sentence
+    // that is thrown as well as shown. It carries a key.
+    'client/js/labels/home-screen.js',
+    'web/src/lib/launchpad/HomeScreen.svelte',
+    'web/src/lib/launchpad/HelpDisclosure.svelte',
+    'web/src/lib/launchpad/RichText.svelte',
+    'web/src/lib/launchpad/rich-text.ts',
+    'web/src/lib/launchpad/home-screen-host.ts',
+    'web/src/lib/launchpad/home-chrome.ts',
+    'web/src/lib/launchpad/home-sections.ts',
+    'web/src/lib/launchpad/home-anchors.ts',
+    'web/src/lib/launchpad/new-fab.ts',
+    'web/src/lib/launchpad/panels.ts',
+    'web/src/lib/launchpad/navigation.ts',
+    'web/src/lib/launchpad/nav-host.ts',
+    'web/src/lib/launchpad/deep-link.ts',
+    'web/src/lib/launchpad/status-report.ts',
+    'web/src/lib/launchpad/shim.ts',
 ];
 
 interface I18nLike {
@@ -304,6 +326,13 @@ describe('the pseudo locale proves the surface really reads the catalog', () => 
  *   rather than something a human reads. ONLY `class` is stripped:
  *   `title`, `aria-label` and `placeholder` all carry real copy and stay
  *   in the scan, which the negative control below asserts.
+ *
+ *   `rel="..."` VALUES ARE STRIPPED TOO, and slice 7 forced that. The
+ *   home bar's outbound link carries `rel="noopener noreferrer"`, which
+ *   is two space-separated words of two-plus letters and is a contract
+ *   with the BROWSER - it is never rendered and translating it would
+ *   disable the protection it buys. Unlike `class`, there is no case in
+ *   which a `rel` value is copy at all.
  * Inputs: src (string) - a source file.
  * Output: string - the same source with comments and diagnostics removed.
  * Example: scannable("console.log('a b'); const x = 'c d';")
@@ -314,7 +343,8 @@ function scannable(src: string): string {
         .replace(/<!--[\s\S]*?-->/g, ' ')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')
         .replace(/^[ \t]*\/\/.*$/gm, ' ')
-        .replace(/\bclass=("[^"]*"|'[^']*')/g, 'class=""');
+        .replace(/\bclass=("[^"]*"|'[^']*')/g, 'class=""')
+        .replace(/\brel=("[^"]*"|'[^']*')/g, 'rel=""');
     let index = out.indexOf('console.');
     while (index !== -1) {
         const open = out.indexOf('(', index);
@@ -361,6 +391,7 @@ function stringLiterals(src: string): string[] {
 function looksLikeCopy(literal: string): boolean {
     if (literal.includes('.') && !literal.includes(' ')) return false;
     if (WIRE_LITERALS.has(literal)) return false;
+    if (COMMAND_LITERALS.has(literal)) return false;
     return /[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(literal);
 }
 
@@ -393,6 +424,26 @@ const WIRE_LITERALS = new Set([
     'timed out',
 ]);
 
+/**
+ * Shell commands the help panel SHOWS, and must never translate.
+ *
+ * SLICE 7 FORCED THIS LIST AND IT IS A DIFFERENT KIND FROM THE ONE
+ * ABOVE. A wire literal is what the SERVER says and is matched but never
+ * rendered; these are rendered verbatim and never matched. A command is
+ * typed into a terminal and has to work byte for byte - a translated
+ * `tmux -L cloude` is a broken instruction, and the socket name in it is
+ * the same `-L cloude` the whole app depends on. They live in
+ * `client/js/labels/home-screen.js` as DATA beside the catalog, and the
+ * prose that introduces them is a catalog message like everything else.
+ *
+ * Nothing here may be a sentence, which the negative control asserts.
+ */
+const COMMAND_LITERALS = new Set([
+    'tmux -L cloude new -s mywork; claude',
+    'tmux -L cloude new -s mywork "claude --dangerously-skip-permissions; exec $SHELL"',
+    'tmux -L cloude new -s mywork \\"$SHELL -ic \'cld; exec $SHELL\'\\"',
+]);
+
 describe('a ported file may not carry a hardcoded sentence', () => {
     test.each(PORTED_FILES)('%s holds no user-visible literal', (rel) => {
         const src = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -405,7 +456,7 @@ describe('a ported file may not carry a hardcoded sentence', () => {
 
     test('the list of ported files is not empty and the files exist', () => {
         // A guard that silently scanned nothing would pass forever.
-        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(55);
+        expect(PORTED_FILES.length).toBeGreaterThanOrEqual(70);
         for (const rel of PORTED_FILES) {
             expect(fs.existsSync(path.join(repoRoot, rel)), rel).toBe(true);
         }
@@ -417,6 +468,17 @@ describe('a ported file may not carry a hardcoded sentence', () => {
         expect(stringLiterals(scannable("const a = 'no sessions';")).filter(looksLikeCopy))
             .toEqual(['no sessions']);
         // ...and does not flag the things that are not copy.
+        // ...and the two exemption lists have not started swallowing a
+        // sentence: every entry in them must be something the scanner
+        // WOULD otherwise have flagged, and none may read as prose.
+        for (const command of COMMAND_LITERALS) {
+            expect(/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(command), command).toBe(true);
+            expect(command.includes('tmux -L cloude'), command).toBe(true);
+        }
+        expect(stringLiterals(scannable('<a rel="noopener noreferrer">')).filter(looksLikeCopy))
+            .toEqual([]);
+        expect(stringLiterals(scannable('<a title="noopener noreferrer">')).filter(looksLikeCopy))
+            .toEqual(['noopener noreferrer']);
         expect(stringLiterals(scannable("t('session.summary.none');")).filter(looksLikeCopy))
             .toEqual([]);
         expect(stringLiterals(scannable("console.error('no string layer here');")).filter(looksLikeCopy))

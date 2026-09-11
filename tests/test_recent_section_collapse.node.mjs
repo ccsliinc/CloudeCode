@@ -1,39 +1,45 @@
-// Node test for the launchpad RECENT section's collapse/expand disclosure
-// and its "show archived" header layout.
+// Node tests for the RECENT section's heading markup.
 //
-// THE BUG THIS LOCKS DOWN: `#recent-sessions-toggle` has rendered as a real
-// `<button aria-expanded="...">` since b1365a2 (the "RECENT (S9)" feature),
-// but `Launchpad.initSectionDisclosures()` only ever wired the
-// "running sessions" and "projects" headings into its `sections` list. The
-// recent heading's click handler was simply never attached - clicking it
-// did nothing, which on screen reads as a chevron stuck pointing down and
-// rows that never hide. It was NOT a repaint clobbering a collapse; there
-// was no collapse behavior at all to clobber. This file proves: (1) a click
-// on the recent toggle collapses the section, (2) a simulated 5s-poller
-// repaint (loadRecentSessions() rebuilding #recent-sessions-list) does not
-// re-expand it, (3) a second click expands it again, and (4) the
-// "show archived" control for recent sits in the same header row, with the
-// same class, that the projects section's "show archived" control uses.
+// SLICE 7 TOOK THE WIRING HALF OF THIS FILE. The four tests above this
+// line drove `initSectionDisclosures()` by loading `client/js/launchpad.js`
+// into a vm sandbox with a listener-recording element stub - the collapse
+// click, the re-expand, the write into `cloude.launchpad.collapsed` and
+// the re-apply on load. That file no longer exists, and all four moved to
+// `web/src/lib/launchpad/HomeScreen.behaviour.test.ts` under "the section
+// disclosures", where they mount the REAL component in jsdom against the
+// real localStorage rather than a stub of each. The claims are unchanged
+// and one is stronger: the port also asserts the collapse uses
+// `style.display` and never the `hidden` attribute, which is the trap
+// `.project-list { display: flex }` sets for exactly one of the three
+// sections.
 //
-// WHY A REAL addEventListener STUB, not a no-op. lib-home-mechanics.mjs's
-// shared `el()` helper deliberately no-ops addEventListener (it exists for
-// tests that call handlers directly, e.g. `_applyProjectNodeCollapsed`).
-// This file's whole point is proving the click WIRING itself, so its stub
-// records listeners and can fire them - "a stub sized to the module under
-// test", same reasoning as lib-home-mechanics.mjs's own header comment.
+// WHAT STAYS HERE IS THE PART THAT IS NOT ABOUT BEHAVIOUR: the heading's
+// markup and the stylesheet that lays it out. A component test cannot
+// answer "does the recent header use the same class as the projects
+// header", because both would be whatever the component renders.
+//
+// THE REPAINT CASE MOVED EARLIER, in slice 2, to
+// `web/src/lib/launchpad/recent-chrome.test.ts`, restated STRONGER: the
+// section's chrome never touches `#recent-sessions-list` at all, asserted
+// by recording every element it asks for.
 //
 // Run with: node tests/test_recent_section_collapse.node.mjs
 
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
+import { HOME_SCREEN_SRC } from './lib-home-source.mjs';
+
+/** The one stylesheet both headings are laid out by. */
+const STYLES = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'client', 'css', 'styles.css'),
+    'utf8',
+);
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
-const LAUNCHPAD_SRC = fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-const STYLES = fs.readFileSync(path.join(ROOT, 'client', 'css', 'styles.css'), 'utf8');
 
 let failures = 0;
 let passes = 0;
@@ -47,205 +53,14 @@ let passes = 0;
 async function test(name, fn) {
     try {
         await fn();
-        passes++;
+        passes += 1;
         console.log(`ok - ${name}`);
     } catch (err) {
-        failures++;
+        failures += 1;
         console.error(`NOT OK - ${name}`);
         console.error(err && err.stack ? err.stack : err);
     }
 }
-
-/**
- * A stub element that records real click listeners and can fire them, plus
- * enough of classList/dataset for the code paths this file drives.
- * @param {string} id  Element id, for getElementById lookup.
- * @returns {object} Stub element.
- */
-function makeEl(id) {
-    const listeners = { click: [] };
-    return {
-        id,
-        innerHTML: '',
-        textContent: '',
-        style: {},
-        dataset: {},
-        _attrs: {},
-        _classes: [],
-        setAttribute(name, value) { this._attrs[name] = String(value); },
-        getAttribute(name) {
-            return Object.prototype.hasOwnProperty.call(this._attrs, name)
-                ? this._attrs[name] : null;
-        },
-        addEventListener(type, handler) {
-            if (!listeners[type]) listeners[type] = [];
-            listeners[type].push(handler);
-        },
-        removeEventListener() {},
-        click() {
-            (listeners.click || []).forEach((h) => h({ target: this }));
-        },
-        closest() { return null; },
-        querySelector() { return null; },
-        querySelectorAll() { return []; },
-        classList: {
-            add: (c) => {}, // eslint-disable-line no-empty-function
-            remove: (c) => {}, // eslint-disable-line no-empty-function
-            toggle() {},
-            contains() { return false; },
-        },
-    };
-}
-
-/**
- * Build a fake localStorage backed by a plain object, real enough to prove
- * persistence round-trips (get after set returns what was set).
- * @returns {{getItem: Function, setItem: Function, removeItem: Function, _store: object}}
- */
-function makeLocalStorage() {
-    const store = {};
-    return {
-        _store: store,
-        getItem(key) { return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null; },
-        setItem(key, value) { store[key] = String(value); },
-        removeItem(key) { delete store[key]; },
-    };
-}
-
-/**
- * Load launchpad.js in a vm sandbox wired to the given element map, and
- * call initSectionDisclosures() so the real click-wiring runs.
- * @param {object} byId  id -> stub element, as document.getElementById sees it.
- * @param {object} localStorage  fake localStorage instance to share with the sandbox.
- * @returns {{lp: object, win: object}}
- */
-function loadWired(byId, localStorage) {
-    const fakeDocument = {
-        getElementById(id) { return byId[id] || null; },
-        querySelector() { return null; },
-        querySelectorAll() { return []; },
-        addEventListener() {},
-        createElement() { return makeEl('created'); },
-    };
-    const fakeWindow = {
-        API: {
-            async listRecentSessions() { return { state: 'ok', sessions: [], notice: null }; },
-        },
-        localStorage,
-        addEventListener() {},
-        dispatchEvent() {},
-        CustomEvent: function CustomEvent(type, opts) {
-            this.type = type;
-            this.detail = opts && opts.detail;
-        },
-        requestAnimationFrame(cb) { cb(); },
-        matchMedia() { return { matches: false, addEventListener() {} }; },
-    };
-    fakeWindow.window = fakeWindow;
-    const context = {
-        window: fakeWindow,
-        document: fakeDocument,
-        console: { log() {}, warn() {}, error() {}, debug() {} },
-        localStorage,
-        requestAnimationFrame: fakeWindow.requestAnimationFrame,
-        CustomEvent: fakeWindow.CustomEvent,
-        setInterval() { return 0; },
-        clearInterval() {},
-        setTimeout() { return 0; },
-        clearTimeout() {},
-        alert() {},
-    };
-    vm.createContext(context);
-    vm.runInContext(LAUNCHPAD_SRC, context, { filename: 'launchpad.js' });
-    const lp = context.window.Launchpad;
-    lp.initSectionDisclosures();
-    return { lp, win: context.window };
-}
-
-// ---------------------------------------------------------------------
-// 1. Click collapses. Click again expands. Same mechanics the running-
-//    sessions header already has.
-// ---------------------------------------------------------------------
-
-await test('clicking the recent-sessions toggle collapses the section', async () => {
-    const toggle = makeEl('recent-sessions-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    const content = makeEl('recent-sessions-list');
-    const byId = { 'recent-sessions-toggle': toggle, 'recent-sessions-list': content };
-    loadWired(byId, makeLocalStorage());
-
-    assert.equal(content.style.display, '', 'starts expanded');
-    toggle.click();
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false',
-        'the chevron state must flip on click');
-    assert.equal(content.style.display, 'none',
-        'the row list must actually hide on click');
-});
-
-await test('a second click on the recent-sessions toggle expands it again', async () => {
-    const toggle = makeEl('recent-sessions-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    const content = makeEl('recent-sessions-list');
-    const byId = { 'recent-sessions-toggle': toggle, 'recent-sessions-list': content };
-    loadWired(byId, makeLocalStorage());
-
-    toggle.click();
-    toggle.click();
-    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-    assert.equal(content.style.display, '');
-});
-
-// ---------------------------------------------------------------------
-// 2. MOVED. The repaint case that used to sit here drove
-//    `lp.renderRecentSessions()`, which no longer exists: slice 2 of the
-//    Svelte migration moved the RECENT list, its count and its archive
-//    filter into web/src/lib/launchpad/, and deleted nine methods from
-//    launchpad.js in the same commit. The invariant did not go with it -
-//    it moved to web/src/lib/launchpad/recent-chrome.test.ts, restated
-//    for the new shape and STRONGER than it was: the section's chrome now
-//    never touches `#recent-sessions-list` AT ALL, which is asserted by
-//    recording every element it asks for, rather than by checking that
-//    one write did not happen.
-//
-//    Everything else in this file is about `initSectionDisclosures()` and
-//    the heading's own markup, both of which are still legacy, so it
-//    stays here and still runs.
-// ---------------------------------------------------------------------
-
-// ---------------------------------------------------------------------
-// 3. Persistence: the recent section uses the SAME localStorage key and
-//    convention the running-sessions section already relies on.
-// ---------------------------------------------------------------------
-
-await test('collapsing recent persists into cloude.launchpad.collapsed, same key as running sessions', async () => {
-    const toggle = makeEl('recent-sessions-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    const content = makeEl('recent-sessions-list');
-    const byId = { 'recent-sessions-toggle': toggle, 'recent-sessions-list': content };
-    const storage = makeLocalStorage();
-    loadWired(byId, storage);
-
-    toggle.click();
-    const raw = storage.getItem('cloude.launchpad.collapsed');
-    assert.ok(raw, 'expected a value written under the shared collapsed-state key');
-    const state = JSON.parse(raw);
-    assert.equal(state['recent-sessions'], true,
-        `expected the recent section's own id marked collapsed, got: ${raw}`);
-});
-
-await test('a freshly loaded launchpad re-applies a previously persisted collapse', async () => {
-    const storage = makeLocalStorage();
-    storage.setItem('cloude.launchpad.collapsed', JSON.stringify({ 'recent-sessions': true }));
-    const toggle = makeEl('recent-sessions-toggle');
-    toggle.setAttribute('aria-expanded', 'true'); // template default before JS runs
-    const content = makeEl('recent-sessions-list');
-    const byId = { 'recent-sessions-toggle': toggle, 'recent-sessions-list': content };
-    loadWired(byId, storage);
-
-    assert.equal(toggle.getAttribute('aria-expanded'), 'false',
-        'a persisted collapse must be re-applied on load, not just after a click');
-    assert.equal(content.style.display, 'none');
-});
 
 // ---------------------------------------------------------------------
 // 4. Layout: the recent section's "show archived" control sits in the
@@ -256,14 +71,14 @@ await test('a freshly loaded launchpad re-applies a previously persisted collaps
  * Extract the substring for one launchpad section's markup, delimited by
  * its own `id="..."` opening div and the next top-level section comment or
  * div that follows it in the template literal.
- * @param {string} src  launchpad.js source.
+ * @param {string} src  HomeScreen.svelte source.
  * @param {string} startMarker  a substring unique to the section's opening tag.
  * @param {string} endMarker  a substring marking where the section's markup ends.
  * @returns {string} the slice between them.
  */
 function sliceSection(src, startMarker, endMarker) {
     const start = src.indexOf(startMarker);
-    assert.ok(start !== -1, `expected to find ${startMarker} in launchpad.js`);
+    assert.ok(start !== -1, `expected to find ${startMarker} in HomeScreen.svelte`);
     const end = src.indexOf(endMarker, start);
     assert.ok(end !== -1, `expected to find ${endMarker} after ${startMarker}`);
     return src.slice(start, end);
@@ -271,12 +86,12 @@ function sliceSection(src, startMarker, endMarker) {
 
 await test('the recent "show archived" toggle lives inside the same header row as its toggle button, like projects', () => {
     const recentSection = sliceSection(
-        LAUNCHPAD_SRC,
+        HOME_SCREEN_SRC,
         'id="recent-sessions-section"',
         '<div id="recent-sessions-list">'
     );
     const projectsSection = sliceSection(
-        LAUNCHPAD_SRC,
+        HOME_SCREEN_SRC,
         'id="projects-section"',
         '<div id="project-list"'
     );

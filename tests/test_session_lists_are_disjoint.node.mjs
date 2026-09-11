@@ -286,16 +286,18 @@ function occurrences(el, name) {
 // =====================================================================
 
 await test('no "earlier session" disclosure exists anywhere in the client', async () => {
-    const launchpad = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
+    // SLICE 7: `client/js/launchpad.js` is gone, so the claim is made
+    // against every slice 7 source - the shell, its help panel and the
+    // modules beside them - rather than one deleted file.
+    const { HOME_ALL_SRC: launchpad } = await import('./lib-home-source.mjs');
     const indexHtml = fs.readFileSync(
         path.join(ROOT, 'client', 'index.html'), 'utf8');
     assert.ok(!/this one replaced/.test(launchpad),
-        'launchpad.js still renders the "this one replaced" disclosure');
+        'the home screen still renders the "this one replaced" disclosure');
     assert.ok(!/project-session-superseded/.test(launchpad),
-        'launchpad.js still carries the superseded disclosure markup');
+        'the home screen still carries the superseded disclosure markup');
     assert.ok(!/SessionSupersede/.test(launchpad),
-        'launchpad.js still calls the supersede classifier');
+        'the home screen still calls the supersede classifier');
     assert.ok(!/session-supersede\.js/.test(indexHtml),
         'index.html still loads the supersede module');
     assert.ok(

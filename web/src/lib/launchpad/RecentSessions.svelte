@@ -88,11 +88,19 @@
     /**
      * Re-read the group, carrying the archive filter as it stands.
      *
+     * EXPORTED, AND SLICE 7 IS WHY. The legacy shell refetched RECENT by
+     * REMOUNTING this component on every `loadProjects()`, which threw
+     * the whole list away and rebuilt it to change at most a row. The
+     * shell is a component now and mounts this ONCE, so the refetch has
+     * to be a call rather than a remount - and the difference is exactly
+     * the repaint this migration exists to remove. Reached through the
+     * mount handle by `panels.ts::refreshLaunchpadPanels`.
+     *
      * Inputs: none. Output: Promise<void>. Never rejects: the store
      *   records a failure as `probe_unavailable`, which is a state the
      *   view can render, rather than as an absence it cannot.
      */
-    async function refresh(): Promise<void> {
+    export async function refresh(): Promise<void> {
         await sessionStore.refreshRecent(
             (includeArchived) => host.fetchRecent(includeArchived),
             uiPrefs.archivedSessionsVisible,

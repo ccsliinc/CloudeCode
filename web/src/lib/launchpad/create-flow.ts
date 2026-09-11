@@ -301,10 +301,19 @@ export async function createConsoleFlow(
             ...host.terminalDims(),
         };
         const session = await host.createSession(payload);
+        // NO DESCRIPTION, AND SLICE 7 REMOVED THE ONE THAT WAS HERE.
+        // It was `t('project.create.console.description')`, a catalog
+        // sentence that got STORED in config.json - so a locale change
+        // could never retranslate it, which is the server-strings gap
+        // .claude/notes/i18n-design.md section 7 names, reached from the
+        // client. A description is USER data; inventing one in whatever
+        // language happened to be on screen and then freezing it was the
+        // defect, and the console row is identified by its NAME anyway.
+        // An adopted session's project row has carried '' since it
+        // shipped, so this is the existing convention, not a new one.
         await persistProjectRow(host, {
             name: sessionName,
             path: String(session.working_dir ?? ''),
-            description: t(PROJECT_CREATE_KEYS.createConsoleDescription),
         });
         await refreshProjects(host);
         host.announceSessionCreated(session);

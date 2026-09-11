@@ -7802,3 +7802,92 @@ four times for a flow whose every step had gone.
   fragments (`already exists`, `not authenticated`, ...) are matched but never
   rendered. Both are asserted by negative controls; `title`, `aria-label` and
   `placeholder` are still scanned.
+
+## 2026-09-10 - svelte slice 7: the shell, the shim, and the end of launchpad.js
+
+Issue #102, draft PR #103 on `Adoom666/CloudeCodeDev`. Branch
+`feat/svelte-slice-7`, off `feat/svelte-slice-6` at `1da6528`.
+
+**DONE. `client/js/launchpad.js` IS DELETED.** The last 1,875 lines moved:
+`renderLaunchpadUI`'s 363-line template string, the six FAB methods,
+`bindHeaderHelpToggle`, `initSectionDisclosures` / `setSectionExpanded` and the
+collapsed-section map, `renderHomeBarVersion`, `wireServerControls`,
+`updateStatus`, `showError`, `_explainRefusedProject`, and the eight navigation
+methods (`openProjectByName`, `selectProject`, `detachAndOpenProject`,
+`connectToExistingSession`, `detachAndCreateNew`, `_handleAttachRunningSession`,
+`_returnToActiveRunningSession`, `_findRunningSessionBySlug`). Sixteen new
+modules under `web/src/lib/launchpad/`, plus `client/js/labels/home-screen.js`
+and 62 catalog keys. The script tag left `client/index.html`.
+
+**`window.Launchpad` is eight members and MERGES rather than assigns.**
+`launchpadScreen`, `init`, `loadProjects`, `loadRunningSessions`,
+`openProjectByName`, `_deriveRunningSessionDisplayName`, `sessionRecords`,
+`showProviderModal`. The merge is an ordering fact: the bundle is a deferred
+module and `providers.js` publishes the launch picker onto that object earlier,
+from a classic script. The plan predicted twelve members; the three it expected
+to survive were resolved at their call sites instead - `providers.js` got its
+own escaper and calls `App.showConfirmModal` directly, and
+`terminal-commands-panel.js` calls `window.CloudeWeb.launchpad`.
+
+**The four load-bearing ids re-derived and unchanged**: `app.js:896`
+(`.active` on `#launchpad-screen`), `app.js:358` (re-parent `#statusText` into
+`#home-bar-status`), `app.js:381` (`#home-bar-status-text`),
+`globalAudioToggle.js:300` (sibling insert into `.home-bar`). Not drifted at
+all. Anchors enumerated in `home-anchors.ts`; the re-parenting is left alone,
+no message bus.
+
+**Repaint audit: the shell holds no reactive state and paints once.** The one
+change is the refetch path - `loadProjects()` used to REMOUNT the attribution
+card and the RECENT list; both now export `refresh()` on their mount handle and
+`panels.ts::refreshLaunchpadPanels` calls it.
+
+**Four mutations, all red, all reverted byte-identically** (verified with
+`git diff --stat` empty, never `git checkout --`): removing
+`#home-bar-status-text`; letting a deep-link miss fall through to
+`selectProject`; painting a theme in `onMount`; dropping `openProjectByName`
+from the shim.
+
+**Slice 6's finding closed: `project.create.console.description` is gone.** It
+was a catalog sentence STORED in `config.json`, so a locale change could never
+retranslate it. The console project is created with no description, which is
+what an adopted session's row has always carried.
+
+**Two test-guard refinements, both with negative controls, both worth keeping:**
+`tests/test_no_remote_assets.py` flagged the home bar's `<a href="https://nyedis.ai">`
+once that markup moved into the bundle - an anchor NAVIGATES and loads nothing,
+and the same link in `client/index.html` was never checked, so the bundle rule
+was stricter than the hand-written one by accident. An ordered no-capture branch
+exempts anchors and a new control asserts a `<link href>`, a `<script src>`, an
+import, a Worker, an `@import` and a `url()` all still fail.
+`tests/test_archive_entry_points.node.mjs` matched the bare substring
+`showArchive`, which also matches `showArchived` - the RECENT and PROJECTS
+filter label. Tightened to the CALL.
+
+**Test moves.** Node: 176 to 171 files, 0 failures. Deleted:
+`test_home_screen_mechanics`, `test_deeplink_resolver`, `test_deeplink_fork_name`,
+`test_header_help_and_toggle` (ported to
+`web/src/lib/launchpad/{HomeScreen.behaviour,navigation}.test.ts`) and
+`test_launchpad_create_label` (its last payload is asserted behaviourally in
+`navigation.test.ts`). Sixteen re-pointed at the new `tests/lib-home-source.mjs`.
+`tests/lib-home-mechanics.mjs` lost its `vm` launchpad sandbox.
+Vitest 1,236 to 1,334.
+
+### OPEN, carried out of this slice
+
+- **`web/src/lib/launchpad/navigation.ts:119` is a name-keyed session lookup.**
+  Moved, not introduced: it resolves the listing row whose label the adopt
+  response does not carry, and `tmuxName` is the only handle an adopt is made
+  with. Registered in `tests/test_no_name_keyed_session_row_lookup.node.mjs`
+  with its reason. The fix is the same one `web/src/lib/sessions/running.ts`
+  needs: a durable key on the live row that the attachable row also carries.
+- **The server-strings gap itself is still open.** Slice 7 closed the one place
+  the CLIENT reached it. Stored toast bodies still cannot follow a locale
+  change; that needs a message id plus parameters on the stored record, an
+  `Accept-Language` on the API client and a Python catalog. See
+  `.claude/notes/i18n-design.md` section 7.
+- **The home screen's CSS was not ported and should not be.** Components still
+  use the legacy class names and `client/css/`, which is what keeps all 26
+  themes working with zero theme work. Revisit after the sidebar round, or
+  never.
+- **`#58` and `#66` remain open and unclaimed** (re-checked 2026-09-10, both
+  labelled `blocked`).

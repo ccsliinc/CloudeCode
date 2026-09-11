@@ -277,11 +277,12 @@ test('the stylesheet is actually loaded', () => {
     // call it, both of which are script tags further down the same file.
     const gateAt = html.indexOf('session-startup-gate.js');
     const rowsAt = html.indexOf('session-sidebar-rows.js"');
-    const padAt = html.indexOf('launchpad.js"');
+    // SLICE 7: the launchpad is the bundle now.
+    const padAt = html.indexOf('dist/app.js"');
     assert.ok(gateAt > 0 && rowsAt > gateAt,
         'session-startup-gate.js must load before session-sidebar-rows.js');
     assert.ok(padAt > gateAt,
-        'session-startup-gate.js must load before launchpad.js');
+        'session-startup-gate.js must load before the bundle');
 });
 
 // ---------------------------------------------------------------------
@@ -314,8 +315,12 @@ test('answering the prompt repaints the launchpad card', () => {
     // measures a tick that changes one value and proves exactly that one
     // value moved.
     const src = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    assert.ok(!/_lastRunningSig/.test(src),
+        path.join(ROOT, 'web', 'src', 'lib', 'launchpad', 'RunningSessions.svelte'), 'utf8');
+    // Comments stripped: the component DOCUMENTS the cache it replaced,
+    // and a file explaining a rule is not a file breaking it.
+    const code = src.replace(/<!--[\s\S]*?-->/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/^[ \t]*\/\/.*$/gm, ' ');
+    assert.ok(!/_lastRunningSig/.test(code),
         'the running-sessions signature cache is back, and with it the '
         + 'staleness trap that needed a per-field fingerprint');
     const row = fs.readFileSync(path.join(

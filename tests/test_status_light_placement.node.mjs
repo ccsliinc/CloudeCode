@@ -108,7 +108,10 @@ function ruleBody(sheet, selector) {
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
 const appJs = js('app.js');
-const launchpadJs = js('launchpad.js');
+// SLICE 7: the home bar is HomeScreen.svelte's markup now. The claim
+// is unchanged: the bar MOUNTS the one #statusText node, it never
+// renders a copy of it.
+const { HOME_SCREEN_SRC: launchpadJs } = await import('./lib-home-source.mjs');
 const tools = stripCssComments(css('terminal-tools.css'));
 const styles = stripCssComments(css('styles.css'));
 const iosChrome = stripCssComments(css('ios-chrome.css'));

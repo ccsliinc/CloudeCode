@@ -175,7 +175,9 @@ test('the module is SERVED - a file nobody loads is dead code', () => {
     // It must load BEFORE its writer and its readers, or the first paint
     // and the first close both find nothing there.
     const me = html.indexOf('/static/js/session-transport.js');
-    for (const after of ['/static/js/terminal.js', '/static/js/launchpad.js']) {
+    // SLICE 7: `/static/js/launchpad.js` is gone; the home screen is in
+    // the bundle, which is the consumer this ordering is about.
+    for (const after of ['/static/js/terminal.js', '/static/dist/app.js']) {
         assert.ok(html.indexOf(after) > me, `must load before ${after}`);
     }
 });

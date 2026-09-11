@@ -90,6 +90,28 @@ const SLICE_FILES = [
     'web/src/lib/launchpad/project-actions.ts',
     'web/src/lib/launchpad/modals.ts',
     'web/src/lib/launchpad/modal-types.ts',
+    // Slice 7, the shell and the navigation glue. THIS IS THE SLICE THE
+    // GUARD EXISTS FOR. `ThemeNavigation.applyForTarget` is total
+    // because every navigation ends in it, and every navigation on this
+    // screen now starts in `navigation.ts` - so a theme applied there,
+    // or painted by the shell on mount, is the exact regression gotcha 7
+    // in CLAUDE.md records: a missing else is not a missing feature, it
+    // is the previous session's theme left on screen.
+    'web/src/lib/launchpad/HomeScreen.svelte',
+    'web/src/lib/launchpad/HelpDisclosure.svelte',
+    'web/src/lib/launchpad/RichText.svelte',
+    'web/src/lib/launchpad/home-screen-host.ts',
+    'web/src/lib/launchpad/home-chrome.ts',
+    'web/src/lib/launchpad/home-sections.ts',
+    'web/src/lib/launchpad/home-anchors.ts',
+    'web/src/lib/launchpad/new-fab.ts',
+    'web/src/lib/launchpad/panels.ts',
+    'web/src/lib/launchpad/navigation.ts',
+    'web/src/lib/launchpad/nav-host.ts',
+    'web/src/lib/launchpad/deep-link.ts',
+    'web/src/lib/launchpad/status-report.ts',
+    'web/src/lib/launchpad/rich-text.ts',
+    'web/src/lib/launchpad/shim.ts',
 ];
 
 /**
@@ -104,6 +126,36 @@ const SLICE_FILES = [
 const CHROME_FILES = new Set([
     'web/src/lib/launchpad/project-chrome-control.ts',
     'web/src/lib/launchpad/running-chrome.ts',
+    // SLICE 7'S SIX, and each one is on this list for a reason that is
+    // about the LEGACY tree rather than about convenience. The rule is
+    // "no component reaches into ANOTHER COMPONENT's DOM"; every one of
+    // these reaches an element that either is not a component's at all
+    // or belongs to a classic script that cannot be passed a prop.
+    //
+    //   home-screen-host.ts  resolves #launchpad-screen, which lives in
+    //                        client/index.html and is the MOUNT TARGET.
+    //   home-anchors.ts      enumerates the three ids app.js and
+    //                        globalAudioToggle.js address, so the guard
+    //                        that they still exist can iterate them.
+    //   home-chrome.ts       fills #home-bar-version (version-footer.js
+    //                        owns the string) and wires
+    //                        #server-controls-btn, #launchpad-help-btn
+    //                        (which is in the top HEADER and outlives
+    //                        this screen) and the three section toggles.
+    //   new-fab.ts           measures a position: fixed menu against a
+    //                        trigger, and #new-fab-backdrop is in
+    //                        client/index.html, outside the shell.
+    //   status-report.ts     writes #statusText, the ONE node whose
+    //                        data-status app.js observes, and appends
+    //                        the error stack to document.body.
+    //   nav-host.ts          pre-shows #terminal-screen so xterm can
+    //                        measure, which is a different screen.
+    'web/src/lib/launchpad/home-screen-host.ts',
+    'web/src/lib/launchpad/home-anchors.ts',
+    'web/src/lib/launchpad/home-chrome.ts',
+    'web/src/lib/launchpad/new-fab.ts',
+    'web/src/lib/launchpad/status-report.ts',
+    'web/src/lib/launchpad/nav-host.ts',
 ]);
 
 /** Strip comments, so a file may EXPLAIN the rule it is obeying. */

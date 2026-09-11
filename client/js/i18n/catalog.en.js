@@ -603,11 +603,16 @@ export default {
     'project.create.status': 'creating new project...',
     'project.create.status_for_agent': 'creating new {agent} project...',
     'project.create.console.status': 'creating new console...',
-    // STORED, not only shown: this becomes the console project's
-    // description in config.json. A locale switch does not retranslate a
-    // description already written, which is the server-strings gap
-    // .claude/notes/i18n-design.md section 7 names.
-    'project.create.console.description': 'console session',
+    // NO `project.create.console.description` KEY ANY MORE, and its
+    // absence is slice 7 closing slice 6's finding. It was a catalog
+    // sentence that got STORED as the console project's description in
+    // config.json, so a locale change could never retranslate it - the
+    // server-strings gap of .claude/notes/i18n-design.md section 7,
+    // reached from the client. The fix is not a second mechanism: a
+    // description is USER data, the console row is identified by its
+    // name, and inventing one in whatever language happened to be on
+    // screen and then freezing it was the defect. The console project is
+    // created with no description at all, exactly as an adopted one is.
     'project.create.failed': 'failed to create session: {reason}',
     'project.create.folder_failed': 'failed to open folder: {reason}',
     // WAS A THROWN ENGLISH SENTENCE. The error now carries this key.
@@ -616,4 +621,90 @@ export default {
     // ---- generic failure reasons --------------------------------------
     // The `{reason}` slot's value when an error carried no message.
     'error.server_unreachable': 'the server could not be reached',
+
+    // ---- slice 7: the home screen shell -------------------------------
+    // THE SECTION HEADINGS, THE FAB AND THE HOME BAR. Every one of these
+    // is chrome the user reads on the home screen before anything has
+    // loaded, which is why they are here rather than on any one list.
+    'home.section.running': 'running sessions',
+    'home.section.recent': 'recent',
+    'home.section.projects': 'projects',
+    'home.projects.loading': 'loading projects...',
+    'home.new.trigger': 'new',
+    'home.new.menu': 'new session actions',
+    'home.new.claude_project': 'new claude project',
+    'home.new.session': 'new session',
+    'home.new.openclaw': 'connect to openclaw',
+    'home.new.hermes': 'connect to hermes',
+    'home.new.console': 'new console',
+    'home.bar.label': 'home bar',
+    'home.bar.server_controls': 'server controls',
+    // SAID OUT LOUD RATHER THAN LEFT DEAD. A control that does nothing
+    // when pressed is the worse failure, so the button is disabled and
+    // its tooltip names why.
+    'home.bar.server_controls_unavailable': 'server controls unavailable',
+    'home.bar.site_link': 'nyedis.ai',
+    'home.bar.site_mark': 'black bird silhouette',
+    'home.error.dismiss': 'dismiss this error',
+    // THE FILTER'S VISIBLE WORD. Its TITLE is set by whichever list owns
+    // it (`session.archive.show` / `project.archived.show`), because that
+    // string flips with the state and the list is what knows the state.
+    // This is the label beside the box, which does not.
+    'home.toggle.show_archived': 'show archived',
+
+    // ---- slice 7: the help disclosure ---------------------------------
+    // THE APP'S ONE HELP SURFACE, and the longest prose it owns. The
+    // markers in these messages are `[[code]]`, `((emphasis))` and
+    // `<<link>>`, expanded by ONE splitter in
+    // web/src/lib/launchpad/rich-text.ts. They exist so a whole sentence
+    // stays one message: splitting a paragraph around its inline <code>
+    // would hand a translator four fragments whose order they cannot
+    // change, which is the one thing a translation most needs to do.
+    // A marker set is not a mini-language - no expressions, no nesting,
+    // one pass - and `script-src 'self'` is untouched by it.
+    'home.help.control': 'help',
+    'home.help.label': 'help: adopting sessions, wrappers, and slash commands',
+    'home.help.adopt.heading': 'adopting a session you started yourself',
+    'home.help.adopt.intro': "you don't have to launch through cloude. ((any)) tmux session on the [[cloude]] socket with [[claude]] running inside it shows up here, adoptable. start one yourself in any terminal:",
+    'home.help.adopt.external': 'it shows up in this list tagged [[EXTERNAL]]. click it to adopt. that tag is worked out fresh each time this list loads by checking which tmux session names cloude itself created, not stored on the session, so give it a few seconds after adopting elsewhere before you trust it. note the [[-L cloude]] flag: a plain [[tmux new -s mywork]] lives on the default socket and never appears here.',
+    'home.help.adopt.oneline': 'to launch claude in one line so the pane survives claude exiting:',
+    'home.help.adopt.exec_shell': 'the [[exec $SHELL]] part keeps the pane alive with a shell prompt after claude exits.',
+    'home.help.adopt.launcher': 'if you already have a launcher function (e.g. [[cld]]) defined in your [[~/.zshrc]] or [[~/.bashrc]], run it through an interactive shell so it resolves:',
+    'home.help.adopt.readme': 'full [[cld]] setup in the <<README>>.',
+    'home.help.wrappers.heading': 'wrappers and launch wrappers are the same thing',
+    'home.help.wrappers.same': 'settings names the tab [[wrappers]]; the panel inside it titles the same section [[launch wrappers]]. both mean one object: a named shell command tied to one agent family (claude, codex, hermes, openclaw, or shell) that runs when a session launches. there is no second, different kind of wrapper hiding anywhere.',
+    'home.help.wrappers.configure': 'configure them under settings, wrappers tab. pick one per family as the default, or choose a different one at launch time from the new-session picker. a family with no wrappers falls back to its static legacy command, shown collapsed under "advanced: legacy <family> command" inside that family\'s group.',
+    'home.help.slash.heading': 'slash commands',
+    'home.help.slash.body': 'open the slash command list from the [[/]] control next to the terminal input (or the d-pad). the row above the terminal shows your starred favorites as tappable chips. star a command in the list to add it there; until you star anything, the row shows a small built-in default set, not your own picks.',
+
+    // ---- slice 7: navigation and its refusals -------------------------
+    // WHAT THE STATUS LINE SAYS WHILE A NAVIGATION IS IN FLIGHT. These
+    // land on `#statusText`'s data-status, which the home bar renders.
+    'home.status.connecting': 'connecting to existing session...',
+    'home.status.detaching': 'detaching from current session...',
+    'home.status.opening': 'opening {name}...',
+    'home.nav.connect_failed': 'failed to connect: {reason}',
+    'home.nav.detach_failed': 'failed to detach session: {reason}',
+    'home.nav.open_failed': 'failed to open {name}: {reason}',
+    'home.nav.attach_failed': 'attach failed: {reason}',
+    'home.nav.return_failed': 'failed to return to terminal: {reason}',
+    // THE DEEP-LINK MISS. Only reached when the router cannot show its
+    // own banner; the banner is the normal path.
+    'home.nav.session_not_found': 'session not found: {name}',
+    // THE DEEP-LINK GUARD'S OWN SENTENCE. It is THROWN as well as shown,
+    // so it carries a key rather than an english literal - the shape
+    // slice 6 found in `saveProjectWithUniqueName`.
+    'home.nav.deeplink_refuses_create': 'refusing to create a session for {name} while resolving a deep link',
+
+    // ---- slice 7: why a project row refused to open --------------------
+    // THREE OUTCOMES, KEPT DISTINCT. `missing` is a measured fact.
+    // `unreachable` is the third state - the probe could not reach the
+    // path, which is NOT evidence the folder is gone. Anything else is a
+    // bug in this app and says so rather than guessing.
+    'home.project.refused.fallback_name': 'this project',
+    'home.project.refused.fallback_path': 'an unrecorded path',
+    'home.project.refused.missing': '"{name}" was not opened: its folder does not exist at {path}.\n\nNothing was started and nothing was changed. Either restore the folder at that path, edit the project to point at where it lives now, or archive the project.',
+    'home.project.refused.unreachable': '"{name}" was not opened: CANNOT DETERMINE whether {path} exists ({detail}).\n\nThis is NOT a report that the folder is gone - the check could not run. Nothing was started and nothing was changed.',
+    'home.project.refused.unreachable_detail': 'reason unknown',
+    'home.project.refused.unknown': '"{name}" was not opened, and the reason was not recorded (presence state "{state}" for {path}).\n\nNothing was started and nothing was changed. This is a bug in the app, not something you did.',
 };

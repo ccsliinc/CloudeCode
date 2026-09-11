@@ -30,6 +30,10 @@
  * value is that there is one of it.
  */
 import { hostWindow } from '../sessions/env';
+import { t } from '../i18n/index.svelte';
+import { browserNavHost } from './nav-host';
+import { detachAndCreateNew, selectProject } from './navigation';
+import { showError, updateStatus } from './status-report';
 import type { ProjectRow } from '../sessions/types';
 import type { ClonedProject } from './modal-types';
 
@@ -122,14 +126,18 @@ interface LegacyApi {
     browseDirectory(path?: string): Promise<{ path?: string | null }>;
 }
 
-/** The subset of `window.Launchpad` these flows call. */
+/**
+ * The subset of `window.Launchpad` these flows call.
+ *
+ * SLICE 7 CUT THIS TO ONE MEMBER. `selectProject`, `detachAndCreateNew`,
+ * `_getTerminalDims`, `updateStatus` and `showError` all live in this
+ * tree now and are imported rather than read off a global, which is one
+ * fewer way for the compiled half to depend on the legacy half. What is
+ * left is the launch picker, which is genuinely still a classic script
+ * (`client/js/providers.js`) and publishes itself onto the shim.
+ */
 interface LegacyLaunchpad {
     showProviderModal(): Promise<ProviderChoice | null>;
-    selectProject(project: ProjectRow, choice?: ProviderChoice | null): Promise<unknown>;
-    detachAndCreateNew(agentType: string | null): unknown;
-    _getTerminalDims(): Record<string, unknown>;
-    updateStatus(message: string): void;
-    showError(message: string): void;
 }
 
 /**
@@ -206,11 +214,26 @@ export function browserCreateHost(): CreateHost {
             const byPath = project.path ? presence.get(String(project.path)) : undefined;
             return (byRoot || byPath || null) as Record<string, unknown> | null;
         },
-        selectProject: (project, choice) => lp().selectProject(project, choice),
-        detachAndCreateNew: (agentType) => lp().detachAndCreateNew(agentType),
-        terminalDims: () => lp()._getTerminalDims(),
-        updateStatus: (message) => lp().updateStatus(message),
-        showError: (message) => lp().showError(message),
+        selectProject: (project, choice) =>
+            selectProject(project, browserNavHost(), t, choice),
+        detachAndCreateNew: (agentType) => {
+            // The create flow it retries with is passed in rather than
+            // imported, because importing it here would close the loop
+            // create-flow.ts -> create-host.ts -> create-flow.ts.
+            const web = win()?.CloudeWeb as
+                | { launchpad?: { createNewSession?: (a: string | null) => Promise<unknown> } }
+                | undefined;
+            const create = web?.launchpad?.createNewSession;
+            return detachAndCreateNew(
+                agentType,
+                browserNavHost(),
+                t,
+                create ? (a) => create(a) : () => Promise.resolve(),
+            );
+        },
+        terminalDims: () => browserNavHost().terminalDims(),
+        updateStatus,
+        showError: (message) => showError(message, t),
         confirm: (title, message, details, primaryLabel, secondaryLabel) => {
             const app = win()?.App as
                 | {

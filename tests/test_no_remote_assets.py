@@ -129,7 +129,8 @@ DIST_DIR = CLIENT_DIR / "dist"
 #: inert strings and teach everyone to add exemptions.
 _REMOTE_LOAD = re.compile(
     r"""(?:
-        \bfrom\s*["'](https?://[^"']+)["']          # static import
+        <a\b[^>]*?\bhref\s*=\s*["']https?://[^"']+["']  # SEE BELOW: not a load
+      | \bfrom\s*["'](https?://[^"']+)["']          # static import
       | \bimport\s*\(\s*["'](https?://[^"']+)["']   # dynamic import
       | \bimportScripts\s*\(\s*["'](https?://[^"']+)["']
       | \bnew\s+Worker\s*\(\s*["'](https?://[^"']+)["']
@@ -139,6 +140,26 @@ _REMOTE_LOAD = re.compile(
     )""",
     re.IGNORECASE | re.VERBOSE,
 )
+
+# THE FIRST BRANCH CAPTURES NOTHING, AND THAT IS HOW IT EXEMPTS. Ordered
+# alternation means an `<a href="https://...">` is consumed by that branch
+# before the generic `src|href` one can see it, and a branch with no groups
+# contributes only empty strings to `findall`, which the comprehension
+# below drops. So an ANCHOR is not reported and a `<link href>` or a
+# `<script src>` still is.
+#
+# WHY AN ANCHOR IS DIFFERENT FROM EVERY OTHER href. It is a NAVIGATION,
+# not a subresource: nothing is fetched into the page, no content blocker
+# can break the rendering by dropping it, and `default-src 'self'` does not
+# govern it at all (`frame-ancestors 'none'` and the absence of any frame
+# are what govern where this app can be embedded). Slice 7 of the svelte
+# migration is what surfaced this: the home bar's one outbound link moved
+# from `client/index.html`, where these assertions never looked at anchors,
+# into the compiled bundle, where they did - so the check was stricter
+# about the bundle than about the hand-written file by accident rather
+# than by decision. The negative control below is what keeps this from
+# becoming a hole: a remote stylesheet, script, font or worker must all
+# still fail.
 
 #: `script-src 'self'` forbids both of these outright. A bundler setting can
 #: reintroduce either (a legacy build target, a plugin that ships a runtime
@@ -156,6 +177,30 @@ def _dist_files() -> list[Path]:
     if not DIST_DIR.is_dir():
         return []
     return sorted(p for p in DIST_DIR.rglob("*") if p.is_file())
+
+
+def test_the_remote_load_scanner_can_actually_fail() -> None:
+    """NEGATIVE CONTROL: the scanner flags every real loading position.
+
+    A scanner that matched nothing would make `test_bundle_loads_nothing_off_origin`
+    pass forever. This asserts it still catches each shape that reaches the
+    network, and that the ONE shape it deliberately ignores - an `<a href>`,
+    which navigates rather than loads - really is ignored.
+    """
+    def hits(text: str) -> list[str]:
+        return [u for match in _REMOTE_LOAD.findall(text) for u in match if u]
+
+    assert hits('<link rel="stylesheet" href="https://fonts.googleapis.com/x">')
+    assert hits('<script src="https://cdn.jsdelivr.net/x.js"></script>')
+    assert hits('import x from "https://esm.sh/x";')
+    assert hits('new Worker("https://example.com/w.js")')
+    assert hits('@import url("https://example.com/a.css");')
+    assert hits('background: url(https://example.com/a.png)')
+    # ...and the exemption, which must not widen: an anchor is ignored,
+    # and an href on anything else is not.
+    assert hits('<a href="https://nyedis.ai" target="_blank">x</a>') == []
+    assert hits('<a class="home-bar__link" href="https://nyedis.ai">x</a>') == []
+    assert hits('<link href="https://nyedis.ai">')
 
 
 def test_the_built_bundle_is_committed() -> None:

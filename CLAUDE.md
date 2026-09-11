@@ -48,6 +48,9 @@ under `/static` exactly as it serves everything else.
 | Slice 3, the session data layer | `web/src/lib/sessions/store.svelte.ts`, `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`, `env.ts`, `types.ts` |
 | Slice 4, the project tree | `web/src/lib/launchpad/ProjectTree.svelte` and its six children, `project-{groups,node,chrome,chrome-control,tree-host}.ts`, `tree-collapse.svelte.ts` |
 | Slice 5, the running sessions list | `web/src/lib/launchpad/RunningSessions.svelte`, `RunningSessionRow.svelte`, `RunningSessionName.svelte`, `StartupGateBadge.svelte`, `WrapperPill.svelte`, `running-{row,actions,host,chrome}.ts`, `web/src/lib/sessions/session-label.ts` |
+| Slice 6, the modals and the create flows | `web/src/lib/launchpad/{ModalShell,ChoiceModal,CloneModal,EditProjectModal,ProjectFolderModal,ProjectNameModal}.svelte`, `create-{flow,host,harness}.ts`, `entry-flows.ts`, `open-folder-flow.ts`, `project-{actions,folder}.ts`, `modals.ts`, `modal-types.ts`, `web/src/lib/modal.ts` |
+| Slice 7, the shell and the shim | `web/src/lib/launchpad/{HomeScreen,HelpDisclosure,RichText}.svelte`, `home-{screen-host,chrome,sections,anchors}.ts`, `new-fab.ts`, `panels.ts`, `navigation.ts`, `nav-host.ts`, `deep-link.ts`, `status-report.ts`, `rich-text.ts`, `shim.ts` |
+| The copy the shell prints | `client/js/labels/home-screen.js` |
 | The copy those two print | `client/js/labels/project-tree.js`, `client/js/labels/running-session.js` |
 | The shared icon geometry, as DATA | `client/js/icons/glyphs.js` |
 | The copy the data layer prints | `client/js/labels/session-listing.js` |
@@ -193,7 +196,122 @@ compiled, never half of each.
   plus `client/js/session-list-busy-guard.js` and
   `client/js/launchpad-wrapper-pill.js` deleted outright with their script
   tags. See "The running sessions list" below.
-- **Slices 6 and 7** - not started.
+- **Slice 6, the modals and the create flows** - DONE (issue #98, PR #99 on
+  `Adoom666/CloudeCodeDev`). Seventeen methods and `client/js/project-create-folder.js`
+  left `client/js/launchpad.js` for eleven entry points on the namespace.
+- **Slice 7, the shell, and the end of `client/js/launchpad.js`** - DONE
+  (issue #102, PR #103 on `Adoom666/CloudeCodeDev`). THE FILE IS DELETED.
+  The last 1,875 lines - `renderLaunchpadUI`'s 363-line template string, the
+  six FAB methods, the header help toggle, the three section disclosures and
+  their localStorage map, the home bar's version chip and server-controls
+  wire, `updateStatus`, `showError` and the eight navigation methods - are
+  `web/src/lib/launchpad/HomeScreen.svelte` and the modules beside it. See
+  "The home screen shell, and the shim that replaced launchpad.js" below.
+
+## The home screen shell, and the shim that replaced launchpad.js
+
+`client/js/launchpad.js` DOES NOT EXIST. Slice 7 deleted it. The home screen
+is `web/src/lib/launchpad/HomeScreen.svelte`, mounted into the empty
+`#launchpad-screen` div `client/index.html` still owns, and `window.Launchpad`
+is a shim the bundle publishes.
+
+| Piece | File |
+|---|---|
+| The shell's markup, and every anchor in it | `web/src/lib/launchpad/HomeScreen.svelte` |
+| The help panel, and the marker set its prose carries | `HelpDisclosure.svelte`, `RichText.svelte`, `rich-text.ts` |
+| Mount and tear down the screen | `home-screen-host.ts` |
+| The four panels, in mount order, as ONE list | `panels.ts` |
+| The imperative wires: version, server controls, help, disclosures | `home-chrome.ts` |
+| The collapsed-section map, on the legacy key | `home-sections.ts` |
+| The ids outside code addresses, written down | `home-anchors.ts` |
+| The "+" speed dial | `new-fab.ts` |
+| Every navigation, and the two rules they may not break | `navigation.ts`, `nav-host.ts`, `deep-link.ts` |
+| The status line and the error card | `status-report.ts` |
+| `window.Launchpad` | `shim.ts` |
+
+**THE SHIM MERGES, IT DOES NOT ASSIGN, AND THAT IS AN ORDERING FACT.** The
+bundle is a `<script type="module">`, so it runs AFTER every classic script on
+the page. `client/js/providers.js` publishes the launch picker onto
+`window.Launchpad` at its own load time, which is earlier. Assigning a fresh
+object in the bundle would drop that publication on the floor and the first
+"new project" would open a picker that resolves null; so `publishLaunchpadShim`
+merges into whatever it finds, and `providers.js` creates the object if it is
+not there yet. `window.CloudeWeb` still THROWS on a collision, for the opposite
+reason: nothing but `main.ts` is supposed to publish into it.
+
+**EIGHT MEMBERS, EACH WITH A NAMED CALLER, AND THE LIST IS MEASURED RATHER THAN
+REMEMBERED.** `launchpadScreen` and `init` (`app.js`, the "already inited" test
+and the mount), `loadProjects` (`app.js`, on every arrival at the screen),
+`loadRunningSessions` (`terminal.js`), `openProjectByName` (`router.js`),
+`_deriveRunningSessionDisplayName` (`app.js`, the deep-link slug),
+`sessionRecords` (`session-sidebar-clicks.js`), and `showProviderModal`, which
+`providers.js` WRITES and `nav-host.ts` reads. The migration plan predicted
+twelve; six slices of movement plus three call sites resolved in this one leave
+these eight, and `web/src/lib/launchpad/shim.test.ts` greps `client/js` and
+requires the two sets to agree in BOTH directions - a member the tree uses and
+the shim lacks is a TypeError on whatever screen reaches it, and a member
+nothing uses is dead weight that makes the next reader think this is unfinished.
+
+**THE FOUR LOAD-BEARING IDS ARE ANCHORS, AND THE RE-PARENTING IS LEFT ALONE.**
+`app.js:896` toggles `.active` on `#launchpad-screen`, which stays in
+`client/index.html` and is the MOUNT TARGET, so the shell never renders it.
+`app.js:358` re-parents the one `#statusText` node into `#home-bar-status`;
+`app.js:381` writes `#home-bar-status-text` from that node's `data-status`
+through a MutationObserver; `globalAudioToggle.js:300` inserts its button as
+`#home-bar-status`'s SIBLING, which makes `.home-bar` load-bearing too. All
+four re-derived on this tree, unchanged. `home-anchors.ts` enumerates them so a
+guard can iterate. **What this costs the shell is that every one of those nodes
+must be STATIC markup**: a `{#if}` or a keyed `{#each}` over them re-creates the
+node and silently drops whatever was moved in, and the symptom - a status light
+that vanishes on the second visit to the home screen - looks nothing like its
+cause. There is deliberately NO message bus for either surface; the plan's
+section 6 asks for an anchor and says so.
+
+**THE SHELL READS NOTHING, SO IT PAINTS ONCE.** Slices 4 and 5 both found the
+same trap - a reactive subscription makes every intermediate assignment a
+repaint where the old renderer painted once at the end - and this component
+carries no rune but its props. The one thing that changed is the REFETCH path:
+`loadProjects()` used to REMOUNT the attribution card and the RECENT list to
+refresh them, throwing both away to change at most a row. Each now exports
+`refresh()` on its mount handle and `panels.ts::refreshLaunchpadPanels` calls
+it. `HomeScreen.behaviour.test.ts` holds a MutationObserver across the mount
+and asserts zero records outside the four panel containers.
+
+**A DEEP LINK STILL NEVER CREATES, AND THE GUARD IS STILL DOUBLE.**
+`openProjectByName` resolves LIVE sessions only and reaches
+`Router.rejectTarget` on a miss; `selectProject` throws while
+`resolvingDeepLink` is set, so a future refactor that re-wires the two fails
+loudly instead of minting `<name>-2`. A listing that did not run is still not
+an empty listing: the ladder re-asks up to five times while the probe CANNOT
+DETERMINE and takes the first answer that did run.
+
+**THE HELP PROSE KEEPS WHOLE SENTENCES, WHICH IS WHY IT CARRIES MARKERS.** It
+is the longest copy this app owns and nearly every paragraph has an inline
+`<code>` in it. Splitting each into the fragments around those spans fixes the
+english word order into the template, and word order is exactly what a
+translation changes. So each paragraph is ONE catalog message carrying
+`[[code]]`, `((em))` and `<<link>>`, expanded by `rich-text.ts` into DATA that
+`RichText.svelte` renders through Svelte's own `{expr}` escaping - so there is
+no `{@html}` on this path, which is the review trigger the migration plan names
+for this screen. A marker set is not a mini-language: no expressions, no
+nesting, one pass, nothing compiled. **A COMMAND IS NOT COPY**: the three shell
+commands the panel shows are data in `client/js/labels/home-screen.js`, because
+a translated `tmux -L cloude` is a broken instruction.
+
+**AND `project.create.console.description` IS GONE RATHER THAN WORKED AROUND.**
+It was a catalog sentence that got STORED as the console project's description
+in `config.json`, so a locale change could never retranslate it - the
+server-strings gap `.claude/notes/i18n-design.md` section 7 names, reached from
+the client. A description is USER data; the console row is identified by its
+NAME, and an adopted session's project row has carried `''` since it shipped.
+The console project is now created with no description at all.
+
+**THREE LEGACY CALL SITES WERE RESOLVED, NOT FORWARDED.** `providers.js` has
+its own `escapeForMarkup` (the text-node form, so the browser's serialiser is
+the implementation) and calls `window.App.showConfirmModal` directly, which is
+the owner it was forwarding to through the shim anyway;
+`terminal-commands-panel.js` calls `window.CloudeWeb.launchpad.createConsoleSession`.
+`create-host.ts` also stopped bouncing five of its own calls through the shim.
 
 **THREE OF SLICE 2's MOVED METHODS HAVE CALLERS THE SLICE DOES NOT OWN, and
 they were not left behind as a second copy.** The project tree's ended rows
@@ -568,9 +686,10 @@ rule is unchanged, and the round-trip case that proves it now reads
 `label`, in both unread states. It used to compare MARKUP attribute by
 attribute, which stopped meaning anything the moment a contribution supplied
 none; what survived is the part a user can see, and it still matters because
-`launchpad.js` DRAWS ITS OWN INLINE COPY through `markUnreadHtml` (that
-screen is not migrated) and two surfaces describing one action in different
-words would read as two features. The negative controls are kept: the
+the sidebar row DRAWS ITS OWN INLINE COPY through `markUnreadHtml` (that
+screen is not migrated; the home screen stopped having a second copy when
+slice 7 deleted `client/js/launchpad.js`) and two surfaces describing one
+action in different words would read as two features. The negative controls are kept: the
 comparison is proven able to fail, and the parser still refuses markup it
 cannot read.
 
@@ -725,7 +844,8 @@ The owner's rule, verbatim: "all sessions belong to projects, the root folder
 ships none, so `/sessions/list` cannot lose a project and cannot restore one.
 The launchpad tree reads `project_id` / `project_attribution` off
 `GET /sessions/records`, joined to the live session by tmux name plus epoch in
-`_buildProjectSessionGroups` (`client/js/launchpad.js:3878`), and it tests
+`buildProjectSessionGroups` (`web/src/lib/launchpad/project-groups.ts`, moved
+there by slice 4 from `client/js/launchpad.js:3878`), and it tests
 `attribution === 'none'` BEFORE it looks at `project_id`. So a row carrying
 both an id and `none` renders under "no project" while holding a perfectly good
 one, which is what the owner saw. The invariant is enforced in
@@ -1276,7 +1396,7 @@ per server process and no subprocess at all.
   imported.
 - **New logic goes in new focused modules.** These files are already past the
   500-line guideline and should not grow: `client/js/terminal.js`,
-  `client/js/launchpad.js`, `client/js/app.js`, `client/css/styles.css`,
+  `client/js/app.js`, `client/css/styles.css`,
   `src/config.py`, `src/api/routes.py`, `src/core/session_manager.py`. Edit them
   when the change belongs there; do not use them as the default landing spot.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
@@ -1698,7 +1818,7 @@ poison every downstream reader, and until 2026-09-08 it did.
 |---|---|
 | Compose, validate and create the directory | `src/core/project_directory.py` |
 | The folder step, and the pure rules behind it | `client/js/project-create-folder.js` |
-| Where it is wired in | `src/api/routes.py` (`create_session`), `client/js/launchpad.js` (`_createNewSessionInner`) |
+| Where it is wired in | `src/api/routes.py` (`create_session`), `web/src/lib/launchpad/create-flow.ts` (slice 6 moved it out of `launchpad.js::_createNewSessionInner`) |
 
 **"START EMPTY" HAD NO FOLDER STEP AT ALL.** The chain was "+" > new
 claude project > start empty > provider > name this project > create
@@ -1748,7 +1868,8 @@ folder the user did not ask for and cannot find. An existing EMPTY target
 directory is fine; a non-empty one refuses.
 
 "clone from github" does NOT have this defect: it has collected a parent
-directory since it shipped (`launchpad.js`, `modal-clone-parent`).
+directory since it shipped (`web/src/lib/launchpad/CloneModal.svelte`,
+`modal-clone-parent`; it was `launchpad.js` until slice 6).
 
 ## The status lights, and what they are allowed to claim
 
@@ -1866,8 +1987,8 @@ PLACEMENTS IT APPEARS IN.** `client/js/version-footer.js` renders a
 small grey `<span class="version">` and both surfaces call it: the
 sidebar footer (right after the status key, its own `.version-footer`
 block) and the home screen's bottom bar chip
-(`renderHomeBarVersion()` in `launchpad.js`, which now only owns a mount
-point). It reads `<meta name="cloude-app-version">`, stamped once at
+(`renderHomeBarVersion()` in `web/src/lib/launchpad/home-chrome.ts` since
+slice 7, which only owns a mount point). It reads `<meta name="cloude-app-version">`, stamped once at
 serve time by `src/main.py` from the SAME resolver `GET /api/v1/version`
 calls (`src/core/version.py::resolve_version()`) - not a second fetch of
 that endpoint, because the value cannot change while the page is open

@@ -69,6 +69,21 @@ import './lib/plugins/builtin';
 import { sessionCardMenuItems, runSessionCardAction } from './lib/plugins/session-card-actions';
 import { t, setLocale, currentLocale, i18n } from './lib/i18n/index.svelte';
 import { summaryLabel } from './lib/session-summary-label';
+import { mountHomeScreen, launchpadScreen, unmountHomeScreen } from './lib/launchpad/home-screen-host';
+import { mountLaunchpadPanels, refreshLaunchpadPanels } from './lib/launchpad/panels';
+import { publishLaunchpadShim } from './lib/launchpad/shim';
+import { browserNavHost } from './lib/launchpad/nav-host';
+import {
+    connectToExistingSession as connectToExistingSessionFlow,
+    detachAndCreateNew as detachAndCreateNewFlow,
+    detachAndOpenProject as detachAndOpenProjectFlow,
+    explainRefusedProject,
+    isResolvingDeepLink,
+    openProjectByName as openProjectByNameFlow,
+    selectProject as selectProjectFlow,
+} from './lib/launchpad/navigation';
+import { showError as showHomeError, updateStatus } from './lib/launchpad/status-report';
+import type { FabAction } from './lib/launchpad/new-fab';
 
 /** The id of the container `renderLaunchpadUI()` writes for the card. */
 const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
@@ -591,6 +606,96 @@ function confirmForLegacy(
     return createHost().confirm(title, message, details, primaryLabel, secondaryLabel);
 }
 
+
+// ---- slice 7: the shell, and the end of client/js/launchpad.js -------
+//
+// THE SCREEN IS A COMPONENT NOW. `renderLaunchpadUI`'s 363-line template
+// string, the six FAB methods, the header help toggle, the three section
+// disclosures and their localStorage map, the home bar's version chip and
+// server-controls wire, `updateStatus`, `showError` and the eight
+// navigation methods all moved here, and `client/js/launchpad.js` was
+// deleted in the same commit. What is left of `window.Launchpad` is
+// ./lib/launchpad/shim.ts: eight members, each with a named legacy call
+// site, published by merging rather than assigning because `providers.js`
+// gets there first.
+
+/** The nav seam, resolved per call for the reason nav-host.ts states. */
+function navHost() {
+    return browserNavHost();
+}
+
+/**
+ * What each item on the "+" speed dial does.
+ *
+ * Description: A TABLE, NOT FIVE HANDLERS IN THE TEMPLATE, and that is
+ *   the plugin seam's first habit: a `launchpad-panel` or a contributed
+ *   entry later is one more key here, not an edit to the shell's markup.
+ *   It is built per mount rather than at module scope so every handler
+ *   resolves its host at call time.
+ * Inputs: none. Output: data-action to handler.
+ * Example: fabActions()['new-console']();
+ */
+function fabActions(): Record<string, FabAction> {
+    return {
+        'new-claude-project': () => void startNewClaudeProjectForLegacy(),
+        'new-session': () => void startSessionInExistingProjectForLegacy(),
+        // NO 'open-folder' ENTRY. Opening a folder already on disk is the
+        // THIRD choice inside "new claude project", not a peer of it, and
+        // `startNewClaudeProject` reaches that flow directly. Only the
+        // dead dispatch key went; the flow is very much alive.
+        'connect-openclaw': () => void createNewSessionForLegacy('openclaw'),
+        'connect-hermes': () => void createNewSessionForLegacy('hermes'),
+        'new-console': () => void createConsoleSessionForLegacy({}),
+    };
+}
+
+/**
+ * Mount the home screen. `client/js/app.js:964` calls this ONCE.
+ *
+ * Description: idempotent, and `app.js` guards it as well with
+ *   `Launchpad.launchpadScreen`. It also starts the 5s tick, whose work
+ *   is the running-session refetch - the store's own load, with no
+ *   repaint attached, because every list on this screen reads the store.
+ * Inputs: none. Output: void.
+ * Example: window.Launchpad.init();
+ */
+function initHomeScreen(): void {
+    mountHomeScreen(fabActions());
+    // Belt and braces: the shell mounts its own panels in `onMount`, and
+    // this makes the call again for the case where the shell was already
+    // up and only a panel's container had been replaced. Both are map
+    // lookups when there is nothing to do.
+    mountLaunchpadPanels();
+    startSessionPolling(() => sessionStore.loadRunningSessions(t));
+}
+
+/**
+ * Refetch everything the home screen shows. `app.js:974` calls this on
+ * every arrival at the screen.
+ *
+ * Description: THE SEQUENCER, AND IT NO LONGER REMOUNTS ANYTHING. It
+ *   loads the project list and its two sidecars into the store, asks the
+ *   two self-fetching panels to refetch, and kicks the running-session
+ *   merge. The tree and the running list update because they READ the
+ *   store.
+ *
+ *   RE-RENDERS ON FAILURE, and that is not defensive noise: without it
+ *   the archived notice keeps whatever the last SUCCESSFUL fetch painted
+ *   - a confident "showing archived: N" sitting on screen after the
+ *   request that would have told you failed. Measured in the live
+ *   browser 2026-09-06.
+ * Inputs: none. Output: Promise<void>. Never rejects.
+ * Example: await window.Launchpad.loadProjects();
+ */
+async function loadHomeScreen(): Promise<void> {
+    const result = await sessionStore.loadProjects(uiPrefs.archivedProjectsVisible, t);
+    if (!result.ok && result.error) showHomeError(result.error, t);
+    refreshLaunchpadPanels();
+    // Not awaited: the running merge is independent of the project list
+    // and a failure in it is handled inside the store.
+    void sessionStore.loadRunningSessions(t);
+}
+
 /** The namespace the legacy tree may call into. */
 const CloudeWeb = {
     /**
@@ -689,6 +794,30 @@ const CloudeWeb = {
         unarchiveProject: unarchiveProjectForLegacy,
         editProject: editProjectForLegacy,
         confirm: confirmForLegacy,
+        /**
+         * SLICE 7: THE SHELL. `mountHomeScreen` is what `Launchpad.init`
+         * became and `loadHomeScreen` is what `Launchpad.loadProjects`
+         * became; the rest are the navigation glue, exported because the
+         * create flows (slice 6) reach three of them and because a test
+         * needs a way in that is not a global.
+         */
+        mountHomeScreen: initHomeScreen,
+        unmountHomeScreen,
+        refreshLaunchpadPanels,
+        loadHomeScreen,
+        openProjectByName: (name: string) => openProjectByNameFlow(name, navHost(), t),
+        selectProject: (project: ProjectRow, choice?: Record<string, unknown> | null) =>
+            selectProjectFlow(project, navHost(), t, choice),
+        detachAndOpenProject: (project: ProjectRow) =>
+            detachAndOpenProjectFlow(project, navHost(), t),
+        detachAndCreateNew: (agentType: string | null) =>
+            detachAndCreateNewFlow(agentType, navHost(), t, createNewSessionForLegacy),
+        connectToExistingSession: () => connectToExistingSessionFlow(navHost(), t),
+        explainRefusedProject,
+        isResolvingDeepLink,
+        updateStatus,
+        showError: (message: string) => showHomeError(message, t),
+        terminalDims: () => navHost().terminalDims(),
     },
     /**
      * THE `session-card-action` SURFACE, as the legacy row menu sees it.
@@ -742,3 +871,16 @@ if (window.CloudeWeb) {
     throw new Error('window.CloudeWeb is already defined - two bundles are loaded');
 }
 window.CloudeWeb = CloudeWeb;
+
+// THE LAST THING THIS BUNDLE DOES, and the order is the point: the shim
+// forwards into `CloudeWeb`, so `CloudeWeb` has to be published first.
+// It MERGES into whatever `window.Launchpad` already holds, because
+// `client/js/providers.js` is a classic script and put the launch picker
+// there before this module ran. See ./lib/launchpad/shim.ts.
+publishLaunchpadShim({
+    launchpadScreen,
+    init: initHomeScreen,
+    loadProjects: loadHomeScreen,
+    loadRunningSessions: () => sessionStore.loadRunningSessions(t),
+    openProjectByName: (name: string) => openProjectByNameFlow(name, browserNavHost(), t),
+});

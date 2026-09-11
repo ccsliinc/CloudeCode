@@ -147,7 +147,6 @@ function makeContext({ attachable, live }) {
     return { context, fakeWindow };
 }
 
-const launchpadSrc = read('client', 'js', 'launchpad.js');
 const sidebarSrc = read('client', 'js', 'session-sidebar.js');
 // The two-endpoint merge moved out of session-sidebar.js into its own
 // module (client/js/session-sidebar-fetch.js) when pinning, ordering and
@@ -157,17 +156,25 @@ const sidebarSrc = read('client', 'js', 'session-sidebar.js');
 const sidebarFetchSrc = read('client', 'js', 'session-sidebar-fetch.js');
 
 /**
- * Run launchpad.js's /sessions merge for real and return its merged rows.
+ * Run the HOME screen's /sessions merge for real and return its rows.
+ *
+ * SLICE 3 MOVED THE MERGE AND SLICE 7 DELETED THE FILE IT LEFT BEHIND.
+ * This used to evaluate `client/js/launchpad.js` in the sandbox and read
+ * `lp.runningSessions` off the singleton; those fields were already
+ * accessors over the compiled store by slice 3, so the sandbox was
+ * driving the bundle through a forwarding layer that no longer exists.
+ * It now calls the store directly - the SAME code the browser runs, one
+ * indirection fewer - and the comparison against the sidebar's own merge
+ * is unchanged, which is the whole point of this file.
+ *
  * @param {{attachable: Array<object>, live: Array<object>}} payloads
- * @returns {Promise<Array<object>>} this.runningSessions after the merge.
+ * @returns {Promise<Array<object>>} the merged running rows.
  */
 async function mergeLaunchpad(payloads) {
     const { context } = makeContext(payloads);
-    vm.runInContext(launchpadSrc, context, { filename: 'launchpad.js' });
-    const lp = context.window.Launchpad;
-    lp.renderRunningSessions = () => {};
-    await lp.loadRunningSessions();
-    return lp.runningSessions;
+    const store = context.window.CloudeWeb.launchpad.sessions;
+    await store.loadRunningSessions((key) => key);
+    return store.runningSessions;
 }
 
 /**
@@ -188,7 +195,7 @@ async function mergeSidebar(payloads) {
     return sb._rows;
 }
 
-const MERGES = [['launchpad.js', mergeLaunchpad], ['session-sidebar.js', mergeSidebar]];
+const MERGES = [['the home screen', mergeLaunchpad], ['session-sidebar.js', mergeSidebar]];
 
 /**
  * Find one merged row by tmux session name.
