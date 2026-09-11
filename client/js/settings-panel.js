@@ -136,7 +136,12 @@
         // preference attached to themes, not to any one agent, terminal
         // or notification channel. Like the theme picker it applies
         // immediately and never joins the batched Save.
-        { id: 'general', label: 'general', sectionIds: [], slots: ['appearance', 'audio', 'server'] },
+        // 'settings-import' is the one-time migration of this browser's own
+        // saved settings onto the server (#46). It sits under general because
+        // it is about the settings screen itself rather than about any one
+        // agent, terminal or channel, and LAST because it is a control a user
+        // presses once and then never sees offered again.
+        { id: 'general', label: 'general', sectionIds: [], slots: ['appearance', 'audio', 'server', 'settings-import'] },
     ];
 
     // Module state - the last GET /config/settings payload, so re-renders
@@ -349,6 +354,13 @@
             // takes no seed from `lastSummary` - the history is not part
             // of the settings document and never joins the batched Save.
             if (historySlot) window.ToastHistoryPanel.mount(historySlot);
+        }
+        if (window.SettingsImport) {
+            var importSlot = overlayEl.querySelector('#settings-settings-import-slot');
+            // Self-fetching and read-only until pressed, so like the toast
+            // history it takes no seed from `lastSummary`: the import is not
+            // part of the settings document and never joins the batched Save.
+            if (importSlot) window.SettingsImport.mount(importSlot);
         }
         if (window.TerminalCommandsPanel) {
             var commandSlot = overlayEl.querySelector('#settings-terminal-commands-slot');

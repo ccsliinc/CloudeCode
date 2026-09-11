@@ -178,6 +178,12 @@
          owns the .settings-field rules this builds on. -->
     <link rel="stylesheet" href="/static/css/settings-audio.css" />
 
+    <!-- The one-time settings import panel's row grid. After styles.css,
+         which owns the .settings-section and .settings-field rules it
+         builds on; it declares layout only and borrows every colour from
+         the active theme's tokens. -->
+    <link rel="stylesheet" href="/static/css/settings-import.css" />
+
     <!-- The global audio on/off control (client/js/globalAudioToggle.js),
          re-parented between .home-bar and .info by app.js. Self-contained:
          it never edits home-bar.css/terminal-tools.css/styles.css, only
@@ -826,6 +832,19 @@
          terminal-socket-abandon.js already uses. Loads after
          preferences.js and before terminal.js. -->
     <script src="/static/js/preferences-transport.js"></script>
+
+    <!-- Puts an existing localStorage-backed control on the shared
+         preference: server value wins, local copy is kept as the fallback
+         and is never cleared. Must load AFTER preferences.js and BEFORE
+         any control that calls it. -->
+    <script src="/static/js/preference-bridge.js"></script>
+    <!-- The one-time settings import (#46). The collector is an allowlist
+         of literal storage keys and never iterates storage, which is what
+         keeps the two auth tokens out of the payload by construction. The
+         panel mounts into a settings slot and uploads nothing until the
+         user presses import. -->
+    <script src="/static/js/settings-import-collect.js"></script>
+    <script src="/static/js/settings-import.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->

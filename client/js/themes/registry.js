@@ -34,6 +34,8 @@
 
     var STORAGE_KEY = 'cloude.theme';
     var DEFAULT_THEME_ID = 'claude';
+    // The server-owned field this browser's STORAGE_KEY now mirrors.
+    var THEME_PREFERENCE_FIELD = 'theme';
     // The theme effects.js consent record used to live here, as
     // `cloude.themeJsAllowlist` in this browser. It is now the server-owned
     // `theme_script_consent` preference and the key name lives in exactly
@@ -136,8 +138,28 @@
 
     /**
      * Read the stored global theme id (sync, safe at any time).
+     *
+     * SHARED FIRST, LOCAL AS THE FALLBACK. The user's global theme is a
+     * server-owned preference (`theme`), so every device shows the same
+     * one. This browser's own `cloude.theme` still answers whenever the
+     * preference block has not been read or does not hold the field -
+     * which keeps the pre-paint path in `applyStoredThemeIdSync` working
+     * before hydration finishes, and keeps a browser that cannot reach
+     * the server on the theme it already had rather than snapping it
+     * back to the default.
      */
     function getStoredThemeId() {
+        var bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.read === 'function') {
+            var shared = bridge.read(THEME_PREFERENCE_FIELD, readLocalThemeId);
+            if (shared && typeof shared === 'string') return shared;
+            return DEFAULT_THEME_ID;
+        }
+        return readLocalThemeId();
+    }
+
+    /** This browser's own copy, which is still written on every change. */
+    function readLocalThemeId() {
         try {
             var v = localStorage.getItem(STORAGE_KEY);
             return v && typeof v === 'string' ? v : DEFAULT_THEME_ID;
@@ -713,7 +735,23 @@
         cacheThemeVars(themeId, m.cssVars || {});
 
         if (opts && opts.persist === true) {
-            try { localStorage.setItem(STORAGE_KEY, themeId); } catch (_) { /* ignore */ }
+            // MIRRORED, NOT MOVED. The local copy is still written every
+            // time, because it is what the pre-hydration paint reads and
+            // what answers when the server is unreachable. The shared
+            // save is fire-and-forget: a failed PATCH must not undo a
+            // theme the user is already looking at.
+            var writeLocal = function () {
+                try { localStorage.setItem(STORAGE_KEY, themeId); } catch (_) { /* ignore */ }
+            };
+            var bridge = globalThis.PreferenceBridge;
+            if (bridge && typeof bridge.write === 'function') {
+                bridge.write(THEME_PREFERENCE_FIELD, themeId, writeLocal)
+                    .catch(function (e) {
+                        console.warn('Themes: could not share the theme choice', e);
+                    });
+            } else {
+                writeLocal();
+            }
         }
 
         // Xterm repaint policy (three-state, opt-in override):

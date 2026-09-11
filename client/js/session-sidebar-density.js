@@ -53,6 +53,9 @@ console.log('[SessionSidebarDensity Module] Loading...');
      * @type {string}
      */
     const STORAGE_KEY = 'cloude.session.sidebar.density';
+    // The server-owned field STORAGE_KEY now mirrors, so the density a
+    // user picked on one device is the density every device opens with.
+    const PREFERENCE_FIELD = 'sidebar_density';
 
     /**
      * The three modes, in the order the menu lists them: thinnest first,
@@ -102,6 +105,19 @@ console.log('[SessionSidebarDensity Module] Loading...');
      * Output: string - one of MODES.
      */
     function loadMode() {
+        // Shared first, this browser's own copy as the fallback. See
+        // client/js/preference-bridge.js for why a field the server does
+        // not hold must fall through rather than read as a default.
+        const bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.read === 'function') {
+            const shared = bridge.read(PREFERENCE_FIELD, loadLocalMode);
+            return MODES.indexOf(shared) === -1 ? DEFAULT_MODE : shared;
+        }
+        return loadLocalMode();
+    }
+
+    /** This browser's own copy, still written on every change. */
+    function loadLocalMode() {
         let raw = null;
         try {
             raw = localStorage.getItem(STORAGE_KEY);
@@ -161,10 +177,22 @@ console.log('[SessionSidebarDensity Module] Loading...');
         if (MODES.indexOf(next) === -1) return false;
         if (next === mode) { closeMenu(); return false; }
         mode = next;
-        try {
-            localStorage.setItem(STORAGE_KEY, mode);
-        } catch (err) {
-            console.warn('SessionSidebarDensity: could not persist density:', err);
+        const writeLocal = function () {
+            try {
+                localStorage.setItem(STORAGE_KEY, mode);
+            } catch (err) {
+                console.warn('SessionSidebarDensity: could not persist density:', err);
+            }
+        };
+        const bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.write === 'function') {
+            // Mirrored to both. Fire and forget: the density is already
+            // applied, and a failed share must not undo it.
+            bridge.write(PREFERENCE_FIELD, mode, writeLocal).catch(function (err) {
+                console.warn('SessionSidebarDensity: could not share density:', err);
+            });
+        } else {
+            writeLocal();
         }
         apply();
         closeMenu();

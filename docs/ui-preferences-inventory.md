@@ -325,8 +325,10 @@ about itself.
   refusal is free and strictly restrictive. It IGNORES every `true`: that
   value names no digest, so there is nothing to bind a grant to, and those
   users are asked once more. **This key is refused by the #46 settings
-  import for the same reason** - see
-  `SETTINGS_IMPORT_REFUSED` in `src/core/settings_import.py`.
+  import for the same reason** - see `REFUSED_FIELDS` in
+  `src/core/settings_import.py`, and the negative control in
+  `tests/test_settings_import_collect.node.mjs` that proves the client
+  collector never even reads the key.
 - Full model: `src/core/theme_script_consent.py` and
   `client/js/theme-consent.js`. Six outcomes, one of which runs.
 

@@ -72,8 +72,10 @@ from src.api.away_routes import router as away_router
 from src.api.restart_routes import router as restart_router
 from src.api.status_routes import router as status_router
 from src.api.preferences_routes import router as preferences_router
+from src.api.settings_routes import router as settings_import_router
 from src.api.websocket import connection_manager
 from src.core.ui_preferences_store import UiPreferencesStore
+from src.core.settings_import_store import SettingsImportStore
 from src.api.toast_routes import router as toast_router
 from src.api.corpus_routes import router as corpus_router
 from src.api.archive_overlay_routes import router as archive_overlay_router
@@ -581,6 +583,14 @@ async def lifespan(app: FastAPI):
     app.state.ui_preferences_store = UiPreferencesStore(
         lambda: Path(settings.auth_config_file).expanduser()
     )
+    # The one-time settings import. It writes the preference block AND
+    # the completion marker in ONE config_writer commit, so it is its own
+    # store rather than a method on the one above, which writes the block
+    # alone. It holds no cache of its own: the preference projection is
+    # refreshed by the commit listener that store already registered.
+    app.state.settings_import_store = SettingsImportStore(
+        lambda: Path(settings.auth_config_file).expanduser()
+    )
     app.state.connection_manager = connection_manager
 
     # Background upload-uploads TTL pruner - safety net for long-running
@@ -889,6 +899,7 @@ app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmu
 # per session on POST /toasts/{id}/ack. See src/api/toast_routes.py.
 app.include_router(toast_router, prefix="/api/v1")  # Cross-session toast list + history (auth required)
 app.include_router(preferences_router, prefix="/api/v1")  # Typed ui_preferences block: read and partial update (auth required)
+app.include_router(settings_import_router, prefix="/api/v1")  # One-time explicit import of a browser's settings, with a preview (auth required)
 if MESSAGE_ARCHIVE.enabled:
     # THE MESSAGE ARCHIVE'S ENTIRE HTTP SURFACE. Mounted only when the
     # master switch resolved to enabled; otherwise these paths 404 like
