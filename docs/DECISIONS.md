@@ -13,6 +13,45 @@ ruling about another.
 
 ---
 
+## The session listing pass: our semantics, their file layout
+**2026-09-11, scope: all repos, ruled by Adam as code owner and sole
+tie-breaker**
+
+Verbatim: "yes, reply with the correction and take their proposals."
+
+Both lines rewrote the session listing pass independently, in the same week,
+neither knowing about the other. Our side added `src/core/listing_gather.py`,
+`src/core/listing_prefetch.py`, `src/core/single_flight.py` and 45 lines in
+`src/core/session_status_map.py` (`f0e07de`); their `feat/backend-decomposition`
+line restructures `src/core/session_manager.py` and moves the call sites of
+`list_session_infos` out to `src/api/session_crud_routes.py` and
+`src/core/sessions/toast_inbox.py`. Confirmed on 2026-09-11: our three new
+modules are absent from `feat/backend-decomposition`, so they merge onto it
+without a single conflict, on top of code whose surrounding structure their
+line has already moved. A clean merge here is not evidence the result is
+correct.
+
+**We own the listing pass semantics. They own where the code lives.** They take
+our version of what the pass does and re-run their listing cost ceilings
+against it once they fold it in. Files to watch on both sides:
+`src/core/session_status_map.py`, `src/core/session_manager.py`,
+`src/core/listing_gather.py`, `src/core/listing_prefetch.py`,
+`src/core/single_flight.py`, `src/api/routes.py`.
+
+## Announce a version bump before you make it
+**2026-09-11, scope: all repos, ruled by Adam as code owner and sole
+tie-breaker**
+
+Verbatim: "yes, reply with the correction and take their proposals."
+
+Both sides set the next minor version to 1.3.0 within 22 minutes of each other
+on 2026-09-11, neither tagged, neither published, caught only because someone
+happened to check. Adam's rule: **whoever is about to bump a version says so
+before they do it.** A version number carries no file path and no design
+approach, so nothing in the existing claim-and-overlap protocol could have
+flagged the collision; this closes that gap the same way a claim closes a
+file-path collision.
+
 ## Free issues are grabbed author first, then priority
 **2026-09-11, scope: CloudeCodeDev, ruled by Adam as code owner and sole
 tie-breaker**
