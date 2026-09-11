@@ -99,6 +99,22 @@ function spy() {
     return fn;
 }
 
+/**
+ * A prompt that records being asked AND answers.
+ *
+ * A bare `async () => 'once'` cannot tell "the gate asked me and I said
+ * yes" from "the gate never asked and ran anyway", and the two are the
+ * whole difference between a working gate and one that always allows.
+ * See the `allow once` control below, which passed against an
+ * always-allow gate until it started using this.
+ */
+function answering(value) {
+    const calls = [];
+    const fn = async (...args) => { calls.push(args); return value; };
+    fn.calls = calls;
+    return fn;
+}
+
 // ---------------------------------------------------------------------
 // Negative controls. Every one of these must NOT execute the script.
 // ---------------------------------------------------------------------
@@ -208,14 +224,25 @@ test('NEGATIVE CONTROL: a user theme whose bytes could not be measured never run
     assert.equal(inject.calls.length, 0);
 });
 
-test('NEGATIVE CONTROL: allow once is never written anywhere', async () => {
+// THIS ONE WAS DECORATIVE UNTIL 2026-09-10 AND THE MUTATION TEST PROVED
+// IT. Driven against a gate mutated to always RUN, thirteen of the
+// twenty-one cases failed and this was the ONLY negative control still
+// passing - because under an always-allow gate the script runs and
+// nothing is persisted either, so every assertion it made was satisfied
+// for the wrong reason. What it was missing is the one fact that
+// separates the two worlds: whether the user was ASKED. `prompt` is now a
+// recording spy, so this case fails on a gate that runs without asking.
+test('NEGATIVE CONTROL: allow once runs only because it was ASKED, and is never written anywhere', async () => {
     const { mod, preferences, storage } = loadModule();
     const inject = spy();
-    const outcome = await mod.gateEffects({
-        manifest: userTheme(),
-        inject,
-        prompt: async () => 'once',
-    });
+    const manifest = userTheme();
+    const prompt = answering('once');
+    const outcome = await mod.gateEffects({ manifest, inject, prompt });
+
+    assert.equal(prompt.calls.length, 1,
+        'the script ran without the user ever being asked');
+    assert.equal(prompt.calls[0][0], manifest,
+        'the user was asked about a different theme than the one that ran');
     assert.equal(outcome, mod.RUN);
     assert.equal(inject.calls.length, 1, 'an explicit allow once did not run');
     assert.equal(preferences.saved.length, 0,
@@ -292,6 +319,81 @@ test('never stores a refusal carrying no digest, because it is about the theme',
     assert.equal(outcome, mod.SKIP_DENIED);
     assert.equal(inject.calls.length, 0);
     assert.deepEqual(preferences.saved[0].value.matrix, { decision: 'never' });
+});
+
+// ---------------------------------------------------------------------
+// A refusal the record would not take. The script is still blocked; what
+// changes is that the user is told the choice did not stick, instead of
+// being shown a refusal that is gone on reload and never reaches their
+// other devices.
+// ---------------------------------------------------------------------
+
+test('a never the record would not take is reported, not claimed as saved', async () => {
+    const { mod } = loadModule({
+        preferences: makePreferences({
+            setResult: {
+                status: 'failed',
+                detail: 'a theme script consent key must be a theme id',
+            },
+        }),
+    });
+    const inject = spy();
+    const notify = spy();
+    const outcome = await mod.gateEffects({
+        manifest: userTheme({ id: 'Neon Rain' }),
+        inject,
+        prompt: answering('never'),
+        notify,
+    });
+
+    assert.equal(outcome, mod.SKIP_DENIED_UNSAVED,
+        'a refusal that was never written down reported itself as recorded');
+    assert.notEqual(outcome, mod.SKIP_DENIED);
+    assert.equal(inject.calls.length, 0,
+        'the script ran even though the user refused it');
+    assert.equal(notify.calls.length, 1, 'the user was not told');
+    assert.equal(notify.calls[0][0], mod.UNSAVED_REFUSAL_COPY);
+    assert.equal(notify.calls[0][0], notify.calls[0][0].toLowerCase(),
+        'ui copy in this project is lowercase');
+});
+
+test('a never that WAS committed still reports skip_denied and says nothing', async () => {
+    // The positive control. Without it, a change that reported every
+    // refusal as unsaved would pass the case above perfectly.
+    const { mod } = loadModule();
+    const inject = spy();
+    const notify = spy();
+    const outcome = await mod.gateEffects({
+        manifest: userTheme(), inject, prompt: answering('never'), notify,
+    });
+    assert.equal(outcome, mod.SKIP_DENIED);
+    assert.equal(inject.calls.length, 0);
+    assert.equal(notify.calls.length, 0,
+        'a refusal that saved cleanly still bothered the user about it');
+});
+
+test('a refusal with no way to tell the user still refuses and still holds', async () => {
+    const { mod } = loadModule({
+        preferences: makePreferences({ setResult: { status: 'failed' } }),
+    });
+    const inject = spy();
+    const outcome = await mod.gateEffects({
+        manifest: userTheme(), inject, prompt: answering('never'),
+    });
+    assert.equal(outcome, mod.SKIP_DENIED_UNSAVED);
+    assert.equal(inject.calls.length, 0);
+});
+
+test('persisted() counts a commit and an unchanged, and nothing else', () => {
+    const { mod } = loadModule();
+    assert.equal(mod.persisted({ status: 'committed' }), true);
+    assert.equal(mod.persisted({ status: 'unchanged' }), true);
+    ['failed', 'refused', 'stale_revision', 'not_stored', ''].forEach((s) => {
+        assert.equal(mod.persisted({ status: s }), false,
+            '"' + s + '" was treated as a durable record');
+    });
+    assert.equal(mod.persisted(null), false);
+    assert.equal(mod.persisted({}), false);
 });
 
 test('an always the server refused to store degrades to this sitting only', async () => {

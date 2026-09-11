@@ -532,7 +532,7 @@ same reasoning is why the #46 settings import refuses that key by name.
 exactly one path, so `tests/test_theme_script_consent.node.mjs` hands it a spy
 and proves an unconsented theme never executes - against the real callback
 registry.js passes in, not against an internal flag that correlates with it
-today. Eleven of its twenty-one cases are refusals. **A suite that only drove
+today. Sixteen of its twenty-five cases are refusals. **A suite that only drove
 the consented path would pass against a gate that never refuses**, which is
 this project's own "a matcher that always finds something is worse than
 useless" one layer up. A revocation arriving from another device runs the
@@ -540,6 +540,104 @@ module's `destroy()`, drops the loader cache, cancels an on-screen prompt and
 is re-checked mid-`import()` before `init()` runs - and it SAYS that anything
 the script already did to the page stands until a reload, because claiming
 otherwise would be the false green this project keeps paying to remove.
+
+**AND ONE OF THOSE REFUSALS WAS DECORATIVE, WHICH ONLY A MUTATION TEST
+COULD SHOW.** Driven against a `decide()` mutated to always RUN, thirteen
+of the twenty-one cases failed and `allow once is never written anywhere`
+was the ONLY negative control still passing - because under an
+always-allow gate the script runs and nothing is persisted either, so
+every assertion it made was satisfied for the wrong reason. The fact it
+never checked is the one that separates the two worlds: whether the user
+was ASKED. Its `prompt` is a recording spy now, asserted to have been
+called exactly once and about THIS manifest, and the same mutation now
+fails it on `the script ran without the user ever being asked`. **A GREEN
+NEGATIVE CONTROL PROVES NOTHING UNTIL YOU HAVE WATCHED IT GO RED**; if
+you add one here, mutate `decide()` to always return `run` and watch.
+
+**A "NEVER" THAT COULD NOT BE WRITTEN DOWN IS `skip_denied_unsaved`, NOT
+`skip_denied`.** `gateEffects` ignored `remember()`'s return value for a
+refusal, so it reported every one as recorded. Reproduced end to end
+2026-09-10: `GET /themes` serves a folder called `Neon Rain` intact,
+digest and all, and `validate_consent_map` then 422s the refusal, so the
+user clicked "never", watched it take effect, and it was gone on reload
+and never reached another device. It FAILED CLOSED every time, so it was
+never an execution hole - it was a durability lie, which on a consent
+control is its own defect, because it teaches the user the control does
+not work. The gate now checks the status (`committed` or `unchanged` are
+the only two that mean the record took it) and reports through an
+optional `notify` callback that registry.js routes to `FabMenu.notify`.
+**THE COPY LIVES WITH THE DECISION** (`UNSAVED_REFUSAL_COPY`) and the
+caller supplies only the channel, so the sentence and the fact cannot
+drift. A missing `notify` still logs; a message nobody could deliver is
+not a reason to go back to saying nothing. `stale_revision` on a refusal
+is reported the same way and deliberately NOT retried - it fails closed,
+the user is told, and the next attempt succeeds.
+
+**A THEME ID IS ONE RULE WITH FIVE CONSUMERS, AND `ThemeManifest.id` HAS
+NO PATTERN AT ALL.** The only rule on the manifest is that the id equals
+the directory name, so the keyspace is whatever the filesystem allows,
+while `THEME_ID_RE` decided what a consent key and the selected-theme
+preference could be. Those disagreed. The id has to survive as: a
+directory name, a filesystem path segment, a URL path segment (safe
+already - `effectsUrlFor` passes it through `encodeURIComponent`), a JSON
+object key in the shared `theme_script_consent` map, and the `theme`
+preference. `THEME_ID_RE` now covers the names people really have -
+letters, digits, `.`, `_`, `-` AND THE SPACE, up to 128 characters, first
+character not `.`, `-` or a space and last not a space - and
+`src/core/theme_script_consent.py` names a reason beside every exclusion
+rather than listing them.
+
+**IT WAS DECLARED IN TWO FILES, AND `ui_preferences` NOW IMPORTS IT.**
+Its own copy answered the same question about the same string, so a
+folder name one accepted and the other refused was a theme you could
+select and could not record a decision about.
+`tests/test_theme_id_charset.py` asserts the two are the SAME OBJECT, not
+two equal patterns, so a future widening cannot reach one and miss the
+other.
+
+**THE BROWSER KEEPS NO COPY OF IT, UNLIKE `DIGEST_RE`, AND THAT IS A
+CHOICE.** A client-side mirror would only be good for pre-empting a
+write, which means a mirror that drifted would refuse a write the server
+would have taken - and the drift test guarding it would be guarding a
+problem it created. The gate handles it REACTIVELY through `persisted()`
+instead, which is correct whatever the write failed for: a rejected key,
+a network outage, a stale revision. `DIGEST_RE` is mirrored because the
+ladder BRANCHES on it; this would have branched on nothing.
+
+**`\Z`, NOT `$`, AND THAT IS NOT COSMETIC.** Python's `$` also matches
+immediately before a trailing newline, so the pattern this replaced
+accepted `"matrix\n"` - a legal POSIX filename, and a second spelling of
+one theme. JS `$` without the `m` flag does not, which is why the mirror
+is the python pattern with `\Z` swapped back.
+
+**NON-ASCII IS STILL REFUSED, DELIBERATELY, AND IT IS THE ONE REFUSAL
+THAT COSTS A REAL USER SOMETHING.** The consent map in `config.json` IS
+the audit record of what the user let execute, and a key carrying a bidi
+override, a zero-width joiner or a homograph is one an operator cannot
+read back and check. Supporting it properly needs a normalisation and
+confusables policy, which is a bigger change and a worse one to make
+hastily on a consent surface. A theme named `über` still renders, still
+prompts and still fails CLOSED - what it cannot do is REMEMBER the
+answer, and the user is now told that instead of being shown a refusal
+that evaporates. Note what was NOT done: dropping such a theme from
+`GET /themes` entirely was considered and rejected as over-broad, because
+a theme that declares no script has no consent problem at all and would
+have vanished for nothing.
+
+**KNOWN DESIGN LIMIT: THE DIGEST IS TAKEN ONCE PER PAGE LOAD, THE
+`import()` HAPPENS WHENEVER THE THEME IS APPLIED.** `loadManifests()` has exactly
+one caller (`client/js/themes/registry.js:1179`), so the
+`effectsDigest` a grant is matched against is the bytes as they were at
+load. Edit `effects.js` after that and, WITHIN THAT ONE OPEN PAGE, the
+grant still matches and the edited file runs. **This is recorded rather
+than fixed, on purpose.** Exploiting it requires a process already
+writing the themes directory while the page is open, which is an actor
+who already has code execution as the user - so it does not lower the bar
+for the threat this gate exists to raise, which is a theme the user
+installed turning out to do something they did not agree to. A reload
+re-measures. Do not restructure the load path to chase it; that is a
+bigger change than it is worth, and re-digesting per apply would put a
+filesystem read on every theme switch.
 
 **THE ATTACH CAPTURE CARRIES THE CURSOR, BECAUSE `capture-pane`
 SERIALISES CELLS AND NEVER CURSOR STATE.** `capture_visible_screen()`

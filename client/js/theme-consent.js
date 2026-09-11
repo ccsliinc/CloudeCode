@@ -64,6 +64,7 @@ console.log('[ThemeConsent Module] Loading...');
     const RUN = 'run';
     const SKIP_NO_SCRIPT = 'skip_no_script';
     const SKIP_DENIED = 'skip_denied';
+    const SKIP_DENIED_UNSAVED = 'skip_denied_unsaved';
     const SKIP_UNVERIFIABLE = 'skip_unverifiable';
     const PROMPT = 'prompt';
     const PROMPT_CHANGED = 'prompt_changed';
@@ -78,6 +79,29 @@ console.log('[ThemeConsent Module] Loading...');
     const RUNG_NO_RECORD = 'no_record';
 
     const DIGEST_RE = /^[0-9a-f]{64}$/;
+
+    /**
+     * WHAT A THEME ID MAY BE IS DELIBERATELY NOT MIRRORED HERE, unlike
+     * DIGEST_RE above. The server's `THEME_ID_RE` is the authority on what
+     * its own store can key on, and a second copy in the browser would
+     * only be useful for pre-empting a write - which means a copy that
+     * drifted would refuse a write the server would have taken. The gate
+     * handles it REACTIVELY instead, through `persisted()` below, which is
+     * right whatever the write failed for: a rejected key, a network
+     * outage, a stale revision. See src/core/theme_script_consent.py for
+     * the rule and the reason behind every character it excludes.
+     */
+
+    /**
+     * The statuses that mean the shared record actually took the write.
+     *
+     * `unchanged` counts: the preference layer answers it when the value
+     * on the server already equals the one being written, which is a
+     * recorded refusal and not a failed one. Everything else - a stale
+     * revision, a refused request, a validator that would not key on this
+     * theme id - left nothing on disk.
+     */
+    const PERSISTED_STATUSES = ['committed', 'unchanged'];
 
     /**
      * Answer whether one theme's effects.js may run right now.
@@ -306,6 +330,55 @@ console.log('[ThemeConsent Module] Loading...');
         return prefs.set(FIELD, next);
     }
 
+    /** What the user is told when their "never" could not be written down. */
+    const UNSAVED_REFUSAL_COPY = 'this theme\'s script is blocked for now, but '
+        + 'the choice could not be saved. you will be asked again next time.';
+
+    /**
+     * Whether a `remember()` result means the record actually took it.
+     *
+     * Description: the shared record is the ONLY durable home for a
+     *   decision, so anything short of a commit means the user's answer
+     *   exists nowhere but this page. Said as a predicate rather than an
+     *   inline comparison because "was it saved" is the question the
+     *   honesty of the whole prompt turns on.
+     * Inputs: outcome (object|null) - what `remember` returned.
+     * Output: boolean.
+     * Example: ThemeConsent.persisted({status: 'committed'}) // true
+     */
+    function persisted(outcome) {
+        if (!outcome || typeof outcome.status !== 'string') return false;
+        return PERSISTED_STATUSES.indexOf(outcome.status) !== -1;
+    }
+
+    /**
+     * Tell the user something the gate could not do.
+     *
+     * Description: the COPY lives here beside the decision that produces
+     *   it, so the sentence and the fact it describes cannot drift; the
+     *   caller supplies only the channel. A caller that supplies none
+     *   still gets the fact in the log, because a message nobody could
+     *   deliver is not a reason to go back to saying nothing.
+     * Inputs: spec (object) - the gateEffects spec, possibly carrying
+     *   `notify`; message (string) - lowercase user-facing text;
+     *   info (object) - context for the log, never for the user.
+     * Output: undefined.
+     */
+    function report(spec, message, info) {
+        console.warn('[ThemeConsent] ' + message, info);
+        const notify = (spec && typeof spec.notify === 'function')
+            ? spec.notify : null;
+        if (!notify) return;
+        try {
+            notify(message, info);
+        } catch (err) {
+            // Deliberately swallowed: failing to SHOW the warning must not
+            // turn a refusal that already held into a thrown error. The
+            // script is blocked either way, and the line above recorded it.
+            console.warn('[ThemeConsent] could not report to the user', err);
+        }
+    }
+
     /**
      * Run the whole gate for one manifest, executing only on `run`.
      *
@@ -325,10 +398,23 @@ console.log('[ThemeConsent Module] Loading...');
      *   prompt (function|undefined) - `(manifest, info) =>
      *     Promise<'always'|'once'|'never'|null>`. Absent means a prompt
      *     cannot be shown, which refuses.
+     *   notify (function|undefined) - `(message, info) => void`, called
+     *     with lowercase user-facing text when the gate held but could
+     *     not record why. Absent logs instead; see `report`.
      * Output: Promise<string> - the outcome that was acted on.
+     *
+     * A REFUSAL THAT WAS NOT WRITTEN DOWN ANSWERS `skip_denied_unsaved`,
+     * NEVER `skip_denied`. Both block the script, so this is not a hole in
+     * the gate - it is the difference between a standing decision and one
+     * that dies with the page, and the user is the only person who can act
+     * on it. It shipped reporting `skip_denied` either way, so clicking
+     * "never" on a theme the server's validator will not key on (a folder
+     * name outside `THEME_ID_RE`) visibly took effect, was silently gone on
+     * reload, and never reached another device.
+     *
      * Example:
      *   await ThemeConsent.gateEffects({manifest: m, inject: run,
-     *     prompt: ask});
+     *     prompt: ask, notify: tell});
      */
     async function gateEffects(spec) {
         const manifest = (spec && spec.manifest) || null;
@@ -373,7 +459,15 @@ console.log('[ThemeConsent Module] Loading...');
         }
 
         if (answer === DECISION_NEVER) {
-            await remember(manifest.id, DECISION_NEVER, null);
+            const kept = await remember(manifest.id, DECISION_NEVER, null);
+            if (!persisted(kept)) {
+                report(spec, UNSAVED_REFUSAL_COPY, {
+                    themeId: manifest.id,
+                    status: (kept && kept.status) || 'unknown',
+                    detail: (kept && kept.detail) || null,
+                });
+                return SKIP_DENIED_UNSAVED;
+            }
             return SKIP_DENIED;
         }
         if (answer === DECISION_ONCE) {
@@ -461,7 +555,9 @@ console.log('[ThemeConsent Module] Loading...');
         RUN: RUN,
         SKIP_NO_SCRIPT: SKIP_NO_SCRIPT,
         SKIP_DENIED: SKIP_DENIED,
+        SKIP_DENIED_UNSAVED: SKIP_DENIED_UNSAVED,
         SKIP_UNVERIFIABLE: SKIP_UNVERIFIABLE,
+        UNSAVED_REFUSAL_COPY: UNSAVED_REFUSAL_COPY,
         PROMPT: PROMPT,
         PROMPT_CHANGED: PROMPT_CHANGED,
         RUNG_DENIED: RUNG_DENIED,
@@ -473,6 +569,7 @@ console.log('[ThemeConsent Module] Loading...');
         RUNG_NO_RECORD: RUNG_NO_RECORD,
         RUNG_NO_SCRIPT: RUNG_NO_SCRIPT,
         decide: decide,
+        persisted: persisted,
         recordFor: recordFor,
         revocationsBetween: revocationsBetween,
         readRecord: readRecord,

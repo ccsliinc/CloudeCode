@@ -610,7 +610,27 @@
             manifest: manifest,
             inject: injectEffectsScript,
             prompt: showConsentModal,
+            notify: tellUserAboutConsent,
         });
+    }
+
+    /**
+     * Show the gate's own message to the user.
+     *
+     * THIS FILE OWNS THE CHANNEL AND NOT THE WORDS. `gateEffects` passes
+     * the sentence, because the only thing that knows exactly what did not
+     * happen is the code that tried. Routed to FabMenu.notify, which is the
+     * app's single status-pill path - a seventh message shape for this one
+     * case would be the bug. A browser with no FabMenu still gets the
+     * warning gate-side, so this degrading to nothing loses no record.
+     *
+     * @param {string} message - lowercase user-facing text from the gate.
+     * @returns {void}
+     */
+    function tellUserAboutConsent(message) {
+        var fab = globalThis.FabMenu;
+        if (!fab || typeof fab.notify !== 'function') return;
+        fab.notify(message, 'error');
     }
 
     /**

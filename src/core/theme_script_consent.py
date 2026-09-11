@@ -94,7 +94,81 @@ RUNG_GRANTED = "granted"
 RUNG_NO_RECORD = "no_record"
 
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-THEME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+MAX_THEME_ID_LENGTH = 128
+"""Comfortably inside the 255-byte limit every filesystem this runs on
+imposes on a single name, and bounded so the shared preference block
+cannot be grown by a theme with a pathological folder name."""
+
+THEME_ID_RE = re.compile(
+    r"^[A-Za-z0-9_](?:[A-Za-z0-9._ -]{0,%d}[A-Za-z0-9._-])?\Z"
+    % (MAX_THEME_ID_LENGTH - 2)
+)
+"""What a theme id may be, for EVERY consumer of one.
+
+A theme id is the theme's DIRECTORY NAME - ``_load_manifest`` refuses a
+manifest whose ``id`` disagrees with the folder it was read from - and it
+then has to survive four more places: a path segment, a URL path segment,
+a JSON object key in the shared ``theme_script_consent`` map, and the
+``theme`` preference naming which theme is selected. A folder name this
+pattern refuses is a folder whose "never" cannot be recorded, which is why
+widening it was a correctness fix and not a convenience.
+
+WHAT IS ALLOWED, AND WHY IT IS SAFE IN ALL FIVE PLACES. Letters, digits,
+``.``, ``_``, ``-`` and THE SPACE. A space is an ordinary character in a
+folder name (``Neon Rain`` is not exotic), it is a legal JSON key, and
+``effectsUrlFor`` in ``client/js/themes/registry.js`` already passes the id
+through ``encodeURIComponent``, so it never reaches a URL unencoded. A
+leading underscore is allowed because nothing anywhere treats one
+specially.
+
+WHAT IS REFUSED, EACH FOR A NAMED REASON, because a charset widened
+without this list is how the next hole gets in.
+
+- A LEADING ``.``: a dotted directory is hidden, and ``_scan_themes_root``
+  already skips one, so accepting it here would record consent for a theme
+  the scanner will never offer. It also makes ``.`` and ``..`` refuse
+  themselves, which is the traversal case.
+- A LEADING ``-``: never argv today, and one flag-shaped id away from
+  being argv tomorrow.
+- A LEADING OR TRAILING SPACE: invisible on screen, trimmed by some
+  transports and not others, so two ids that look identical stop comparing
+  equal and a refusal recorded under one is looked up under the other.
+- ``/``, ``\\``, NUL AND EVERY CONTROL CHARACTER: path and URL separators,
+  and a control character in a config-file key makes the audit record for a
+  code-execution grant unreadable.
+- ANYTHING NON-ASCII: deliberate, and the only refusal here that costs a
+  real user something. The consent map in ``config.json`` IS the audit
+  record of what the user let execute, and a key carrying a bidi override,
+  a zero-width joiner or a homograph is one an operator cannot read back
+  and check. Supporting it properly needs a normalisation and confusables
+  policy, which is a bigger change than this and a worse one to make
+  hastily on a consent surface. The gap is named rather than hidden: a
+  theme whose folder name is non-ASCII still renders, still prompts, and
+  still fails CLOSED - what it cannot do is REMEMBER the answer, and
+  ``gateEffects`` now tells the user that instead of pretending it saved.
+
+``\\Z`` RATHER THAN ``$``, WHICH IS NOT COSMETIC. Python's ``$`` also
+matches immediately before a trailing newline, so the pattern this
+replaced accepted ``"matrix\\n"`` - a legal POSIX filename, and a second
+spelling of one theme."""
+
+
+def is_keyable_theme_id(theme_id: Any) -> bool:
+    """Whether the consent store can key a record on this theme id.
+
+    Description: the ONE predicate every caller asks, so "can a decision
+      about this theme be recorded" is a question with one answer rather
+      than a regex re-applied in four places. See ``THEME_ID_RE`` for what
+      the rule is and why each exclusion is there.
+    Inputs: theme_id (Any) - the candidate, usually the manifest's ``id``.
+    Output: bool - True when a record may be stored under it.
+
+    Example:
+        is_keyable_theme_id("Neon Rain") -> True
+        is_keyable_theme_id(" leading space") -> False
+    """
+    return isinstance(theme_id, str) and bool(THEME_ID_RE.match(theme_id))
 
 MAX_CONSENT_ENTRIES = 256
 """A record per theme the user has ever answered for. Bounded so the
@@ -274,7 +348,7 @@ def validate_consent_map(value: Any) -> Dict[str, Dict[str, Any]]:
 
     out: Dict[str, Dict[str, Any]] = {}
     for theme_id, entry in value.items():
-        if not isinstance(theme_id, str) or not THEME_ID_RE.match(theme_id):
+        if not is_keyable_theme_id(theme_id):
             raise ValueError("a theme script consent key must be a theme id")
         if not isinstance(entry, dict):
             raise ValueError("each theme script consent entry must be an object")
