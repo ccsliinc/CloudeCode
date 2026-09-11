@@ -231,6 +231,11 @@ test('Terminal#insertText is the last line of defence and honours a ticket', () 
         ws: { readyState: OPEN, send: (b) => sent.push(b) },
         _noteUserInputToSession() {},
         insertText: Klass.prototype.insertText,
+        // The ONE seam every keystroke-shaped path reaches the socket
+        // through. It offers the bytes to the pre-ready input buffer
+        // first; with no buffer module in this world it degrades to the
+        // plain readyState check, which is what this test is about.
+        _sendUserBytes: Klass.prototype._sendUserBytes,
     };
     NG.begin('session:a');
     const ticket = Own.claim('command');

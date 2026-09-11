@@ -127,6 +127,13 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // bytes waiting to be written. See
         // client/js/navigation-generation.js.
         this._navToken = null;
+
+        // THE CONNECTION THIS TERMINAL'S INPUT BELONGS TO. Distinct from
+        // _navToken: a reconnect to the SAME session is a new connection
+        // but not a new navigation, and input typed before a socket
+        // dropped must not be replayed into the one that replaces it.
+        // See client/js/terminal-input-buffer.js.
+        this._connGen = null;
     }
 
     /**
@@ -145,6 +152,34 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         if (!window.NavigationGeneration) return true;
         if (this._navToken == null) return true;
         return window.NavigationGeneration.keep(this._navToken, what);
+    }
+
+    /**
+     * Description: a connection to the pane is starting, so input typed
+     *   from here until `terminal.ready` is HELD rather than thrown away.
+     *   The window is deaf, not merely slow - the server's handshake loop
+     *   discards binary frames until it has the client's dims. All the
+     *   rules are in client/js/terminal-input-buffer.js.
+     * Inputs: what (string) - a label for the log line.
+     * Output: void. Records the generation as `_connGen`.
+     */
+    _beginConnection(what) {
+        if (window.TerminalInputBuffer) window.TerminalInputBuffer.begin(this, what);
+        else this._connGen = null;
+    }
+
+    /**
+     * Description: send user input, or hold it until the pane can hear.
+     *   THE ONE decision point for every keystroke-shaped path, because
+     *   two readers of the buffer's phase is how they come to disagree.
+     * Inputs: bytes (Uint8Array) - the encoded input.
+     * Output: boolean - true when the bytes reached the socket.
+     */
+    _sendUserBytes(bytes) {
+        if (window.TerminalInputBuffer) return window.TerminalInputBuffer.send(this, bytes);
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+        this.ws.send(bytes);
+        return true;
     }
 
     /**
@@ -175,37 +210,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * Wait for xterm.js CDN scripts to load
      */
     async waitForXterm() {
-        const maxWait = 10000; // 10 seconds max
-        const checkInterval = 50; // Check every 50ms
-        const startTime = Date.now();
-
-        while (Date.now() - startTime < maxWait) {
-            // Check if all xterm.js modules are loaded (use window.Terminal to avoid shadowing)
-            const terminalLoaded = typeof window.Terminal !== 'undefined' && window.Terminal !== Terminal;
-            const fitLoaded = typeof FitAddon !== 'undefined' && typeof FitAddon.FitAddon !== 'undefined';
-            const webglLoaded = typeof WebglAddon !== 'undefined' && typeof WebglAddon.WebglAddon !== 'undefined';
-            const unicodeLoaded = typeof Unicode11Addon !== 'undefined' && typeof Unicode11Addon.Unicode11Addon !== 'undefined';
-
-            if (terminalLoaded && fitLoaded && webglLoaded && unicodeLoaded) {
-                console.log('Terminal: xterm.js loaded', {
-                    windowTerminal: typeof window.Terminal,
-                    FitAddon: typeof FitAddon?.FitAddon,
-                    WebglAddon: typeof WebglAddon?.WebglAddon,
-                    Unicode11Addon: typeof Unicode11Addon?.Unicode11Addon
-                });
-                return;
-            }
-
-            await new Promise(resolve => setTimeout(resolve, checkInterval));
+        // `Terminal` here is THIS file's own class, which occupies
+        // window.Terminal until the vendored bundle loads over it - so it
+        // has to be handed to the check or the check answers true against
+        // us. Bounded, and it THROWS rather than degrading: there is no
+        // terminal to degrade into, and that error path is what tells the
+        // user xterm did not load. See client/js/terminal-readiness.js.
+        if (!window.TerminalReadiness) {
+            throw new Error('terminal-readiness.js did not load');
         }
-
-        console.error('Terminal: xterm.js failed to load', {
-            windowTerminal: typeof window.Terminal,
-            FitAddon: typeof FitAddon,
-            WebglAddon: typeof WebglAddon,
-            Unicode11Addon: typeof Unicode11Addon
-        });
-        throw new Error('xterm.js failed to load from CDN');
+        await window.TerminalReadiness.waitForXterm(Terminal);
     }
 
     /**
@@ -383,17 +397,19 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             if (window.AltScreenScroll && !isMouse) window.AltScreenScroll.noteUserInput();
             // The "take me back to live" half of scrollOnUserInput: false.
             if (window.TerminalScroll && !isMouse) window.TerminalScroll.pinToBottom(this.term);
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                // Convert special symbols for mobile keyboard shortcuts
-                if (data === '¥') {
-                    data = '\n';  // Yen = Newline
-                } else if (data === '€') {
-                    data = '\t';  // Euro = Tab
-                } else if (data === '￡' || data === '£') {
-                    data = '\x1b[Z';  // Pound = Shift+Tab
-                }
-                // Send input as binary frame
-                this.ws.send(new TextEncoder().encode(data));
+            // Convert special symbols for mobile keyboard shortcuts
+            if (data === '¥') {
+                data = '\n';  // Yen = Newline
+            } else if (data === '€') {
+                data = '\t';  // Euro = Tab
+            } else if (data === '￡' || data === '£') {
+                data = '\x1b[Z';  // Pound = Shift+Tab
+            }
+            // NO `readyState === OPEN` GATE HERE ANY MORE. That test is
+            // what silently ate everything typed before the socket
+            // existed; _sendUserBytes still applies it, but only after
+            // the buffer has had the chance to HOLD the bytes instead.
+            if (this._sendUserBytes(new TextEncoder().encode(data))) {
                 // Answering a session clears that session's toasts. Same
                 // isMouse gate as the two guards above, same reason: a
                 // pointer move is not an answer. After the send, so a
@@ -468,12 +484,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
                 ev.preventDefault();
                 ev.stopPropagation();
-                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    const bytes = new Uint8Array([0x1b, 0x0d]);  // \x1b\r - VSCode/Alacritty pattern from Claude Code's /terminal-setup docs
-                    console.log('[SHIFT-ENTER] sending ESC+CR (\\x1b\\r), bytes:', bytes);
-                    this.ws.send(bytes);
-                    this._noteUserInputToSession();
-                }
+                const bytes = new Uint8Array([0x1b, 0x0d]);  // \x1b\r - VSCode/Alacritty pattern from Claude Code's /terminal-setup docs
+                console.log('[SHIFT-ENTER] sending ESC+CR (\\x1b\\r), bytes:', bytes);
+                if (this._sendUserBytes(bytes)) this._noteUserInputToSession();
                 return false;  // swallow the event so xterm doesn't also emit \r
             }
             return true;  // all other keys pass through to default handling
@@ -709,10 +722,25 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         }
         this.queue.push(bytes);
         this._queuedBytes += bytes.length;
-        if (!this.flushing) {
-            this.flushing = true;
-            requestAnimationFrame(() => this.flush());
-        }
+        if (this.flushing) return;
+        // AN ISOLATED CHUNK DOES NOT WAIT FOR A FRAME. `flushing` is true
+        // for as long as a flush is scheduled OR a write is outstanding,
+        // so reaching here means the queue held nothing but these bytes
+        // and there is nothing to coalesce them with. The frame that used
+        // to sit here bought coalescing, and coalescing one chunk with
+        // itself costs up to a full frame - 16.7ms at 60Hz, about half
+        // that on average - on the keystroke echo the round-trip target
+        // is measured on.
+        //
+        // BURSTS STILL COALESCE, and that is what the branch preserves.
+        // The second chunk of a burst arrives while this write is in
+        // flight, so it takes the early return above and waits for the
+        // re-schedule at the bottom of flush(), which merges everything
+        // that accumulated into ONE term.write per frame. Sustained
+        // output therefore lands in that branch after its first chunk and
+        // xterm parses once per frame exactly as before.
+        this.flushing = true;
+        this.flush();
     }
 
     /**
@@ -751,6 +779,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * Flush queued PTY data
      */
     flush() {
+        // NO TERMINAL TO WRITE INTO. `term` is null until initTerminal()
+        // runs, and enqueue reaches this synchronously now. The bytes
+        // STAY QUEUED, bounded by the write queue, and `flushing` goes
+        // back down so the next chunk retries once a terminal exists.
+        if (!this.term) {
+            this.flushing = false;
+            console.warn('[terminal] flush with no terminal, holding',
+                this._queuedBytes, 'bytes');
+            return;
+        }
         let total = 0;
         for (const c of this.queue) total += c.length;
         const merged = new Uint8Array(total);
@@ -787,7 +825,17 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 this.term.scrollToBottom();
             }
 
-            if (this.queue.length) requestAnimationFrame(() => this.flush());
+            // THE RE-SCHEDULE RE-RAISES THE FLAG, which is what makes
+            // `flushing` mean "a flush is scheduled or in flight" rather
+            // than only "in flight". Without it a chunk arriving between
+            // this callback and the scheduled frame reads `flushing` as
+            // false, and the isolated-write branch in enqueue() would
+            // then write synchronously UNDER a flush already on its way -
+            // two writers for one queue.
+            if (this.queue.length) {
+                this.flushing = true;
+                requestAnimationFrame(() => this.flush());
+            }
         });
     }
 
@@ -915,10 +963,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     sendKeyToTerminal(keyData) {
         if (window.AltScreenScroll) window.AltScreenScroll.noteUserInput();
         this._noteUserInputToSession(keyData);
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(new TextEncoder().encode(keyData));
-        } else {
-            console.warn('Terminal: WebSocket not open, cannot send key');
+        if (!this._sendUserBytes(new TextEncoder().encode(keyData))) {
+            console.warn('Terminal: key not delivered, the pane is not ready');
         }
     }
 
@@ -944,6 +990,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // hand this session the generation of whatever superseded it.
         this._navToken = (ctx && ctx.nav != null) ? ctx.nav
             : (window.NavigationGeneration ? window.NavigationGeneration.current() : null);
+        this._beginConnection('connectToSession');
         console.log('Terminal: Connecting to session:', this._unwrapSession(session).id, {
             adopted: !!initialScrollbackB64,
             fifoStartOffset,
@@ -1005,70 +1052,60 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // not the header - nothing to enable here for it).
         if (this.detachSessionBtn) this.detachSessionBtn.disabled = false;
 
-        // Adopt path: paint server-captured scrollback into xterm BEFORE
-        // the WS opens. Must be synchronous relative to the WS connect so
-        // the VT parser state is correct when the first streamed byte
-        // arrives at fifoStartOffset. atob() decodes to a binary string
-        // whose charCodeAt values are the raw bytes - we MUST NOT run
-        // these through TextDecoder, which would mangle non-UTF8 ANSI
-        // escape bytes. xterm.write() accepts Uint8Array directly and
-        // feeds the parser without re-encoding.
+        // Adopt path: paint the server's captured screen into xterm
+        // BEFORE the WS opens, so the VT parser state is correct when the
+        // first streamed byte arrives at fifoStartOffset. The whole
+        // ordered sequence - bounded layout wait, guarded fit, parser
+        // reset, raw octets - lives in one place, because both entry
+        // paths used to carry a byte-identical copy of it. See
+        // client/js/terminal-scrollback-paint.js.
         if (paintPlan === 'keep') { this._pendingPostConnectScroll = true; } else if (initialScrollbackB64) {
-            // Let layout settle (the screen-swap toggle needs a paint tick
-            // first). BOUNDED: the bare double-rAF this replaced never
-            // resolves in an unpainted tab, and the WS connect is below it.
-            await (window.TerminalLayoutWait?.settleFrames(2) ?? Promise.resolve());
-
-            // Fit xterm to the container BEFORE painting scrollback so the
-            // captured bytes land at the correct column width. xterm.js
-            // doesn't reflow already-buffered content on resize, so painting
-            // at the default 80-col geometry leaves the scrollback wrong
-            // even after a later fit. If the container isn't visible yet,
-            // fit() may throw or compute zeros - we swallow and continue;
-            // the resize pipeline / handshake fit will still recover the
-            // live screen, just not the already-painted scrollback rows.
-            try {
-                if (this.fitAddon && typeof this.fitAddon.fit === 'function') {
-                    this.fitAddon.fit();
-                }
-            } catch (e) {
-                console.warn('pre-paint fit failed (continuing):', e);
-            }
-
-            try {
-                const bin = atob(initialScrollbackB64);
-                const bytes = new Uint8Array(bin.length);
-                for (let i = 0; i < bin.length; i++) {
-                    bytes[i] = bin.charCodeAt(i) & 0xff;
-                }
-                // Exit any alt-screen state + clear + home cursor so the captured bytes
-                // paint into a known-clean screen instead of on top of stale parser
-                // state (the bytes carry escape sequences relative to the tmux pane's
-                // screen state at capture time - we have none of that here).
-                this.term.write('\x1b[?1049l\x1b[2J\x1b[H');
-                this.term.write(bytes, () => {
-                    this._forceScrollToBottom();
-                });
-                console.log(`Terminal: painted ${bytes.length} bytes of adopt scrollback`);
-                // Flag to send Ctrl+L in ws.onopen after dims handshake settles
+            if (await this._paintCapturedScreen(initialScrollbackB64, 'adopt') === 'painted') {
                 this._needsReplayCtrlL = true;
                 this._pendingPostConnectScroll = true;
-            } catch (e) {
-                // Non-fatal - if the b64 is malformed we still want the
-                // session to come up. The user will just miss the pre-
-                // adopt scrollback, not the live stream.
-                console.warn('Terminal: scrollback paint failed, continuing without it:', e);
             }
         } else {
             this.term.writeln('\x1b[1;32m[Session created - connecting to WebSocket...]\x1b[0m');
         }
 
-        // Connect WebSocket. THE DELAY IS A WINDOW: a session switch
-        // landing inside it used to open this session's socket anyway,
-        // which the next connect then had to abandon mid-handshake.
-        setTimeout(() => {
-            if (this._navCurrent('scheduled connect')) this.connectWebSocket();
-        }, 500);
+        await this._connectWhenReady('scheduled connect');
+    }
+
+    /**
+     * Description: open the socket, once this navigation is still the one
+     *   on screen. The MEASURED readiness this waits on lives inside
+     *   connectWebSocket() and is documented below.
+     * Inputs: what (string) - for the superseded-navigation log line.
+     * Output: Promise<void>.
+     */
+    async _connectWhenReady(what) {
+        // THE 500 ms THAT USED TO BE HERE WAS WAITING FOR A CSS
+        // TRANSITION THAT DOES NOT EXIST. `.screen` swaps on `display`,
+        // which is not animatable and fires no `transitionend`, and the
+        // two padding rules that also match `.screen` say in their own
+        // comments that their transitions were removed on purpose. The
+        // measured readiness that IS real is below this line, inside
+        // connectWebSocket: the bounded container measurement, then the
+        // bounded guardedFit retry. See CLAUDE.md, "the connect is
+        // measured, not slept".
+        if (!this._navCurrent(what)) return;
+        await this.connectWebSocket();
+    }
+
+    /**
+     * Description: the pre-connect screen paint, delegated. One line here
+     *   and the ordered sequence next door, so a fix cannot land on one
+     *   entry path and miss the other.
+     * Inputs: b64 (string) - the captured screen.
+     *   what (string) - 'adopt' or 'rejoin', for the log line.
+     * Output: Promise<string> - 'painted' | 'nothing' | 'decode_failed'.
+     */
+    async _paintCapturedScreen(b64, what) {
+        if (!window.TerminalScrollbackPaint) {
+            console.warn('Terminal: no scrollback paint module, skipping the capture');
+            return 'nothing';
+        }
+        return window.TerminalScrollbackPaint.paint(this, b64, what);
     }
 
     /**
@@ -1098,6 +1135,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // Same rule as connectToSession(): the caller's token wins.
         this._navToken = (ctx && ctx.nav != null) ? ctx.nav
             : (window.NavigationGeneration ? window.NavigationGeneration.current() : null);
+        this._beginConnection('reconnectToExistingSession');
         // THE path that lost a conversation on every server restart. See client/js/terminal-reconnect-buffer.js.
         const paintPlan = window.TerminalReconnectBuffer ? window.TerminalReconnectBuffer.planFor(this.term, this._unwrapSession(this._currentSession).id, this._unwrapSession(session).id, session && session.initial_scrollback_b64) : 'replace';
 
@@ -1167,58 +1205,15 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // dims, on top of the painted history.
         const initialScrollbackB64 = session && session.initial_scrollback_b64;
         if (paintPlan === 'keep') { this._pendingPostConnectScroll = true; } else if (initialScrollbackB64) {
-            // Let layout settle (the screen-swap toggle needs a paint tick
-            // first). BOUNDED: the bare double-rAF this replaced never
-            // resolves in an unpainted tab, and the WS connect is below it.
-            await (window.TerminalLayoutWait?.settleFrames(2) ?? Promise.resolve());
-
-            // Fit xterm to the container BEFORE painting scrollback so the
-            // captured bytes land at the correct column width. xterm.js
-            // doesn't reflow already-buffered content on resize, so painting
-            // at the default 80-col geometry leaves the scrollback wrong
-            // even after a later fit. If the container isn't visible yet,
-            // fit() may throw or compute zeros - we swallow and continue;
-            // the resize pipeline / handshake fit will still recover the
-            // live screen, just not the already-painted scrollback rows.
-            try {
-                if (this.fitAddon && typeof this.fitAddon.fit === 'function') {
-                    this.fitAddon.fit();
-                }
-            } catch (e) {
-                console.warn('pre-paint fit failed (continuing):', e);
-            }
-
-            try {
-                const bin = atob(initialScrollbackB64);
-                const bytes = new Uint8Array(bin.length);
-                for (let i = 0; i < bin.length; i++) {
-                    bytes[i] = bin.charCodeAt(i) & 0xff;
-                }
-                // Exit any alt-screen state + clear + home cursor so the
-                // captured bytes paint into a known-clean parser state.
-                this.term.write('\x1b[?1049l\x1b[2J\x1b[H');
-                this.term.write(bytes, () => {
-                    this._forceScrollToBottom();
-                });
-                console.log(`Terminal: painted ${bytes.length} bytes of rejoin scrollback`);
+            if (await this._paintCapturedScreen(initialScrollbackB64, 'rejoin') === 'painted') {
                 this._needsReplayCtrlL = true;
                 this._pendingPostConnectScroll = true;
-            } catch (e) {
-                // Non-fatal: fall through to the clean-screen rejoin. The
-                // live stream over WS still works; user just misses the
-                // pre-existing history paint.
-                console.warn('reconnectToExistingSession: failed to paint initial scrollback', e);
             }
         }
 
-        // Always reopen a fresh WS after teardown above, on the same delay
-        // connectToSession uses, so
-        // the terminal screen transition has time to settle and the
-        // fit/font readiness dance in connectWebSocket() has a stable
-        // container to measure.
-        setTimeout(() => {
-            if (this._navCurrent('scheduled reconnect')) this.connectWebSocket();
-        }, 500);
+        // Always reopen a fresh WS after the teardown above, through the
+        // same MEASURED gate connectToSession uses.
+        await this._connectWhenReady('scheduled reconnect');
     }
 
     /**
@@ -1229,16 +1224,8 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      * @returns {Promise<void>}
      */
     async waitForFontsAndLayout(container) {
-        // TerminalMetrics.waitForFonts bounds the wait so a font that never
-        // resolves cannot hang the terminal forever. See that module for why
-        // document.fonts.ready alone is a weaker guarantee than it looks.
-        if (window.TerminalMetrics?.waitForFonts) {
-            await window.TerminalMetrics.waitForFonts();
-        } else if (document.fonts?.ready) {
-            try { await document.fonts.ready; } catch {}
-        }
-        const r = await (window.TerminalLayoutWait?.waitForLayout(container) ?? null);
-        if (r?.timedOut) console.warn('Terminal: layout wait timed out, connecting anyway', r);
+        if (!window.TerminalReadiness) return null;
+        return window.TerminalReadiness.waitForContainer(container);
     }
 
     /**
@@ -1294,25 +1281,20 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         const container = document.getElementById('terminal');
         await this.waitForFontsAndLayout(container);
 
-        // Fit terminal with multiple attempts to ensure proper sizing.
-        // Both attempts go through the measurement guard so a fit taken
-        // before xterm.css applied cannot set a bogus grid.
-        const fitOnce = () => {
-            if (window.TerminalMetrics?.guardedFit) {
-                const r = window.TerminalMetrics.guardedFit(this);
-                if (!r.fitted) {
-                    console.warn(`Terminal: initial fit skipped, reason=${r.reason}`);
-                }
-                return r.fitted;
-            }
-            this.fitAddon.fit();
-            return true;
-        };
-        fitOnce();
-        await new Promise(resolve => setTimeout(resolve, 50));
-        fitOnce();
-
-        console.log('Terminal size:', this.term.cols, 'x', this.term.rows);
+        // THE CONNECT IS ONLY ISSUED ONCE THE CONTAINER HAS BEEN
+        // MEASURED. This used to be fit, sleep 50ms, fit again - the
+        // second attempt existing because the first might have been taken
+        // before layout settled, which is a real concern answered with a
+        // guess. guardedFit returns a VERDICT, so the question is asked
+        // instead: retry while it refuses, stop the instant it succeeds,
+        // give up on a bound. See client/js/terminal-fit-wait.js for why
+        // the bound is a warn and never a refusal to connect.
+        const measured = window.TerminalReadiness
+            ? await window.TerminalReadiness.measure(this)
+            : { fitted: false, reason: 'no-fit-wait', attempts: 0, waitedMs: 0 };
+        console.log('Terminal size:', this.term.cols, 'x', this.term.rows,
+            'measured=' + measured.fitted, 'reason=' + measured.reason,
+            'in ' + measured.waitedMs + 'ms');
 
         // Open WebSocket via subprotocol auth (Item 3). JWT is carried in
         // the Sec-WebSocket-Protocol header, NOT in the URL - so no token
@@ -1798,6 +1780,13 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             console.log('Terminal: WebSocket closed', { code: closeCode });
             this.ws = null;
 
+            // AN AMBIGUOUS DISCONNECT DISCARDS AND NEVER REPLAYS: we
+            // cannot know what the server received, so re-sending held
+            // input risks running a command twice.
+            if (window.TerminalInputBuffer) {
+                window.TerminalInputBuffer.abandon(this, 'the socket closed, code ' + closeCode);
+            }
+
             // Stop keepalive
             if (this.keepaliveInterval) {
                 clearInterval(this.keepaliveInterval);
@@ -2001,6 +1990,16 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                     console.warn('[TERM-RESIZE] handshake fit failed', e);
                 }
                 this.sendResize('handshake', true /* force: always ship on handshake */);
+            }
+        } else if (type === 'terminal.ready') {
+            // THE ONE POSITIVE STATEMENT that the pane can take input.
+            // Everything before it happens with the socket OPEN and the
+            // server's handshake loop discarding binary frames, so
+            // "socket open" was never the same fact. The flush, and what
+            // happens when there is nothing to flush, are in
+            // client/js/terminal-input-buffer.js.
+            if (window.TerminalInputBuffer) {
+                window.TerminalInputBuffer.flushOnReady(this, message);
             }
         }
     }
@@ -2730,13 +2729,14 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     insertText(text, ticket) {
         if (window.TerminalInputOwnership
             && !window.TerminalInputOwnership.deliver(this, ticket)) return;
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.warn('Terminal: Cannot insert text - WebSocket not connected');
+
+        // Sent without a newline. Held, not dropped, while the pane is
+        // still opening: a slash command picked during a connect is a
+        // deliberate act and losing it silently is the defect.
+        if (!this._sendUserBytes(new TextEncoder().encode(text))) {
+            console.warn('Terminal: text not delivered, the pane is not ready');
             return;
         }
-
-        // Send text to terminal without newline
-        this.ws.send(new TextEncoder().encode(text));
         this._noteUserInputToSession(text);
 
         console.log('Terminal: Inserted text:', text);

@@ -194,17 +194,28 @@ test('POSITIVE CONTROL: ordinary output is written, merged once per frame', () =
     assert.equal(self.queue.length, 0);
 });
 
-test('two chunks in one frame become ONE write, so xterm parses once', () => {
+test('a BURST still coalesces to one write per frame', () => {
+    // The first chunk goes straight through (see the isolated-write test
+    // below); every chunk that arrives while that write is outstanding
+    // waits, and the re-schedule merges all of them into ONE term.write.
+    // That is the coalescing the animation frame was ever buying, and it
+    // is what sustained output actually looks like.
     const { self, term, sandbox } = makeController();
-    // Hold the frame so both chunks land before the flush runs.
     let frame = null;
     sandbox.requestAnimationFrame = (fn) => { frame = fn; return 1; };
+
     self.enqueue(chunk(3, 1));
+    assert.equal(term.written.length, 1, 'the first chunk is isolated and goes now');
     self.enqueue(chunk(4, 2));
-    assert.equal(term.written.length, 0, 'nothing written until the frame');
+    self.enqueue(chunk(5, 3));
+    assert.equal(term.written.length, 1,
+        'nothing more is written while xterm still holds the first write');
+
+    term.pendingCallback();                 // xterm finishes the first write
+    assert.equal(term.written.length, 1, 'the merge waits for the frame');
     frame.call(self);
-    assert.equal(term.written.length, 1, 'one write, not two');
-    assert.equal(term.written[0].length, 7);
+    assert.equal(term.written.length, 2, 'one write for the burst, not two');
+    assert.equal(term.written[1].length, 9, 'both queued chunks merged');
 });
 
 test('an overflow drops from the FRONT and writes exactly one marker', () => {
@@ -213,21 +224,59 @@ test('an overflow drops from the FRONT and writes exactly one marker', () => {
     sandbox.requestAnimationFrame = (fn) => { frame = fn; return 1; };
     const budget = sandbox.window.TerminalWriteQueue.MAX_QUEUED_BYTES;
     const half = Math.floor(budget / 2);
-    self.enqueue(chunk(half, 1));      // oldest
-    self.enqueue(chunk(half, 2));      // now exactly at budget
+    // A first chunk occupies the in-flight slot, so everything after it
+    // queues and the admission policy is what this exercises.
+    self.enqueue(chunk(1, 9));
+    self.enqueue(chunk(half, 1));      // oldest queued
+    self.enqueue(chunk(half, 2));      // now at the budget
     self.enqueue(chunk(16, 3));        // must shed
+    term.pendingCallback();            // xterm finishes, the merge is scheduled
     frame.call(self);
-    const text = asText(term.written[0]);
+    const merged = term.written[1];
+    const text = asText(merged);
     assert.match(text, /\[cloude: dropped \d+ bytes of output/,
         'a drop that is not announced makes the terminal lie');
     assert.equal((text.match(/\[cloude: dropped/g) || []).length, 1,
         'exactly one marker, not one per shed chunk');
     // The oldest chunk's bytes are gone; the newest are present.
-    assert.ok(!term.written[0].includes(1),
+    assert.ok(!merged.includes(1),
         'the oldest chunk must be the one that went');
-    assert.ok(term.written[0].includes(3),
+    assert.ok(merged.includes(3),
         'and the newest output must survive - dropping the tail would '
         + 'throw away the very thing the pressure is producing');
+});
+
+test('AN ISOLATED CHUNK REACHES XTERM WITHOUT WAITING FOR A FRAME', () => {
+    // The frame in enqueue() coalesced a burst, and coalescing one chunk
+    // with itself costs up to a whole frame on the keystroke echo. This
+    // is the assertion that says the frame is no longer on that path, so
+    // a rAF that is never fired must not stop the write.
+    const { self, term, sandbox } = makeController();
+    let frames = 0;
+    sandbox.requestAnimationFrame = () => { frames += 1; return 1; };
+    self.enqueue(chunk(52, 7));       // the measured size of one keystroke echo
+    assert.equal(term.written.length, 1, 'written with no frame in between');
+    assert.equal(frames, 0, 'and no frame was even requested');
+    assert.equal(self.queue.length, 0);
+});
+
+test('a chunk arriving between the callback and its frame does not double-write', () => {
+    // `flushing` has to mean "scheduled OR in flight", not only the
+    // latter. If the re-schedule left it false, this chunk would take the
+    // isolated branch and write synchronously UNDER a flush already on
+    // its way, giving one queue two writers.
+    const { self, term, sandbox } = makeController();
+    let frame = null;
+    sandbox.requestAnimationFrame = (fn) => { frame = fn; return 1; };
+    self.enqueue(chunk(3, 1));        // written now
+    self.enqueue(chunk(4, 2));        // queued behind it
+    term.pendingCallback();           // re-schedule armed, frame not run yet
+    self.enqueue(chunk(5, 3));        // lands in the gap
+    assert.equal(term.written.length, 1,
+        'the gap between the callback and its frame is still covered');
+    frame.call(self);
+    assert.equal(term.written.length, 2, 'exactly one more write');
+    assert.equal(term.written[1].length, 9);
 });
 
 test('the queue never exceeds the budget, however hard it is pushed', () => {
@@ -247,11 +296,14 @@ test('the queue never exceeds the budget, however hard it is pushed', () => {
 test('with the policy module missing, the queue is unbounded as before', () => {
     // A load-order accident must degrade to the shipped behaviour, not
     // to a terminal that drops output it could have written.
-    const { self, sandbox } = makeController();
+    const { self, term, sandbox } = makeController();
     delete sandbox.window.TerminalWriteQueue;
     sandbox.requestAnimationFrame = () => 1;
     for (let i = 0; i < 8; i += 1) self.enqueue(chunk(1024 * 1024));
-    assert.equal(self.queue.length, 8);
+    // The first chunk took the isolated-write path, so it is with xterm
+    // rather than in the queue. What matters is that NOTHING was dropped.
+    assert.equal(term.written.length, 1);
+    assert.equal(self.queue.length, 7, '8 admitted, 1 written, 0 dropped');
 });
 
 // ------------------------------------------- the switch, in two steps
@@ -261,11 +313,11 @@ test('THE DECISIVE CASE: a switch discards our bytes and waits for xterm\'s', as
     let frame = null;
     sandbox.requestAnimationFrame = (fn) => { frame = fn; return 1; };
 
-    self.enqueue(chunk(10, 1));
-    frame.call(self);                 // one write is now IN FLIGHT
+    self.enqueue(chunk(10, 1));       // isolated: one write is now IN FLIGHT
     assert.equal(self._writeInFlight, true);
     self.enqueue(chunk(10, 2));       // and more bytes queue behind it
     assert.equal(self.queue.length, 1);
+    assert.equal(frame, null, 'no frame was needed for the isolated write');
 
     let released = false;
     const release = self._releaseQueueForSwitch().then(() => { released = true; });
@@ -289,10 +341,8 @@ test('a SECOND switch releases the first one\'s wait rather than orphaning it', 
     // hung forever, on exactly the rapid double-switch this chain exists
     // to make safe.
     const { self, term, sandbox } = makeController();
-    let frame = null;
-    sandbox.requestAnimationFrame = (fn) => { frame = fn; return 1; };
+    sandbox.requestAnimationFrame = () => 1;
     self.enqueue(chunk(10, 1));
-    frame.call(self);
     assert.equal(self._writeInFlight, true);
 
     let firstDone = false;

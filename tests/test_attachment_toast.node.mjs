@@ -581,7 +581,13 @@ test('terminal.js hands the sent bytes down to the dismissal seam', () => {
     assert.ok(src.includes('this._noteUserInputToSession(keyData)'));
     // Shift+Enter deliberately passes NOTHING: it bypasses onData and
     // sends ESC+CR, which is a newline, so it must not look like a send.
-    assert.ok(/this\.ws\.send\(bytes\);\s*\n\s*this\._noteUserInputToSession\(\);/.test(src));
+    // The send goes through _sendUserBytes now (it holds input typed
+    // before the pane is ready instead of dropping it), and the receipt
+    // clear is gated on delivery having actually happened - a chord that
+    // was only BUFFERED has not been sent, so it must not retire a card.
+    assert.ok(/this\._sendUserBytes\(bytes\)\)\s*this\._noteUserInputToSession\(\);/.test(src),
+        'shift+enter must pass no bytes to the dismissal seam, and must '
+        + 'only reach it when the bytes were really delivered');
 });
 
 test('toast-lifecycle.js dispatches the receipt clear and keeps the submit test out', () => {

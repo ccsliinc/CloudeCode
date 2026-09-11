@@ -492,8 +492,10 @@ test('the onData and Shift+Enter call sites are still wired', () => {
         + 'the neighbouring guards use - a pointer move is not an answer');
     assert.match(
         src,
-        /this\.ws\.send\(bytes\);\s*\n\s*this\._noteUserInputToSession\(\);/,
-        'the Shift+Enter chord bypasses onData and needs its own call');
+        /this\._sendUserBytes\(bytes\)\)\s*this\._noteUserInputToSession\(\);/,
+        'the Shift+Enter chord bypasses onData and needs its own call, and '
+        + 'it may only clear a toast when the bytes were really delivered - '
+        + 'input merely HELD until the pane is ready has answered nothing');
 });
 
 // ----------------------------------------------------------------- runner
