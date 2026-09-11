@@ -5554,22 +5554,29 @@ class Launchpad {
                 }
             }
 
+            // ENTER THE SESSION FIRST, DECORATE AFTER. The session is what
+            // the user clicked; the project repaint is bookkeeping they
+            // did not ask for, and nothing in its result is needed to
+            // render the terminal. Dispatched before the repaint, the
+            // user lands in their new session immediately instead of
+            // watching a list redraw first.
+            window.dispatchEvent(new CustomEvent('session-created', {
+                detail: { session, nav }
+            }));
+
             // Repaint the project tree from the list we just changed.
             // renderProjectList() draws from the cached this.projects, and
             // the 5s poller repaints from that cache without ever refilling
             // it - so without this the new project stays invisible until some
-            // other action reloads. Guarded on its own: the session was
-            // created, and a failed repaint must not read as a failed create.
+            // other action reloads. STILL AWAITED, so a caller that runs
+            // after this function does not race the refresh, and still
+            // guarded on its own: the session was created, and a failed
+            // repaint must not read as a failed create.
             try {
                 await this.loadProjects();
             } catch (error) {
                 console.error('Launchpad: Failed to refresh projects after session create:', error);
             }
-
-            // Trigger session-created event
-            window.dispatchEvent(new CustomEvent('session-created', {
-                detail: { session, nav }
-            }));
 
         } catch (error) {
             console.error('Launchpad: Failed to create session:', error);
@@ -5995,20 +6002,26 @@ class Launchpad {
         try {
             this.updateStatus('detaching from current session...');
             await window.API.detachSession();
-
-            // Wait a moment, then create new. Same race-avoidance rationale
-            // as ``detachAndOpenProject``. Honor the agentType so the
-            // re-create lands on the same CLI the user originally picked.
-            setTimeout(() => {
-                if (agentType) {
-                    this.createNewSessionWithAgent(agentType);
-                } else {
-                    this.createNewSession();
-                }
-            }, 500);
         } catch (error) {
             console.error('Launchpad: Failed to detach session:', error);
             this.showError('failed to detach session: ' + error.message);
+            return;
+        }
+        // No delay, and its own try/catch, both for the reasons spelled
+        // out in ``detachAndOpenProject``. The identical copy of that
+        // timer lived here too, and fixing one of a pair is how the
+        // other one survives.
+        // Honor the agentType so the re-create lands on the same CLI the
+        // user originally picked.
+        try {
+            if (agentType) {
+                await this.createNewSessionWithAgent(agentType);
+            } else {
+                await this.createNewSession();
+            }
+        } catch (error) {
+            console.error('Launchpad: Failed to create a session after detach:', error);
+            this.showError('failed to create session: ' + error.message);
         }
     }
 
@@ -6421,15 +6434,28 @@ class Launchpad {
         try {
             this.updateStatus('detaching from current session...');
             await window.API.detachSession();
-
-            // Wait a moment, then open project. The brief delay lets the
-            // server finish clearing its backend handles before the new
-            // create-session call lands - avoids a race where we try to
-            // create while the old backend is still tearing down.
-            setTimeout(() => this.selectProject(project), 500);
         } catch (error) {
             console.error('Launchpad: Failed to detach session:', error);
             this.showError('failed to detach session: ' + error.message);
+            return;
+        }
+        // NO DELAY, BECAUSE THE AWAIT ABOVE ALREADY IS THE WAIT. This
+        // used to sleep 500 ms "to let the server finish clearing its
+        // backend handles". It already has: detach_session awaits
+        // detach_current_session, which awaits the idle watcher's stop
+        // and the reader task's cancellation before the handler returns,
+        // so the response just awaited IS the completion signal. The
+        // timer was waiting for something that had already happened.
+        //
+        // Its own try/catch, because it is its own failure: the timer
+        // escaped the block above, so an error here used to be an
+        // unhandled rejection, and folding it in would report a failed
+        // OPEN as a failed detach.
+        try {
+            await this.selectProject(project);
+        } catch (error) {
+            console.error('Launchpad: Failed to open project after detach:', error);
+            this.showError(`failed to open ${project.name}: ${error.message}`);
         }
     }
 

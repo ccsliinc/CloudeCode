@@ -1184,21 +1184,14 @@ class AppController {
             window.DPad.show();
         }
 
-        // Initialize slash commands modal
-        if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
-            await window.SlashCommandsModal.init((command, ticket) => {
-                // Insert command into terminal without Enter. The ticket
-                // is ownership claimed when the panel OPENED - the panel
-                // survives a session switch, so a pick made after one
-                // would otherwise run in the wrong pane. See
-                // client/js/terminal-input-ownership.js.
-                window.TerminalController.insertText(command, ticket);
-            }, session && session.working_dir);
-        }
-
-        // Show slash command button on terminal screen
-        if (window.SlashCommandsModal) {
-            window.SlashCommandsModal.show();
+        // START the slash command palette, do NOT wait for it. It is a
+        // property of the session's AGENT, not of the socket, and its two
+        // server round trips used to sit directly above the connect. It
+        // carries the navigation token so a palette that lands after the
+        // user has left cannot populate another session's menu. See
+        // client/js/slash-commands-boot.js.
+        if (window.SlashCommandsBoot) {
+            window.SlashCommandsBoot.start(session && session.working_dir, nav);
         }
 
         // THE LAST CHECK BEFORE THE SOCKET. Everything above this line is
@@ -1347,14 +1340,11 @@ class AppController {
         if (window.DPad) {
             window.DPad.show();
         }
-        if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
-            await window.SlashCommandsModal.init((command, ticket) => {
-                // Same ticket rule as showTerminal()'s copy above.
-                window.TerminalController.insertText(command, ticket);
-            }, session && session.working_dir);
-        }
-        if (window.SlashCommandsModal) {
-            window.SlashCommandsModal.show();
+        // Same rule as showTerminal()'s copy: started, never awaited, and
+        // carrying the token so a late palette cannot land on the wrong
+        // session's menu.
+        if (window.SlashCommandsBoot) {
+            window.SlashCommandsBoot.start(session && session.working_dir, nav);
         }
 
         // THE LAST CHECK BEFORE THE SOCKET - see showTerminal()'s copy of

@@ -1184,6 +1184,14 @@
          because slash-commands.js is already past the 500-line budget. -->
     <script src="/static/js/slash-favorites.js"></script>
     <script src="/static/js/slash-commands.js"></script>
+    <!-- Starts the palette WITHOUT the WebSocket waiting for it. The two
+         fetches it makes used to sit directly above the terminal connect,
+         on the critical path between a click and a connected pane, and
+         the list is a property of the session's AGENT rather than of the
+         socket. Carries the navigation token so a palette landing after
+         the user has left cannot populate another session's menu. Must
+         load AFTER slash-commands.js, whose modal it drives. -->
+    <script src="/static/js/slash-commands-boot.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->
     <script src="/static/js/router.js"></script>
