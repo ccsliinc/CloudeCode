@@ -59,6 +59,51 @@ class WSMessageType(str, Enum):
     # than silently wondering why the pane is smaller than its own
     # viewport. See src/core/terminal_size.py for the negotiation rule.
     TERMINAL_SIZE = "terminal_size"
+    # ---- the application event channel, /ws/events (issue 34) ----------
+    # These travel on the per-BROWSER socket rather than the per-session
+    # terminal one, so they reach a client sitting on the home screen or
+    # looking at a different session. Dot notation, matching ``toast.*``.
+    #
+    # Server -> client, once, as the FIRST frame after a successful
+    # handshake. It means "you are receiving notices now, and you missed
+    # everything before this instant", and the client answers it with an
+    # authoritative refresh. It is deliberately NOT a catch-up: nothing is
+    # replayed and nothing is buffered for a client that is not connected.
+    EVENTS_HELLO = "events.hello"
+    # Server -> client. A COMPACT change notice about one session: the
+    # instance it is about, and the handful of fields a list row paints.
+    # Never a whole SessionInfo - a notice carrying a full payload would
+    # be a second serialization of /sessions/list and would drift from it.
+    # Distinct from the legacy ``session_status`` value above, which is a
+    # different message on the terminal socket.
+    SESSION_STATUS_CHANGED = "session.status"
+    # Server -> client. The STRUCTURAL notice: the shape of the list
+    # changed, re-read it. It carries no payload at all, on purpose - a
+    # notice that says "re-read" cannot go stale or disagree with the
+    # endpoint the client then reads.
+    SESSIONS_CHANGED = "sessions.changed"
+    # Server -> client. The typed ui_preferences block committed a change.
+    # This literal predates the channel (it shipped on the terminal socket
+    # and still goes out there for a client holding one) and is named here
+    # so the enum stays the ONE vocabulary rather than acquiring a second
+    # one made of loose strings. See src/api/preferences_routes.py.
+    PREFERENCES_CHANGED = "preferences.changed"
+    # Server -> client, sent ONCE per socket, after the dimension
+    # handshake, after the attach paint, and after any configured startup
+    # command has been written into the pane. It is the only positive
+    # statement this protocol makes that the pane is able to receive
+    # input, and it exists because the window before it is not merely
+    # slow: the handshake loop in src/api/websocket.py deliberately DROPS
+    # binary frames that arrive before the client's pty_resize, so a
+    # keystroke typed during a connect is discarded with no trace.
+    #
+    # ADDITIVE, AND THAT IS LOAD-BEARING. A client that never reads this
+    # message behaves exactly as it did before the message existed: it
+    # sends input the moment its socket is OPEN, which is what every
+    # client did until now. Nothing on the server waits for an
+    # acknowledgement and nothing is gated on it, so an old client is not
+    # degraded, only unbuffered.
+    TERMINAL_READY = "terminal.ready"
 
 
 class ToastNewMessage(BaseModel):
@@ -150,3 +195,32 @@ class WSPTYResizeMessage(BaseModel):
     type: WSMessageType = WSMessageType.PTY_RESIZE
     cols: int
     rows: int
+
+
+class WSTerminalReadyMessage(BaseModel):
+    """The pane can take input now (server -> client), sent once.
+
+    ``startup_command`` says which ready case this is, in four words that
+    are deliberately not collapsible to two. ``issued`` - a configured
+    terminal command's bytes were written into the pane just before this
+    message, so the first thing the user sees is that command's output.
+    ``none`` - nothing was configured, and the pane is at a bare prompt.
+    ``failed`` - a command WAS configured and every write attempt failed,
+    so the pane is at a prompt the user did not ask for. ``unknown`` - the
+    flush could not be run or raised, so what reached the pane was never
+    established. A reading that did not happen is not a reading of
+    nothing, which is why the last two are separate from ``none``.
+
+    The message is sent in all four cases: readiness is about the pane
+    being able to take input, and a startup command that failed does not
+    make the pane unable to take input. Never withhold it.
+
+    Example:
+        WSTerminalReadyMessage(startup_command="none").model_dump()
+    """
+    type: WSMessageType = WSMessageType.TERMINAL_READY
+    startup_command: str = Field(
+        "unknown",
+        description="'issued' | 'none' | 'failed' | 'unknown' - what the "
+                    "startup command flush did, not what it was",
+    )

@@ -1380,7 +1380,6 @@ class SessionManager:
             logger.error("failed_to_load_session_metadata", error=str(exc))
             return
 
-<<<<<<< HEAD
         # Register the persisted session into the per-session dicts
         # (backend wired later by ``_lifespan_tmux_reconcile``). This is
         # the only session restored across restarts; concurrent live
@@ -1392,106 +1391,6 @@ class SessionManager:
             owned_count=load.owned_count,
             note="probe deferred to lifespan_startup",
         )
-=======
-            # Extract the new schema field BEFORE handing the rest to
-            # ``Session(**)``, which would reject unknown keys with
-            # ``extra='forbid'`` if we ever tightened it.
-            owned = raw.pop("owned_tmux_sessions", None)
-
-            # OWNED-SET-ONLY PAYLOAD. Written by ``_clear_stale_metadata``
-            # when it drops an un-rehydratable session pointer but has an
-            # ownership record worth keeping. There is no session to
-            # rehydrate, and that is the whole point - handing this to
-            # ``Session(**raw)`` would raise and the except below would
-            # swallow the owned set along with it, which is the exact loss
-            # the owned-set-only payload exists to prevent.
-            if not raw.get("id"):
-                self.owned_tmux_sessions = set(owned or [])
-                self._legacy_metadata_needs_backfill = False
-                logger.info(
-                    "session_metadata_owned_set_only_loaded",
-                    owned_count=len(self.owned_tmux_sessions),
-                    note="no persisted session to rehydrate",
-                )
-                return
-
-            loaded = Session(**raw)
-            # Register the persisted session into the per-session dicts
-            # (backend wired later by ``_lifespan_tmux_reconcile``). This
-            # is the only session restored across restarts; concurrent live
-            # sessions are a runtime-only feature.
-            self._register_session(loaded, backend=None)
-
-            if owned is None and raw.get("id"):
-                # Pre-v3 metadata: no owned-set was persisted. Mark for
-                # backfill on next save; the reconciler in
-                # ``lifespan_startup`` will populate the set once the
-                # slug is confirmed live on the tmux socket.
-                self.owned_tmux_sessions = set()
-                self._legacy_metadata_needs_backfill = True
-                logger.info(
-                    "session_metadata_legacy_detected",
-                    session_id=loaded.id,
-                    note="owned_tmux_sessions will be backfilled on rehydrate",
-                )
-            else:
-                self.owned_tmux_sessions = set(owned or [])
-                self._legacy_metadata_needs_backfill = False
-
-            logger.info(
-                "session_metadata_loaded",
-                session_id=loaded.id,
-                owned_count=len(self.owned_tmux_sessions),
-                note="probe deferred to lifespan_startup",
-            )
-        except Exception as e:
-            logger.error("failed_to_load_session_metadata", error=str(e))
-
-    def _write_metadata_atomic(self, data: dict) -> None:
-        """Durable, crash-consistent metadata write.
-
-        Protocol: write to a UNIQUELY NAMED sibling temp file (see
-        ``src/core/unique_tmp_path.py`` - atomic and serialized are
-        different properties, and a fixed ``.tmp`` name only ever had
-        the first) → ``f.flush()`` → ``os.fsync(fd)`` →
-        ``os.replace(tmp, final)``. ``os.replace`` is the only rename
-        primitive guaranteed atomic across POSIX and Windows. ``fsync``
-        before the rename prevents a kernel panic from stranding a
-        zero-byte file at the final path (which, on ext4
-        ``data=ordered``, is a real scenario).
-
-        The directory's own ``fsync`` (for rename durability) is skipped
-        - this is metadata, not a source of truth for money. Losing
-        the very last write to a sudden power failure is acceptable;
-        losing SESSION OWNERSHIP isn't, which is what the atomic rename
-        prevents.
-        """
-        path = settings.get_session_metadata_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = unique_tmp_path(path)
-
-        try:
-            with tmp.open("w") as f:
-                json.dump(data, f, indent=2, default=str)
-                f.flush()
-                try:
-                    os.fsync(f.fileno())
-                except OSError as exc:
-                    # tmpfs and some network FS don't support fsync; log
-                    # and continue - the rename is still atomic per POSIX.
-                    logger.debug("metadata_fsync_unsupported", error=str(exc))
-
-            os.replace(str(tmp), str(path))
-        except OSError:
-            # The temp name is unique per write, so a failure that left
-            # it behind would litter the state directory with one
-            # orphan per failure instead of reusing a single dead file.
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
->>>>>>> 6012467
 
     def _save_session_metadata(self, session: Optional[Session] = None):
         """Persist a session and the owned set, defaulting to the current one.
@@ -1794,18 +1693,7 @@ class SessionManager:
         tmux_name = self.hook_tokens.name_for(session_id)
         if not tmux_name:
             return None
-<<<<<<< HEAD
         for live_id, sess in self._registry.sessions.items():
-            if getattr(sess, "tmux_session", None) == tmux_name:
-                logger.info(
-                    "toast_session_id_remapped",
-                    stale_id=session_id,
-                    live_id=live_id,
-                    tmux_name=tmux_name,
-                )
-                return live_id
-=======
-        for live_id, sess in self.sessions.items():
             if getattr(sess, "tmux_session", None) != tmux_name:
                 continue
             if live_id == session_id:
@@ -1819,7 +1707,6 @@ class SessionManager:
                 tmux_name=tmux_name,
             )
             return live_id
->>>>>>> 6012467
         return None
 
     def record_toast(
@@ -1903,11 +1790,12 @@ class SessionManager:
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("toast_label_read_threw", error=str(exc))
             session_label = None
-<<<<<<< HEAD
-        # STORAGE, SUPERSESSION AND PRUNING ARE THE INBOX'S. Everything
-        # above this line is what the inbox deliberately does not know:
-        # which live session this hook's id means, what colour the
-        # session's theme is, and what to call it.
+        # STORAGE, SUPERSESSION, VERSIONING AND PRUNING ARE THE INBOX'S.
+        # Everything above this line is what the inbox deliberately does
+        # not know: which live session this hook's id means, what colour
+        # the session's theme is, and what to call it. The monotonic
+        # ``version`` issue #39 asks for moves inside ``store`` and
+        # ``ack``, on a real content change only.
         toast, _superseded = self._toast_inbox.store(
             session_id,
             kind=kind,
@@ -1917,73 +1805,6 @@ class SessionManager:
             session_label=session_label,
             session_name=session_name,
         )
-=======
-        bucket = self._pending_toasts.setdefault(session_id, [])
-        superseded = self._find_supersedable_toast(bucket, kind, title)
-        if superseded is not None:
-            # REPLACE IN PLACE, KEEPING THE ID. See _find_supersedable_toast
-            # for which records qualify and why the id must not change.
-            #
-            # THE VERSION MOVES ONLY ON A REAL CHANGE (issue #39). Compare
-            # BEFORE mutating: a duplicated hook event resupersedes with
-            # identical content ("your turn" fired twice, nothing new to
-            # say) and must not bump the version, or every client holding
-            # this toast re-renders for nothing - the exact waste issue
-            # #39 exists to remove. `created_at` and `session_name` are
-            # deliberately excluded from this comparison for `created_at`
-            # (a timestamp is not content) but `session_name` DOES count:
-            # a rename between two Stops is a real fact about the same
-            # notification. `title` is never compared - it is part of the
-            # match key `_find_supersedable_toast` already applied, so it
-            # is always equal here.
-            content_changed = (
-                superseded.body != body
-                or superseded.color != color
-                or superseded.session_label != session_label
-                or superseded.session_name != session_name
-            )
-            superseded.body = body
-            superseded.color = color
-            superseded.session_label = session_label
-            superseded.session_name = session_name
-            superseded.created_at = datetime.utcnow()
-            if content_changed:
-                superseded.version += 1
-            bucket.remove(superseded)
-            bucket.insert(0, superseded)  # newest-first
-            toast = superseded
-            logger.info(
-                "toast_superseded",
-                session_id=session_id,
-                toast_id=toast.id,
-                kind=kind,
-                version=toast.version,
-                version_bumped=content_changed,
-            )
-        else:
-            toast = Toast(
-                id=_uuid.uuid4().hex,
-                session_id=session_id,
-                kind=kind,
-                title=title,
-                body=body,
-                color=color,
-                session_label=session_label,
-                session_name=session_name,
-                created_at=datetime.utcnow(),
-                version=1,
-                acknowledged=False,
-            )
-            bucket.insert(0, toast)  # newest-first
-            logger.info(
-                "toast_recorded",
-                session_id=session_id,
-                toast_id=toast.id,
-                kind=kind,
-                color=color,
-            )
-        self._prune_toasts(session_id)
->>>>>>> 6012467
 
         # v0.7.0 Part 4 - fan out to the notification router (ntfy + Slack).
         # Lazy import to keep the (already-circular-prone) notifications
@@ -2627,11 +2448,15 @@ class SessionManager:
         """
         if not toast_auto_ack.kinds_answered_by(event_kind):
             return []
-<<<<<<< HEAD
-        if not self._toast_inbox.has(session_id):
-=======
-        if session_id not in self.sessions:
->>>>>>> 6012467
+        # HIS GUARD, NOT THE DECOMPOSED BUCKET READ. The docstring above
+        # is the measurement: asking the toast inbox "do you hold
+        # anything for this id" sent every live session with an empty
+        # bucket into the remap path, 339 self-remaps over 8 hours on
+        # live with stale_id == live_id every time, and it is one tmux
+        # name reuse away from auto-acking a different session's toasts.
+        # The question the recovery exists to answer is whether the id is
+        # unknown to the MANAGER, which is the registry on this line.
+        if self._registry.get_session(session_id) is None:
             remapped = self._live_session_id_for_stale_id(session_id)
             if remapped is not None:
                 session_id = remapped

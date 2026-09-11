@@ -101,6 +101,7 @@ from .websocket import (
     WSPTYDataMessage,
     WSPTYInputMessage,
     WSPTYResizeMessage,
+    WSTerminalReadyMessage,
 )
 from .config_settings import (
     AgentCommandsUpdate,
@@ -143,7 +144,8 @@ __all__ = [
     "UploadImageResponse", "VerifyTOTPRequest", "WSCommandMessage",
     "WSErrorMessage", "WSLocalServerDetectedMessage", "WSLocalServerLostMessage",
     "WSLogMessage", "WSMessageType", "WSPTYDataMessage", "WSPTYInputMessage",
-    "WSPTYResizeMessage", "WSSessionStatusMessage", "WorkspaceUpdate",
+    "WSPTYResizeMessage", "WSSessionStatusMessage", "WSTerminalReadyMessage",
+    "WorkspaceUpdate",
     "WrapperExamplesResponse", "WrapperListResponse", "describe_model_id_rejection",
     "is_valid_model_id",
 ]

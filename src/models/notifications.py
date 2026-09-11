@@ -60,6 +60,38 @@ class Toast(BaseModel):
         ),
     )
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # MONOTONIC PER-RECORD VERSION, ISSUE #39. Hook events are unordered,
+    # duplicated and droppable, so a client applying whatever arrives last
+    # can apply a stale redelivery over a newer state. This is the same
+    # discipline client/js/preferences.js already uses for
+    # `preferences.changed`: a per-record integer, starting at 1, that
+    # moves ONLY on a real content change - never a global counter, never
+    # a timestamp (two hook events can share a millisecond).
+    # `SessionManager.record_toast` bumps it when a superseded `Stop`'s
+    # body/color/label actually differs from what is held, and skips the
+    # bump on an identical re-raise (the common case: "your turn" fired
+    # twice with nothing new to say). `SessionManager.ack_toast` bumps it
+    # on the acked/unacked transition, once, guarded by the same
+    # already-acked check that makes that method idempotent.
+    #
+    # ABSENT IS NOT A DEFAULT FOR A CONSUMER OF THIS FIELD. The default
+    # below exists only so every record this server ever mints carries a
+    # real version from birth; it must never be read by a client as
+    # meaning "version zero" for a record that came from somewhere this
+    # field does not reach (an older server, a locally-minted toast that
+    # never passed through this model). See toast-lifecycle.js's
+    # `_shouldReplace`.
+    version: int = Field(
+        1,
+        description=(
+            "Monotonic version of this record, starting at 1. Bumped only "
+            "on a real content change (supersession with different body, "
+            "or an ack transition), never on a duplicate or reorder of "
+            "the same fact. A client compares this, not the id alone, "
+            "before replacing a held record: higher replaces, equal is a "
+            "no-op, lower is discarded as an out-of-order delivery."
+        ),
+    )
     acknowledged: bool = Field(
         False, description="True once the toast has been dismissed"
     )
