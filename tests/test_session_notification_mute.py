@@ -246,15 +246,15 @@ def _build_hook_app(monkeypatch, tmp_path, *, store=None, router=None):
 
     work = tmp_path / "mute_proj"
     work.mkdir(exist_ok=True)
-    mgr.sessions["ses_mute"] = Session(
+    mgr._registry.sessions["ses_mute"] = Session(
         id="ses_mute",
         pty_pid=None,
         working_dir=str(work),
         status=SessionStatus.RUNNING,
         tmux_session=TMUX_NAME,
     )
-    mgr.backends["ses_mute"] = _FakeBackend(TMUX_NAME)
-    mgr._subscribers.setdefault("ses_mute", [])
+    mgr._registry.backends["ses_mute"] = _FakeBackend(TMUX_NAME)
+    mgr._registry.subscribers.setdefault("ses_mute", [])
     mgr._instance_epochs["ses_mute"] = TMUX_EPOCH
     mgr._mint_hook_token("ses_mute")
     if store is not None:
@@ -1152,7 +1152,7 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
 
     verdict = mgr._startup_gate_for(
         session_id="ses_mute",
-        backend=mgr.backends["ses_mute"],
+        backend=mgr._registry.backends["ses_mute"],
         tmux_name=TMUX_NAME,
         row=row,
         liveness=LIVENESS_LIVE,
@@ -1167,7 +1167,7 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
     assert (
         mgr._startup_gate_for(
             session_id="ses_mute",
-            backend=mgr.backends["ses_mute"],
+            backend=mgr._registry.backends["ses_mute"],
             tmux_name=TMUX_NAME,
             row=row,
             liveness=LIVENESS_LIVE,
@@ -1197,7 +1197,7 @@ def test_an_unmuted_session_still_gets_its_startup_prompt_toast(
 
     verdict = mgr._startup_gate_for(
         session_id="ses_mute",
-        backend=mgr.backends["ses_mute"],
+        backend=mgr._registry.backends["ses_mute"],
         tmux_name=TMUX_NAME,
         row=row,
         liveness=LIVENESS_LIVE,

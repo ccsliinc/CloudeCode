@@ -29,19 +29,24 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
-def _resolve_backend(session_manager, session_id: Optional[str]):
-    """Get the backend for a session id, tolerating older managers.
+def _resolve_backend(registry, session_id: Optional[str]):
+    """The backend for a session id, or for the current session.
 
-    Args:
-        session_manager: The active SessionManager.
-        session_id: Target session, or None for the manager's current one.
-
-    Returns:
-        The SessionBackend, or None when it cannot be resolved.
+    Description: takes the ``SessionRegistry`` rather than the manager,
+      because the registry is what owns the ``backends`` map. The two
+      ``hasattr`` / ``getattr`` guards this used to carry were tolerance
+      for a manager that might not have the methods; a moved field read
+      through tolerance answers None instead of raising, which is a
+      silent wrong answer rather than a loud failure.
+    Inputs: registry (SessionRegistry); session_id (str | None) - None
+      asks for the current session's backend.
+    Output: SessionBackend | None - None when nothing is registered
+      under that id, or when nothing is registered at all.
+    Example: _resolve_backend(services.registry, "ses_1")
     """
-    if session_id and hasattr(session_manager, "get_backend"):
-        return session_manager.get_backend(session_id)
-    return getattr(session_manager, "backend", None)
+    if session_id:
+        return registry.get_backend(session_id)
+    return registry.current_backend()
 
 
 class ConnectionManager:
@@ -219,6 +224,8 @@ async def websocket_terminal(websocket: WebSocket):
 
     # Get app state
     session_manager = websocket.app.state.session_manager
+    # The live session table is the registry's, not the manager's.
+    registry = websocket.app.state.services.registry
     local_servers = websocket.app.state.local_servers
     log_monitor = websocket.app.state.log_monitor
 
@@ -226,23 +233,17 @@ async def websocket_terminal(websocket: WebSocket):
     # Which session is this WS for? Path is ``/ws/terminal?session_id=<id>``.
     # Missing query param → fall back to the current (most-recent) session
     # so legacy single-session clients (and the auth-only test) keep working.
-    sessions_map = getattr(session_manager, "sessions", None)
     requested_sid = websocket.query_params.get("session_id")
     target_sid: Optional[str] = None
     if requested_sid:
-        if sessions_map is not None and requested_sid not in sessions_map:
+        if requested_sid not in registry.sessions:
             # Unknown session id - close with a clear app-range code.
             logger.warning("ws_unknown_session", session_id=requested_sid)
             await websocket.close(code=4404, reason="unknown session")
             return
         target_sid = requested_sid
     else:
-        cur = None
-        if hasattr(session_manager, "current_session"):
-            try:
-                cur = session_manager.current_session()
-            except Exception:
-                cur = None
+        cur = registry.current_session()
         target_sid = cur.id if cur is not None else None
 
     await connection_manager.connect(websocket)
@@ -266,7 +267,7 @@ async def websocket_terminal(websocket: WebSocket):
             )
 
     # Subscribe to THIS session's PTY output only.
-    pty_output_queue = session_manager.subscribe_output(target_sid)
+    pty_output_queue = registry.subscribe(target_sid)
 
     # Subscribe to local-server events (replaces the old tunnel queue -
     # carries `local_server_detected` / `local_server_lost` payloads).
@@ -395,7 +396,7 @@ async def websocket_terminal(websocket: WebSocket):
             # for why the second branch exists.
             _strategy = await paint_on_attach(
                 websocket,
-                _resolve_backend(session_manager, target_sid),
+                _resolve_backend(registry, target_sid),
             )
             logger.debug("ws_handshake_painted", strategy=_strategy)
         else:
@@ -406,7 +407,7 @@ async def websocket_terminal(websocket: WebSocket):
             await asyncio.sleep(0.15)
             _strategy = await paint_on_attach(
                 websocket,
-                _resolve_backend(session_manager, target_sid),
+                _resolve_backend(registry, target_sid),
             )
             logger.info("ws_handshake_painted_fallback", strategy=_strategy)
 
@@ -427,7 +428,7 @@ async def websocket_terminal(websocket: WebSocket):
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
-        session_manager.unsubscribe_output(pty_output_queue, target_sid)
+        registry.unsubscribe(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         await release_client_resize(
@@ -469,7 +470,7 @@ async def websocket_terminal(websocket: WebSocket):
     finally:
         # Cleanup - unsubscribe ONLY this session's queue. Do NOT detach or
         # destroy the session: other tabs (or a later reconnect) may want it.
-        session_manager.unsubscribe_output(pty_output_queue, target_sid)
+        registry.unsubscribe(pty_output_queue, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         # fix/multiclient-tmux-size - drop this client from size negotiation
@@ -587,20 +588,27 @@ async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monito
                 # Pattern detection + idle watching, scoped to THIS session.
                 # We skip both when the backend is in replay mode so replayed
                 # scrollback doesn't look like "new" activity downstream.
-                sm = websocket.app.state.session_manager
+                _registry = websocket.app.state.services.registry
                 _backend = None
                 _idle_watcher = None
-                if sm is not None:
-                    if session_id and hasattr(sm, "get_backend"):
-                        _backend = sm.get_backend(session_id)
+                if _registry is not None:
+                    if session_id:
+                        _backend = _registry.get_backend(session_id)
                         _idle_watcher = (
                             websocket.app.state.services.sidecars.watcher(
                                 session_id
                             )
                         )
                     else:
-                        _backend = getattr(sm, "backend", None)
-                        _idle_watcher = getattr(sm, "idle_watcher", None)
+                        _backend = _registry.current_backend()
+                        current = _registry.current_session()
+                        _idle_watcher = (
+                            websocket.app.state.services.sidecars.watcher(
+                                current.id
+                            )
+                            if current is not None
+                            else None
+                        )
                 in_replay = (
                     _backend is not None
                     and getattr(_backend, "replay_in_progress", False)

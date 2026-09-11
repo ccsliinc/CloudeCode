@@ -101,8 +101,8 @@ def _register_session(mgr: SessionManager, sid: str, working_dir: Path) -> Sessi
         status=SessionStatus.RUNNING,
         tmux_session=None,
     )
-    mgr.sessions[sid] = sess
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 
@@ -440,7 +440,7 @@ def test_hook_endpoint_410_when_session_destroyed_mid_flight(monkeypatch, tmp_pa
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
     token = mgr.get_hook_token("ses_hook")
     # Race simulation: leave the token in _hook_tokens but yank the session.
-    mgr.sessions.pop("ses_hook", None)
+    mgr._registry.sessions.pop("ses_hook", None)
     client = _loopback_client(app)
     resp = client.post(
         "/api/v1/hooks/claude-event",

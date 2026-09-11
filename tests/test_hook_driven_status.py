@@ -94,9 +94,9 @@ def _register_session(mgr: SessionManager, sid: str, tmux_name: str, working_dir
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    mgr.sessions[sid] = sess
-    mgr.backends[sid] = _FakeBackend(tmux_name)
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = _FakeBackend(tmux_name)
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 

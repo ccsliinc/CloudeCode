@@ -948,11 +948,12 @@ async def destroy_session(request: Request, session_id: Optional[str] = None):
         # Drop any local-server detections owned by THIS session before
         # tearing it down. Best-effort: look up the backend's tmux name
         # (the key local_servers tracks entries under) and clear it.
-        backend = None
-        if session_id and hasattr(session_manager, "get_backend"):
-            backend = session_manager.get_backend(session_id)
-        else:
-            backend = getattr(session_manager, "backend", None)
+        registry = request.app.state.services.registry
+        backend = (
+            registry.get_backend(session_id)
+            if session_id
+            else registry.current_backend()
+        )
         active_name = (
             getattr(backend, "tmux_session", None) if backend else None
         )
@@ -1070,14 +1071,7 @@ async def list_attachable_sessions(request: Request):
     # Filter out EVERY tmux name currently bound to a live backend so the
     # UI never offers self-adopt for any open session (the client also
     # filters defensively).
-    if hasattr(session_manager, "active_tmux_names"):
-        active_names = session_manager.active_tmux_names()
-    else:
-        active_names = set()
-        b = getattr(session_manager, "backend", None)
-        n = getattr(b, "tmux_session", None) if b else None
-        if n:
-            active_names.add(n)
+    active_names = session_manager.active_tmux_names()
     if active_names:
         sessions = [s for s in sessions if s.get("name") not in active_names]
 
@@ -1317,6 +1311,7 @@ async def _apply_session_theme(
     session_manager,
     themes,
     owned_tmux,
+    registry,
     session_name: str,
     theme_id: Optional[str],
 ) -> SessionInfo:
@@ -1331,7 +1326,9 @@ async def _apply_session_theme(
         Taken as an argument rather than reached through the manager,
         because the manager no longer forwards to it. ``owned_tmux`` is
         the ``OwnedTmuxLedger`` and arrives the same way for the same
-        reason: it is what knows which tmux names this app created.
+        reason: it is what knows which tmux names this app created, and
+        ``registry`` is the ``SessionRegistry``, which is what knows
+        which sessions are live.
         Empty/None ``theme_id`` clears the dotfile.
       * Mirrors onto the live ``Session.pinned_theme`` so a follow-up
         ``get_session_info`` reflects the change without re-reading.
@@ -1349,12 +1346,7 @@ async def _apply_session_theme(
     # Build the set of tmux names we recognize: live attachable rows
     # (caught by tmux probe) ∪ owned_tmux_sessions ∪ every live backend.
     known_names: set[str] = set(owned_tmux.names)
-    if hasattr(session_manager, "active_tmux_names"):
-        known_names |= session_manager.active_tmux_names()
-    elif session_manager.backend is not None:
-        active_name = getattr(session_manager.backend, "tmux_session", None)
-        if active_name:
-            known_names.add(active_name)
+    known_names |= session_manager.active_tmux_names()
     # A failed probe only SHRINKS ``known_names`` here, and the union
     # already contains the owned set and every live backend, so the worst
     # case is a 404 on a name we could not confirm - a refusal, never a
@@ -1385,15 +1377,13 @@ async def _apply_session_theme(
     # record wins; otherwise we don't have a path to write to.
     matched_sid: Optional[str] = None
     matched_working_dir: Optional[str] = None
-    backends_map = getattr(session_manager, "backends", None)
-    if backends_map is not None:
-        for sid, b in backends_map.items():
-            if getattr(b, "tmux_session", None) == session_name:
-                matched_sid = sid
-                sess_obj = session_manager.sessions.get(sid)
-                if sess_obj is not None:
-                    matched_working_dir = sess_obj.working_dir
-                break
+    for sid, b in registry.backends.items():
+        if getattr(b, "tmux_session", None) == session_name:
+            matched_sid = sid
+            sess_obj = registry.get_session(sid)
+            if sess_obj is not None:
+                matched_working_dir = sess_obj.working_dir
+            break
 
     # v0.7.0 - write the project-scoped dotfile. When no live session
     # carries this name we still update the legacy JSON map below so
@@ -1507,6 +1497,7 @@ async def set_session_theme(
         session_manager,
         request.app.state.services.themes,
         request.app.state.services.owned_tmux,
+        request.app.state.services.registry,
         session_name,
         body.theme_id,
     )
@@ -1576,6 +1567,7 @@ async def set_pinned_theme(
         session_manager,
         request.app.state.services.themes,
         request.app.state.services.owned_tmux,
+        request.app.state.services.registry,
         session_name,
         body.pinned_theme,
     )
@@ -1830,14 +1822,13 @@ async def upload_file(
     """
     session_manager = request.app.state.session_manager
 
-    session = None
-    if session_id and hasattr(session_manager, "get_session"):
-        session = session_manager.get_session(session_id)
+    registry = request.app.state.services.registry
+    session = registry.get_session(session_id) if session_id else None
     if session is None:
         # Back-compat: fall back to "the" session.
         if not session_manager.has_active_session():
             raise HTTPException(status_code=409, detail="No active session to upload into")
-        session = session_manager.session
+        session = registry.current_session()
     if session is None or not session.working_dir:
         raise HTTPException(status_code=409, detail="Active session has no working directory")
 

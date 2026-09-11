@@ -88,6 +88,37 @@ DELETED_FORWARDERS = {
     "_owned_instances_from_db",
     "owned_tmux_instances",
     "is_owned_tmux_name",
+    # v2 slice S4, the second half of the registry: the live session
+    # table, the output subscribers and the "current session" pointer.
+    # ``session`` and ``backend`` were the read-only back-compat aliases
+    # onto ``current_session`` / ``current_backend``; ``sessions``,
+    # ``backends``, ``_subscribers`` and ``_last_session_id`` were plain
+    # attributes rather than members, so they cannot be caught by the
+    # shape walk and are listed here as names instead.
+    "current_session",
+    "current_backend",
+    "session",
+    "backend",
+    "get_session",
+    "get_backend",
+    "list_sessions",
+    "_resolve_session_id",
+    "_register_session",
+    "_registered_ids_for_tmux_name",
+    "subscribe_output",
+    "unsubscribe_output",
+}
+
+#: Plain instance attributes that moved to a collaborator in the same
+#: slice. A revived one would be a SECOND container holding one logical
+#: state, which is the shape that produced 22 ``/sessions/list`` rows for
+#: 21 live panes, and every value assertion would keep passing until the
+#: first write landed on the wrong reference.
+DELETED_ATTRIBUTES = {
+    "sessions",
+    "backends",
+    "_subscribers",
+    "_last_session_id",
 }
 
 
@@ -223,4 +254,46 @@ def test_a_deleted_forwarder_is_not_revived(name: str):
     assert name not in members, (
         f"SessionManager.{name} is back; it was deleted by the slice that "
         "extracted its cluster, and its callers hold the collaborator now"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(DELETED_ATTRIBUTES))
+def test_a_moved_container_is_not_re_created_on_the_manager(name: str):
+    """The live session containers have ONE home, and it is the registry.
+
+    Description: an attribute assignment is invisible to the shape walk
+      above, which only reads members, so the four containers S4 moved
+      need their own guard. It parses ``__init__`` and looks for
+      ``self.<name> = ...``; a re-created container would alias or copy
+      state the registry owns, and a copy passes every equality
+      assertion right up until the two references are written through
+      separately.
+    Inputs: name (str) - one moved attribute name.
+    Output: None.
+    """
+    init = next(
+        node
+        for node in _manager_class().body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    assigned: set[str] = set()
+    for node in ast.walk(init):
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+            ):
+                assigned.add(target.attr)
+
+    assert name not in assigned, (
+        f"SessionManager.__init__ creates self.{name} again; the registry "
+        "owns that container and a second one holding the same logical "
+        "state is the 22-rows-for-21-panes defect"
     )

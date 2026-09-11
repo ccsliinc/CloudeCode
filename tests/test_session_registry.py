@@ -143,8 +143,8 @@ def _register(manager: SessionManager, session_id: str, work: Path) -> Session:
         status=SessionStatus.RUNNING,
         tmux_session=f"cloude_{session_id}",
     )
-    manager.sessions[session_id] = sess
-    manager._last_session_id = session_id
+    manager._registry.sessions[session_id] = sess
+    manager._registry.last_session_id = session_id
     return sess
 
 

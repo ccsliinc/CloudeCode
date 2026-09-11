@@ -38,6 +38,7 @@ from fastapi.testclient import TestClient
 from src.api import status_routes
 from src.api.auth import require_auth
 from src.api.status_routes import router as status_router
+from src.core.sessions.registry import SessionRegistry
 from tests.socket_guard import shipped_default_socket_name
 
 
@@ -58,9 +59,12 @@ class FakeSessionManager:
 
     def __init__(self, attachable=None, backends=None) -> None:
         self._attachable = attachable or []
-        self.backends = {
-            sid: FakeBackend(name) for sid, name in (backends or {}).items()
-        }
+        # ``backends`` lives on the registry since v2 slice S4, and the
+        # status route reads it there. A double keeping its own dict would
+        # agree with a reader that had not been repointed.
+        self._registry = SessionRegistry(log_cap=lambda: 1000)
+        for sid, name in (backends or {}).items():
+            self._registry.backends[sid] = FakeBackend(name)
 
     def list_attachable_sessions(self) -> list:
         return self._attachable
@@ -172,7 +176,7 @@ def test_ownership_survives_an_adopted_id_on_an_app_created_session(manager):
 def test_ownership_map_is_empty_when_the_manager_cannot_answer():
     """Empty means unknown downstream, which merge_ownership renders None."""
     class Broken:
-        backends: dict = {}
+        _registry = SessionRegistry(log_cap=lambda: 1000)
 
         def list_attachable_sessions(self):
             raise RuntimeError("tmux exploded")
@@ -180,11 +184,21 @@ def test_ownership_map_is_empty_when_the_manager_cannot_answer():
     assert status_routes.ownership_by_name(Broken()) == {}
 
 
-def test_open_ids_tolerates_a_manager_with_no_backends_dict():
-    class Odd:
-        backends = None
+def test_open_ids_is_empty_when_nothing_is_registered():
+    """THE NEGATIVE CONTROL. A map that always finds something is useless.
 
-    assert status_routes.open_ids_by_name(Odd()) == {}
+    Description: this used to prove the reader TOLERATED a manager whose
+      ``backends`` was None, which was a real shape while the attribute
+      hung off the manager. Since v2 slice S4 the container lives on the
+      registry and is always a dict, so tolerance there would only ever
+      hide a moved field behind an empty answer. The claim worth keeping
+      is the other half of the same sentence: with nothing open, the map
+      is empty rather than inventing a name.
+    """
+    class Nothing:
+        _registry = SessionRegistry(log_cap=lambda: 1000)
+
+    assert status_routes.open_ids_by_name(Nothing()) == {}
 
 
 def test_socket_name_falls_back_when_config_is_unreadable(monkeypatch):

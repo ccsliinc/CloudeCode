@@ -83,7 +83,7 @@ def session_ids_for_tmux_name(manager: Any, tmux_name: str) -> list[str]:
     """
     if not tmux_name:
         return []
-    backends = getattr(manager, "backends", None) or {}
+    backends = manager._registry.backends
     return [
         sid
         for sid, backend in backends.items()
@@ -123,7 +123,7 @@ def clear_view_state(
         ids.append(session_id)
 
     if not tmux_name and session_id:
-        backend = (getattr(manager, "backends", None) or {}).get(session_id)
+        backend = manager._registry.get_backend(session_id)
         tmux_name = getattr(backend, "tmux_session", None) if backend else None
 
     if tmux_name:

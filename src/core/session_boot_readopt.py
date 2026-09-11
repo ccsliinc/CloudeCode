@@ -137,7 +137,7 @@ def _record_epoch_for_already_registered(
 
     name_to_session_id = {
         getattr(backend, "tmux_session", None): sid
-        for sid, backend in manager.backends.items()
+        for sid, backend in manager._registry.backends.items()
     }
 
     for name in already_held:
@@ -306,10 +306,10 @@ async def readopt_surviving_sessions(
                 conn, socket=socket, name=name, epoch=epoch
             ),
             hook_names=dict(getattr(manager, "_hook_tmux_names", {}) or {}),
-            held_ids=list(manager.sessions.keys()),
+            held_ids=list(manager._registry.sessions.keys()),
             held_names=[
                 getattr(backend, "tmux_session", None)
-                for backend in manager.backends.values()
+                for backend in manager._registry.backends.values()
             ],
             default_working_dir=str(settings.get_working_dir()),
         )
@@ -357,7 +357,7 @@ async def readopt_surviving_sessions(
         session.pinned_theme = manager._theme_store.resolve_project_theme(
             Path(target.working_dir), target.name
         )
-        manager._register_session(session, backend)
+        manager._registry.register(session, backend)
         # Scope any later hook write to the exact instance, the same way
         # the create and adopt paths do.
         manager._instance_epochs[target.session_id] = target.epoch
@@ -398,13 +398,13 @@ async def readopt_surviving_sessions(
             )
 
     # WHICH SESSION IS "CURRENT" MUST NOT BE DECIDED BY A RACE.
-    # ``_register_session`` moves ``_last_session_id``, and these attaches
+    # ``SessionRegistry.register`` moves ``last_session_id``, and these attaches
     # finish in whatever order tmux answers, so without this the session
     # the user was last in would be replaced by whichever pane happened to
     # come back last. The rehydrated metadata session (set before this
     # pass) keeps the pointer; with none set, the FIRST target in plan
     # order takes it, so two boots over unchanged state agree.
-    prior_current = manager._last_session_id
+    prior_current = manager._registry.last_session_id
 
     results = await asyncio.gather(
         *(_attach(target) for target in plan.targets),
@@ -432,11 +432,11 @@ async def readopt_surviving_sessions(
     # and it is a choice made by somebody who is here NOW - it outranks a
     # boot-time default. Re-pinning it regardless would take "current"
     # away from the session the user is looking at.
-    if manager._last_session_id in set(held):
-        if prior_current is not None and prior_current in manager.sessions:
-            manager._last_session_id = prior_current
+    if manager._registry.last_session_id in set(held):
+        if prior_current is not None and prior_current in manager._registry.sessions:
+            manager._registry.last_session_id = prior_current
         elif held:
-            manager._last_session_id = held[0]
+            manager._registry.last_session_id = held[0]
 
     logger.info(
         "boot_readopt_complete",

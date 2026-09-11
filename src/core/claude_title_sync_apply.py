@@ -112,7 +112,7 @@ def _tmux_name_for(session_manager: Any, session_id: str) -> Optional[str]:
     Output: str | None - None when nothing can be keyed.
     Example: _tmux_name_for(mgr, 'ses_5a756046') -> 'cloude_Punchlist'
     """
-    sess = getattr(session_manager, "sessions", {}).get(session_id)
+    sess = session_manager._registry.get_session(session_id)
     name = getattr(sess, "tmux_session", None) if sess else None
     if name:
         return str(name)

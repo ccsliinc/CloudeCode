@@ -275,7 +275,7 @@ def test_upgrade_reads_metadata_left_at_the_old_location(dirs):
     mgr = SessionManager()
     mgr._load_session_metadata()
 
-    current = mgr.current_session()
+    current = mgr._registry.current_session()
     assert current is not None, "the new version did not rehydrate the old file"
     assert current.id == "sess-upgrade"
     assert current.tmux_session == "work-a"
@@ -323,12 +323,12 @@ def test_detach_sequence_keeps_metadata_where_the_install_started_from(dirs):
 
     mgr = SessionManager()
     mgr._load_session_metadata()
-    assert mgr.current_session() is not None
+    assert mgr._registry.current_session() is not None
 
     # the exact pair of statements detach_session runs
     mgr._clear_stale_metadata()
     survivor = _session("sess-survivor", "work-b")
-    mgr._register_session(survivor, backend=None)
+    mgr._registry.register(survivor, backend=None)
     mgr._owned.names = {"work-b"}
     mgr._save_session_metadata()
 
@@ -420,7 +420,7 @@ def test_metadata_present_in_both_locations_leaves_the_old_copy_stale(dirs):
     mgr = SessionManager()
     mgr._load_session_metadata()
     live = _session("sess-current", "work-z")
-    mgr._register_session(live, backend=None)
+    mgr._registry.register(live, backend=None)
     mgr._owned.names = {"work-z"}
     mgr._save_session_metadata()
 

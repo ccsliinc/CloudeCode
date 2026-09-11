@@ -143,31 +143,26 @@ def read_activity_signal(
     )
 
 
-def read_alternate_screen(
-    session_manager: Any, session_id: str
-) -> Optional[bool]:
+def read_alternate_screen(registry: Any, session_id: str) -> Optional[bool]:
     """Is this session's pane on the alternate screen?
 
     Answers the only question that makes "full history" honest: tmux
     keeps no scrollback for an alternate-screen pane, so a replay of one
     is the current frame and nothing before it.
 
-    Args:
-        session_manager: the app's SessionManager.
-        session_id: the session to probe.
-
-    Returns:
-        True / False as tmux reported, or None when there is no live tmux
-        backend or the probe raised. None is a refusal, not a False.
-
-    Example:
-        >>> read_alternate_screen(object(), 's1') is None
-        True
+    Description: takes the ``SessionRegistry`` rather than the manager,
+      because the registry is what owns ``backends``. It used to take the
+      manager and guard the lookup with a ``callable`` check; that guard
+      would answer None for a manager that had simply moved the method,
+      which is a refusal indistinguishable from a real one.
+    Inputs: registry (SessionRegistry) - the live session table;
+      session_id (str) - the session to probe.
+    Output: bool | None - True / False as tmux reported, or None when
+      there is no live tmux backend or the probe raised. None is a
+      refusal, not a False.
+    Example: read_alternate_screen(services.registry, 's1')
     """
-    getter = getattr(session_manager, "get_backend", None)
-    if not callable(getter):
-        return None
-    backend = getter(session_id)
+    backend = registry.get_backend(session_id)
     probe = getattr(backend, "pane_in_alternate_screen", None)
     if not callable(probe):
         return None
@@ -227,8 +222,7 @@ async def away_summary(
     """
     session_manager = request.app.state.session_manager
 
-    sessions = getattr(session_manager, "sessions", {})
-    if session_id not in sessions:
+    if session_id not in request.app.state.services.registry.sessions:
         raise HTTPException(status_code=404, detail="No such session")
 
     now = datetime.utcnow()
@@ -256,6 +250,8 @@ async def away_summary(
         permission_open=permission_open,
         notice_open=notice_open,
         last_activity_at=last_activity_at,
-        alternate_screen=read_alternate_screen(session_manager, session_id),
+        alternate_screen=read_alternate_screen(
+            request.app.state.services.registry, session_id
+        ),
         history_bound_lines=history_bound_lines(),
     )

@@ -242,7 +242,7 @@ async def _drop_backends(manager: SessionManager) -> None:
     Output: None. Leaves the tmux sessions alone - the fixture kills the
       whole server - and only stops this process from tailing their FIFOs.
     """
-    for backend in list(manager.backends.values()):
+    for backend in list(manager._registry.backends.values()):
         task = getattr(backend, "_reader_task", None)
         if task is not None:
             task.cancel()
@@ -351,19 +351,19 @@ async def test_real_readopt_pass_holds_every_live_session_by_stored_id(
 
         # Held under the STORED id, not a derived ``adopted:`` one.
         for sid in names.values():
-            assert sid in mgr.sessions
+            assert sid in mgr._registry.sessions
             assert not sid.startswith("adopted:")
 
         # ...and bound to the STORED tmux name, not a re-derivation of it.
         assert {
-            backend.tmux_session for backend in mgr.backends.values()
+            backend.tmux_session for backend in mgr._registry.backends.values()
         } == set(names)
 
         # The pipe is the point. A held session whose pane is not being
         # piped streams nothing, and the browser paints a frozen terminal.
         for name in names:
             assert _pane_pipe(name) == "1", f"{name} is held but not piped"
-        for backend in mgr.backends.values():
+        for backend in mgr._registry.backends.values():
             assert backend._running is True
     finally:
         await _drop_backends(mgr)

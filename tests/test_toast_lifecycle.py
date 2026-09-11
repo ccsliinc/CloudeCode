@@ -96,8 +96,8 @@ def _register_session(mgr: SessionManager, sid: str, working_dir: Path) -> Sessi
         status=SessionStatus.RUNNING,
         tmux_session=None,
     )
-    mgr.sessions[sid] = sess
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 

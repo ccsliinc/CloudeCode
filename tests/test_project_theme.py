@@ -411,7 +411,7 @@ def _build_route_app(monkeypatch, tmp_path):
     (tmp_path / "logs").mkdir(exist_ok=True)
     monkeypatch.setattr("src.core.session_manager.settings", stub)
     sm = SessionManager()
-    sm.sessions[sess.id] = sess
+    sm._registry.sessions[sess.id] = sess
 
     # Fake backend that just carries the tmux name attribute the route
     # walks through ``backends.items()`` to find.
@@ -419,7 +419,7 @@ def _build_route_app(monkeypatch, tmp_path):
     backend.tmux_session = "cloude_routeproj"
     backend.__class__.__name__ = "TmuxBackend"
     backend.is_alive = lambda: True
-    sm.backends[sess.id] = backend
+    sm._registry.backends[sess.id] = backend
     sm._owned.names.add("cloude_routeproj")
 
     # Patch ``list_attachable_sessions`` to return one row matching the

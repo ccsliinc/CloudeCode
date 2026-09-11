@@ -30,7 +30,9 @@ if str(ROOT) not in sys.path:
 
 from src.api.websocket import receive_messages  # noqa: E402
 from src.core.session_manager import SessionManager  # noqa: E402
+from src.core.sessions.registry import SessionRegistry  # noqa: E402
 from src.core.tmux_backend import TmuxBackend  # noqa: E402
+from src.models import Session, SessionStatus  # noqa: E402
 
 
 class _StopLoop(Exception):
@@ -81,16 +83,26 @@ def make_session_manager(backend: TmuxBackend, session_id: str):
     """A stand-in carrying the REAL SessionManager.resize_terminal.
 
     The method is bound to a duck-typed object holding only what it reads
-    (`backends` and `_resolve_session_id`), so the dispatch and the tmux
-    call are exercised without standing up a whole manager.
+    - a ``SessionRegistry``, which is where ``backends`` and the id
+    resolution both live since v2 slice S4 - so the dispatch and the tmux
+    call are exercised without standing up a whole manager. The registry
+    is REAL rather than a namespace, so the resolution under test is the
+    production one.
 
     Inputs: backend (TmuxBackend), session_id (str).
     Output: object with .resize_terminal(cols, rows, session_id=...).
     """
-    holder = SimpleNamespace(
-        backends={session_id: backend},
-        _resolve_session_id=lambda sid=None: sid or session_id,
+    registry = SessionRegistry(log_cap=lambda: 1000)
+    registry.register(
+        Session(
+            id=session_id,
+            working_dir="/tmp",
+            status=SessionStatus.RUNNING,
+            tmux_session=f"cloude_{session_id}",
+        ),
+        backend,
     )
+    holder = SimpleNamespace(_registry=registry)
     holder.resize_terminal = SessionManager.resize_terminal.__get__(holder)
     return holder
 
@@ -169,7 +181,7 @@ async def test_resize_for_a_dead_session_is_a_no_op_not_a_crash():
     calls: list[list[str]] = []
     backend = make_backend(calls)
     manager = make_session_manager(backend, "sess-resize-1")
-    manager.backends = {}
+    manager._registry.backends = {}
 
     ws = FakeWebSocket([
         {"text": json.dumps({"type": "pty_resize", "cols": 42, "rows": 48})},

@@ -4,15 +4,16 @@ Multi-concurrent-session design: holds any number of live `SessionBackend`
 instances, keyed by ``session_id`` - two browser tabs can each attach to a
 different session and neither disconnects the other. Per-session state
 (backend, output subscribers, log buffer, command count, idle watcher, adopt
-FIFO offset) lives in dicts keyed by ``session_id``; global state
-(``owned_tmux_sessions``, ``pinned_themes``, the notification router) stays
-scalar. Backend type (tmux vs PTY) is selected per-session via
+FIFO offset) lives in dicts keyed by ``session_id`` on the collaborators
+that own them; global state (the owned tmux ledger, the pinned themes, the
+notification router) stays scalar. Backend type (tmux vs PTY) is selected per-session via
 ``build_backend(settings)`` which reads ``AuthConfig.session.backend``.
 
-Back-compat shim: ``self.session`` / ``self.backend`` are read-only
-properties resolving to ``current_session()`` / ``current_backend`` (the
-most-recently-created session) so the handful of legacy single-session
-callers in ``src/api`` keep working unchanged.
+The live session table is NOT here. ``sessions``, ``backends``,
+``subscribers``, ``last_session_id``, the log buffers and the command
+counts all live on :class:`~src.core.sessions.registry.SessionRegistry`,
+reached as ``self._registry``, and this class keeps no copy and no
+forwarder. A caller that wants to look a session up holds the registry.
 """
 
 import asyncio
@@ -26,7 +27,7 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional
 from datetime import datetime
 from fastapi import HTTPException
 import structlog
@@ -376,23 +377,13 @@ class SessionManager:
             sidecars if sidecars is not None else AttachmentSidecars()
         )
         # ---- per-session state, keyed by session_id ---------------------
-        # Multiple sessions coexist; two browser tabs can each be attached
-        # to a different session. Touching one session's entry NEVER
-        # touches another's - that isolation is the whole point.
-        self.sessions: dict[str, Session] = {}
-        self.backends: dict[str, SessionBackend] = {}
-        # Output fan-out: each backend's ``on_output`` callback is bound to
-        # its own session_id (see ``_make_output_handler``), so bytes route
-        # to ``self._subscribers[session_id]`` and nowhere else.
-        self._subscribers: dict[str, list[asyncio.Queue]] = {}
-        # Per-session log buffers / command counters live on
-        # ``self._registry`` (S4); the two names above are properties.
-        # The three per-session sidecars live on ``self._sidecars`` (S5);
-        # ``idle_watchers``, ``adopt_fifo_offsets`` and
-        # ``pending_terminal_commands`` are properties onto it.
-        # Most-recently-created/adopted session id - backs the back-compat
-        # ``current_session()`` / ``self.session`` / ``self.backend`` views.
-        self._last_session_id: Optional[str] = None
+        # EVERY container lives on ``self._registry`` and this class keeps
+        # no copy of any of them: ``sessions``, ``backends``,
+        # ``subscribers``, ``last_session_id``, the log buffers and the
+        # command counts. Multiple sessions coexist; two browser tabs can
+        # each be attached to a different session, and touching one
+        # session's entry NEVER touches another's.
+        # The three per-session sidecars live on ``self._sidecars``.
         # Notification router reference - set by ``attach_notification_router``
         # during FastAPI lifespan startup (after both the SessionManager and
         # the router are constructed). When None, IdleWatcher instantiation
@@ -608,48 +599,17 @@ class SessionManager:
     # session). All four were repointed in the same commit and their
     # tolerance removed, so the next such move fails loudly.
 
-    # ---- multi-session accessors / back-compat shims --------------------
-
-    def current_session(self) -> Optional[Session]:
-        """The most-recently-created/adopted session, or None.
-
-        Legacy single-session callers that genuinely just want "a" session
-        use this. New code that knows the session id should use
-        ``self.sessions[session_id]`` / ``get_backend(session_id)`` directly.
-        """
-        if self._last_session_id and self._last_session_id in self.sessions:
-            return self.sessions[self._last_session_id]
-        # _last_session_id may be stale (last session destroyed); fall back
-        # to whatever's still around (dicts preserve insertion order).
-        if self.sessions:
-            sid = next(reversed(self.sessions))
-            self._last_session_id = sid
-            return self.sessions[sid]
-        self._last_session_id = None
-        return None
-
-    @property
-    def current_backend(self) -> Optional[SessionBackend]:
-        """Backend of ``current_session()``, or None."""
-        sess = self.current_session()
-        if sess is None:
-            return None
-        return self.backends.get(sess.id)
-
-    # Read-only back-compat aliases. Legacy callers in src/api only READ
-    # these; do NOT assign to them from new code - touch the dicts instead.
-    @property
-    def session(self) -> Optional[Session]:
-        return self.current_session()
-
-    @property
-    def backend(self) -> Optional[SessionBackend]:
-        return self.current_backend
+    # ---- the current session's sidecars ---------------------------------
+    #
+    # These two stay because each reaches a DIFFERENT collaborator: the
+    # registry answers which session is current, the sidecars answer what
+    # is attached to it. Neither is a forwarder and neither belongs on
+    # either collaborator alone.
 
     @property
     def idle_watcher(self) -> Optional[IdleWatcher]:
         """Idle watcher of the current session (back-compat for the WS hot path)."""
-        sess = self.current_session()
+        sess = self._registry.current_session()
         if sess is None:
             return None
         return self._sidecars.watcher(sess.id)
@@ -657,49 +617,31 @@ class SessionManager:
     @property
     def adopt_fifo_start_offset(self) -> Optional[int]:
         """FIFO offset of the current session (back-compat)."""
-        sess = self.current_session()
+        sess = self._registry.current_session()
         if sess is None:
             return None
         return self._sidecars.peek_fifo_offset(sess.id)
 
-    def get_session(self, session_id: str) -> Optional[Session]:
-        return self.sessions.get(session_id)
 
-    def get_backend(self, session_id: str) -> Optional[SessionBackend]:
-        return self.backends.get(session_id)
+    def _make_output_handler(
+        self, session_id: str
+    ) -> Callable[[bytes], Awaitable[None]]:
+        """Build an ``on_output`` callback bound to one session id.
 
-    def list_sessions(self) -> list[Session]:
-        """All live sessions, insertion order (oldest first)."""
-        return list(self.sessions.values())
-
-    def _resolve_session_id(self, session_id: Optional[str]) -> Optional[str]:
-        """Map an explicit id (validated) or None (-> current) to a live id."""
-        if session_id is not None:
-            return session_id if session_id in self.sessions else None
-        sess = self.current_session()
-        return sess.id if sess is not None else None
-
-    def _make_output_handler(self, session_id: str):
-        """Build an ``on_output`` callback bound to ``session_id``.
-
-        Each backend gets its OWN handler so its bytes only ever land in
-        ``self._subscribers[session_id]`` - destroying session A never
-        touches session B's subscribers.
+        Description: each backend gets its OWN handler, so its bytes can
+          only ever reach the subscribers of THAT session and destroying
+          session A never touches session B's. The binding is the whole
+          point of the closure: the registry's fan-out is told which
+          session it is delivering for, and it is the only thing that
+          knows how.
+        Inputs: session_id (str) - the session whose bytes this handler
+          will carry.
+        Output: Callable[[bytes], Awaitable[None]] - hand it to a
+          backend as ``on_output``.
+        Example: backend = build_backend(on_output=self._make_output_handler(sid))
         """
         async def _on_output(data: bytes) -> None:
-            encoded = base64.b64encode(data).decode("utf-8")
-            subs = self._subscribers.get(session_id)
-            if not subs:
-                return
-            for queue in list(subs):
-                try:
-                    await queue.put(encoded)
-                except Exception as e:  # pragma: no cover - defensive
-                    logger.error("failed_to_send_to_subscriber", error=str(e))
-                    try:
-                        subs.remove(queue)
-                    except ValueError:
-                        pass
+            await self._registry.publish(session_id, data)
         return _on_output
 
     def _wipe_session_state(self, session_id: str) -> None:
@@ -715,13 +657,14 @@ class SessionManager:
         # down: unread is a durable fact about a conversation and must
         # survive detach/re-adopt, while "has this instance fired a hook
         # yet" describes a PROCESS that this call is dropping.
-        wiped_backend = self.backends.get(session_id)
+        wiped_backend = self._registry.get_backend(session_id)
         self._startup_gate_ledger.forget(
             getattr(wiped_backend, "tmux_session", None)
         )
-        self.sessions.pop(session_id, None)
-        self.backends.pop(session_id, None)
-        self._subscribers.pop(session_id, None)
+        # ONE CALL, because the registry owns all six containers and the
+        # "current" pointer that has to move when the session it names is
+        # the one going. Popping them from out here would be this class
+        # keeping a second opinion about a state it does not own.
         self._registry.forget(session_id)
         self._sidecars.forget(session_id)
         # v0.7.0 Part 2 - drop pending toasts for this session. Other
@@ -750,9 +693,9 @@ class SessionManager:
         # The persisted unread flag (keyed by tmux NAME, not session_id) is
         # deliberately untouched here - it must survive detach/re-adopt.
         self._activity_tracker.forget(session_id)
-        if self._last_session_id == session_id:
-            self._last_session_id = (
-                next(reversed(self.sessions)) if self.sessions else None
+        if self._registry.last_session_id == session_id:
+            self._registry.last_session_id = (
+                next(reversed(self._registry.sessions)) if self._registry.sessions else None
             )
 
     # ---- notification wiring --------------------------------------------
@@ -818,7 +761,7 @@ class SessionManager:
         store = getattr(self, "_notification_policy_store", None)
         if store is None:
             return UNKNOWN_VERDICT
-        sess = self.sessions.get(session_id)
+        sess = self._registry.sessions.get(session_id)
         tmux_name = getattr(sess, "tmux_session", None) if sess else None
         return store.for_instance(
             tmux_name, self._instance_epochs.get(session_id)
@@ -1021,12 +964,12 @@ class SessionManager:
         self._hook_tokens[session_id] = token
         # THE NAME MUST BE PASSED IN, not looked up. This is called BEFORE
         # the tmux spawn (the token has to exist to be injected into the
-        # pane's environment), so ``self.sessions`` does not carry this id
+        # pane's environment), so ``self._registry.sessions`` does not carry this id
         # yet and a lookup here returns None every time - measured: the
         # first store written this way recorded `tmux_name: null` for a
         # session whose name was known to its own caller.
         # NO FALLBACK LOOKUP. An earlier version ended `or getattr(
-        # self.sessions.get(session_id), "tmux_session", None)`, which the
+        # self._registry.sessions.get(session_id), "tmux_session", None)`, which the
         # comment above already explains can only ever return None here -
         # so it was dead code whose sole effect was to require a fully
         # built manager, and it crashed five terminal tests on a test
@@ -1066,40 +1009,6 @@ class SessionManager:
         self._persist_hook_tokens()
         return existing
 
-    def _registered_ids_for_tmux_name(
-        self, name: str, also: Optional[str] = None
-    ) -> List[str]:
-        """Every registered session id currently bound to one tmux name.
-
-        Description: ONE PANE IS ONE REGISTRATION, and this is what lets
-          a caller enforce that. While an adoption's id was always
-          ``adopted:<name>``, "the registration for this id" and "the
-          registration for this pane" were the same question; once the
-          id is RESOLVED they are not, and a pane can already be held
-          under a different id (a rehydrated ``session_metadata.json``
-          entry, or the boot re-adopt). Dropping only the id's own
-          registration then leaves a second backend tailing the same
-          FIFO - measured on live, 22 rows for 21 live sessions.
-
-          ``also`` is included in the result whether or not it is bound
-          to this name, so a caller tearing down before a fresh attach
-          gets one list covering both reasons to drop a registration.
-          The order is stable (backend insertion order, ``also`` last)
-          so two calls over unchanged state agree.
-        Inputs: name (str) - literal tmux session name. also (str|None)
-          - an extra id to include, typically the id about to be
-          registered.
-        Output: list[str] - registered session ids, no duplicates.
-        Example: mgr._registered_ids_for_tmux_name('cloude_x', also='ses_1')
-        """
-        found = [
-            sid
-            for sid, backend in self.backends.items()
-            if getattr(backend, "tmux_session", None) == name
-        ]
-        if also and also in self.backends and also not in found:
-            found.append(also)
-        return found
 
     def _adopt_identity_for(
         self, name: str, epoch: Optional[int]
@@ -1321,9 +1230,10 @@ class SessionManager:
     @property
     def backend_name(self) -> str:
         """Human-readable backend name for API responses ('tmux' / 'pty' / 'none')."""
-        if self.backend is None:
+        backend = self._registry.current_backend()
+        if backend is None:
             return "none"
-        cls = self.backend.__class__.__name__
+        cls = backend.__class__.__name__
         # "TmuxBackend" → "tmux", "PTYBackend" → "pty"
         return cls.replace("Backend", "").lower()
 
@@ -1389,21 +1299,6 @@ class SessionManager:
             return None
         return schedule_boot_readopt(self)
 
-    def _register_session(
-        self, session: Session, backend: Optional[SessionBackend]
-    ) -> None:
-        """Wire a Session (and optional backend) into the per-session dicts.
-
-        Marks it as the current session. Used by both the create/adopt
-        paths and the lifespan rehydrate path. Initializes empty
-        subscriber/log/command containers if absent.
-        """
-        self.sessions[session.id] = session
-        if backend is not None:
-            self.backends[session.id] = backend
-        self._subscribers.setdefault(session.id, [])
-        self._registry.ensure(session.id)
-        self._last_session_id = session.id
 
     async def _lifespan_tmux_reconcile(self) -> None:
         """Tmux-side of lifespan startup. See ``lifespan_startup`` for
@@ -1415,7 +1310,7 @@ class SessionManager:
         not a durability one). The "persisted" session is the one returned
         by ``current_session()`` after ``_load_session_metadata``.
         """
-        persisted = self.current_session()
+        persisted = self._registry.current_session()
         # Phase 6 - one-shot agent_type backfill. Logic extracted to the
         # top-level ``backfill_agent_type`` helper for direct unit testing
         # without spinning up the full lifespan path. Idempotent + safe to
@@ -1591,7 +1486,7 @@ class SessionManager:
                 return
 
             persisted.status = SessionStatus.RUNNING
-            self._register_session(persisted, backend)
+            self._registry.register(persisted, backend)
 
             # Legacy backfill: first successful rehydrate populates the
             # owned-set and re-persists under the new schema.
@@ -1652,7 +1547,7 @@ class SessionManager:
         self._owned.drop_session_pointer()
         sid = session_id
         if sid is None:
-            cur = self.current_session()
+            cur = self._registry.current_session()
             sid = cur.id if cur is not None else None
         if sid is not None:
             self._wipe_session_state(sid)
@@ -1727,7 +1622,7 @@ class SessionManager:
         # (backend wired later by ``_lifespan_tmux_reconcile``). This is
         # the only session restored across restarts; concurrent live
         # sessions are a runtime-only feature.
-        self._register_session(loaded, backend=None)
+        self._registry.register(loaded, backend=None)
         logger.info(
             "session_metadata_loaded",
             session_id=loaded.id,
@@ -1749,7 +1644,7 @@ class SessionManager:
         Output: None.
         Example: mgr._save_session_metadata()
         """
-        sess = session or self.current_session()
+        sess = session or self._registry.current_session()
         if not sess:
             return
         self._owned.save(sess.model_dump())
@@ -1875,9 +1770,9 @@ class SessionManager:
 
         # Mirror onto any live Session whose backend IS this tmux name, so
         # SessionInfo serialization picks it up immediately.
-        for sid, backend in list(self.backends.items()):
+        for sid, backend in list(self._registry.backends.items()):
             if getattr(backend, "tmux_session", None) == tmux_name:
-                sess = self.sessions.get(sid)
+                sess = self._registry.sessions.get(sid)
                 if sess is not None:
                     sess.pinned_theme = theme_id
                     # Persist into session_metadata so a server-restart
@@ -2030,7 +1925,7 @@ class SessionManager:
         tmux_name = self._hook_tmux_names.get(session_id)
         if not tmux_name:
             return None
-        for live_id, sess in self.sessions.items():
+        for live_id, sess in self._registry.sessions.items():
             if getattr(sess, "tmux_session", None) == tmux_name:
                 logger.info(
                     "toast_session_id_remapped",
@@ -2076,7 +1971,7 @@ class SessionManager:
                 toasts for sessions that don't exist - the client would
                 have no live WS to receive them on).
         """
-        session = self.sessions.get(session_id)
+        session = self._registry.sessions.get(session_id)
         if session is None:
             # THE ID MAY SIMPLY PREDATE A RESTART. The pane's
             # CLOUDECODE_SESSION_ID is baked in at spawn and cannot be
@@ -2094,7 +1989,7 @@ class SessionManager:
             remapped = self._live_session_id_for_stale_id(session_id)
             if remapped is not None:
                 session_id = remapped
-                session = self.sessions.get(session_id)
+                session = self._registry.sessions.get(session_id)
         if session is None:
             raise ValueError(f"Unknown session_id: {session_id!r}")
 
@@ -2243,7 +2138,7 @@ class SessionManager:
             >>> mgr.record_hook_event("ses_1", "PreToolUse")
         """
         self._activity_tracker.record_event(session_id, kind)
-        backend = self.backends.get(session_id)
+        backend = self._registry.backends.get(session_id)
         tmux_name = getattr(backend, "tmux_session", None) if backend else None
         if not tmux_name:
             # After a restart the id is not in `backends` yet, but the
@@ -2683,38 +2578,7 @@ class SessionManager:
 
     # ---- output fan-out (per session) -----------------------------------
 
-    def subscribe_output(self, session_id: Optional[str] = None) -> asyncio.Queue:
-        """Subscribe to a session's backend output stream.
 
-        ``session_id`` None → the current session (back-compat). The
-        returned queue receives ONLY that session's bytes (base64-encoded
-        strings); a session's output never leaks into another's queue.
-        """
-        sid = self._resolve_session_id(session_id)
-        # Tolerate "no session yet" - return an orphan queue so callers
-        # (e.g. the auth-only WS test) don't have to special-case it.
-        key = sid if sid is not None else "__orphan__"
-        queue: asyncio.Queue = asyncio.Queue()
-        self._subscribers.setdefault(key, []).append(queue)
-        return queue
-
-    def unsubscribe_output(
-        self, queue: asyncio.Queue, session_id: Optional[str] = None
-    ):
-        """Unsubscribe a queue from a session's output stream.
-
-        ``session_id`` None → search all buckets (covers callers that
-        don't track which session the queue belonged to). Idempotent.
-        """
-        if session_id is not None:
-            subs = self._subscribers.get(session_id)
-            if subs and queue in subs:
-                subs.remove(queue)
-            return
-        for subs in self._subscribers.values():
-            if queue in subs:
-                subs.remove(queue)
-                return
 
     # ---- session lifecycle ----------------------------------------------
 
@@ -2751,7 +2615,7 @@ class SessionManager:
         command = settings.get_terminal_command(command_id)
         if command is None:
             return
-        backend = self.backends.get(session_id)
+        backend = self._registry.backends.get(session_id)
         if backend is None:
             return
 
@@ -2857,9 +2721,9 @@ class SessionManager:
         """
         # Clean up a zombie entry for this exact id (stale metadata / dead
         # backend) - but leave any OTHER live sessions alone.
-        if session_id in self.sessions and (
-            session_id not in self.backends
-            or not self.backends[session_id].is_alive()
+        if session_id in self._registry.sessions and (
+            session_id not in self._registry.backends
+            or not self._registry.backends[session_id].is_alive()
         ):
             logger.info("cleaning_up_zombie_session", session_id=session_id)
             self._wipe_session_state(session_id)
@@ -3131,7 +2995,7 @@ class SessionManager:
                 tmux_session=tmux_session_name,
             )
 
-            self._register_session(new_session, backend)
+            self._registry.register(new_session, backend)
             # Best-effort: ferry any legacy pinned_themes.json entry into
             # the dotfile so subsequent restarts read from the new source
             # of truth. Read-then-migrate ordering keeps the read above
@@ -3298,7 +3162,7 @@ class SessionManager:
         """
         # If the session was registered before the failure, mark it errored
         # for any in-flight observer, then wipe it.
-        sess = self.sessions.get(session_id)
+        sess = self._registry.sessions.get(session_id)
         if sess is not None:
             sess.status = SessionStatus.ERROR
         if backend is not None:
@@ -3342,8 +3206,8 @@ class SessionManager:
 
         Returns False (no-op) when the session isn't live. True otherwise.
         """
-        sid = self._resolve_session_id(session_id)
-        backend = self.backends.get(sid) if sid else None
+        sid = self._registry.resolve_session_id(session_id)
+        backend = self._registry.backends.get(sid) if sid else None
         if not sid or backend is None:
             logger.info("detach_current_session_noop")
             return False
@@ -3409,8 +3273,8 @@ class SessionManager:
                     "pipe_pane_stop_failed_on_detach", error=str(exc)
                 )
 
-            was_persisted = (self.current_session() is not None and
-                             self.current_session().id == sid)
+            was_persisted = (self._registry.current_session() is not None and
+                             self._registry.current_session().id == sid)
             # Wipe THIS session's state only - leave tmux alive, leave
             # other sessions alone.
             self._wipe_session_state(sid)
@@ -3429,7 +3293,7 @@ class SessionManager:
                     )
                 # If another session is still around, persist that one so a
                 # restart rehydrates *something* live rather than nothing.
-                if self.current_session() is not None:
+                if self._registry.current_session() is not None:
                     self._save_session_metadata()
 
             logger.info("session_detached", session_id=sid)
@@ -3444,11 +3308,11 @@ class SessionManager:
         → the current session. Only touches THAT session's state - other
         live sessions are untouched.
         """
-        sid = self._resolve_session_id(session_id)
+        sid = self._registry.resolve_session_id(session_id)
         if not sid:
             raise ValueError("No session to destroy")
-        sess = self.sessions.get(sid)
-        backend = self.backends.get(sid)
+        sess = self._registry.sessions.get(sid)
+        backend = self._registry.backends.get(sid)
         if sess is None:
             raise ValueError("No session to destroy")
 
@@ -3500,8 +3364,8 @@ class SessionManager:
                         reason=verdict.reason,
                     )
 
-            was_persisted = (self.current_session() is not None and
-                             self.current_session().id == sid)
+            was_persisted = (self._registry.current_session() is not None and
+                             self._registry.current_session().id == sid)
 
             self._wipe_session_state(sid)
 
@@ -3509,7 +3373,7 @@ class SessionManager:
             # destroyed it, either re-point metadata at another live session
             # or unlink the file entirely.
             if was_persisted:
-                if self.current_session() is not None:
+                if self._registry.current_session() is not None:
                     self._save_session_metadata()
                 else:
                     metadata_path = settings.get_session_metadata_path()
@@ -3577,7 +3441,7 @@ class SessionManager:
 
         validate_label(label)
 
-        sess = self.sessions.get(session_id)
+        sess = self._registry.sessions.get(session_id)
         tmux_name = getattr(sess, "tmux_session", None) if sess else None
         if not tmux_name:
             # NOT REQUIRING A LIVE SESSION ANY MORE. This used to be the
@@ -3702,7 +3566,7 @@ class SessionManager:
         from src.core.session_transcript_presence import conversation_presence
 
         try:
-            sess = self.sessions.get(session_id)
+            sess = self._registry.sessions.get(session_id)
             family = getattr(sess, "agent_family", None) if sess else None
             claude_uuid = self._claude_uuid_for_tmux_name(tmux_name)
             # A BOUND UUID IS NOT EVIDENCE A TRANSCRIPT EXISTS. Measured
@@ -3842,8 +3706,8 @@ class SessionManager:
                 name or an owned-but-detached session name.
             RuntimeError: ``tmux rename-session`` failed at the backend.
         """
-        sess = self.sessions.get(session_id)
-        backend = self.backends.get(session_id)
+        sess = self._registry.sessions.get(session_id)
+        backend = self._registry.backends.get(session_id)
         if sess is None or backend is None:
             raise ValueError(f"Unknown session id: {session_id!r}")
 
@@ -3928,11 +3792,11 @@ class SessionManager:
 
     def _require_running(self, session_id: Optional[str]):
         """Return (sid, session, backend) for a RUNNING session, else raise."""
-        sid = self._resolve_session_id(session_id)
+        sid = self._registry.resolve_session_id(session_id)
         if not sid:
             raise ValueError("No active session")
-        sess = self.sessions.get(sid)
-        backend = self.backends.get(sid)
+        sess = self._registry.sessions.get(sid)
+        backend = self._registry.backends.get(sid)
         if sess is None or backend is None:
             raise ValueError("No active session")
         if sess.status != SessionStatus.RUNNING:
@@ -3979,8 +3843,8 @@ class SessionManager:
     ):
         """Resize a session's backend terminal. No-op if the session/backend
         isn't live."""
-        sid = self._resolve_session_id(session_id)
-        backend = self.backends.get(sid) if sid else None
+        sid = self._registry.resolve_session_id(session_id)
+        backend = self._registry.backends.get(sid) if sid else None
         if backend is None:
             return
         try:
@@ -3997,8 +3861,8 @@ class SessionManager:
         Returns b"" when no backend is live, for PTYBackend, or on capture
         failure. The WS handler treats b"" as "nothing to replay".
         """
-        sid = self._resolve_session_id(session_id)
-        backend = self.backends.get(sid) if sid else None
+        sid = self._registry.resolve_session_id(session_id)
+        backend = self._registry.backends.get(sid) if sid else None
         if backend is None:
             return b""
         try:
@@ -4013,7 +3877,7 @@ class SessionManager:
         self, limit: int = 100, session_id: Optional[str] = None
     ) -> list[LogEntry]:
         """Get recent log entries for a session (default: current)."""
-        sid = self._resolve_session_id(session_id)
+        sid = self._registry.resolve_session_id(session_id)
         if not sid:
             return []
         return self._registry.recent_logs(sid, limit)
@@ -4034,7 +3898,7 @@ class SessionManager:
         Output: None.
         Example: mgr.add_log_entry("boot ok", session_id="ses_1")
         """
-        sid = self._resolve_session_id(session_id)
+        sid = self._registry.resolve_session_id(session_id)
         if not sid:
             return
         self._registry.append_log(sid, content=content, log_type=log_type)
@@ -4305,8 +4169,8 @@ class SessionManager:
         trusting whatever was captured on ``Session`` at creation/adopt
         time - see fix/adopted-session-pid.
         """
-        sess = self.sessions.get(session_id)
-        backend = self.backends.get(session_id)
+        sess = self._registry.sessions.get(session_id)
+        backend = self._registry.backends.get(session_id)
         if sess is None or backend is None:
             return None
         if sess.status != SessionStatus.RUNNING:
@@ -4692,7 +4556,7 @@ class SessionManager:
         self, session_id: Optional[str] = None
     ) -> Optional[SessionInfo]:
         """Complete session information for one session (default: current)."""
-        sid = self._resolve_session_id(session_id)
+        sid = self._registry.resolve_session_id(session_id)
         if not sid:
             return None
         return self._session_info_for(sid)
@@ -4717,7 +4581,7 @@ class SessionManager:
             names=self._seed_candidate_tmux_names(),
         )
         out: list[SessionInfo] = []
-        for sid in list(self.sessions.keys()):
+        for sid in list(self._registry.sessions.keys()):
             info = self._session_info_for(
                 sid, status_map=status_map, instance_index=instance_index
             )
@@ -4789,8 +4653,8 @@ class SessionManager:
         hook_names = getattr(self, "_hook_tmux_names", None) or {}
         pairs: list[tuple] = []
         seen: set = set()
-        for session_id in list(self.sessions.keys()):
-            backend = self.backends.get(session_id)
+        for session_id in list(self._registry.sessions.keys()):
+            backend = self._registry.backends.get(session_id)
             name = getattr(backend, "tmux_session", None) or hook_names.get(
                 session_id
             )
@@ -4838,8 +4702,8 @@ class SessionManager:
 
     def has_active_session(self) -> bool:
         """True iff at least one session is running AND its backend is alive."""
-        for sid, backend in self.backends.items():
-            sess = self.sessions.get(sid)
+        for sid, backend in self._registry.backends.items():
+            sess = self._registry.sessions.get(sid)
             if (
                 sess is not None
                 and sess.status == SessionStatus.RUNNING
@@ -4850,8 +4714,8 @@ class SessionManager:
 
     def is_session_live(self, session_id: str) -> bool:
         """True iff this specific session is running AND its backend alive."""
-        sess = self.sessions.get(session_id)
-        backend = self.backends.get(session_id)
+        sess = self._registry.sessions.get(session_id)
+        backend = self._registry.backends.get(session_id)
         return (
             sess is not None
             and sess.status == SessionStatus.RUNNING
@@ -4868,7 +4732,7 @@ class SessionManager:
         ALL live sessions (not just the most-recent one).
         """
         names: set[str] = set()
-        for backend in self.backends.values():
+        for backend in self._registry.backends.values():
             n = getattr(backend, "tmux_session", None)
             if n:
                 names.add(n)
@@ -5038,7 +4902,7 @@ class SessionManager:
                 ),
             )
 
-        session = self.get_session(session_id)
+        session = self._registry.get_session(session_id)
         tmux_name = getattr(session, "tmux_session", None) if session else None
         if not tmux_name:
             # RESTART FALLBACK. The pane's CLOUDECODE_SESSION_ID is baked
@@ -5275,7 +5139,7 @@ class SessionManager:
             recover_claude_uuid,
         )
 
-        session = self.get_session(session_id)
+        session = self._registry.get_session(session_id)
         tmux_name = getattr(session, "tmux_session", None) if session else None
         if not tmux_name:
             tmux_name = self._hook_tmux_names.get(session_id)
@@ -6024,7 +5888,7 @@ class SessionManager:
         Description: Thin pass-through to
             ``backend.list_attachable_sessions``, but we always
             instantiate a fresh PROBE backend rather than using
-            ``self.backend`` - the user should be able to list external
+            the current backend - the user should be able to list external
             sessions whether or not they currently have an active session
             (the adopt-UI fetch happens at launchpad render time).
 
@@ -6401,10 +6265,10 @@ class SessionManager:
         # ``ses_fb8dd410``, and ``GET /sessions/list`` then returned 22
         # rows for 21 live sessions - ONE PANE, TWO BACKENDS, two
         # tailers on one FIFO. One pane is one registration.
-        for stale_id in self._registered_ids_for_tmux_name(
+        for stale_id in self._registry.registered_ids_for_tmux_name(
             name, also=adopt_session_id
         ):
-            old_backend = self.backends.get(stale_id)
+            old_backend = self._registry.backends.get(stale_id)
             old_iw = self._sidecars.watcher(stale_id)
             if old_iw is not None:
                 try:
@@ -6606,7 +6470,7 @@ class SessionManager:
             # it (not the "adopted:" prefixed id) as the pin-key handle.
             tmux_session=name,
         )
-        self._register_session(adopted_session, backend)
+        self._registry.register(adopted_session, backend)
         # Best-effort migration AFTER the read so the read remains
         # deterministic (dotfile beats JSON when both exist post-migration).
         # Failures here are logged + swallowed; never block adopt.
@@ -6740,7 +6604,7 @@ class SessionManager:
         # down via the full destroy path (DELETE /sessions[?session_id=])
         # so reader task + idle watcher + metadata get cleaned up. Calling
         # kill-session out from under a live backend would orphan all that.
-        for sid, backend in self.backends.items():
+        for sid, backend in self._registry.backends.items():
             if getattr(backend, "tmux_session", None) == name:
                 raise ValueError(
                     f"{name!r} is a currently-active session (id={sid!r}); "
@@ -6933,7 +6797,7 @@ class SessionManager:
             concatenation - see ``src/core/session_resume_target.py``.
 
             THE agent_type COMES FROM THE SAME PLACE THE PREVIEW READS
-            IT. This used to scan ``self.sessions`` only, so an ADOPTED
+            IT. This used to scan ``self._registry.sessions`` only, so an ADOPTED
             session - whose in-memory ``Session`` carries ``agent_type``
             None while its ROW records the wrapper exactly - resolved to
             None here and fell to the REPLAY rung, while
@@ -6969,7 +6833,7 @@ class SessionManager:
             )
         else:
             agent_type = None
-            for session in self.sessions.values():
+            for session in self._registry.sessions.values():
                 if getattr(session, "tmux_session", None) == name:
                     agent_type = getattr(session, "agent_type", None)
                     break
@@ -7153,7 +7017,7 @@ class SessionManager:
 
         backend = None
         env_session_id: Optional[str] = None
-        for candidate_id, candidate in self.backends.items():
+        for candidate_id, candidate in self._registry.backends.items():
             if getattr(candidate, "tmux_session", None) == name:
                 backend = candidate
                 env_session_id = candidate_id
@@ -7350,7 +7214,7 @@ class SessionManager:
                 socket_name = DEFAULT_SOCKET_NAME
 
         backend = None
-        for candidate in self.backends.values():
+        for candidate in self._registry.backends.values():
             if getattr(candidate, "tmux_session", None) == name:
                 backend = candidate
                 break
@@ -7512,7 +7376,7 @@ class SessionManager:
                     conn.close()
                 except sqlite3.Error:  # noqa: BLE001 - not a verdict
                     pass
-        for session in self.sessions.values():
+        for session in self._registry.sessions.values():
             if getattr(session, "tmux_session", None) == name:
                 return getattr(session, "agent_type", None)
         return None
@@ -7538,7 +7402,7 @@ class SessionManager:
             >>> mgr._model_for_tmux_name("cloude_api")
             None
         """
-        for session in self.sessions.values():
+        for session in self._registry.sessions.values():
             if getattr(session, "tmux_session", None) == name:
                 return getattr(session, "model", None)
         return None
@@ -7625,7 +7489,7 @@ class SessionManager:
             {'session_id': 'a1b2', 'session_uuid': '...'}
         """
         out = {"session_id": None, "session_uuid": None}
-        for sid, session in self.sessions.items():
+        for sid, session in self._registry.sessions.items():
             if getattr(session, "tmux_session", None) == name:
                 out["session_id"] = sid
                 break
@@ -7718,7 +7582,7 @@ class SessionManager:
         offset against a (by then) much larger FIFO. ``session_id`` None
         → the current session.
         """
-        sid = self._resolve_session_id(session_id)
+        sid = self._registry.resolve_session_id(session_id)
         if not sid:
             return None
         return self._sidecars.take_fifo_offset(sid)

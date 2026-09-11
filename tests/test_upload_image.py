@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 import jwt as pyjwt
 import pytest
 from fastapi import FastAPI
+from src.core.sessions.registry import SessionRegistry
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -118,47 +119,58 @@ def _webp_bytes() -> bytes:
 
 
 class _StubSessionManager:
-    """Minimal SessionManager stand-in for route-level testing."""
+    """Minimal SessionManager stand-in for route-level testing.
+
+    Description: the live session lives on a REAL ``SessionRegistry``
+      (v2 slice S4), which is also what the route reaches for off
+      ``app.state.services``. Keeping a second ``self.session`` here
+      would be a stub agreeing with itself.
+    """
 
     def __init__(self, working_dir: Path | None):
         self._wd = working_dir
+        self.registry = SessionRegistry(log_cap=lambda: 1000)
         if working_dir is not None:
-            self.session = Session(
-                id="ses_test01",
-                working_dir=str(working_dir),
-                status=SessionStatus.RUNNING,
-            )
             backend = MagicMock()
             backend.is_alive.return_value = True
-            self.backend = backend
-        else:
-            self.session = None
-            self.backend = None
+            self.registry.register(
+                Session(
+                    id="ses_test01",
+                    working_dir=str(working_dir),
+                    status=SessionStatus.RUNNING,
+                ),
+                backend,
+            )
 
     def has_active_session(self) -> bool:
+        session = self.registry.current_session()
+        backend = self.registry.current_backend()
         return (
-            self.session is not None
-            and self.session.status == SessionStatus.RUNNING
-            and self.backend is not None
-            and self.backend.is_alive()
+            session is not None
+            and session.status == SessionStatus.RUNNING
+            and backend is not None
+            and backend.is_alive()
         )
+
+
+def _app_with(manager: _StubSessionManager) -> FastAPI:
+    """A FastAPI app carrying both the manager and its services."""
+    app = FastAPI()
+    app.state.session_manager = manager
+    app.state.services = SimpleNamespace(registry=manager.registry)
+    app.include_router(api_router, prefix="/api/v1")
+    return app
 
 
 @pytest.fixture
 def app_with_session(tmp_path):
     """Build a FastAPI app whose state.session_manager points at tmp_path."""
-    app = FastAPI()
-    app.state.session_manager = _StubSessionManager(tmp_path)
-    app.include_router(api_router, prefix="/api/v1")
-    return app
+    return _app_with(_StubSessionManager(tmp_path))
 
 
 @pytest.fixture
 def app_without_session():
-    app = FastAPI()
-    app.state.session_manager = _StubSessionManager(None)
-    app.include_router(api_router, prefix="/api/v1")
-    return app
+    return _app_with(_StubSessionManager(None))
 
 
 @pytest.fixture
@@ -306,7 +318,7 @@ async def test_destroy_session_cleans_uploads_dir(tmp_path, monkeypatch):
     backend.tmux_session = "cloude_destroy01"
     # Multi-session manager: register the session into the per-session dicts
     # rather than assigning the (now read-only) ``.session`` / ``.backend``.
-    manager._register_session(
+    manager._registry.register(
         Session(
             id="ses_destroy01",
             working_dir=str(tmp_path),
@@ -318,5 +330,5 @@ async def test_destroy_session_cleans_uploads_dir(tmp_path, monkeypatch):
     await manager.destroy_session()
 
     assert not uploads_dir.exists(), "uploads dir must be removed on destroy"
-    assert manager.session is None
-    assert manager.sessions == {}
+    assert manager._registry.current_session() is None
+    assert manager._registry.sessions == {}

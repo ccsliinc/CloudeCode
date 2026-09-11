@@ -27,6 +27,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from src.core.sessions.registry import SessionRegistry
+
 import pytest
 
 # ---- minimal env bootstrap so ``src.config`` import succeeds --------------
@@ -71,18 +73,20 @@ class _FakeSocket:
 async def _pump(sidecars: AttachmentSidecars, session_id: str, payload: bytes):
     """Run one chunk through the real ``send_pty_output`` branch.
 
-    Description: builds the ``app.state`` shape the function reads - a
-      manager exposing ``get_backend``, and ``services.sidecars`` - then
-      drives exactly one queue item and cancels.
+    Description: builds the ``app.state`` shape the function reads -
+      ``services.registry`` and ``services.sidecars`` - then drives
+      exactly one queue item and cancels.
     Inputs: sidecars (AttachmentSidecars), session_id (str),
       payload (bytes) - the raw terminal output to deliver.
     Output: the fake socket, so a caller can assert on what was sent.
     Example: await _pump(AttachmentSidecars(), 'ses_1', b'hi')
     """
-    manager = SimpleNamespace(get_backend=lambda sid: None)
     state = SimpleNamespace(
-        session_manager=manager,
-        services=SimpleNamespace(sidecars=sidecars),
+        session_manager=SimpleNamespace(),
+        services=SimpleNamespace(
+            sidecars=sidecars,
+            registry=SessionRegistry(log_cap=lambda: 1000),
+        ),
     )
     socket = _FakeSocket(SimpleNamespace(state=state))
 

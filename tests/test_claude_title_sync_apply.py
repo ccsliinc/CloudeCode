@@ -41,6 +41,7 @@ import json
 import pytest
 
 from src.core import claude_title_sync_apply as apply_mod
+from src.core.sessions.registry import SessionRegistry
 from src.core.claude_title_sync import (
     TITLE_APPLIED,
     TITLE_BASELINE_RECORDED,
@@ -84,9 +85,13 @@ class _FakeManager:
 
     def __init__(self, conn, tmux_name=TMUX_NAME, working_dir=None):
         self._conn = conn
-        self.sessions = (
-            {"ses_test": _FakeSession(tmux_name, working_dir)} if tmux_name else {}
-        )
+        # The live session table lives on the registry since v2 slice S4,
+        # and the seam reads it there.
+        self._registry = SessionRegistry(log_cap=lambda: 1000)
+        if tmux_name:
+            self._registry.sessions["ses_test"] = _FakeSession(
+                tmux_name, working_dir
+            )
         self._hook_tmux_names = {}
         self.connections_opened = 0
 

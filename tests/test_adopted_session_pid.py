@@ -100,9 +100,9 @@ def _register_adopted_session(
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    mgr.sessions[sid] = sess
-    mgr.backends[sid] = _FakeBackend(tmux_name)
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = _FakeBackend(tmux_name)
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 
@@ -151,7 +151,7 @@ async def test_pid_refreshes_rather_than_freezing_at_adopt_time(monkeypatch, tmp
 
     # The underlying Session object stored on the manager is untouched --
     # only the per-response copy carries the live value.
-    assert mgr.sessions["adopted:proj"].pty_pid is None
+    assert mgr._registry.sessions["adopted:proj"].pty_pid is None
 
 
 @pytest.mark.asyncio
@@ -162,7 +162,7 @@ async def test_falls_back_to_backend_pid_when_status_map_has_no_row(
     fall back to a direct ``backend.pid`` query instead of reporting None."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_adopted_session(mgr, "adopted:proj", "cloude_proj", tmp_path)
-    mgr.backends["adopted:proj"].pid = 333  # type: ignore[attr-defined]
+    mgr._registry.backends["adopted:proj"].pid = 333  # type: ignore[attr-defined]
 
     monkeypatch.setattr(mgr, "_build_tmux_status_map", lambda: {})
 

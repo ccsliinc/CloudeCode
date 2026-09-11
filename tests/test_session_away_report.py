@@ -51,6 +51,7 @@ from fastapi.testclient import TestClient
 
 import src.api.away_routes as away_mod
 from src.api.auth import require_auth
+from src.core.sessions.registry import SessionRegistry
 from src.core.session_away_report import (
     COVERAGE_COMPLETE,
     COVERAGE_PARTIAL_RESTART,
@@ -243,9 +244,10 @@ def test_reading_a_signal_returns_the_later_of_the_two_stamps():
 
 
 def test_an_unprobeable_pane_is_unknown_and_never_scrollback():
-    assert away_mod.read_alternate_screen(object(), "s1") is None
-    sm = SimpleNamespace(get_backend=lambda sid: None)
-    assert away_mod.read_alternate_screen(sm, "s1") is None
+    empty = SessionRegistry(log_cap=lambda: 1000)
+    assert away_mod.read_alternate_screen(empty, "s1") is None
+    no_probe = SimpleNamespace(get_backend=lambda sid: object())
+    assert away_mod.read_alternate_screen(no_probe, "s1") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -256,18 +258,23 @@ def test_an_unprobeable_pane_is_unknown_and_never_scrollback():
 def _build_app(toasts=None, signal=None, alt_screen=None, session_id="s1"):
     """A FastAPI app carrying a SessionManager stocked for this route."""
     sm = MagicMock()
-    sm.sessions = {session_id: object()}
     sm._toast_inbox.get = MagicMock(return_value=list(toasts or []))
     sm._activity_tracker = SimpleNamespace(
         _signals={session_id: signal} if signal is not None else {}
     )
     backend = SimpleNamespace(pane_in_alternate_screen=lambda: alt_screen)
-    sm.get_backend = lambda sid: backend if alt_screen is not None else None
+    registry = SessionRegistry(log_cap=lambda: 1000)
+    registry.sessions[session_id] = object()
+    if alt_screen is not None:
+        registry.backends[session_id] = backend
 
     app = FastAPI()
     app.state.session_manager = sm
-    # The away report reads the toast inbox off ``app.state.services``.
-    app.state.services = SimpleNamespace(toasts=sm._toast_inbox)
+    # The route reads the toast inbox and the live session table off
+    # ``app.state.services``, each from the collaborator that owns it.
+    app.state.services = SimpleNamespace(
+        toasts=sm._toast_inbox, registry=registry
+    )
     app.include_router(away_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
     return app, sm

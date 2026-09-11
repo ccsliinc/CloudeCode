@@ -118,8 +118,8 @@ def _session(mgr: SessionManager, sid: str, work: Path) -> Session:
         status=SessionStatus.RUNNING,
         tmux_session=f"cloude_{sid}",
     )
-    mgr.sessions[sid] = sess
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 

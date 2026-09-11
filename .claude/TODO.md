@@ -7413,3 +7413,110 @@ private pair keeps the rest until their own slices. And `routes.py` still guards
 `active_tmux_names` with `hasattr` two lines from the call this slice edited;
 that name belongs to S4 and removing its tolerance here would change behaviour
 outside this slice.
+
+## 2026-09-10 - backend decomposition v2, slice S4: the registry's second half
+
+`src/core/sessions/registry.py` grows from 187 to 441 lines and now owns the
+LIVE SESSION TABLE as well as the log buffers: `sessions`, `backends`,
+`subscribers` (was `_subscribers`), `last_session_id` (was `_last_session_id`),
+the registration path, every lookup, the "current session" pointer with its
+self-repair, the output fan-out and `registered_ids_for_tmux_name`.
+`src/core/session_manager.py` goes **7,725 to 7,589**, and twelve members are
+gone from the class: `current_session`, `current_backend`, `session`, `backend`,
+`get_session`, `get_backend`, `list_sessions`, `_resolve_session_id`,
+`_register_session`, `_registered_ids_for_tmux_name`, `subscribe_output`,
+`unsubscribe_output`.
+
+**No copy and no forwarder.** All 82 internal reads go through
+`self._registry`, and `__init__` creates none of the four containers - a new
+test parses `__init__` and fails if it ever does, because an attribute
+assignment is invisible to the existing forwarder SHAPE walk. `AppServices`
+needed no new field: the registry has been on it since S0, so the composition
+root already hands the same object to both sides.
+
+**Three methods stayed and none is a forwarder.** `_make_output_handler`
+builds a per-session closure over `publish`, which is real work rather than a
+forward. `idle_watcher` and `adopt_fifo_start_offset` each reach TWO
+collaborators (the registry for which session is current, the sidecars for what
+is attached to it), so neither belongs on either one alone.
+
+**The no-copy legs are chosen for this data, and there are five.** What can go
+wrong here is not a wrong value, it is TWO CONTAINERS: two dicts written
+through one path agree forever and diverge only when a create through the
+manager meets a boot re-adopt through the registry, which is the 22-rows-for-21
+-panes shape. So: (a) identity, kept only as the cheap canary; (b) FORWARD,
+write through the manager and read through a registry reference captured
+BEFORE that write; (c) REVERSE, write through the registry and read through
+`has_active_session` / `is_session_live` / `active_tmux_names`, which walk the
+dicts themselves; (d) TWO REFERENCES ONE PANE, register one tmux name under two
+ids through two different references and require the query to see both, which
+is the plan's named negative control and a no-copy leg at once; (e) DELETION,
+because `pop` on a copy leaves the original populated and an add-only suite
+cannot see that. (d) carries its own control: an unregistered name finds
+nothing, and `also` naming an id with no backend is refused.
+
+**Five mutations, five RED, every revert byte-identical by sha256.** Reverted
+from `.pristine` copies, never with `git checkout`.
+1. The composition root hands the manager a DIFFERENT registry from the one in
+   `AppServices`: 5 red across `test_composition_root` and
+   `test_lifespan_composition`.
+2. `registered_ids_for_tmux_name` returns only the first match: 2 red,
+   including the PRE-EXISTING `test_adopt_rekey_stored_id`.
+3. `forget` stops repairing the current pointer: 1 red.
+4. `publish` fans out to every subscriber instead of the session's own: 4 red,
+   including the pre-existing `test_session_backend::
+   test_concurrent_sessions_output_isolation`.
+5. THE NO-COPY ONE: `register` writes into `dict(self.sessions)` and rebinds.
+   **Leg (a) stayed GREEN** - both spellings still read one attribute on one
+   object at any instant - and legs (b) and (e) went red. That is the whole
+   argument for choosing legs per slice rather than reusing an `is` check.
+
+**Ten defensive readers repointed, and NINE of them were invisible to the first
+sweep** because they were spelled `getattr(manager, "backends", None)` rather
+than `manager.backends`. Every one would have answered empty instead of
+raising: `session_view_clears` (twice - a view would have stopped clearing any
+flag), `session_status_seed_read`, `session_agent_infer_apply`,
+`claude_title_sync_apply`, `local_servers`, `status_routes` (twice),
+`away_routes` (twice) and `routes.py`. `read_alternate_screen` now takes the
+REGISTRY rather than the manager, because a `callable` guard on `get_backend`
+answers None for a moved method and a real refusal identically. The
+`hasattr(session_manager, "active_tmux_names")` guard that the S3 entry flagged
+as belonging to this slice is gone, and the `elif` behind it was dead code.
+
+**Patch sweep clean.** No `patch(`/`patch.object(` in the suite aims at any of
+the twelve deleted names. One monkeypatch repointed:
+`test_boot_readopt.py` patched `mgr._register_session` and now patches
+`mgr._registry.register`. Both node source-text guards
+(`test_launchpad_help_content`, `test_session_ownership_badge`) still match
+without edits, checked rather than assumed.
+
+**Verification.** Control MEASURED on this tree before any edit: 6,169 passed /
+3 failed / 20 skipped, 6,192 collected. After: **6,200 passed / 2 failed / 20
+skipped, 6,222 collected**. Collection diff is exact: +31 added (14 in the new
+`test_session_registry_live.py`, 16 parametrised cases in
+`test_no_cluster_forwarders.py`, 1 rename replacement), -1 removed, and the
+removed one is `test_open_ids_tolerates_a_manager_with_no_backends_dict`
+RENAMED to `test_open_ids_is_empty_when_nothing_is_registered` in the same
+file. **ZERO tests removed.** The two remaining failures are the known
+environmental pair. The control's third failure,
+`test_boot_readopt_real_tmux::test_attach_to_a_dead_pane_still_succeeds`,
+passed after the change: it drives the real `cloude` socket and is the
+INFRA-49 flake class, not a regression either way. Node 200/200,
+`check-js-syntax.sh` 227 files clean, four listing cost ceilings pass,
+`scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Plan versus code, and the code won twice.**
+1. The plan says "31 test files touch these attributes but only 41 times".
+   Re-measured today with the plan's own methodology it is **37 files and 138
+   hits**, three times the stated reach. Wide and shallow was right; the number
+   was not.
+2. `src/core/sessions/registry.py`'s own module docstring said the second half
+   was slice "S7", which is version 1 numbering. Under plan v2 it is S4. The
+   docstring is rewritten rather than left to become the stale-doc trap gotcha
+   8 warns about.
+
+**What is NOT done, said out loud.** `test_session_registry.py`'s legs (a) and
+(c) became degenerate when S1 deleted the forwarders - both sides of each
+assertion now read `manager._registry` - and this slice did not repair them,
+because they belong to the log-buffer half and the real legs for the live table
+are in the new file. Worth a follow-up.

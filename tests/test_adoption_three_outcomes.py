@@ -217,12 +217,15 @@ def test_the_manager_raises_the_NAMED_gone_error_not_a_bare_runtime_error():
         AdoptTargetGoneError,
     )
     from src.core.session_manager import SessionManager
+    from src.core.sessions.registry import SessionRegistry
 
     # A bare instance: adopt_external_session touches only ``backends``
     # before the persistence gate, so nothing else has to be built. That
     # is deliberate - constructing a full manager would drag in tmux.
+    # The container lives on the registry (v2 S4), so the one collaborator
+    # is built by hand rather than the whole manager.
     manager = object.__new__(SessionManager)
-    manager.backends = {}
+    manager._registry = SessionRegistry(log_cap=lambda: 1000)
     manager.persist_adoption = lambda _name: AdoptPersistResult(
         outcome=PERSIST_SESSION_GONE, detail="that session is no longer there"
     )
@@ -251,9 +254,10 @@ def test_the_manager_does_not_abort_the_adoption_for_other_persist_failures():
         AdoptTargetGoneError,
     )
     from src.core.session_manager import SessionManager
+    from src.core.sessions.registry import SessionRegistry
 
     manager = object.__new__(SessionManager)
-    manager.backends = {}
+    manager._registry = SessionRegistry(log_cap=lambda: 1000)
     manager.persist_adoption = lambda _name: AdoptPersistResult(
         outcome=PERSIST_LISTING_UNAVAILABLE, detail="datastore unreadable"
     )

@@ -535,15 +535,15 @@ def _manager(monkeypatch, tmp_path: Path) -> SessionManager:
 
 
 def _register(mgr: SessionManager, sid: str, name: str, tmp_path: Path) -> None:
-    mgr.sessions[sid] = Session(
+    mgr._registry.sessions[sid] = Session(
         id=sid,
         pty_pid=None,
         working_dir=str(tmp_path),
         status=SessionStatus.RUNNING,
         tmux_session=name,
     )
-    mgr.backends[sid] = _FakeBackend(name)
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.backends[sid] = _FakeBackend(name)
+    mgr._registry.subscribers.setdefault(sid, [])
 
 
 def _stub_tail(monkeypatch, text):
@@ -574,7 +574,7 @@ def test_manager_reports_awaiting_and_toasts_exactly_once(
         verdicts.append(
             mgr._startup_gate_for(
                 session_id="ses1",
-                backend=mgr.backends["ses1"],
+                backend=mgr._registry.backends["ses1"],
                 tmux_name="cloude_proj",
                 row=row,
                 liveness=LIVENESS_LIVE,
@@ -604,7 +604,7 @@ def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
     assert (
         mgr._startup_gate_for(
             session_id="ses1",
-            backend=mgr.backends["ses1"],
+            backend=mgr._registry.backends["ses1"],
             tmux_name="cloude_proj",
             row=row,
             liveness=LIVENESS_LIVE,
@@ -629,7 +629,7 @@ def test_manager_refuses_to_guess_when_liveness_is_unknown(
     assert (
         mgr._startup_gate_for(
             session_id="ses1",
-            backend=mgr.backends["ses1"],
+            backend=mgr._registry.backends["ses1"],
             tmux_name="cloude_proj",
             row=row,
             liveness=LIVENESS_UNKNOWN,
@@ -664,7 +664,7 @@ def test_manager_never_captures_a_tail_for_a_session_with_a_hook(
     }
     mgr._startup_gate_for(
         session_id="ses1",
-        backend=mgr.backends["ses1"],
+        backend=mgr._registry.backends["ses1"],
         tmux_name="cloude_proj",
         row=row,
         liveness=LIVENESS_LIVE,

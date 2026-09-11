@@ -455,7 +455,7 @@ def seed_live_sessions(manager: Any) -> Tuple[int, int]:
     seeded = 0
     examined = 0
     try:
-        sessions = dict(getattr(manager, "sessions", {}) or {})
+        sessions = dict(manager._registry.sessions)
         store = seeds_for(manager)
         store.prune(sessions.keys())
         tracker = getattr(manager, "_activity_tracker", None)

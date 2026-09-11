@@ -28,7 +28,9 @@ from unittest.mock import MagicMock
 
 import jwt as pyjwt
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi import HTTPException
+from src.core.sessions.registry import SessionRegistry
 from fastapi.testclient import TestClient
 
 # ---- env bootstrap so ``src.config`` import succeeds -------------------
@@ -106,17 +108,25 @@ def _mint_access_token() -> str:
 
 
 class _StubSessionManager:
-    """Minimal SessionManager stand-in for route-level testing."""
+    """Minimal SessionManager stand-in for route-level testing.
+
+    Description: the live session lives on a REAL ``SessionRegistry``
+      (v2 slice S4), which is what the route reaches for off
+      ``app.state.services``.
+    """
 
     def __init__(self, working_dir: Path):
-        self.session = Session(
-            id="ses_test01",
-            working_dir=str(working_dir),
-            status=SessionStatus.RUNNING,
-        )
         backend = MagicMock()
         backend.is_alive.return_value = True
-        self.backend = backend
+        self.registry = SessionRegistry(log_cap=lambda: 1000)
+        self.registry.register(
+            Session(
+                id="ses_test01",
+                working_dir=str(working_dir),
+                status=SessionStatus.RUNNING,
+            ),
+            backend,
+        )
 
     def has_active_session(self) -> bool:
         return True
@@ -125,7 +135,9 @@ class _StubSessionManager:
 @pytest.fixture
 def client(tmp_path):
     app = FastAPI()
-    app.state.session_manager = _StubSessionManager(tmp_path)
+    manager = _StubSessionManager(tmp_path)
+    app.state.session_manager = manager
+    app.state.services = SimpleNamespace(registry=manager.registry)
     app.include_router(api_router, prefix="/api/v1")
     return TestClient(app)
 

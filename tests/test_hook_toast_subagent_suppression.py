@@ -107,15 +107,15 @@ def _build_hook_app(monkeypatch, tmp_path):
 
     work = tmp_path / "hook_proj"
     work.mkdir()
-    mgr.sessions["ses_hook"] = Session(
+    mgr._registry.sessions["ses_hook"] = Session(
         id="ses_hook",
         pty_pid=None,
         working_dir=str(work),
         status=SessionStatus.RUNNING,
         tmux_session="cloude_hook_proj",
     )
-    mgr.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
-    mgr._subscribers.setdefault("ses_hook", [])
+    mgr._registry.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
+    mgr._registry.subscribers.setdefault("ses_hook", [])
     mgr._mint_hook_token("ses_hook")
 
     app = FastAPI()

@@ -116,15 +116,15 @@ def harness(monkeypatch, tmp_path):
             ).session_id
 
     mgr = SessionManager()
-    mgr.sessions[APP_SESSION_ID] = Session(
+    mgr._registry.sessions[APP_SESSION_ID] = Session(
         id=APP_SESSION_ID,
         pty_pid=None,
         working_dir=str(tmp_path),
         status=SessionStatus.RUNNING,
         tmux_session=TMUX_NAME,
     )
-    mgr.backends[APP_SESSION_ID] = _FakeBackend(TMUX_NAME)
-    mgr._subscribers.setdefault(APP_SESSION_ID, [])
+    mgr._registry.backends[APP_SESSION_ID] = _FakeBackend(TMUX_NAME)
+    mgr._registry.subscribers.setdefault(APP_SESSION_ID, [])
     token = mgr._mint_hook_token(APP_SESSION_ID)
 
     monkeypatch.setattr(

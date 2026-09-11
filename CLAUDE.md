@@ -95,7 +95,11 @@ behind. Measured on live minutes after the re-key shipped: the rehydrated
 `adopted:cloude_Agent_-_Cloude_Code`, the browser's adopt correctly re-keyed to
 `ses_fb8dd410`, and `GET /sessions/list` returned **22 rows for 21 live tmux
 sessions** - one pane, two backends, two tailers on one FIFO.
-`_registered_ids_for_tmux_name` is what enforces the rule. Note this was caught
+`SessionRegistry.registered_ids_for_tmux_name` is what enforces the rule; it
+lives on the registry rather than the manager because it has to run against
+the very `backends` dict the registration path writes, and a second dict
+holding a copy answers every equality assertion while missing the second
+registration. Note this was caught
 only because the deploy was verified against `/sessions/list` rather than
 against the `boot_readopt_complete` log line, which was perfect.
 

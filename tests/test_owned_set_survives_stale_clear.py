@@ -141,6 +141,6 @@ def test_cleared_metadata_no_longer_rehydrates_the_dead_session(dirs):
     reloaded = SessionManager()
     reloaded._load_session_metadata()
 
-    assert reloaded.current_session() is None, (
+    assert reloaded._registry.current_session() is None, (
         "the dead session was rehydrated anyway"
     )

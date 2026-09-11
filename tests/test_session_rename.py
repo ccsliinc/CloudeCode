@@ -125,10 +125,10 @@ def _register(
         tmux_session=tmux_session,
     )
     backend = _FakeBackend(tmux_session=tmux_session)
-    mgr.sessions[sid] = sess
-    mgr.backends[sid] = backend
-    mgr._subscribers.setdefault(sid, [])
-    mgr._last_session_id = sid
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = backend
+    mgr._registry.subscribers.setdefault(sid, [])
+    mgr._registry.last_session_id = sid
     if owned:
         mgr._owned.names.add(tmux_session)
     return sess, backend
@@ -202,7 +202,7 @@ async def test_rename_adopted_external_session(monkeypatch, tmp_path):
     assert "external_a" not in mgr._owned.names
     assert "external_b" not in mgr._owned.names
     # Session's tmux_session still updates.
-    assert mgr.sessions["adopted:external_a"].tmux_session == "external_b"
+    assert mgr._registry.sessions["adopted:external_a"].tmux_session == "external_b"
 
 
 # --------------------------------------------------------------------------- #
@@ -225,7 +225,7 @@ async def test_rename_conflict_with_existing_session(monkeypatch, tmp_path):
         await mgr.rename_session("ses_a", "name_b")
 
     # State unchanged on conflict.
-    assert mgr.sessions["ses_a"].tmux_session == "name_a"
+    assert mgr._registry.sessions["ses_a"].tmux_session == "name_a"
     assert b_backend.tmux_session == "name_b"
 
 
@@ -399,7 +399,7 @@ def test_a_label_that_cannot_be_rendered_is_still_a_400(
         "/api/v1/sessions/ses_route/name", json={"new_name": label}
     )
     assert resp.status_code == 400, resp.text
-    assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
+    assert mgr._registry.sessions["ses_route"].tmux_session == "cloude_route"
 
 
 def test_labelling_never_moves_the_tmux_name(monkeypatch, tmp_path):
@@ -418,7 +418,7 @@ def test_labelling_never_moves_the_tmux_name(monkeypatch, tmp_path):
         json={"new_name": "Something Entirely Different"},
     )
 
-    assert mgr.sessions["ses_route"].tmux_session == "cloude_route"
+    assert mgr._registry.sessions["ses_route"].tmux_session == "cloude_route"
     assert "cloude_route" in mgr._owned.names
     assert "Something Entirely Different" not in mgr._owned.names
 

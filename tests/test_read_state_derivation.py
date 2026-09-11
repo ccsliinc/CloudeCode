@@ -319,15 +319,15 @@ def _manager_with_row_state(monkeypatch, tmp_path: Path, stored: str) -> Session
     (tmp_path / "logs").mkdir(exist_ok=True)
     monkeypatch.setattr("src.core.session_manager.settings", stub)
     mgr = SessionManager()
-    mgr.sessions["ses1"] = Session(
+    mgr._registry.sessions["ses1"] = Session(
         id="ses1",
         pty_pid=None,
         working_dir=str(tmp_path),
         status=SessionStatus.RUNNING,
         tmux_session="cloude_daily-briefing",
     )
-    mgr.backends["ses1"] = _FakeBackend("cloude_daily-briefing")
-    mgr._subscribers.setdefault("ses1", [])
+    mgr._registry.backends["ses1"] = _FakeBackend("cloude_daily-briefing")
+    mgr._registry.subscribers.setdefault("ses1", [])
     monkeypatch.setattr(
         mgr,
         "_build_tmux_status_map",

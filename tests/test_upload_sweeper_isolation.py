@@ -409,7 +409,7 @@ async def _destroy_with_uploads_dir(tmp_path, working_dir: Path):
     backend.stop = _stop
     backend.is_alive = MagicMock(return_value=True)
     backend.tmux_session = "cloude_iso01"
-    manager._register_session(
+    manager._registry.register(
         Session(
             id="ses_iso01",
             working_dir=str(working_dir),

@@ -70,14 +70,14 @@ def mgr(monkeypatch, tmp_path) -> SessionManager:
     work = tmp_path / "proj"
     work.mkdir()
     for sid in ("ses_a", "ses_b"):
-        manager.sessions[sid] = Session(
+        manager._registry.sessions[sid] = Session(
             id=sid,
             pty_pid=None,
             working_dir=str(work),
             status=SessionStatus.RUNNING,
             tmux_session=None,
         )
-        manager._subscribers.setdefault(sid, [])
+        manager._registry.subscribers.setdefault(sid, [])
     return manager
 
 
