@@ -3766,7 +3766,59 @@ minute, forever, which is why it was rejected.
 | Read the verdict and decide what may be said | `src/core/db_integrity_status.py` |
 | The background loop | `src/core/db_integrity_task.py` |
 | The cheap per-request probe | `src/core/db_health.py` |
+| May boot stand on the cached verdict | `src/core/db_integrity_gate.py` |
 | Atomic write / tolerant read, shared with the ingester | `src/core/json_artifact.py` |
+
+**AND BOOT WAS DOING THE SAME THING THE REQUEST PATH USED TO, FOR LONGER.**
+`ensure_db_migrated` ran the identical pragma unconditionally at
+`db_migration.py:280`, BEFORE the schema-version gate, so it ran whether or not
+a migration was pending. Measured 2026-09-11 on the owner's 5.4 GB cloude.db:
+**51.8 s of a 55 s startup window**, after which the entire rest of the lifespan
+took 200 ms. Warm cache floor about 21 s, cold about 54 s. That is 20 to 50
+seconds of CLOSED PORT on every restart, six hours after the daily checker had
+walked the same file in 19.767 s and written `ok`.
+
+`src/core/db_integrity_gate.py` is the ladder. **ONLY A POSITIVE, FRESH, `ok`
+VERDICT TAKEN ON THIS DATABASE MAY SKIP THE PRAGMA**; ten named rungs refuse and
+every one of them runs it. The freshness window is NOT picked here: it is
+`resolve_stale_after_seconds()`, two check intervals, and more than the number
+the gate reuses the REDUCTION - `db_integrity_status.classify_record` is now one
+public function and `GET /api/v1/version` calls it too, so the boot gate and the
+status block cannot disagree about whether the database has been verified.
+
+**A CACHED FAILURE RUNS THE LIVE PRAGMA; IT DOES NOT SHORT-CIRCUIT.** Returning
+the degraded state straight from the recorded complaint looks stricter and is
+worse: it makes a stale failure permanent, so a user who restored a verified
+backup after a corruption would boot read-only forever, with a cached verdict
+outranking a live one. Running the pragma cannot be softer than the old
+behaviour because it IS the old behaviour.
+
+**THE ARTIFACT NOW SAYS WHICH DATABASE IT DESCRIBES.** It recorded only
+`db_path`, which is derived from the state directory on both sides and therefore
+always matches and proves nearly nothing, because a restored file lands at the
+same path. It now also carries `meta.install_id` and `db_size_bytes`, following
+`corpus_ingest_scan.py`, which already invalidates its own cache on a changed
+`install_id`. A file SMALLER than when it was verified has been replaced,
+restored, truncated or VACUUMed, because SQLite does not shrink in normal
+operation; a VACUUM is the one false positive and costs exactly one slow boot.
+An artifact predating the binding carries no `install_id` and is REFUSED, so the
+first boot after this ships still walks the file and only the second is fast.
+
+**WHAT IT CANNOT DETECT IS SAID OUT LOUD RATHER THAN IMPLIED AWAY.** An in-place
+restore of a same-size-or-larger backup of the SAME install is invisible to all
+three identity facts, and so is bit rot arising between the check and the boot.
+An unclean shutdown is not detectable either: in WAL mode a `-wal` file is
+present whenever a connection is open and routinely survives a clean exit, and
+this is a menubar app that is killed constantly, so any crash heuristic built on
+it would refuse always or never. For all three the freshness window is the only
+control, which is the same control the daily check has always rested on.
+
+**A BOOT-RUN CHECK PUBLISHES**, tagged `source: boot` beside the scheduled
+sweep's `source: scheduled`. It is a real completed check and withholding it
+would make the next boot walk a file verified moments earlier, which on a box
+that restarts more often than the daily schedule fires is the whole fix not
+happening. The tag is what keeps a dead daily loop diagnosable now that the
+artifact's age alone cannot separate the two producers.
 
 **The request path is now one connect plus one small SELECT**, plus one read of
 a small JSON file. Measured at 0.46 ms median against a 310 MB database where

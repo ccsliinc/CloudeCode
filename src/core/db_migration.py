@@ -41,10 +41,10 @@ from src.core.db import (
     connect,
     db_path_for,
     get_schema_version,
-    integrity_check,
     table_exists,
     transaction,
 )
+from src.core.db_integrity_gate import boot_integrity_verdict
 from src.core.db_backup import prune_backups, take_backup
 from src.core.db_version_gate import resolve_startable_version
 from src.core.db_steps import run_chain
@@ -277,7 +277,14 @@ def ensure_db_migrated(
         )
 
     with closing(conn):
-        verdict = integrity_check(conn)
+        # PRAGMA integrity_check is a MAINTENANCE OPERATION, not a boot
+        # probe. Run unconditionally it held the port shut for 51.8 s of a
+        # 55 s startup on a 5.4 GB cloude.db, after which the whole rest of
+        # the lifespan took 200 ms. The gate runs it unless a POSITIVE,
+        # FRESH, ok verdict taken on THIS database says it already ran;
+        # every other state, including a recorded failure, still runs it.
+        # See src/core/db_integrity_gate.py for the ladder and its limits.
+        verdict = boot_integrity_verdict(state_dir, conn).verdict
         if verdict != "ok":
             return _state(
                 STATUS_DEGRADED_DB_UNREADABLE,
