@@ -1,6 +1,6 @@
 # TODO — closing out the open issue board
 
-Repo: Adoom666/CloudeCodeDev. 53 open at start, 30 now (re-derived 2026-09-11
+Repo: Adoom666/CloudeCodeDev. 53 open at start, 29 now (re-derived 2026-09-11
 via `gh issue list --state open --json number --jq 'length'`).
 - 11 are ccsliinc's (their draft PRs) — not ours
 - 9 carry `blocked` (waiting on ccsliinc PR #19, Adam's ruling): #31 #32 #35
@@ -23,6 +23,27 @@ via `gh issue list --state open --json number --jq 'length'`).
   direct WebSocket capture of the attach handshake, on both a fresh
   connect and a reconnect, returned request_dims, binary, terminal.ready,
   binary - zero frames of type log.
+
+- [x] #113 an explicit CLOUDE_STATE_DIR now suppresses the legacy
+  LOG_DIRECTORY pin. PR #114 merged as 405e9e8. FILED AND FIXED THIS
+  SESSION: setting CLOUDE_STATE_DIR alone did NOT isolate an instance,
+  because LOG_DIRECTORY is populated from the repo's own .env, so a
+  throwaway dev server opened the real /Users/Adam/cloude-projects/
+  refresh_tokens.db read-write and would have WRITTEN the real
+  pinned_themes.json. Settings.state_dir_is_explicit() is the single
+  authority and is handed to _state_file_pin as a required parameter, so
+  the refusing branch is drivable by a test. The legacy rung still fires
+  for an install that named nothing, pinned by
+  test_legacy_pin_still_fires_when_no_state_dir_was_named, watched RED
+  under a mutated unconditional skip. Adversarial review raised four
+  findings, all closed in c860f87: the pin cache key was missing the new
+  flag and would poison a future caller for the process lifetime; an
+  explicit state dir on a legacy install abandoned the old copy with no
+  diagnostic, now state_file_legacy_copy_left_behind at info; .env.example
+  still carried the false claim README.md:529 was corrected for; and one
+  drift test's python half had started short circuiting past the rung it
+  names. Suite 6431/0/18, both shell suites pass.
+
 
 ## In flight
 
