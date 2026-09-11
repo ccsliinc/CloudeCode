@@ -41,6 +41,16 @@
  * running a personal fork of the menu bar app would ever exercise. Left as
  * a known gap rather than built speculatively; the config override above
  * covers that same developer today.
+ *
+ * KNOWN CONSEQUENCE, stated here rather than discovered later, and carried
+ * across verbatim in substance from the other line's version of this fix.
+ * That repo publishes v1.0.36 while this line ships 1.2.1, so an install is
+ * told the latest release is OLDER than the one it is running. It does NOT
+ * prompt a downgrade: compareVersions('1.2.1', '1.0.36') is 1, and
+ * checkForUpdate reports RESULT_AVAILABLE only when the comparison is
+ * negative, so the outcome is RESULT_CURRENT. What IS wrong is the figure
+ * reported alongside it, and the release the upgrade link opens. Both
+ * suites pin those real numbers. See docs/DECISIONS.md, 2026-09-10.
  */
 
 const fs = require('node:fs');

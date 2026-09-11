@@ -6818,3 +6818,135 @@ Incidental, from the same round: an unrelated v1 worker re-ran its own two
 suites against current HEAD and got 58/58, independently confirming its
 invariants survived v2's forwarder deletion. A worker cross-checking a LATER
 worker's change is better evidence than either checking itself, and it was free.
+
+## 2026-09-10 - both update checkers retargeted, 33 stale drafts deleted, the kept-behaviours question put to Adam
+
+Three owner-authorised errands, on `fix/update-checker-target` off `release/1.2.1`.
+
+### 1. the update checker points at Adam's main repo, and the consequence is stated
+
+- [x] Owner's ruling, verbatim: "1. use adams main repo." So BOTH checkers now
+  consult `Adoom666/CloudeCode`.
+- [x] EXACTLY ONE line of product code moved. `macOS/update-check.js`,
+  `UPDATE_FEED_URL`, from `api.github.com/repos/ccsliinc/CloudeCode/releases/latest`
+  to `.../repos/Adoom666/CloudeCode/releases/latest`. Everything else was
+  already correct or carries no repo at all:
+  - `src/core/update_check.py:76` `FALLBACK_REMOTE` already
+    `https://github.com/Adoom666/CloudeCode.git`. UNCHANGED.
+  - `src/core/update_check.py:81` `DEFAULT_UPGRADE_COMMAND` already opens that
+    repo's releases page. UNCHANGED.
+  - `macOS/main.js:437` "View on GitHub" already Adam's repo. UNCHANGED.
+  - `client/js/launchpad.js:3406` README link already Adam's repo. UNCHANGED.
+    (An older note said line 3175; that was stale. Re-derived, do not trust it.)
+  - `.github/workflows/claude.yml:17` `Adoom666` is an allowed SENDER LOGIN for
+    the Claude action, not a release remote. UNCHANGED and out of scope.
+- [x] `scripts/upgrade.sh` JUDGMENT RE-CHECKED AND IT HOLDS, but the earlier
+  wording was wrong: it does NOT default to a literal `origin`. It hardcodes no
+  repository anywhere. `scripts/upgrade_lib/version_probe.py:79 resolve_remote`
+  imports `FALLBACK_REMOTE` from `src.core.update_check` and reuses the same
+  three-rung ladder, so it follows this ruling for free. No edit needed.
+- [x] THE CONSEQUENCE, FLAGGED RATHER THAN BURIED. `Adoom666/CloudeCode`
+  publishes v1.0.36 as both its latest release and its highest tag (measured
+  2026-09-10 with `gh api` and `git ls-remote`), while this line ships 1.2.1.
+  So a 1.2.1 install is told the latest is OLDER than what it runs. The
+  reported figure is wrong and the upgrade link opens a release older than the
+  running build.
+- [x] IT DOES NOT PROMPT A DOWNGRADE, and that was VERIFIED IN THE CODE rather
+  than assumed, on both sides:
+  - Python, `UpdateChecker.refresh`: `newer = parsed_latest > parsed_current`,
+    and `(1, 0, 36) > (1, 2, 1)` is False, so status resolves `current`.
+  - JS, `checkForUpdate`: `compareVersions('1.2.1', '1.0.36')` returns 1 and
+    `available` needs a NEGATIVE comparison, so the result is `current`.
+    Executed against the real module, not read: result `current`, latest
+    `1.0.36`.
+- [x] PINNED BY TESTS so a future move is deliberate:
+  `tests/test_update_check.node.mjs` asserts the exact feed URL and that an
+  older latest reads `current`; `tests/test_version_and_update_check.py` asserts
+  `FALLBACK_REMOTE`, `DEFAULT_UPGRADE_COMMAND` and the same ordering invariant
+  with the real 1.2.1 against 1.0.36 numbers.
+- [x] ASYMMETRY LEFT ALONE ON PURPOSE, noted so nobody "fixes" it by accident.
+  The Python side has a ladder (configured `updates.remote`, else the
+  checkout's `origin`, else the fallback), so a DEV CHECKOUT still consults its
+  own origin and only a PACKAGED install lands on Adam's repo. The menubar
+  client has no ladder, one URL for everyone. That is documented dev-from-fork
+  behaviour and has nothing to do with this ruling.
+- [x] RECORDED WHERE ADAM WILL SEE IT, not only in a commit message:
+  `docs/DECISIONS.md` entry "Both update checkers point at Adam's main repo",
+  2026-09-10, scope all repos. The file was CARRIED ACROSS as the exact blob
+  from `docs/repo-of-record` (sha `7d6562caabadd2055e82ed8a179a46c510b15106`,
+  itself `feat/work-protocol`'s blob plus their entry) and the new entry
+  prepended, so a later merge stays clean instead of forking the file.
+- [x] AND AS AN ISSUE, because it is a coupling he should get a say in:
+  `Adoom666/CloudeCodeDev` #69. His main repo is now the release feed for our
+  builds, so what he publishes is announced to our users, and the version
+  reconciliation is partly his to make.
+
+### 2. 33 stale draft releases deleted from ccsliinc/CloudeCode
+
+- [x] Owner's answer, verbatim: "2. i think this is safe so why not."
+- [x] Deleted 33 DRAFT releases, tags v1.0.0 through v1.0.32, one dmg each,
+  4,095,684,007 bytes reclaimed (3.81 GB). Deleted 33, skipped 0, failed 0.
+- [x] Addressed BY RELEASE ID, never by tag, because v1.0.31 exists twice: a
+  draft (`378751396`, deleted) and a published release (`378751709`, kept). A
+  tag-addressed delete there is ambiguous and could have taken the wrong one.
+- [x] Every id re-read from the live API immediately before its own delete and
+  refused unless the record STILL said `draft: true` and the tag was still in
+  range. That guard earned its keep: the first attempt hit a zsh
+  word-splitting bug that passed the whole id list as one string, and the
+  guard refused it, deleting nothing.
+- [x] A RELEASE OBJECT IS NOT A TAG, and it was PROVEN rather than asserted.
+  `git ls-remote --tags --refs` captured on BOTH remotes before and after; the
+  `diff` of the two listings is EMPTY. All 39 tags per remote still resolve to
+  the same commit shas on `origin` and on `adamdev`. No `--cleanup-tag` was
+  used on any call.
+- [x] KEPT: v1.0.31 (published twin), v1.0.33 (published, previous Latest),
+  v1.2.0 and v1.2.1 (published, v1.2.1 is Latest).
+- [ ] FLAGGED, NOT ACTED ON: v1.0.34, v1.0.35 and v1.0.36 on
+  `ccsliinc/CloudeCode` are ALSO drafts carrying dmgs, and they sit OUTSIDE the
+  authorised v1.0.0 to v1.0.32 range. Roughly another 370 MB. They need their
+  own decision; do not sweep them in on the strength of this one.
+- [x] Audit artifact, written BEFORE the deletion and completed after:
+  `docs/audits/2026-09-10-ccsliinc-draft-release-deletion.md`. Ids, tags, asset
+  names, byte counts, the keep list with reasons, and the before/after tag
+  listings from both remotes.
+
+### 3. the kept-behaviours question put to Adam, and a defect in his file
+
+- [x] Owner's answer, verbatim: "3. put in a note to him for an answer."
+- [x] Commented on `Adoom666/CloudeCodeDev` #63 and #15 asking plainly for a
+  yes, a no, or a later, and saying that declining is legitimate but a silent
+  expiry is not.
+- [x] The concrete argument, not the abstract one: the policy is symmetric on
+  paper and one-sided in practice, and the side it fails to protect is HIS.
+  `docs/kept-behaviours/ccsliinc.md` has 8 entries, each declaring `paths:`,
+  `anchors:` and `tests:`; 7 name real test files and the 8th (double-click
+  rename) says `tests: none`, honestly. So a commit of his that removes
+  something of OURS fires the guard, which is the direction that already
+  happened (`8898f07`, 2026-09-10, restart on a live row plus the manual
+  mark-unread control plus group filing). A commit of OURS that removes
+  something of his fires nothing, because no file names it.
+- [x] Guard claims VERIFIED against the real blobs before quoting them, not
+  taken from the brief: `scripts/check_kept_behaviours.py` reads every file in
+  the directory, and `tests/test_kept_behaviours_guard.py` carries the negative
+  controls (silent on the real tree, on an unrelated anchor, and on a path
+  merely absent from the branch) alongside the positive ones. The `8898f07`
+  replay is where the anchor lesson came from: `dblclick` and `beginEdit` did
+  NOT fire on the commit that killed the gesture.
+- [x] DEFECT REPORTED IN HIS FILE, not edited. `.claude/skills/work/SKILL.md`'s
+  claim block runs `git push -u origin "feat/$N-$SLUG"`. Correct on his clone,
+  now WRONG on ours: since his repo became primary, our `origin` is the mirror
+  `ccsliinc/CloudeCode` and his repo is `adamdev`. An agent following it
+  literally pushes the claim branch to the mirror, the draft PR here never gets
+  a branch, and the claim silently does not happen. Suggested naming the remote
+  explicitly. His file, his fix.
+
+### verification
+
+- Full pytest, MEASURED CONTROL on the same tree before any edit:
+  2 failed, 5708 passed, 19 skipped. Both failures pre-existing and
+  environmental (`test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`,
+  `test_version_probe.py::test_current_version_empty_when_unresolvable`).
+- Node: 200 of 200 `tests/*.node.mjs` suites pass, run the way CI globs them.
+- `scripts/ci/check-js-syntax.sh`: 227 files parsed cleanly.
+- `node --check` on both touched JS files.
+- `venv/bin/python3 scripts/scan_secrets.py`: exit 0, clean, 1393 files scanned.

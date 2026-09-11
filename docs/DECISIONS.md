@@ -13,6 +13,80 @@ ruling about another.
 
 ---
 
+## Both update checkers point at Adam's main repo
+**2026-09-10, scope: all repos**
+
+Verbatim: "1. use adams main repo."
+
+`Adoom666/CloudeCode` is the upstream product, and both of this app's update
+checkers now consult it. Before today they disagreed: the server checker
+already pointed there, and the menubar app pointed at `ccsliinc/CloudeCode`,
+so the two could report different answers to the question "what is the latest
+release" on the same machine at the same moment.
+
+What changed, exactly:
+
+- `macOS/update-check.js`, `UPDATE_FEED_URL`, moved from
+  `api.github.com/repos/ccsliinc/CloudeCode/releases/latest` to
+  `api.github.com/repos/Adoom666/CloudeCode/releases/latest`.
+- `src/core/update_check.py` was ALREADY correct and is unchanged:
+  `FALLBACK_REMOTE` is `https://github.com/Adoom666/CloudeCode.git` and
+  `DEFAULT_UPGRADE_COMMAND` opens that repo's releases page.
+- `scripts/upgrade.sh` hardcodes no repo at all. It imports the same
+  `FALLBACK_REMOTE` through `scripts/upgrade_lib/version_probe.py`, so it
+  follows this ruling for free and needed no edit.
+
+**THE CONSEQUENCE, STATED HERE RATHER THAN LEFT TO BE DISCOVERED.** Measured
+2026-09-10: `Adoom666/CloudeCode` publishes v1.0.36 as its latest release and
+its highest tag, while this line ships 1.2.1. So a 1.2.1 install is now told
+the latest release is OLDER than the one it is running.
+
+It does NOT prompt a downgrade, and that was verified in the code rather than
+assumed. On the python side `UpdateChecker.refresh` sets
+`newer = parsed_latest > parsed_current`, and `(1, 0, 36) > (1, 2, 1)` is
+False, so the status reads `current`. On the javascript side
+`compareVersions('1.2.1', '1.0.36')` returns 1 and `checkForUpdate` reports
+`available` only when that comparison is negative, so the result is
+`current`. Both are pinned by tests.
+
+What IS wrong is the figure reported beside that verdict, and the release the
+upgrade link opens: a user following it lands on a build older than the one
+they are running. Fixing it needs either a release above 1.2.1 on that repo or
+the two lines converging on one version scheme, and both are Adam's call. Asked
+on `Adoom666/CloudeCodeDev` as issue #69, which states the ruling, the exact
+files that changed, this measured consequence, and the open questions.
+
+Note this is a coupling, not just a setting: that repo is now the release feed
+for these builds, so anything published there is announced to these users.
+
+## Adam's repo is the primary, ours is the backup, releases stay on ours
+**2026-09-10, scope: all repos**
+
+Verbatim: "you can use his repo as the main. keep mine for backup."
+
+`Adoom666/CloudeCodeDev` (`adamdev`) is the primary development repository.
+Work is claimed there by issue plus draft PR, `docs/DECISIONS.md` and
+`docs/kept-behaviours/` bind both teams from there, and branches land there
+first. `ccsliinc/CloudeCode` (`origin`) is the backup mirror: every branch and
+every tag also goes there. `Adoom666/CloudeCode` (`upstream`) stays forbidden.
+
+This SUPERSEDES "Push only to origin and adamdev, never to upstream"
+(2026-09-08, below), which named the two as interchangeable targets. Both
+remotes are still pushed to; what changed is which one is authoritative.
+
+**Distribution is the exception, and it is deliberate.** Verified with `gh` on
+2026-09-10: `CloudeCodeDev` is PRIVATE and its recent releases are all drafts,
+while `CloudeCode` is PUBLIC and holds the published downloads, v1.2.0 and
+v1.2.1, each an arm64 dmg with a sha256 and a written downgrade procedure,
+v1.2.1 marked Latest. So "primary" means development, not distribution, and
+public releases stay on ccsliinc's repo. They move only if Adam makes his repo
+public and rules that they should; moving them while it is private removes the
+download from every existing user.
+
+Also measured the same day: `CloudeCode` has Issues DISABLED, being a fork, so
+it cannot act as a fallback tracker while that holds. `CloudeCodeDev` is the
+only issue tracker either side has.
+
 ## The row menu is one superset, not two implementations
 **2026-09-10, scope: CloudeCodeDev**
 
@@ -125,9 +199,22 @@ grouping it promised was never queryable from the command line anyway.
 `.claude/skills/work/` carries this under "Filing an issue", so it binds both
 parties and both sides need to pull it.
 
-## Both update checkers point at Adam's main repo
+## Both update checkers point at Adam's main repo, the implementation record
 **2026-09-08, scope: all repos, ruled by Adam as code owner and sole
 tie-breaker**
+
+THE SAME RULING AS THE ENTRY AT THE TOP OF THIS FILE, recorded independently
+by the other line on the same day and kept here in full rather than folded
+into it. Both were written before either side saw the other. Read them
+together: the entry above is the ruling and its measured consequence, this
+one is what the implementation that shipped actually does, which is a
+superset - one named constant plus a config override rather than one moved
+literal.
+
+NOTE THE TWO ENTRIES DISAGREE ABOUT THE DATE OF THE RULING, 2026-09-08 here
+against 2026-09-10 above. Neither was changed to match the other, because
+picking one silently is how a wrong date becomes the record. Both are as
+their author wrote them and Adam is the one who can say which is right.
 
 Verbatim: "1. use adams main repo."
 
@@ -182,3 +269,78 @@ Adam's to decide, per the issue that raised them:**
    coming from) while the update FEED is `Adoom666/CloudeCode`? If so,
    that split is deliberate and should be written down here once decided,
    rather than left implicit.
+
+## The outer ring carries unread, as a still green ring
+**2026-09-09, scope: all repos**
+
+The owner was shown two models and picked adoom666's, over ccsliinc's. Verbatim
+answer: "1. his".
+
+Both lines were fixing ONE report - "the ring around some of the leds are not
+gray, which means there should be background tasks. i dont think those few have
+any background tasks" - and fixed it opposite ways within hours. ccsliinc retired
+the outer `unread` state and moved unread onto the inner dot. adoom666 kept the
+ring and simply stopped it breathing. The owner picked the ring.
+
+So, quoting the shipped code on `release/1.2.1` rather than any note:
+
+- `client/js/status-led.js:123`:
+  `const OUTER_STATES = ['active', 'steady', 'unread', 'off', 'dim'];`
+  `unread` IS an outer state.
+- A finished turn nobody has read paints `unread`, a crisp STILL green ring. A
+  read session at rest takes `steady`. A dead pane or a lost transport takes
+  `off`. An unmeasured one takes `dim`.
+- MOTION is the load-bearing distinction: `active` is the only outer state that
+  animates, so a light that MOVES is a session that is moving, which was the
+  whole of the original complaint.
+- The INNER dot carries the session's own state. `done` is what a finished turn
+  holds while the green unread ring is around it; `idle` is what the dot becomes
+  once that ring goes. That pair is what makes the ring's departure visible.
+- `--led-color-unread` EXISTS (`client/css/status-led.css:162`, green via
+  `--color-success`). It was not retired.
+
+**Do not reintroduce the inner-dot-unread model. It was decided against, not
+forgotten**, and the module header says so in those words. Anything in any
+document that reads as though unread lives on the inner dot is describing the
+branch that lost.
+
+**How this entry was got wrong once, on 2026-09-10, and it is worth keeping.**
+ccsliinc first recorded the INVERSE here, citing `settled/ccsliinc.md`, a
+2026-09-08 `TODO.md` entry and a CLAUDE.md on a divergent branch. All three are
+real and all three predate the ruling: they describe the state before the owner
+chose. A dated record is evidence of what was true on that date. An older record
+cannot overturn a newer ruling, and three agreeing stale sources are still stale.
+Check the date on a record before you let it overturn a later one, and prefer
+shipped code to any note.
+
+## A dead pane leaves the live list and goes to Recent
+**2026-09-08, scope: all repos**
+
+Verbatim: "they go into recent, they can disappear."
+
+A session whose process died has stopped, so its row leaves `GET /sessions/list`
+rather than lingering there wearing a dead light. A restart from Recent is a
+resume. `dead` stays in the LED vocabulary but is gallery-only. A round that read
+the same measurement as a bug and made a husk KEEP its row, painted dead, was
+overruled and reverted (`ba2aa5d`).
+
+## The mark-unread CONTROL is not replaced by the unread INDICATOR
+**2026-09-08, scope: all repos**
+
+Verbatim: "when clicking a tab, the session is marked read. if i want it unread i
+click unread. it allows me to know whats waiting."
+
+Opening a tab clears the flag; the user's control is how it goes back on. The LED
+painting unread is an indicator and does not remove the need for the control. It
+ships behind `ui.show_mark_unread_control`, default on, so turning it off is a
+setting rather than a deletion.
+
+## Push only to origin and adamdev, never to upstream
+**2026-09-08, scope: ccsliinc clones**
+
+On ccsliinc's clone `origin` is `ccsliinc/CloudeCode` and `adamdev` is
+`Adoom666/CloudeCodeDev`. The `upstream` remote (`Adoom666/CloudeCode`) has its
+PUSH url set to the sentinel `DISABLED_do_not_push_to_Adoom666_CloudeCode` so a
+push there fails by construction. Do not repair it, and re-apply it on any fresh
+clone. This is a ruling about ccsliinc's remotes and says nothing about anyone
+else's.
