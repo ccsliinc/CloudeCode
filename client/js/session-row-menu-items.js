@@ -20,7 +20,8 @@ console.log('[SessionRowMenuItems Module] Loading...');
 
 (function () {
     /**
-     * The eight items, in render order, each with the letter that runs it.
+     * The SEVEN NATIVE items, each with the letter that runs it and the
+     * number it sorts on.
      *
      * RECONCILED 2026-09-10, and the shape is the owner's ruling rather
      * than either side's design: "merge not take everything". Four items
@@ -29,13 +30,30 @@ console.log('[SessionRowMenuItems Module] Loading...');
      * and close is the one both sides already had. See `.claude/TODO.md`,
      * "1.2 merge decisions (owner)" decisions 2 and 3.
      *
+     * THE MENU IS STILL EIGHT ITEMS. MARK UNREAD IS NOT ONE OF THESE
+     * SEVEN because it is a PLUGIN now - the first contribution on the
+     * compiled tree's `session-card-action` surface
+     * (web/src/lib/plugins/mark-unread/). It is merged into this table by
+     * `session-row-menu.js::itemsFor`, which is the ONE place the two
+     * lists meet, and it sorts to position two off its own `order`
+     * exactly where the ruling put it. The ruling did not change; the
+     * list the item comes from did.
+     *
+     * ``order`` IS WHAT MAKES THAT MERGE TOTAL. It runs 100, 300, 400,
+     * 500, 600, 700, 800 rather than 1..7, and the gaps are the point: a
+     * contribution picks a number in one (mark unread takes 200) instead
+     * of forcing a renumber here. Ties break on the item id, so the order
+     * never depends on registration sequence or on array position.
+     *
      * ``available`` decides whether the item is RENDERED AT ALL;
      * ``enabled`` decides whether a rendered item can run. They are two
      * questions and collapsing them would break both callers:
      *   - mark unread must VANISH when ``ui.show_mark_unread_control``
      *     is off (decision 2's one gate), and a disabled-but-visible
      *     control would still advertise a feature the operator turned
-     *     off.
+     *     off. That item lives on the plugin registry now, where the
+     *     same distinction is `enabled` on the CONTRIBUTION (rendered at
+     *     all) rather than on the payload.
      *   - a rename that cannot run must STAY VISIBLE and say why, which
      *     is the whole point of the aria-disabled treatment below.
      *
@@ -54,6 +72,7 @@ console.log('[SessionRowMenuItems Module] Loading...');
     var ITEMS = [
         {
             id: 'rename',
+            order: 100,
             shortcut: 'R',
             separatorBefore: false,
             label: function () { return 'rename'; },
@@ -65,26 +84,8 @@ console.log('[SessionRowMenuItems Module] Loading...');
             },
         },
         {
-            id: 'mark-unread',
-            shortcut: 'U',
-            separatorBefore: false,
-            // OURS. The label states the RESULT of activating it, so it
-            // flips with the row's current flag exactly as the inline
-            // control's title did.
-            label: function (ctx) {
-                return ctx.unread ? 'clear unread flag' : 'mark unread for followup';
-            },
-            // THE ONE GATE, asked rather than re-implemented: the surface
-            // stamps this from SessionStatusUI.markUnreadHtml() returning
-            // empty, so `ui.show_mark_unread_control` hides the menu item
-            // and the inline control together and there is no second
-            // place to remember. See client/js/ui-flags.js.
-            available: function (ctx) { return !!ctx.markUnreadAvailable; },
-            enabled: function () { return true; },
-            reason: function () { return ''; },
-        },
-        {
             id: 'move-to-group',
+            order: 300,
             shortcut: 'G',
             separatorBefore: false,
             // OURS. Only the sidebar files sessions into groups, so the
@@ -97,6 +98,7 @@ console.log('[SessionRowMenuItems Module] Loading...');
         },
         {
             id: 'fork',
+            order: 400,
             shortcut: 'F',
             separatorBefore: false,
             label: function () { return 'fork session'; },
@@ -110,6 +112,7 @@ console.log('[SessionRowMenuItems Module] Loading...');
         },
         {
             id: 'new-in-folder',
+            order: 500,
             shortcut: 'N',
             separatorBefore: false,
             label: function () { return 'new session in folder'; },
@@ -126,6 +129,7 @@ console.log('[SessionRowMenuItems Module] Loading...');
         },
         {
             id: 'mute',
+            order: 600,
             shortcut: 'M',
             separatorBefore: false,
             label: function (ctx) {
@@ -137,6 +141,7 @@ console.log('[SessionRowMenuItems Module] Loading...');
         },
         {
             id: 'restart',
+            order: 700,
             shortcut: 'T',
             separatorBefore: true,
             // OURS, AND THIS IS DECISION 3. A live row offers restart;
@@ -154,6 +159,7 @@ console.log('[SessionRowMenuItems Module] Loading...');
         },
         {
             id: 'close',
+            order: 800,
             shortcut: 'C',
             separatorBefore: false,
             label: function () { return 'close session'; },

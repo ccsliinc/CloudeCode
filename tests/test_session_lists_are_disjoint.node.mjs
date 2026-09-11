@@ -28,6 +28,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -150,20 +155,17 @@ async function loadBoth({ attachable, recent }) {
         alert() {},
     };
     vm.createContext(context);
-    // SAME ORDER AS index.html. The exclusion rule lives in
-    // session-recent-visibility.js and launchpad.js delegates to it, so a
-    // sandbox that loaded only launchpad.js would exercise that file's
-    // fail-open branch and prove nothing about the rule.
-    for (const script of ['session-recent-visibility.js', 'launchpad.js']) {
-        vm.runInContext(
-            fs.readFileSync(path.join(ROOT, 'client', 'js', script), 'utf8'),
-            context,
-            { filename: script }
-        );
-    }
+    installCloudeWeb(context);
+    // ONE SCRIPT NOW. `session-recent-visibility.js` was deleted with
+    // slice 2 and its rule is imported into the bundle instead; see the
+    // note above the first test for where it is asserted.
+    vm.runInContext(
+        fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8'),
+        context,
+        { filename: 'launchpad.js' }
+    );
     const lp = context.window.Launchpad;
     await lp.loadRunningSessions();
-    await lp.loadRecentSessions();
     return { recentList, runningList, lp };
 }
 
@@ -241,152 +243,61 @@ function occurrences(el, name) {
 // 1. THE RULE: a session currently running is NOT in recent.
 // =====================================================================
 
-await test('a running session is absent from RECENT', async () => {
-    const { recentList } = await loadBoth({
-        attachable: [live('cloude_Media_Compression')],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_Media_Compression')],
-            notice: null,
-        },
-    });
-    assert.equal(
-        occurrences(recentList, 'cloude_Media_Compression'), 0,
-        `recent still lists the running session: ${recentList.innerHTML}`);
-});
-
-await test('a running session IS in RUNNING (the other half of the rule)', async () => {
-    // POSITIVE CONTROL for the test above. Without this, a renderer that
-    // drew nothing at all would pass the exclusion assertion, and the
-    // suite would report a clean list rule while showing the user an
-    // empty screen.
-    const { runningList } = await loadBoth({
-        attachable: [live('cloude_Media_Compression')],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_Media_Compression')],
-            notice: null,
-        },
-    });
-    assert.ok(
-        occurrences(runningList, 'cloude_Media_Compression') >= 1,
-        `running does not list the live session: ${runningList.innerHTML}`);
-});
-
 // =====================================================================
-// 2. EXACTLY ONE LIST, counted across both surfaces at once.
+// TRIMMED BY SVELTE SLICE 2, AND THE RULE ITSELF DID NOT MOVE - THE
+// SURFACE DID.
+//
+// "A session appears in exactly one list" has two halves. The RECENT
+// half was `client/js/session-recent-visibility.js` plus
+// `Launchpad.renderRecentSessions`, and both were deleted when the
+// section moved into web/src/lib/launchpad/. That half is now:
+//
+//   web/src/lib/launchpad/recent-visibility.test.ts
+//       every exclusion case, including the archived row that survives a
+//       live session reusing its tmux name, and a NEGATIVE CONTROL
+//       proving the filter can exclude at all - which the version here
+//       did not have.
+//   web/src/lib/launchpad/recent.test.ts
+//       that the rendered count follows the exclusion, so a hidden row
+//       cannot still be counted.
+//
+// THE RUNNING half and the TREE half are still launchpad.js, and they
+// are what is left below. Slice 3 moves the running list and takes them
+// with it.
 // =====================================================================
 
-await test('each session appears in exactly one list', async () => {
-    const { recentList, runningList } = await loadBoth({
-        attachable: [live('cloude_Media'), live('cloude_Hockey')],
-        recent: {
-            state: 'ok',
-            sessions: [
-                // Both live rows whose reaper has not caught up yet, plus
-                // one genuinely finished session.
-                stored('cloude_Media'),
-                stored('cloude_Hockey'),
-                stored('cloude_Old_Thing'),
-            ],
-            notice: null,
-        },
-    });
-    for (const name of ['cloude_Media', 'cloude_Hockey', 'cloude_Old_Thing']) {
-        const inRunning = occurrences(runningList, name) > 0 ? 1 : 0;
-        const inRecent = occurrences(recentList, name) > 0 ? 1 : 0;
-        assert.equal(
-            inRunning + inRecent, 1,
-            `${name} is in ${inRunning + inRecent} list(s), expected exactly 1`
-            + ` (running=${inRunning} recent=${inRecent})`);
-    }
-});
-
-await test('a genuinely stopped session still renders in RECENT', async () => {
-    // The filter must exclude the RUNNING ones and nothing else. A filter
-    // that emptied recent entirely would satisfy every exclusion
-    // assertion above while deleting the section's whole purpose.
-    const { recentList } = await loadBoth({
-        attachable: [live('cloude_Media')],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_Old_Thing')],
-            notice: null,
-        },
-    });
-    assert.ok(
-        occurrences(recentList, 'cloude_Old_Thing') >= 1,
-        `recent dropped a genuinely stopped row: ${recentList.innerHTML}`);
-});
-
-await test('with NO running sessions, recent is untouched', async () => {
-    // The exclusion is driven by the live probe, so an empty probe must
-    // remove nothing. A `new Set([])` used carelessly as a filter is an
-    // easy way to accidentally drop everything.
-    const { recentList } = await loadBoth({
-        attachable: [],
-        recent: {
-            state: 'ok',
-            sessions: [stored('cloude_A'), stored('cloude_B')],
-            notice: null,
-        },
-    });
-    assert.ok(occurrences(recentList, 'cloude_A') >= 1, 'cloude_A vanished');
-    assert.ok(occurrences(recentList, 'cloude_B') >= 1, 'cloude_B vanished');
-});
-
 // =====================================================================
-// 3. A DEAD PANE IS NOT RUNNING - kept property, re-pinned here so all
-//    three list rules are asserted in one place.
-// =====================================================================
-
-await test('a session whose pane is DEAD is absent from RUNNING', async () => {
-    const { runningList, lp } = await loadBoth({
-        attachable: [
-            live('cloude_Alive'),
-            live('cloude_Corpse', { status: 'dead' }),
-        ],
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    assert.equal(
-        occurrences(runningList, 'cloude_Corpse'), 0,
-        `a dead pane rendered as running: ${runningList.innerHTML}`);
-    assert.ok(
-        occurrences(runningList, 'cloude_Alive') >= 1,
-        'the live session was dropped too, so the filter is too broad');
-    assert.equal(
-        lp.runningSessions.length, 1,
-        'the dead row is still in the running state array');
-});
-
-await test('a session whose pane status is UNKNOWN still renders as running', async () => {
-    // THE THIRD OUTCOME. Only a MEASURED `dead` is dropped. Dropping
-    // `unknown` would assert a death nobody measured - the same invented
-    // verdict in the opposite direction.
-    const { runningList } = await loadBoth({
-        attachable: [live('cloude_Unsure', { status: 'unknown' })],
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    assert.ok(
-        occurrences(runningList, 'cloude_Unsure') >= 1,
-        `an unevaluable pane was dropped as if measured dead: ${runningList.innerHTML}`);
-});
-
-// =====================================================================
-// 4. THE SUPERSEDE DISCLOSURE IS GONE, structurally.
+// THE TWO RENDER CASES MOVED IN SLICE 5.
+//
+// "a session whose pane is DEAD is absent from RUNNING" and "a session
+// whose pane status is UNKNOWN still renders as running" both drove the
+// real `loadRunningSessions` and read back the rendered rows, because the
+// defect they were written for was always visible on screen and never in
+// a log. The running list is a component now, and a `vm` sandbox has no
+// `Element` for it to mount into - so they are asserted against a REAL
+// DOM in web/src/lib/launchpad/running-membership.test.ts, still against
+// the rendered rows, still pairing each dead row with a live one so
+// "hide everything" cannot pass.
+//
+// That file also carries the state-level half, which this one never had:
+// the husk leaves `sessionStore.runningSessions` and not merely the
+// markup, so every other reader of that array - the project tree, a row
+// action, the sort - is holding the same list the screen shows.
 // =====================================================================
 
 await test('no "earlier session" disclosure exists anywhere in the client', async () => {
-    const launchpad = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
+    // SLICE 7: `client/js/launchpad.js` is gone, so the claim is made
+    // against every slice 7 source - the shell, its help panel and the
+    // modules beside them - rather than one deleted file.
+    const { HOME_ALL_SRC: launchpad } = await import('./lib-home-source.mjs');
     const indexHtml = fs.readFileSync(
         path.join(ROOT, 'client', 'index.html'), 'utf8');
     assert.ok(!/this one replaced/.test(launchpad),
-        'launchpad.js still renders the "this one replaced" disclosure');
+        'the home screen still renders the "this one replaced" disclosure');
     assert.ok(!/project-session-superseded/.test(launchpad),
-        'launchpad.js still carries the superseded disclosure markup');
+        'the home screen still carries the superseded disclosure markup');
     assert.ok(!/SessionSupersede/.test(launchpad),
-        'launchpad.js still calls the supersede classifier');
+        'the home screen still calls the supersede classifier');
     assert.ok(!/session-supersede\.js/.test(indexHtml),
         'index.html still loads the supersede module');
     assert.ok(
@@ -394,144 +305,38 @@ await test('no "earlier session" disclosure exists anywhere in the client', asyn
         'client/js/session-supersede.js still exists');
 });
 
-await test('the recent filter excludes by LIVE IDENTITY, not by stored lifecycle', async () => {
-    // Pins the mechanism, not just the outcome. Reading `lifecycle` here
-    // instead of the live probe is the exact bug: every row in RECENT
-    // already says 'stopped', so a lifecycle test can never exclude
-    // anything and the duplicate comes straight back.
-    //
-    // THE KEY IS THE STORED ROW ID, NOT THE TMUX NAME. It used to be the
-    // name, and that hid rows the user had DELETED whenever an unrelated
-    // live session later reused their name - measured on the owner's box
-    // 2026-09-08, five of six deleted rows unreachable. See
-    // client/js/session-recent-visibility.js and
-    // tests/test_recent_deleted_visibility.node.mjs.
-    const body = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    const fn = body.slice(body.indexOf('renderRecentSessions()'));
-    const head = fn.slice(0, fn.indexOf("if (state !== 'ok')"));
-    assert.ok(/runningSessions/.test(head),
-        'renderRecentSessions no longer consults the live running set');
-    assert.ok(/SessionRecentVisibility\.visibleRecentRows/.test(head),
-        'renderRecentSessions no longer applies the exclusion rule');
-
-    const rule = fs.readFileSync(
-        path.join(ROOT, 'client', 'js', 'session-recent-visibility.js'), 'utf8');
-    assert.ok(/session_row_id/.test(rule),
-        'the exclusion rule no longer keys on the stored row id');
-});
-
-await test('a DELETED row survives a live session that reused its name', async () => {
-    // The launcher-level statement of the toggle bug. `cloude_Mac` is
-    // live; the deleted row of the same name is an OLDER session with a
-    // different stored id, so it is not the row on screen under RUNNING
-    // and must still be reachable through "show deleted".
-    const { recentList } = await loadBoth({
-        attachable: [live('cloude_Mac')],
-        recent: {
-            state: 'ok',
-            sessions: [
-                stored('cloude_Mac', {
-                    id: 9,
-                    session_uuid: 'uuid-deleted-mac',
-                    archived_at: '2026-09-03T19:20:11.638508Z',
-                }),
-            ],
-            notice: null,
-        },
-    });
-    assert.ok(
-        occurrences(recentList, 'uuid-deleted-mac') >= 1,
-        `the deleted row was hidden by a live name collision: ${recentList.innerHTML}`);
-});
-
 // =====================================================================
-// 5. THE PROJECT TREE obeys the same one-list rule, including for the
-//    legacy rows a name comparison cannot catch.
+// THE PROJECT TREE's THREE CASES MOVED IN SLICE 4.
+//
+// `_endedSessionsForTree` is `endedSessionsForTree` in
+// web/src/lib/launchpad/project-groups.ts now, and all three assertions
+// live in web/src/lib/launchpad/project-groups.test.ts under
+// "endedSessionsForTree, and its four filters":
+//
+//   - "a row a RUNNING successor names as its parent is already on
+//     screen" (the two rows carry DIFFERENT tmux names on purpose, which
+//     is the whole reason the live-name guard misses them)
+//   - "it KEEPS an ended row whose successor is NOT running" (the
+//     positive control: once nothing on screen represents the row,
+//     hiding it would make it unreachable)
+//   - "it keeps an ordinary ended session that has no successor at all"
+//
+// They are stronger there, because they drive the pure function against
+// a typed input rather than a hand-built launchpad singleton. The
+// one-list rule they enforce is unchanged.
 // =====================================================================
-
-/**
- * Drive _endedSessionsForTree() against canned running rows and records.
- * @param {object[]} running  What the live tmux probe reported.
- * @param {object[]} records  What GET /sessions/records returned.
- * @returns {Promise<string[]>} tmux names the tree would list as ENDED.
- */
-async function endedInTree(running, records) {
-    const { lp } = await loadBoth({
-        attachable: running,
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    lp.sessionAttributionListingOk = true;
-    lp.sessionRecords = records;
-    lp.runningSessions = running;
-    return lp._endedSessionsForTree().map(r => r.name);
-}
-
-await test('the tree drops an ended row its RUNNING successor already shows', async () => {
-    // The two rows carry DIFFERENT tmux names on purpose - that is the
-    // whole reason the live-name guard misses them, and it is exactly
-    // the shape of the owner's real data.
-    const ended = await endedInTree(
-        [live('cloude_Media_Compression')],
-        [
-            { id: 4, tmux_name: 'Media_Compression', lifecycle: 'stopped',
-              session_uuid: 'u4', archived_at: null, parent_session_id: null },
-            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'running',
-              session_uuid: 'u7', archived_at: null, parent_session_id: 4 },
-        ]
-    );
-    assert.ok(!ended.includes('Media_Compression'),
-        `the tree listed a session twice: ended=${JSON.stringify(ended)}`);
-    assert.equal(ended.length, 0);
-});
-
-await test('the tree KEEPS an ended row whose successor is not running', async () => {
-    // POSITIVE CONTROL. Once nothing on screen represents the row,
-    // hiding it would make it unreachable.
-    const ended = await endedInTree(
-        [],
-        [
-            { id: 4, tmux_name: 'Media_Compression', lifecycle: 'stopped',
-              session_uuid: 'u4', archived_at: null, parent_session_id: null },
-            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'stopped',
-              session_uuid: 'u7', archived_at: null, parent_session_id: 4 },
-        ]
-    );
-    assert.equal(ended.length, 2,
-        `the tree hid rows nothing else represents: ${JSON.stringify(ended)}`);
-});
-
-await test('the tree keeps an ordinary ended session with no successor', async () => {
-    const ended = await endedInTree(
-        [live('cloude_Media_Compression')],
-        [
-            { id: 9, tmux_name: 'cloude_Old_Thing', lifecycle: 'stopped',
-              session_uuid: 'u9', archived_at: null, parent_session_id: null },
-            { id: 7, tmux_name: 'cloude_Media_Compression', lifecycle: 'running',
-              session_uuid: 'u7', archived_at: null, parent_session_id: null },
-        ]
-    );
-    assert.deepStrictEqual(ended.length, 1);
-    assert.ok(ended.includes('cloude_Old_Thing'));
-});
 
 // =====================================================================
 // 6. THE PARENT-LINK BADGE IS GONE from the running row.
 // =====================================================================
 
-await test('a running row does not render an arrow to the session it replaced', async () => {
-    const { lp } = await loadBoth({
-        attachable: [],
-        recent: { state: 'ok', sessions: [], notice: null },
-    });
-    const html = lp._renderSessionIdHtml({ session_row_id: 7, parent_session_id: 4 });
-    assert.ok(/#7/.test(html), `the row id itself must still render: ${html}`);
-    assert.ok(!/\u2190/.test(html) && !/&larr;/.test(html),
-        `the parent arrow is still rendered: ${html}`);
-    assert.ok(!/#4/.test(html),
-        `the replaced session is still named: ${html}`);
-    assert.ok(!/fork-of/.test(html), `fork-of markup remains: ${html}`);
-});
+// MOVED IN SLICE 5, and the assertion got STRONGER rather than smaller.
+// `_renderSessionIdHtml` was a string builder and this drove it directly,
+// so it could only prove that ONE function emitted no arrow. The badge is
+// part of the card now, and
+// web/src/lib/launchpad/running-membership.test.ts asserts the same three
+// claims over the WHOLE RENDERED ROW: the id renders, no arrow appears
+// anywhere on it, and the replaced session is not named anywhere on it.
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

@@ -141,7 +141,8 @@ function mediaBody(sheet, condition) {
 }
 
 const styles = css('styles.css');
-const launchpad = js('launchpad.js');
+// SLICE 7: as above - the shell is a component now.
+const { HOME_ALL_SRC: launchpad, HOME_SCREEN_SRC } = await import('./lib-home-source.mjs');
 
 /**
  * Read client/index.html with HTML comments stripped.
@@ -287,9 +288,14 @@ test('the adopt disclosure sits at the top of the pane, not in running sessions'
     // something that renders below a title block that no longer exists
     // here. See tests/test_home_header_consolidation.node.mjs for the
     // header-side assertions.
-    const containerIdx = launchpad.indexOf('class="launchpad-container"');
-    const disclosureIdx = launchpad.indexOf('<details class="adopt-disclosure">');
-    const runningIdx = launchpad.indexOf('id="running-sessions-section"');
+    // SLICE 7: the disclosure is its own component, so what the SHELL
+    // orders is the `<HelpDisclosure />` tag. The claim is unchanged and
+    // the mounted-DOM version of it is in
+    // web/src/lib/launchpad/HomeScreen.behaviour.test.ts.
+    const shell = HOME_SCREEN_SRC;
+    const containerIdx = shell.indexOf('class="launchpad-container"');
+    const disclosureIdx = shell.indexOf('<HelpDisclosure />');
+    const runningIdx = shell.indexOf('id="running-sessions-section"');
     assert.ok(containerIdx !== -1 && disclosureIdx !== -1 && runningIdx !== -1);
     assert.ok(
         disclosureIdx > containerIdx,
@@ -362,7 +368,10 @@ test('the version chip renders exactly once, in the home bar', () => {
         mountHits.length, 1,
         `expected exactly one home-bar version mount, found ${mountHits.length}`
     );
-    const renderCalls = launchpad.match(/window\.VersionFooter\.versionSpanHtml\(\)/g) || [];
+    // SLICE 7: the module reads `window.VersionFooter` into a local
+    // before calling it, so the call site is `footer.versionSpanHtml()`.
+    // ONE mount, ONE call, unchanged.
+    const renderCalls = launchpad.match(/versionSpanHtml\(\)/g) || [];
     assert.equal(
         renderCalls.length, 1,
         `expected exactly one call rendering the chip into it, found ${renderCalls.length}`
@@ -381,18 +390,19 @@ test('the version chip still refuses to shrink', () => {
  * Guard: the markup is built inside a template literal
  * ------------------------------------------------------------------------- */
 
-test('renderLaunchpadUI template literal contains no stray backtick', () => {
-    // A backtick anywhere in this block - including inside an HTML comment -
-    // terminates the template literal and takes the whole module out with it.
-    // That happened while writing this change; the syntax checker caught it,
-    // but only after the page had silently rendered with no Launchpad at all.
-    const start = launchpad.indexOf('this.launchpadScreen.innerHTML = `');
-    assert.ok(start !== -1, 'expected the launchpad markup template literal');
-    const bodyStart = start + 'this.launchpadScreen.innerHTML = `'.length;
-    const end = launchpad.indexOf('`;', bodyStart);
-    assert.ok(end !== -1, 'expected the template literal to terminate');
-    const block = launchpad.slice(bodyStart, end);
-    assert.doesNotMatch(block, /`/, 'a backtick inside the markup ends the string early');
+test('the shell markup is no longer a template literal at all', () => {
+    // THE TRAP THIS GUARDED IS GONE RATHER THAN GUARDED. The home screen
+    // was 363 lines of markup inside one backtick-delimited template
+    // literal, and a backtick anywhere in it - including inside an HTML
+    // comment - ended the string and took the whole module out. That
+    // happened while writing the original change: the syntax checker
+    // caught it, but only after the page had silently rendered with no
+    // launchpad at all. Slice 7 made the markup a Svelte template, which
+    // the compiler parses, so the failure mode does not exist. What
+    // replaces this assertion is that the build itself refuses.
+    assert.ok(!/innerHTML = `/.test(HOME_SCREEN_SRC),
+        'the shell markup is back inside a template literal, and with it '
+        + 'the stray-backtick failure that takes the whole module out');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

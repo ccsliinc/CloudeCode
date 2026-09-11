@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>create flow modal harness</title>
+<!--
+  SLICE 6 - DRIVE THE REAL CREATE FLOW IN A REAL BROWSER, UNDER THE REAL
+  CSP, AND PROVE IT ASKS FOR A FOLDER.
+
+  WHY A BROWSER AT ALL, WHEN THERE IS A VITEST SUITE. Two reasons, and
+  the second is the one that matters. The first is the one slice 5
+  measured: jsdom and a real engine disagree, and a modal is focus,
+  keyboard and paint, which is what jsdom models worst. The second is
+  that the defect this slice exists to prevent is INVISIBLE in a unit
+  test by construction - a create that silently skipped its folder step
+  would still return a session, still write a project row, and still
+  paint a perfectly healthy screen. The only thing that catches it is
+  watching what the flow POSTS, in the browser, after a human walked
+  through it. So this page records every request the flow would send and
+  lets the driver read them back.
+
+  NOTHING REAL IS CREATED. `window.API` is a recorder: `createSession`
+  and `createProject` resolve a fixture and write to `window.__cf.posts`,
+  and `browseDirectory` answers a TEMP directory, never the owner's
+  projects root. No tmux session, no folder on disk, no config write.
+
+  WHAT IT MOUNTS. The real `client/dist/app.js`, the real stylesheets and
+  `client/js/i18n/boot.js` for the string layer, in the same order
+  `client/index.html` loads them. The real `folder-picker-modal.js` is
+  loaded too, because slice 6 stopped injecting an escaper into it and
+  the browse button is the one place that shows.
+
+  VISIBILITY IS RECORDED ON EVERY PHASE. A modal's focus and a timer's
+  cadence both change in a backgrounded tab - `waitForFontsAndLayout`
+  taught this project that the hard way - so every phase stamps
+  `document.visibilityState` and a reading is only worth quoting beside a
+  `visible`.
+
+  THE CSP CONTROL IS PLANTED FROM THIS SCRIPT, not written into the
+  markup above, and that ordering is the whole point: an element sitting
+  in the document is fetched while it parses, which is BEFORE a deferred
+  listener exists, so the violation it raises is never collected and the
+  control silently proves nothing.
+
+  THERE IS NO LEGACY `innerHTML` COMPARISON IN THIS HARNESS, and that is
+  a fact about slice 6 rather than an omission. The five modals it
+  replaces were deleted in the same commit, so there is no second
+  implementation left to compare against - unlike slices 4 and 5, whose
+  legacy renderers were still in the file. Anything that DID replace the
+  document's nodes would detach the ones the components own and make
+  every later reading meaningless, so if one is ever added here it runs
+  last and the page is reloaded before anything else is measured.
+
+  Open over http://127.0.0.1:5057/tests/manual/create-flow-modal-harness.html
+  and drive it with `window.__cf`.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/modal-stack.css" />
+<link rel="stylesheet" href="../../client/dist/app.css" />
+<style>
+  #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 40vw;
+         max-height: 92vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+  body { background: #1e1e1e; color: #ddd; }
+  #status-line { position: fixed; bottom: 8px; left: 8px; color: #f80;
+                 font: 12px/1.4 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active"></div>
+<div id="status-line"></div>
+<pre id="out">booting...</pre>
+
+<script src="../../client/js/folder-picker-modal.js"></script>
+<script>
+/**
+ * The recorder every phase writes into.
+ *
+ * `posts` is the load-bearing field: it is every request the flow would
+ * have sent, in order, so "did anything get created before the folder
+ * step answered" is a question with an answer rather than an opinion.
+ */
+window.__cf = {
+    posts: [],
+    errors: [],
+    statuses: [],
+    phases: [],
+    cspViolations: [],
+};
+
+document.addEventListener('securitypolicyviolation', function (e) {
+    window.__cf.cspViolations.push({
+        directive: e.effectiveDirective || e.violatedDirective,
+        blocked: e.blockedURI,
+        sample: e.sample || '',
+    });
+});
+
+/**
+ * Stamp a named phase with the tab's visibility at that moment.
+ *
+ * Inputs: name (string), extra (object|undefined).
+ * Output: object - the recorded phase.
+ */
+window.__cf.phase = function (name, extra) {
+    var row = {
+        phase: name,
+        visibility: document.visibilityState,
+        at: Date.now(),
+        overlays: document.querySelectorAll('.modal-overlay').length,
+        posts: window.__cf.posts.length,
+    };
+    if (extra) { Object.keys(extra).forEach(function (k) { row[k] = extra[k]; }); }
+    window.__cf.phases.push(row);
+    return row;
+}
+
+/**
+ * A temp parent directory, so nothing this page does could land in a
+ * real projects root even if a request escaped the recorder.
+ */
+window.__cf.TEMP_PARENT = '/private/tmp/cloude-slice6-harness';
+
+window.API = {
+    createSession: function (payload) {
+        window.__cf.posts.push({ call: 'createSession', payload: payload });
+        return Promise.resolve({
+            id: 'ses_harness',
+            working_dir: (payload.project_parent_dir || '/nowhere') + '/' + payload.project_name,
+        });
+    },
+    createProject: function (row) {
+        window.__cf.posts.push({ call: 'createProject', row: row });
+        return Promise.resolve(row);
+    },
+    browseDirectory: function (p) {
+        window.__cf.posts.push({ call: 'browseDirectory', path: p || null });
+        return Promise.resolve({
+            path: window.__cf.TEMP_PARENT,
+            parent: '/private/tmp',
+            entries: [{ name: 'inner', path: window.__cf.TEMP_PARENT + '/inner' }],
+        });
+    },
+    cloneProjectFromGithub: function (payload) {
+        window.__cf.posts.push({ call: 'cloneProjectFromGithub', payload: payload });
+        return Promise.resolve({ name: 'repo', path: window.__cf.TEMP_PARENT + '/repo' });
+    },
+    getProjects: function () { return Promise.resolve([]); },
+    getProjectsPresence: function () { return Promise.resolve({ status: 'ok', projects: [] }); },
+    getProjectsAuthority: function () { return Promise.resolve({ status: 'ok' }); },
+};
+
+/**
+ * The legacy singleton, as much of it as these flows reach.
+ *
+ * The provider gate ANSWERS IMMEDIATELY here. It is `providers.js`'s
+ * modal, it is slice 7's, and what this page is measuring is what
+ * happens AFTER it - so it is scripted rather than driven.
+ */
+window.Launchpad = {
+    showProviderModal: function () {
+        window.__cf.phase('provider-gate-answered');
+        return Promise.resolve({ wrapperId: null, agentType: null, model: null });
+    },
+    selectProject: function (project) {
+        window.__cf.posts.push({ call: 'selectProject', project: project });
+        return Promise.resolve();
+    },
+    detachAndCreateNew: function () { window.__cf.posts.push({ call: 'detachAndCreateNew' }); },
+    _getTerminalDims: function () { return { cols: 120, rows: 30 }; },
+    updateStatus: function (message) {
+        window.__cf.statuses.push(message);
+        document.getElementById('status-line').textContent = message;
+    },
+    showError: function (message) {
+        window.__cf.errors.push(message);
+        document.getElementById('status-line').textContent = message;
+    },
+};
+
+window.App = {
+    showConfirmModal: function () { return Promise.resolve(true); },
+};
+</script>
+<script type="module" src="../../client/js/i18n/boot.js"></script>
+<script type="module" src="../../client/dist/app.js"></script>
+<script>
+/**
+ * Read the modal that is on screen right now, as plain data.
+ *
+ * Inputs: none.
+ * Output: object - what is visible, or `{present: false}`.
+ */
+window.__cf.readModal = function () {
+    var overlay = document.querySelector('.modal-overlay');
+    if (!overlay) return { present: false, visibility: document.visibilityState };
+    var inputs = {};
+    overlay.querySelectorAll('input').forEach(function (el) {
+        inputs[el.id] = { value: el.value, placeholder: el.placeholder, disabled: el.disabled };
+    });
+    var buttons = [];
+    overlay.querySelectorAll('button').forEach(function (el) {
+        buttons.push({ id: el.id, text: el.textContent.trim(), disabled: el.disabled });
+    });
+    var preview = overlay.querySelector('#project-path-preview');
+    var status = overlay.querySelector('#project-path-status');
+    return {
+        present: true,
+        visibility: document.visibilityState,
+        header: (overlay.querySelector('.modal-header') || {}).textContent || '',
+        inputs: inputs,
+        buttons: buttons,
+        preview: preview ? preview.textContent.trim() : null,
+        status: status ? status.textContent.trim() : null,
+        statusIsError: status ? status.className.indexOf('--error') !== -1 : null,
+        rows: Array.prototype.map.call(
+            overlay.querySelectorAll('.folder-picker-item'),
+            function (el) { return el.textContent.trim(); }
+        ),
+    };
+};
+
+/**
+ * Type into one field of the open modal and fire the input event.
+ *
+ * Inputs: id (string) - the input's id. value (string).
+ * Output: boolean - whether the field was found.
+ */
+window.__cf.type = function (id, value) {
+    var el = document.querySelector('.modal-overlay #' + id);
+    if (!el) return false;
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+};
+
+/**
+ * Click a button in the open modal by id.
+ *
+ * Inputs: id (string). Output: boolean - whether it was found.
+ */
+window.__cf.click = function (id) {
+    var el = document.querySelector('.modal-overlay #' + id);
+    if (!el) return false;
+    el.click();
+    return true;
+};
+
+/** Press a key on the open overlay, the way a user in the dialog would. */
+window.__cf.press = function (key) {
+    var overlay = document.querySelector('.modal-overlay');
+    if (!overlay) return false;
+    overlay.dispatchEvent(new KeyboardEvent('keydown', { key: key, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: key, bubbles: true }));
+    return true;
+};
+
+/** Start the real create flow. It returns when the flow finishes. */
+window.__cf.startCreate = function () {
+    window.__cf.phase('create-started');
+    window.__cf.running = window.CloudeWeb.launchpad.createNewSession(null);
+    return true;
+};
+
+/** Start the real clone flow. */
+window.__cf.startClone = function () {
+    window.__cf.phase('clone-started');
+    window.__cf.running = window.CloudeWeb.launchpad.cloneFromGithub();
+    return true;
+};
+
+// THE CSP CONTROL, PLANTED FROM THIS SCRIPT rather than from the markup,
+// so the listener installed above is already there to hear it. An image
+// from another origin is refused by `default-src 'self'`, and a page that
+// reported NO violation for it would be a page whose CSP is not on -
+// which would make every other reading here worthless.
+window.__cf.plantCspControl = function () {
+    var img = document.createElement('img');
+    img.src = 'https://cdn.jsdelivr.net/npm/nothing-here.png';
+    img.style.display = 'none';
+    document.body.appendChild(img);
+    return true;
+};
+
+window.addEventListener('load', function () {
+    window.__cf.phase('loaded', { hasBundle: !!window.CloudeWeb });
+    document.getElementById('out').textContent =
+        'ready. bundle=' + (!!window.CloudeWeb)
+        + ' visibility=' + document.visibilityState;
+});
+</script>
+</body>
+</html>

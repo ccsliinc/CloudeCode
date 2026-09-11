@@ -359,6 +359,68 @@ console.log('[SessionStatusSummary Module] Loading...');
     }
 
     /**
+     * The string accessor, or a loud stand-in.
+     *
+     * Description: `client/js/i18n/boot.js` publishes the one string
+     *   layer as a module script, and module scripts are deferred, so it
+     *   is guaranteed to exist before any render but NOT while this
+     *   classic script is being defined. That is why the lookup happens
+     *   here, per call, rather than at module load.
+     *
+     *   WHEN IT IS ABSENT, KEYS ARE WHAT RENDERS - never a second copy of
+     *   the copy. A fallback table would be the dual path the catalog
+     *   exists to prevent, and a fallback that works is one nobody ever
+     *   notices is being used. A bare `vm` sandbox in a test is the
+     *   normal way to reach this branch.
+     * Inputs: none.
+     * Output: Function - `(key, params) => string`.
+     * Example: accessor()('session.summary.none')  // 'no sessions'
+     */
+    function accessor() {
+        const i18n = globalThis.CloudeI18n;
+        if (i18n && typeof i18n.t === 'function') {
+            return function (key, params) {
+                return i18n.t(key, params);
+            };
+        }
+        console.error(
+            '[SessionStatusSummary] no string layer on globalThis.CloudeI18n; '
+            + 'rendering catalog keys. Is client/js/i18n/boot.js loaded?',
+        );
+        return function (key) {
+            return key;
+        };
+    }
+
+    /**
+     * The group's summary sentence, localised.
+     *
+     * Description: delegates to the SHARED assembler in
+     *   client/js/labels/session-summary.js, which the Svelte tree
+     *   imports directly and which this file reaches through the global
+     *   `boot.js` publishes. One assembler and one catalog, so the two
+     *   trees cannot render two different sentences for one state -
+     *   web/src/lib/session-summary-label.parity.test.ts is what holds
+     *   them to it.
+     * Inputs: s (Object) - a `summarizeStates` result.
+     * Output: string.
+     * Example: summaryLabel({bucket: 'working', total: 2, unreadCount: 1})
+     *   // 'working - 2 sessions, 1 unread'
+     */
+    function summaryLabel(s) {
+        const labels = globalThis.CloudeLabels;
+        const t = accessor();
+        if (!labels || typeof labels.sessionSummaryLabel !== 'function') {
+            console.error(
+                '[SessionStatusSummary] no shared label builder on '
+                + 'globalThis.CloudeLabels; is client/js/i18n/boot.js loaded?',
+            );
+            return t('session.summary.none');
+        }
+        return labels.sessionSummaryLabel(s, t);
+    }
+
+    /**
      * The summary LED, as one HTML string.
      *
      * Description: What a group header and the launchpad top bar both
@@ -380,18 +442,11 @@ console.log('[SessionStatusSummary Module] Loading...');
     function summaryHtml(children, opts) {
         const o = opts || {};
         const s = summarizeStates(children);
-        let label =
-            s.total === 0
-                ? 'no sessions'
-                : s.bucket + ' - ' + s.total + ' session' + (s.total === 1 ? '' : 's');
-        if (s.unreadCount > 0) {
-            label += ', ' + s.unreadCount + ' unread';
-        }
         return globalThis.StatusLed.ledHtml({
             inner: s.inner,
             outer: s.outer,
             size: o.size,
-            title: label,
+            title: summaryLabel(s),
         });
     }
 
@@ -399,6 +454,7 @@ console.log('[SessionStatusSummary Module] Loading...');
         SUMMARY_PRIORITY: SUMMARY_PRIORITY.slice(),
         summarizeStates: summarizeStates,
         summaryHtml: summaryHtml,
+        summaryLabel: summaryLabel,
         bucketFor: bucketFor,
         outerFor: outerFor,
         signalsFor: signalsFor,

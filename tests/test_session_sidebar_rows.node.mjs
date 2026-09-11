@@ -78,6 +78,12 @@ function makeSandbox() {
     };
     const fakeWindow = { App: { showConfirmModal: () => Promise.resolve(true) } };
     fakeWindow.window = fakeWindow;
+    // THE FLAG THE MARK-UNREAD PLUGIN READS. Mutable, so a block below
+    // can switch the control off and read the menu again.
+    fakeWindow.UIFlags = {
+        _show: true,
+        showMarkUnreadControl() { return this._show; },
+    };
 
     const context = { window: fakeWindow, document: fakeDocument, console };
     vm.createContext(context);
@@ -91,17 +97,30 @@ function makeSandbox() {
     // invariants below can still be asserted over what a row OFFERS,
     // rather than quietly narrowing to what a row happens to draw inline.
     vm.runInContext(readClientJs('session-row-menu-items.js'), context);
+    vm.runInContext(readClientJs('session-row-menu-plugins.js'), context);
     vm.runInContext(readClientJs('session-row-menu.js'), context);
+    // THE REAL COMPILED BUNDLE, not a stand-in. client/dist/app.js is
+    // emitted with no import or export statement, so it runs in this same
+    // sandbox and publishes the real `window.CloudeWeb` - which is what
+    // makes the plugin assertions below a test of the shipped path rather
+    // than of a fixture that agrees with whatever it was built to agree
+    // with. It is the committed artifact, and scripts/web-build-check.sh
+    // is what keeps that artifact current.
+    vm.runInContext(
+        fs.readFileSync(
+            path.join(__dirname, '..', 'client', 'dist', 'app.js'), 'utf8'),
+        context);
 
     return {
         Rows: fakeWindow.SessionSidebarRows,
         StatusUI: fakeWindow.SessionStatusUI,
         RowActions: fakeWindow.SessionRowActions,
         RowMenu: fakeWindow.SessionRowMenu,
+        Win: fakeWindow,
     };
 }
 
-const { Rows, RowActions, RowMenu } = makeSandbox();
+const { Rows, RowActions, RowMenu, Win } = makeSandbox();
 
 /**
  * Description: everything a row OFFERS the user - its own markup PLUS
@@ -133,6 +152,23 @@ function offeredActions(r) {
         menu = RowMenu.itemsFor(RowMenu.contextFromTrigger(stub)).map((i) => i.id);
     }
     return { html, inline, menu, all: [...inline, ...menu] };
+}
+
+/**
+ * Description: the row's rendered kebab, as something with getAttribute -
+ *   parsed back OUT of real markup, so the frozen context under test is
+ *   the one the browser would read.
+ * Inputs: html (string) - one rendered row.
+ * Output: object - a getAttribute stub.
+ */
+function triggerOf(html) {
+    const tag = (html.match(/<button[^>]*data-row-menu="[^"]*"[^>]*>/) || [])[0] || '';
+    return {
+        getAttribute(name) {
+            const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`));
+            return m ? m[1] : null;
+        },
+    };
 }
 
 /** One ordinary row fixture. Inputs: overrides (object). Output: object. */
@@ -311,6 +347,102 @@ test('an UNDETERMINED row is still offered no restart - the original rule, kept'
         const offered = offeredActions(row({ status }));
         assert.ok(!offered.all.includes('restart'),
             `status ${String(status)} must offer no restart, anywhere`);
+    }
+});
+
+test('MARK UNREAD IS STILL OFFERED, and it arrives from the plugin surface', () => {
+    // THE RE-SEAT, ASSERTED AS A FACT RATHER THAN AS AN ABSENCE. The item
+    // used to be a hardcoded entry in session-row-menu-items.js. It is now
+    // the first `session-card-action` on the compiled registry
+    // (web/src/lib/plugins/mark-unread/), merged into the menu's own table
+    // by itemsFor. What the user sees must not have moved, so this checks
+    // that it is offered EXACTLY ONCE, in the ruled position, saying the
+    // shipped words - and not merely that something appeared.
+    for (const unread of [false, true]) {
+        const offered = offeredActions(row({ unread }));
+        assert.equal(offered.menu.filter((id) => id === 'mark-unread').length, 1,
+            `unread=${unread} must offer exactly one mark-unread`);
+        assert.equal(offered.menu[1], 'mark-unread',
+            'and it keeps the second slot the owner ruled it into');
+        const item = RowMenu.itemsFor(RowMenu.contextFromTrigger(triggerOf(offered.html)))
+            .find((i) => i.id === 'mark-unread');
+        assert.equal(item.shortcut, 'U');
+        assert.equal(item.enabled, true);
+        assert.equal(item.label,
+            unread ? 'clear unread flag' : 'mark unread for followup');
+    }
+});
+
+test('NEGATIVE CONTROL: the flag off removes it, and nothing else', () => {
+    // `ui.show_mark_unread_control` is still the one switch. It now reaches
+    // the item through the contribution's `enabled` instead of through an
+    // early return in a builder, and this proves the gate survived the move
+    // - in BOTH directions, so a surface that had silently stopped
+    // registering anything could not pass.
+    const before = offeredActions(row()).menu;
+    assert.ok(before.includes('mark-unread'));
+
+    Win.UIFlags._show = false;
+    try {
+        const after = offeredActions(row()).menu;
+        assert.ok(!after.includes('mark-unread'),
+            'the flag off must remove the plugin-contributed item');
+        assert.deepEqual(Array.from(after),
+            Array.from(before.filter((id) => id !== 'mark-unread')),
+            'the flag must take that item and nothing else');
+    } finally {
+        Win.UIFlags._show = true;
+    }
+    assert.ok(offeredActions(row()).menu.includes('mark-unread'),
+        'and it comes back when the flag does');
+});
+
+test('the hardcoded copy is GONE from the menu, not commented out', () => {
+    // No dual path. If the old table entry or the old click route came
+    // back beside the plugin, the item would render twice or be run by two
+    // handlers, and both are the kind of thing that reads fine in a diff.
+    //
+    // Matched on the CALL form, `name(`, not on the bare name: the
+    // modules' docblocks record what moved and where it went, and a check
+    // that forbade naming the deleted function would force that history to
+    // be deleted with it. A stale doc is worse than no doc; an accurate one
+    // is not a regression.
+    const items = readClientJs('session-row-menu-items.js');
+    assert.ok(!items.includes("id: 'mark-unread'"),
+        'the item table must not still carry a hardcoded entry');
+    const menu = readClientJs('session-row-menu.js');
+    assert.ok(!menu.includes('markUnreadHtml('),
+        'session-row-menu.js must not still probe the legacy builder');
+    const actions = readClientJs('session-row-menu-actions.js');
+    assert.ok(!actions.includes('onMarkUnreadClick('),
+        'the runner must not still route to the old sidebar handler');
+    const clicks = readClientJs('session-sidebar-clicks.js');
+    assert.ok(!clicks.includes('onMarkUnreadClick'),
+        'the old handler must be deleted, not left unreachable');
+    const sidebar = readClientJs('session-sidebar.js');
+    assert.ok(!sidebar.includes('_onMarkUnreadClick'),
+        'the sidebar must not still carry a method reaching the old handler');
+});
+
+test('the plugin path is LOUD when the compiled bundle is missing', () => {
+    // A menu that silently drops a shipped item is the false green this
+    // project keeps paying for, so the bridge reports rather than returning
+    // an empty list quietly. Note it reports on the FUNCTION being absent,
+    // not on an empty result: an empty result is what the flag being off
+    // looks like, and those two must not be confused.
+    const held = Win.CloudeWeb;
+    const errors = [];
+    const realError = console.error;
+    console.error = (...args) => { errors.push(args.join(' ')); };
+    try {
+        delete Win.CloudeWeb;
+        const offered = offeredActions(row());
+        assert.ok(!offered.menu.includes('mark-unread'));
+        assert.ok(errors.length > 0, 'it reports, rather than staying silent');
+        assert.ok(errors.every((e) => e.includes('sessionCardMenuItems')));
+    } finally {
+        console.error = realError;
+        Win.CloudeWeb = held;
     }
 });
 

@@ -45,21 +45,32 @@ function test(name, fn) {
     }
 }
 
-const launchpad = fs.readFileSync(path.join(repoRoot, 'client/js/launchpad.js'), 'utf8');
+// SLICE 7 SPLIT THIS FILE'S SUBJECT IN TWO, and the split is the point.
+// The help panel's COPY moved into the catalog, so every prose assertion
+// below reads `client/js/i18n/catalog.en.js` through `helpMessages()`;
+// the panel's MARKUP is a Svelte component, so the two structural
+// assertions read that. Nothing was dropped, and the copy assertions got
+// stronger by accident: they now read the message a translator would
+// edit rather than a regex slice of a template literal.
+const { helpMessages, plain, HOME_HELP_SRC, HOME_LABELS_SRC } = await import('./lib-home-source.mjs');
+const HELP_MESSAGES = await helpMessages();
 const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
 const settingsTabs = fs.readFileSync(path.join(repoRoot, 'client/js/settings-tabs.js'), 'utf8');
 const wrappersView = fs.readFileSync(path.join(repoRoot, 'client/js/agent-wrappers-view.js'), 'utf8');
 
 /**
- * Extract the `.adopt-disclosure-body` markup block from launchpad.js.
- * @returns {string} The inner HTML string, still containing markup tags.
+ * Every help sentence, with its inline markers stripped.
+ *
+ * Description: what `helpBodyHtml()` used to slice out of a template
+ *   literal. The markers (`[[code]]`, `((em))`, `<<link>>`) are removed
+ *   so a prose assertion reads what a human sees, and the README link's
+ *   HREF is appended because it lives beside the catalog in
+ *   client/js/labels/home-screen.js rather than in a message.
+ * @returns {string} All the help copy, newline separated.
  */
 function helpBodyHtml() {
-    const start = launchpad.indexOf('<div class="adopt-disclosure-body">');
-    assert.ok(start !== -1, 'expected the adopt-disclosure-body block to exist');
-    const end = launchpad.indexOf('</details>', start);
-    assert.ok(end !== -1, 'expected a closing </details> after the body');
-    return launchpad.slice(start, end);
+    assert.ok(HELP_MESSAGES.length > 5, 'expected the help copy to exist');
+    return `${HELP_MESSAGES.map(plain).join('\n')}\n${HOME_HELP_SRC}\n${HOME_LABELS_SRC}`;
 }
 
 /**
@@ -107,7 +118,15 @@ test('the help body has no emoji', () => {
 
 test('every README link in the help body resolves to a real heading anchor', () => {
     const body = helpBodyHtml();
-    const links = Array.from(body.matchAll(/href="https:\/\/github\.com\/Adoom666\/CloudeCode#([a-z0-9-]+)"/g));
+    // SLICE 7: the url is `HELP_README_URL` in the labels module now, not
+    // an `href` attribute in a template literal - the sentence around it
+    // is one catalog message carrying a `<<README>>` marker, so the link
+    // TEXT is translatable and its TARGET is not. The anchor is what this
+    // test has always been about, and it is still checked against the
+    // README's real headings.
+    const links = Array.from(
+        body.matchAll(/https:\/\/github\.com\/Adoom666\/CloudeCode#([a-z0-9-]+)/g),
+    );
     assert.ok(links.length > 0, 'expected at least one README link in the help body');
     for (const [, anchor] of links) {
         assert.ok(
@@ -170,10 +189,15 @@ test('the EXTERNAL tag explanation matches how ownership is actually computed', 
 });
 
 test('the help body still has all three sections, in a stuck-user-first order', () => {
-    const text = textOnly(helpBodyHtml()).toLowerCase();
-    const iAdopt = text.indexOf('adopting a session you started yourself');
-    const iWrap = text.indexOf('wrappers and launch wrappers are the same thing');
-    const iSlash = text.indexOf('slash commands');
+    // ASSERTED AGAINST THE TEMPLATE, not against the concatenated copy,
+    // and slice 7 is why: the disclosure's own aria-label happens to say
+    // "help: adopting sessions, wrappers, and slash commands", so a text
+    // search for "slash commands" finds that first and the order reads
+    // backwards. What the claim is actually about is the order the PANEL
+    // renders its headings in, which is exactly what the template says.
+    const iAdopt = HOME_HELP_SRC.indexOf('helpAdoptHeading');
+    const iWrap = HOME_HELP_SRC.indexOf('helpWrappersHeading');
+    const iSlash = HOME_HELP_SRC.indexOf('helpSlashHeading');
     assert.ok(iAdopt !== -1 && iWrap !== -1 && iSlash !== -1, 'expected all three sections present');
     assert.ok(iAdopt < iWrap && iWrap < iSlash, 'sections must stay in this order');
 });
@@ -182,7 +206,7 @@ test('the disclosure marker survives as a native summary (not repurposed into a 
     // Regression guard shared in spirit with test_home_screen_polish.node.mjs -
     // this file only asserts on the PROSE, that one still owns the marker's
     // layout contracts.
-    const block = launchpad.match(/<details class="adopt-disclosure">[\s\S]*?<\/summary>/);
+    const block = HOME_HELP_SRC.match(/<details class="adopt-disclosure">[\s\S]*?<\/summary>/);
     assert.ok(block, 'expected the details/summary disclosure markup to still exist');
     assert.doesNotMatch(block[0], /<button\b/, 'a button here inherits the 36px reset box (see test_home_screen_polish)');
 });

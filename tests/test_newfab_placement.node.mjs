@@ -142,7 +142,11 @@ function decl(body, prop) {
 
 const styles = read('client', 'css', 'styles.css');
 const cssRules = rules(styles);
-const launchpadJs = read('client', 'js', 'launchpad.js');
+// SLICE 7: `client/js/launchpad.js` is gone. The home screen's
+// markup and its wiring are the Svelte shell and the modules
+// beside it; every assertion below is unchanged and simply reads
+// the files that now hold what it is about.
+const { HOME_ALL_SRC: launchpadJs } = await import('./lib-home-source.mjs');
 const indexHtml = read('client', 'index.html');
 const anchorJs = read('client', 'js', 'anchor-popover.js');
 
@@ -296,19 +300,26 @@ test('every pill row is 44px at every breakpoint', () => {
 // The JS side
 // ---------------------------------------------------------------------
 
-test('launchpad places the menu through AnchorPopover', () => {
-    assert.ok(/placeNewFabMenu\s*\(\)\s*\{/.test(launchpadJs),
+test('the home screen places the menu through AnchorPopover', () => {
+    // SLICE 7: these three were methods on a class and are exported
+    // functions in web/src/lib/launchpad/new-fab.ts now. The claims are
+    // unchanged; only the shape they are matched against moved.
+    assert.ok(/export function placeNewFabMenu\s*\(\)/.test(launchpadJs),
         'placeNewFabMenu() must exist');
-    assert.ok(/window\.AnchorPopover\.place\s*\(\s*menu\s*,\s*trigger\s*\)/
-        .test(launchpadJs),
+    assert.ok(/popover\.place\s*\(\s*menu\s*,\s*trigger\s*\)/.test(launchpadJs),
         'it must delegate to the shared primitive, not re-derive a rule');
+    assert.ok(/AnchorPopover/.test(launchpadJs),
+        'and the primitive it delegates to is the shared one');
 });
 
 test('openNewFab places the menu before it becomes visible', () => {
-    const body = /openNewFab\s*\(\)\s*\{([\s\S]*?)\n    \}/.exec(launchpadJs);
+    const body = /export function openNewFab\(\): void \{([\s\S]*?)\n\}/.exec(launchpadJs);
     assert.ok(body, 'openNewFab() must exist');
-    const place = body[1].indexOf('this.placeNewFabMenu()');
-    const open = body[1].indexOf("classList.add('new-fab--open')");
+    const place = body[1].indexOf('placeNewFabMenu()');
+    // SLICE 7: the class is the named constant `OPEN_CLASS`, declared
+    // once beside the module that owns it, so the match is on the ADD
+    // rather than on a literal nobody writes twice any more.
+    const open = body[1].indexOf('classList.add(OPEN_CLASS)');
     assert.ok(place > -1, 'openNewFab must place the menu');
     assert.ok(open > -1, 'openNewFab must add the open class');
     assert.ok(place < open,
@@ -317,8 +328,8 @@ test('openNewFab places the menu before it becomes visible', () => {
 });
 
 test('the reposition listeners are removed on close', () => {
-    const open = /openNewFab\s*\(\)\s*\{([\s\S]*?)\n    \}/.exec(launchpadJs)[1];
-    const close = /closeNewFab\s*\(\)\s*\{([\s\S]*?)\n    \}/.exec(launchpadJs)[1];
+    const open = /export function openNewFab\(\): void \{([\s\S]*?)\n\}/.exec(launchpadJs)[1];
+    const close = /export function closeNewFab\(\): void \{([\s\S]*?)\n\}/.exec(launchpadJs)[1];
     const added = (open.match(/addEventListener/g) || []).length;
     const removed = (close.match(/removeEventListener/g) || []).length;
     assert.ok(added > 0, 'openNewFab must re-place on viewport changes');

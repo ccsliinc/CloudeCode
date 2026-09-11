@@ -421,17 +421,38 @@ test('the focus ring is no longer overridden away on a themed row', () => {
 // ---------------------------------------------------------------------
 
 test('both surfaces splice BOTH halves into their row', () => {
-    for (const file of ['session-sidebar-rows.js', 'launchpad.js']) {
-        const src = fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8');
-        assert.match(src, /window\.SessionThemeTint\s*\?\s*window\.SessionThemeTint\.attrs\(/,
-            `${file} must ask for the attributes and tolerate the module being absent`);
-        assert.match(src,
-            /window\.SessionThemeTint\s*\?\s*window\.SessionThemeTint\.swatchHtml\(/,
-            `${file} must ask for the swatch too - the attributes alone now paint `
-            + 'nothing, so a row with only those is a row with no cue at all');
-        assert.match(src, /\$\{themeAttrs\}/, `${file} must splice the attributes in`);
-        assert.match(src, /themeSwatch/, `${file} must splice the swatch in`);
-    }
+    // THE SIDEBAR ROW IS STILL A STRING BUILDER, so it still splices two
+    // markup fragments and this is still a grep for them.
+    const sidebar = fs.readFileSync(
+        path.join(ROOT, 'client', 'js', 'session-sidebar-rows.js'), 'utf8');
+    assert.match(sidebar, /window\.SessionThemeTint\s*\?\s*window\.SessionThemeTint\.attrs\(/,
+        'the sidebar row must ask for the attributes and tolerate the module being absent');
+    assert.match(sidebar,
+        /window\.SessionThemeTint\s*\?\s*window\.SessionThemeTint\.swatchHtml\(/,
+        'the sidebar row must ask for the swatch too - the attributes alone now '
+        + 'paint nothing, so a row with only those is a row with no cue at all');
+    assert.match(sidebar, /\$\{themeAttrs\}/, 'the sidebar row must splice the attributes in');
+    assert.match(sidebar, /themeSwatch/, 'the sidebar row must splice the swatch in');
+
+    // THE HOME CARD IS A COMPONENT AS OF SLICE 5, and there is no
+    // `{@html}` anywhere in this migration - so it consumes the module's
+    // DATA half (`colorsFor`) and renders its own element. BOTH HALVES
+    // STILL HAVE TO BE THERE: the attributes alone paint nothing, so a
+    // row carrying only those is a row with no cue at all. That is
+    // asserted as behaviour in
+    // web/src/lib/launchpad/RunningSessions.behaviour.test.ts; what is
+    // checked here is that the card reads the SHARED colour rule rather
+    // than a second copy of it, because two copies is how one theme comes
+    // to look like two.
+    const host = fs.readFileSync(path.join(
+        ROOT, 'web', 'src', 'lib', 'launchpad', 'running-host.ts'), 'utf8');
+    assert.match(host, /SessionThemeTint/,
+        'the home card must read the shared theme module, not a copy of it');
+    assert.match(host, /colorsFor/, 'and it must read its DATA half');
+    const card = fs.readFileSync(path.join(
+        ROOT, 'web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte'), 'utf8');
+    assert.match(card, /data-session-theme=/, 'the card must splice the attribute in');
+    assert.match(card, /session-theme-swatch/, 'the card must splice the swatch in');
 });
 
 test('re-theming a session repaints the sidebar list', () => {

@@ -534,32 +534,53 @@ await test('ITEM 63: the sidebar builder no longer exposes a pill builder at all
 });
 
 await test('ITEM 63: the HOME SCREEN still draws the pill, in all three states', () => {
-    // The launcher owns its own builder and nothing in the sidebar feeds
-    // it, so this is the regression guard on the blast radius of item 63.
-    const src = repoFile('client', 'js', 'launchpad.js');
+    // THE LAUNCHER'S BUILDER MOVED IN SLICE 5. It owned a
+    // `_renderFamilyPillHtml` of its own; the card is a component now and
+    // the three states are decided by
+    // web/src/lib/launchpad/agent-family-pill.ts and rendered by
+    // AgentFamilyPill.svelte. This stays a source check because it is the
+    // regression guard on the BLAST RADIUS of item 63 - "did removing the
+    // pill from the sidebar row take it off the home screen too" - and the
+    // answer still has to be no.
+    const pill = repoFile('web', 'src', 'lib', 'launchpad', 'agent-family-pill.ts');
     for (const cls of ['family-pill--fact', 'family-pill--guess', 'family-pill--unknown']) {
-        assert.ok(src.includes(cls), `the home screen must still render ${cls}`);
+        assert.ok(pill.includes(cls), `the home screen must still render ${cls}`);
     }
+    const card = repoFile('web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte');
+    assert.ok(card.includes('<AgentFamilyPill'),
+        'the home card must still draw the pill at all');
 });
 
 await test('ITEM 63: the home screen renders a SINGLE tilde, and the CSS is the only source', () => {
     // THE PIXEL-LEVEL FORM OF THIS ASSERTION. The tilde a user sees comes
-    // from exactly one place. If the builder ever adds a literal one back
+    // from exactly one place. If a builder ever adds a literal one back
     // while the stylesheet keeps its `::before`, this fails - which is the
     // check the `~~claude` defect needed and did not have.
-    const js = repoFile('client', 'js', 'launchpad.js');
     const css = repoFile('client', 'css', 'styles.css');
-
     const guessRule = css.match(/\.family-pill--guess::before\s*\{([^}]*)\}/);
     assert.ok(guessRule, 'the stylesheet must still carry the guess tilde');
     assert.match(guessRule[1], /content:\s*"~"/, 'and it is a tilde');
 
-    // The builder must NOT prepend its own. `~${' + '...}` in a template
-    // literal, or a '~' + concat, are the two shapes this can take.
-    const label = js.match(/const label = known \? ([^;]+);/);
-    assert.ok(label, 'the launchpad label expression must still be findable');
-    assert.ok(!label[1].includes('~'),
-        'the builder must not add a second tilde on top of the stylesheet one');
+    // THE HOME SCREEN'S HALF, AFTER SLICE 5. There is no label expression
+    // to grep any more - the pill's text is a catalog message or the
+    // server's own family name - so the check is that NEITHER the decision
+    // module, NOR the component, NOR the message it renders carries a
+    // tilde of its own.
+    for (const rel of [
+        ['web', 'src', 'lib', 'launchpad', 'agent-family-pill.ts'],
+        ['web', 'src', 'lib', 'launchpad', 'AgentFamilyPill.svelte'],
+    ]) {
+        const src = repoFile(...rel)
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/\/\/.*/g, '');
+        assert.ok(!src.includes('~'),
+            `${rel.join('/')} must not add a second tilde on top of the stylesheet one`);
+    }
+    const catalog = repoFile('client', 'js', 'i18n', 'catalog.en.js');
+    const unknown = catalog.match(/'session\.agent\.family\.unknown': '([^']*)'/);
+    assert.ok(unknown, 'the unknown-family message must exist');
+    assert.ok(!unknown[1].includes('~'), 'and it must not carry a tilde either');
 });
 
 // =====================================================================

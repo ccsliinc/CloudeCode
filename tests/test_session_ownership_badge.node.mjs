@@ -39,6 +39,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -138,10 +143,10 @@ function makeContext({ attachable, live }) {
         alert() {},
     };
     vm.createContext(context);
+    installCloudeWeb(context);
     return { context, fakeWindow };
 }
 
-const launchpadSrc = read('client', 'js', 'launchpad.js');
 const sidebarSrc = read('client', 'js', 'session-sidebar.js');
 // The two-endpoint merge moved out of session-sidebar.js into its own
 // module (client/js/session-sidebar-fetch.js) when pinning, ordering and
@@ -151,17 +156,25 @@ const sidebarSrc = read('client', 'js', 'session-sidebar.js');
 const sidebarFetchSrc = read('client', 'js', 'session-sidebar-fetch.js');
 
 /**
- * Run launchpad.js's /sessions merge for real and return its merged rows.
+ * Run the HOME screen's /sessions merge for real and return its rows.
+ *
+ * SLICE 3 MOVED THE MERGE AND SLICE 7 DELETED THE FILE IT LEFT BEHIND.
+ * This used to evaluate `client/js/launchpad.js` in the sandbox and read
+ * `lp.runningSessions` off the singleton; those fields were already
+ * accessors over the compiled store by slice 3, so the sandbox was
+ * driving the bundle through a forwarding layer that no longer exists.
+ * It now calls the store directly - the SAME code the browser runs, one
+ * indirection fewer - and the comparison against the sidebar's own merge
+ * is unchanged, which is the whole point of this file.
+ *
  * @param {{attachable: Array<object>, live: Array<object>}} payloads
- * @returns {Promise<Array<object>>} this.runningSessions after the merge.
+ * @returns {Promise<Array<object>>} the merged running rows.
  */
 async function mergeLaunchpad(payloads) {
     const { context } = makeContext(payloads);
-    vm.runInContext(launchpadSrc, context, { filename: 'launchpad.js' });
-    const lp = context.window.Launchpad;
-    lp.renderRunningSessions = () => {};
-    await lp.loadRunningSessions();
-    return lp.runningSessions;
+    const store = context.window.CloudeWeb.launchpad.sessions;
+    await store.loadRunningSessions((key) => key);
+    return store.runningSessions;
 }
 
 /**
@@ -182,7 +195,7 @@ async function mergeSidebar(payloads) {
     return sb._rows;
 }
 
-const MERGES = [['launchpad.js', mergeLaunchpad], ['session-sidebar.js', mergeSidebar]];
+const MERGES = [['the home screen', mergeLaunchpad], ['session-sidebar.js', mergeSidebar]];
 
 /**
  * Find one merged row by tmux session name.
@@ -376,9 +389,22 @@ await test('adoption still does not claim ownership', () => {
 // ---------------------------------------------------------------------
 
 await test('both surfaces render the same flag as the same badge', () => {
-    assert.match(launchpadSrc, /owned \? 'TMUX' : 'EXTERNAL'/);
+    // THE SIDEBAR ROW IS STILL A STRING BUILDER, so its ternary is still
+    // a grep. THE HOME CARD IS A COMPONENT as of slice 5 and its words
+    // moved into the string catalog with the rest of that surface, so the
+    // check moved with them: the card branches on the same ONE field and
+    // names the same two catalog keys the sidebar's literals spell out.
+    // (`.badge` in styles.css is what uppercases them, which is why the
+    // catalog values are lowercase and the sidebar's literals are too.)
     assert.match(read('client', 'js', 'session-sidebar-rows.js'),
         /r\.created_by_cloude \? 'tmux' : 'external'/);
+    const card = read('web', 'src', 'lib', 'launchpad', 'RunningSessionRow.svelte');
+    assert.match(card, /owned = \$derived\(!!row\.created_by_cloude\)/);
+    assert.match(card, /badgeTmux/);
+    assert.match(card, /badgeExternal/);
+    const catalog = read('client', 'js', 'i18n', 'catalog.en.js');
+    assert.match(catalog, /'session\.badge\.tmux': 'tmux'/);
+    assert.match(catalog, /'session\.badge\.external': 'external'/);
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

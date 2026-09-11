@@ -145,11 +145,27 @@ test('TERMINAL.JS ACTUALLY WRITES IT - all three transitions', () => {
 });
 
 test('THE READERS ACTUALLY READ IT - both session surfaces', () => {
-    for (const file of ['session-sidebar-rows.js', 'launchpad.js']) {
-        const src = clientJs(file);
-        assert.ok(src.includes('SessionTransport'),
-            `${file} must pass the transport state into the LED`);
-    }
+    // THE SIDEBAR ROW IS STILL A STRING BUILDER, so its read is still a
+    // grep of client/js. The HOME CARD is a Svelte component as of slice
+    // 5, so its read moved into web/src: the row passes `transport` to
+    // `<StatusLed>` and gets the value through
+    // `RunningHost.transportFor`, which is the ONE place this tree reads
+    // `window.SessionTransport`. Both files are named, because a
+    // disconnected transport OUTRANKS every server signal in
+    // `ledStateFor` and a surface that dropped it would paint a
+    // confident dot over a dead socket.
+    assert.ok(clientJs('session-sidebar-rows.js').includes('SessionTransport'),
+        'the sidebar row must pass the transport state into the LED');
+    const host = fs.readFileSync(
+        path.join(__dirname, '..', 'web', 'src', 'lib', 'launchpad',
+            'running-host.ts'), 'utf8');
+    assert.ok(host.includes('SessionTransport'),
+        'the running-sessions host must read the transport state');
+    const row = fs.readFileSync(
+        path.join(__dirname, '..', 'web', 'src', 'lib', 'launchpad',
+            'RunningSessionRow.svelte'), 'utf8');
+    assert.ok(row.includes('transportFor'),
+        'the running-sessions card must pass it into the LED');
 });
 
 test('the module is SERVED - a file nobody loads is dead code', () => {
@@ -159,7 +175,9 @@ test('the module is SERVED - a file nobody loads is dead code', () => {
     // It must load BEFORE its writer and its readers, or the first paint
     // and the first close both find nothing there.
     const me = html.indexOf('/static/js/session-transport.js');
-    for (const after of ['/static/js/terminal.js', '/static/js/launchpad.js']) {
+    // SLICE 7: `/static/js/launchpad.js` is gone; the home screen is in
+    // the bundle, which is the consumer this ordering is about.
+    for (const after of ['/static/js/terminal.js', '/static/dist/app.js']) {
         assert.ok(html.indexOf(after) > me, `must load before ${after}`);
     }
 });

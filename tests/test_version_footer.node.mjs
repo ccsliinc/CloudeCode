@@ -26,6 +26,9 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 7: the home bar's version chip is rendered by the compiled
+// tree now; `client/js/launchpad.js` is gone.
+import { HOME_CHROME_SRC } from './lib-home-source.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -223,14 +226,17 @@ test('THE SIDEBAR FOOTER ACTUALLY CALLS THE SHARED COMPONENT', () => {
 });
 
 test('THE HOME BAR ACTUALLY CALLS THE SHARED COMPONENT', () => {
-    const lp = repoFile('client', 'js', 'launchpad.js');
+    // SLICE 7: `renderHomeBarVersion` moved into the compiled tree.
+    // The claim is unchanged - the chip is rendered THROUGH
+    // VersionFooter, and nothing else reads the meta tag.
+    const lp = HOME_CHROME_SRC;
     assert.ok(
-        lp.includes('window.VersionFooter.versionSpanHtml()'),
-        'launchpad.js must render the home bar chip through VersionFooter, not build one itself',
+        lp.includes('VersionFooter') && lp.includes('versionSpanHtml()'),
+        'the home bar chip must render through VersionFooter, not build one itself',
     );
     assert.ok(
         !lp.includes('meta[name="cloude-app-version"]'),
-        'launchpad.js must no longer read the meta tag directly - version-footer.js owns that read',
+        'the home bar must not read the meta tag directly - version-footer.js owns that read',
     );
 });
 
@@ -239,10 +245,14 @@ test('BOTH FILES ARE SERVED, IN AN ORDER THAT WORKS', () => {
     assert.ok(html.includes('/static/js/version-footer.js'), 'the module is served');
     assert.ok(html.includes('/static/css/version-footer.css'), 'and so is its CSS');
     const scriptIdx = html.indexOf('/static/js/version-footer.js');
-    const launchpadIdx = html.indexOf('/static/js/launchpad.js');
+    // SLICE 7: the consumer is the BUNDLE now, and it is a deferred
+    // module, so it runs after every classic script by spec rather
+    // than by position. The ordering claim is kept against it anyway:
+    // version-footer.js must still be above it in the document.
+    const launchpadIdx = html.indexOf('/static/dist/app.js');
     const rowsIdx = html.indexOf('/static/js/session-sidebar-rows.js');
     assert.ok(scriptIdx > -1 && launchpadIdx > -1 && rowsIdx > -1);
-    assert.ok(scriptIdx < launchpadIdx, 'version-footer.js must load before launchpad.js');
+    assert.ok(scriptIdx < launchpadIdx, 'version-footer.js must load before the bundle');
     assert.ok(scriptIdx < rowsIdx, 'version-footer.js must load before session-sidebar-rows.js');
 });
 

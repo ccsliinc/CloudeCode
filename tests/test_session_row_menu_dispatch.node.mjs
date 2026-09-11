@@ -216,9 +216,19 @@ function dispatchSandbox() {
         SessionSidebar: { id: 'the-controller' },
         SessionSidebarClicks: {
             runRestart(ctrl, name, el2) { calls.push(['runRestart', ctrl, name, !!el2]); },
-            onMarkUnreadClick(ctrl, toggle) {
-                calls.push(['markUnread', ctrl, toggle.dataset.markUnread,
-                    toggle.dataset.unreadCurrent]);
+        },
+        // THE PLUGIN REGISTRY, stubbed at the `window.CloudeWeb` seam the
+        // compiled bundle publishes. What is being asserted here is that
+        // an id the native table does not know is handed to the registry
+        // WITH THE FROZEN ROW, so a stub is the right depth: what the
+        // mark-unread contribution then does with it is
+        // web/src/lib/plugins/session-card-actions.test.ts's job, against
+        // the real contribution.
+        CloudeWeb: {
+            sessionCardMenuItems() { return []; },
+            runSessionCardAction(id, row2) {
+                calls.push(['plugin', id, row2.name, row2.unread]);
+                return Promise.resolve(true);
             },
         },
         SessionSidebarGroupActions: {
@@ -233,6 +243,7 @@ function dispatchSandbox() {
     };
     const context = { window: win, document: doc, console: { log() {}, error() {} }, globalThis: win, CSS: { escape: (s) => s } };
     vm.createContext(context);
+    vm.runInContext(clientJs('session-row-menu-plugins.js'), context);
     vm.runInContext(clientJs('session-row-menu-actions.js'), context);
     return { win, calls };
 }
@@ -249,17 +260,37 @@ test('RESTART goes to the picker, through the row\'s own handler', () => {
     assert.deepEqual(Array.from(calls[0]), ['runRestart', { id: 'the-controller' }, 'cloude_api', true]);
 });
 
-test('MARK UNREAD goes to the row\'s own handler, carrying the frozen flag', () => {
-    // The handler flips whatever it is told the current value is, so the
-    // menu must hand it the state the row SHOWED when the menu opened -
-    // the captured snapshot, never a re-read of a list that has since
-    // repainted.
+test('MARK UNREAD goes to the PLUGIN REGISTRY, carrying the frozen flag', async () => {
+    // It is a contribution now, not an entry in the native table: the
+    // dispatch table falls through to the registry for any id it does not
+    // know. The contribution flips whatever it is told the current value
+    // is, so the menu must hand it the state the row SHOWED when the menu
+    // opened - the captured snapshot, never a re-read of a list that has
+    // since repainted.
     const { win, calls } = dispatchSandbox();
-    win.SessionRowMenuActions.run('mark-unread', { ...ctx(), unread: true });
-    assert.deepEqual(Array.from(calls[0]), ['markUnread', { id: 'the-controller' }, 'cloude_api', 'true']);
+    await win.SessionRowMenuActions.run('mark-unread', { ...ctx(), unread: true });
+    assert.deepEqual(Array.from(calls[0]), ['plugin', 'mark-unread', 'cloude_api', true]);
     const second = dispatchSandbox();
-    second.win.SessionRowMenuActions.run('mark-unread', { ...ctx(), unread: false });
-    assert.equal(second.calls[0][3], 'false');
+    await second.win.SessionRowMenuActions.run('mark-unread', { ...ctx(), unread: false });
+    assert.equal(second.calls[0][3], false);
+});
+
+test('the native table is NOT a second path to any plugin item', async () => {
+    // NEGATIVE CONTROL for the re-seat. With the registry absent, the item
+    // must do NOTHING - no hardcoded twin behind it, no fabricated proxy
+    // element handed to a legacy handler. A fallback here would make the
+    // registry decorative and would pass every positive case above.
+    const { win, calls } = dispatchSandbox();
+    delete win.CloudeWeb;
+    await win.SessionRowMenuActions.run('mark-unread', { ...ctx(), unread: true });
+    assert.equal(calls.length, 0, 'nothing may run mark-unread but the registry');
+});
+
+test('an id NOTHING claims is refused, rather than falling through to a native item', async () => {
+    const { win, calls } = dispatchSandbox();
+    await win.SessionRowMenuActions.run('no-such-item', ctx());
+    assert.deepEqual(Array.from(calls), [['plugin', 'no-such-item', 'cloude_api', false]],
+        'it reaches the registry, which answers false, and reaches nothing else');
 });
 
 test('MOVE TO GROUP opens the group module\'s own picker', () => {
@@ -275,6 +306,7 @@ test('a runner whose collaborator is missing does nothing, and does not throw', 
     const { win } = dispatchSandbox();
     delete win.SessionSidebarClicks;
     delete win.SessionSidebarGroupActions;
+    delete win.CloudeWeb;
     win.SessionRowMenuActions.run('restart', ctx());
     win.SessionRowMenuActions.run('mark-unread', ctx());
     win.SessionRowMenuActions.run('move-to-group', ctx());

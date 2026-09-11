@@ -1711,6 +1711,7 @@ body.home-header-active {
 
 .project-archived-badge {
     margin-top: 8px;
+    text-transform: uppercase;
     padding: 3px 8px;
     border-radius: var(--radius-sm, 4px);
     font-size: 0.72rem;
@@ -2883,6 +2884,13 @@ body.home-header-active {
     letter-spacing: 0.12em;
     font-weight: 700;
     color: var(--color-warning, #d79921);
+    /* CASING IS THE STYLESHEET'S JOB. The markup used to carry the
+     * literal words NEEDS ATTENTION in capitals; slice 5 moved them into
+     * the string catalog, whose voice rule is lowercase, so the shout
+     * lives here instead. Same precedent as `.badge`, which slice 4
+     * moved for the same reason. A translation that wants a different
+     * casing rule changes this line, not the message. */
+    text-transform: uppercase;
 }
 
 .running-sessions-attention__title {
@@ -3181,6 +3189,12 @@ body.home-header-active {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     letter-spacing: 0.5px;
+    /* CASING IS THE STYLESHEET'S JOB. The markup used to carry the
+     * literal words TMUX, EXTERNAL and ENDED in capitals; slice 4
+     * moved them into the string catalog, whose voice rule is
+     * lowercase, so the shout lives here instead. Same precedent as
+     * `.recent-session-lifecycle`. Pixels are unchanged. */
+    text-transform: uppercase;
     /* THE TRANSPARENT BORDER IS LOAD-BEARING, and its absence was
      * visible. `.family-pill` below carries `border: 1px solid
      * transparent` so a coloured variant can fill it without shifting
@@ -4778,6 +4792,7 @@ body.home-header-active {
 
 .project-node__attention-head {
     display: block;
+    text-transform: uppercase;
     font-size: 0.68rem;
     letter-spacing: 0.12em;
     font-weight: 700;

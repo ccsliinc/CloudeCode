@@ -57,7 +57,11 @@ function read(...parts) {
 }
 
 const HTML = read('client', 'index.html');
-const LAUNCHPAD = read('client', 'js', 'launchpad.js');
+// SLICE 7: `client/js/launchpad.js` is gone and the home screen's
+// markup is a Svelte component. The claim is unchanged - the archive
+// row must not come back into the BODY - so it is made against the
+// file that now holds the body.
+const { HOME_ALL_SRC: LAUNCHPAD } = await import('./lib-home-source.mjs');
 const CSS = read('client', 'css', 'styles.css');
 
 /**
@@ -194,7 +198,7 @@ await test('the icon does not depend on rounded corners or colour alone', async 
 // ---- 2. THE BODY ROW IS GONE -------------------------------------------
 
 await test('the launchpad body no longer renders an archive row or section', async () => {
-    assert.ok(LAUNCHPAD.length > 1000, 'launchpad.js did not load; vacuous');
+    assert.ok(LAUNCHPAD.length > 1000, 'the home screen source did not load; vacuous');
     assert.ok(!LAUNCHPAD.includes('id="launchpad-archive-entry"'),
         'the archive row is back in the launchpad body');
     assert.ok(!LAUNCHPAD.includes('id="archive-section"'),

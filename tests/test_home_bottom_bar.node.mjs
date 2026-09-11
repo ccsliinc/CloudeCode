@@ -164,7 +164,11 @@ const homeBarCss = read('client', 'css', 'home-bar.css');
 const iosCss = read('client', 'css', 'ios-chrome.css');
 const stylesCss = read('client', 'css', 'styles.css');
 const indexHtml = read('client', 'index.html');
-const launchpadJs = read('client', 'js', 'launchpad.js');
+// SLICE 7: `client/js/launchpad.js` is gone. The home screen's
+// markup and its wiring are the Svelte shell and the modules
+// beside it; every assertion below is unchanged and simply reads
+// the files that now hold what it is about.
+const { HOME_ALL_SRC: launchpadJs } = await import('./lib-home-source.mjs');
 const menuJs = read('client', 'js', 'server-controls-menu.js');
 const apiJs = read('client', 'js', 'api.js');
 
@@ -263,10 +267,10 @@ test('the bare button hover reset is gone, and .home-bar__btn never opts into it
         'expected zero bare `button:hover` rules in styles.css - that reset '
         + 'is now scoped to .btn-icon');
 
-    const launchpadJs = fs.readFileSync(
-        path.join(__dirname, '..', 'client', 'js', 'launchpad.js'), 'utf8');
+    // SLICE 7: the bar is HomeScreen.svelte's markup now; the claim is
+    // unchanged.
     const classAttr = launchpadJs.match(/class="[^"]*\bhome-bar__btn\b[^"]*"/);
-    assert.ok(classAttr, 'expected to find home-bar__btn in the launchpad.js template');
+    assert.ok(classAttr, 'expected to find home-bar__btn in the home screen markup');
     assert.ok(!classAttr[0].includes('btn-icon'),
         '.home-bar__btn must never also carry btn-icon, or the round-icon '
         + 'reset reaches the bottom bar again');
@@ -379,9 +383,9 @@ test('the home screen is excluded from the generic screen bottom inset', () => {
 // Trap 4 - home screen only
 // ---------------------------------------------------------------------
 
-test('the bar markup exists only in the launchpad renderer', () => {
+test('the bar markup exists only in the home screen shell', () => {
     assert.match(launchpadJs, /class="home-bar"/,
-        'launchpad.js must render the bar');
+        'HomeScreen.svelte must render the bar');
     const clientDir = path.join(ROOT, 'client');
     const offenders = [];
     /**
@@ -398,7 +402,14 @@ test('the bar markup exists only in the launchpad renderer', () => {
                 continue;
             }
             if (!/\.(js|html)$/.test(entry.name)) continue;
-            if (full.endsWith(path.join('js', 'launchpad.js'))) continue;
+            // THE ONE EXEMPTION IS THE COMPILED BUNDLE, which is the
+            // renderer. `client/dist/app.js` is the emitted form of
+            // web/src/lib/launchpad/HomeScreen.svelte, so finding the
+            // bar's class in it is finding the one renderer, not a
+            // second one. Everything else under client/ is still
+            // walked, and that is the guard: a SECOND renderer would
+            // put this bar on a screen with no room for it.
+            if (full.endsWith(path.join('dist', 'app.js'))) continue;
             if (/class="home-bar"/.test(fs.readFileSync(full, 'utf8'))) {
                 offenders.push(path.relative(ROOT, full));
             }
@@ -450,10 +461,10 @@ test('the version chip left the header and is stamped through a meta tag', () =>
     // and the sidebar footer get the string from, so the two placements
     // cannot read it two different ways. launchpad.js instead delegates.
     assert.ok(!/meta\[name="cloude-app-version"\]/.test(launchpadJs),
-        'launchpad.js must not read the meta tag directly any more - '
+        'the home screen must not read the meta tag directly - '
         + 'version-footer.js owns that read');
-    assert.match(launchpadJs, /window\.VersionFooter\.versionSpanHtml\(\)/,
-        'launchpad.js must render the chip through the shared VersionFooter component');
+    assert.ok(/VersionFooter/.test(launchpadJs) && /versionSpanHtml\(\)/.test(launchpadJs),
+        'the home bar must render the chip through the shared VersionFooter component');
 });
 
 test('an unresolved version renders "version unknown", not a mystery gap', () => {

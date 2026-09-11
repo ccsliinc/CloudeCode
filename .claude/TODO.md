@@ -5636,6 +5636,271 @@ no `v1.2.0` tag was created, and nothing was pushed to origin.
 
 ---
 
+## 2026-09-09 - the `web/` build toolchain (Svelte 5 + TS + Tailwind via vite)
+
+Branch `feat/svelte-web`. Round 1 of a screen-by-screen (strangler)
+migration of `client/` to Svelte. Scope was the TOOLCHAIN plus one real
+component proving the pipeline end to end. NOTHING in the running app
+changes behaviour this round: the bundle publishes `window.CloudeWeb` and
+returns, mounts nothing into the document and overwrites no global.
+Full model in `CLAUDE.md`, new section "The `web/` build".
+
+**What landed**
+
+- `web/` vite project: Svelte 5 with `runes: true` forced project-wide,
+  TypeScript strict (`noUncheckedIndexedAccess` on too), Tailwind 4 at
+  build time. Every dependency pinned to an EXACT version,
+  `package-lock.json` committed - the bundle check compares bytes, so a
+  floating transitive dependency would make it fail for a reason nobody
+  caused. `npm ci`, never `npm install`.
+  Pinned: svelte 5.57.0, vite 8.2.2, @sveltejs/vite-plugin-svelte 7.3.0,
+  tailwindcss + @tailwindcss/vite 4.3.3, vitest 5.0.0, typescript 5.9.3,
+  svelte-check 4.7.6, @types/node 24.11.2.
+- Output at `client/dist/` with FIXED names `app.js` / `app.css`, no
+  content hash, so `client/index.html` never has to be rewritten per
+  build. Vite is given a `.ts` entry rather than an HTML file, so its HTML
+  plugin never runs and no inline script is ever emitted.
+- `client/index.html` loads both: a `<link>` last in `<head>` and a
+  `<script type="module">` last in `<body>`, both from `/static/dist/`.
+- `scripts/web-build-check.sh` (new): rebuilds and fails if
+  `git status --porcelain client/dist` is non-empty. Exit 1 = drift,
+  exit 2 = COULD NOT EVALUATE, 2 is not 0. Wired into `deploy-mini.sh`
+  before the transfer (drift -> exit 1 `DEPLOY FAILED`, cannot-evaluate ->
+  exit 3 `CANNOT DETERMINE`; `CLOUDE_DEPLOY_SKIP_WEB_CHECK=1` is the
+  named, printed escape hatch) and into the `javascript` CI job.
+- `.gitignore`: `!client/dist/` negation added. THE `dist/` LINE IN THE
+  PYTHON SECTION WAS SILENTLY SWALLOWING THE WHOLE BUNDLE - it has no
+  leading slash, so it matches a `dist` directory at any depth. Measured
+  before the fix: `git check-ignore -v client/dist/app.js` answered
+  `.gitignore:9:dist/`. Left alone, the deploy would have shipped nothing
+  and its own hash check would have read green, because absent on both
+  sides compares equal.
+- The proof component: `client/js/status-led.js` ported to
+  `web/src/lib/led.ts`, the status half of `session-status-ui.js` to
+  `web/src/lib/status-dot.ts`, and `web/src/lib/StatusLed.svelte` as a
+  real runes component. No legacy caller switched to it.
+- `tests/test_no_remote_assets.py` extended by 6 tests to cover the
+  emitted bundle: no remote URL in a LOADING position, no `eval` /
+  `new Function`, the bundle is committed, index.html references it, and
+  a negative control asserting both detectors can actually match.
+
+**Measured, not assumed**
+
+- vitest: 36 tests pass in `web/`. 30 are a one-for-one port of the
+  behavioural half of `tests/test_status_led.node.mjs`; the other 26
+  blocks in that file assert on the TEXT of `client/css/status-led.css`
+  and were deliberately NOT duplicated (same file, same assertions,
+  already run by CI). The node suite is untouched and still 56 passed.
+- THE EQUIVALENCE PROOF: the test loads the two REAL legacy files in a
+  `vm` sandbox and compares strings across the cross product of status x
+  unread x startup_gate x status_source. **1008 comparisons, 0
+  mismatches**, plus a negative control proving the comparison can fail.
+- IN A REAL BROWSER, under the production CSP served by a scratch static
+  server that IMPORTS `src.security_headers.SECURITY_HEADERS` rather than
+  copying it: the same 1008 comparisons, **0 mismatches**.
+  `CloudeWeb.ledHtml('working',{unread:false})` byte-identical to
+  `SessionStatusUI.dotHtml('working',{unread:false})`.
+- Svelte actually mounts: `CloudeWeb.renderProbe('question', ...)`
+  returned real rendered markup from a compiled runes component in a
+  DETACHED element. A broken Svelte runtime cannot pass that while every
+  pure string function still would.
+- CSP: `window.CloudeWeb` exists after load, so `script-src 'self'` did
+  not refuse the module; `/static/dist/app.css` is in `document.styleSheets`
+  with 10 rules and `tw:opacity-70` computes to `0.7` on a live element,
+  so the stylesheet parsed and applies. A deliberate `eval('1+1')` on
+  that page THREW and raised a `script-src` violation, and a deliberate
+  off-origin `<img>` raised an `img-src` one - so the policy is real and
+  the violation listener works. Nothing the bundle does triggers either.
+- Tailwind emits 7 prefixed utility rules and 0 preflight; `app.css` is
+  835 bytes, `app.js` 36,605 bytes.
+- pytest `tests/test_no_remote_assets.py`: 9 -> 15 passed, 0 failed.
+- `scripts/ci/check-js-syntax.sh`: 215 files parsed cleanly.
+
+**Known gaps, carried forward**
+
+- NO CALLER USES THE PORT YET. The legacy parents build rows as HTML
+  strings and set them with `innerHTML`, so switching one means rewriting
+  a parent. That is round 2, one screen at a time.
+- No vite dev server / HMR, deliberately: it would need a proxy in front
+  of FastAPI and a CSP relaxation. Build and reload.
+- The 26 stylesheet assertions in `tests/test_status_led.node.mjs` are the
+  single source of truth for `client/css/status-led.css` and are NOT
+  mirrored in the web tree. If that stylesheet ever moves into `web/`,
+  they move with it.
+- The browser console reader captured only 1 of the page's many load-time
+  log lines, so "no console errors" from it is WEAK evidence and is not
+  what the CSP claim above rests on. The claim rests on the positive
+  outcome measurements listed there.
+- NOT DEPLOYED. Nothing was pushed and no deploy was run.
+
+## 2026-09-09 - release plan: 1.2 merge with Adam, 1.3 Svelte, slices paused after slice 1
+
+Owner's words: "hes been doing a lot of work, hes going to push it shortly. we
+are going to need to diff both our changes and then discuss them. many are
+already the same and i want to see which is better code. then we will make a
+1.2 release, with a 1.3 of the svelte work, mainly the plugin/theme engine and
+rewrite for adam to pull."
+
+- [ ] Wait for Adam's push to `adamdev` (Adoom666/CloudeCodeDev). Owner will say when.
+- [ ] Then: fetch, recompute merge base against `v1.1` (was `ba2aa5d`, 25
+  overlapping files, 17 hard conflicts per `git merge-tree` on 2026-09-09; see
+  `.claude/notes/divergence-adamdev-2026-09-09.md`), group the overlap by
+  subsystem (status LED, toasts, sidebar, launchpad, hooks, tests, docs), one
+  worker per subsystem producing a three-way view (base / ours / his) and a
+  verdict on the better code by: behaviour under unordered hooks, tests, 500-line
+  rule, docs in the same change, what the owner sees. Same intent: pick one.
+  Different intent: say so, stop for the owner.
+- [ ] Ours-only and his-only changes merge without discussion unless they
+  conflict in behaviour.
+- [ ] Assemble winners into `release/1.2` off `v1.1`, deploy, tag 1.2.
+- [ ] 1.3 = `feat/svelte-web` rebased onto 1.2: Svelte rewrite, plugin surface
+  registry, theme engine. Adam pulls 1.3.
+- [ ] Svelte slices 2 to 7 (`.claude/notes/svelte-migration-launchpad.md`) are
+  PAUSED after slice 1 lands, because his real work sits in the status, toast
+  and sidebar cluster (slices 4 and 5) and porting it before the 1.2 merge
+  would port it twice.
+- Branch state: `v1.1` at `d392aeb` is the release line; `feat/svelte-web` holds
+  `9d31ec4` (toolchain, validated 11/11) plus slice 1 in flight. `origin/main`
+  and `adamdev/v1.1` are 34 behind `v1.1`; push of those held pending owner.
+
+## 2026-09-09 - svelte slice 1: the attribution prompt card, and the mount seam
+
+Slice 1 of `.claude/notes/svelte-migration-launchpad.md`, on `feat/svelte-web`.
+The first legacy screen element actually REPLACED rather than duplicated: the
+Stage C attribution prompt is a Svelte 5 component, and the legacy code for it
+was deleted in the same commit.
+
+**What moved**
+
+- `client/js/launchpad.js`: **224 lines deleted, 27 added, net -197**
+  (6,481 to 6,284). The deleted code is `loadAttributionPrompt`,
+  `renderAttributionPrompt`, `_bindAttributionPrompt`, `_adoptAttributed`,
+  `_declineAttributed` (203 lines together) plus the `attributionPrompt` and
+  `attributionPromptClosed` constructor fields (11 lines) - 214 lines of
+  attribution logic - and two stale comment blocks that described them.
+- `web/src/lib/mount.ts` - `mountPanel(id, Component, props)` /
+  `unmountPanel(id)`. THE ONLY MOUNT PATH for every later slice. One handle per
+  container id, the old one unmounted first, the container never cleared (that
+  would delete sibling content the legacy parent still owns), a missing
+  container warned about rather than swallowed.
+- `web/src/lib/launchpad/attribution.ts` - the ladder and the two answers, with
+  the host (window.API / window.Launchpad / window.SessionLabel) injected so it
+  is testable in Node.
+- `web/src/lib/launchpad/AttributionPrompt.svelte` - runes, legacy class names
+  and element ids kept verbatim so `client/css/attribution-prompt.css` and all
+  26 themes apply unchanged, Tailwind for nothing but the absence of layout, no
+  `{@html}` anywhere.
+- The legacy call site is one guarded line in `loadProjects()`:
+  `window.CloudeWeb.launchpad.mountAttributionPrompt()`.
+
+**Three port decisions worth keeping**
+
+- THE CLOSE FLAG IS MODULE STATE, NOT COMPONENT STATE. Legacy kept it on the
+  Launchpad singleton, where it outlived every re-render and died with the page.
+  The component is REMOUNTED on every `loadProjects()`, so component state would
+  forget the close on the next home-screen entry, and anything durable would
+  contradict the card's own footnote ("closing this without answering brings it
+  back next time"). Module scope is the one lifetime that matches. It is not
+  persisted, and the Vitest case asserts that.
+- THE AGE STRING STILL COMES FROM THE LEGACY `_formatRelativeTime`, through the
+  host, rather than being copied into TypeScript. Slice 5 moves that function;
+  two copies for the length of the migration is how two copies drift. Measured
+  in the browser: the card rendered "started 393d ago" off the legacy
+  implementation.
+- ADOPT DOES NOT REFRESH ANYTHING ITSELF. Legacy reloaded the prompt and THEN
+  the running sessions, in that order; the component keeps the order rather than
+  the helper guessing at half of it. Decline refreshes NOTHING, which is the
+  legacy asymmetry, not an oversight - declining moves no session.
+
+**A regression this caught, in the same round**
+
+The mount call started life unguarded and it was the LAST statement in
+`loadProjects()`. `window.CloudeWeb` is absent in every node harness, so the
+throw rejected the promise every caller awaits: `test_project_list_render_guard`
+went 11 passed to 2 passed / 9 failed and `test_home_screen_mechanics` lost one.
+The call site now tests for the bundle and `console.error`s when it is missing -
+loud, because a prompt that silently never mounts is the same false green the
+card exists to remove, and non-fatal, because Stage C failing must not take the
+home screen down. Both suites are green again.
+
+**Measured, not assumed**
+
+- vitest in `web/`: **58 passed** (36 pre-existing StatusLed, 22 new in
+  `attribution.test.ts`), 2 files. `npm run check` (svelte-check): 262 files, 0
+  errors, 0 warnings.
+- node suite: **191 passed / 2 failed**, and both failures are the documented
+  pre-existing ones (`led_state_for.node.mjs` is a stdin CLI helper that exits
+  non-zero with no input; `test_archive_full_page_mode.node.mjs` was already
+  failing). `scripts/ci/check-js-syntax.sh`: 215 files parsed cleanly.
+- pytest `tests/test_no_remote_assets.py`: 15 passed.
+- Bundle: `client/dist/app.js` 36,605 to 47,720 bytes, `app.css` unchanged at
+  835 bytes (the component adds no Tailwind utility that was not already there).
+- IN A REAL BROWSER (Claude in Chrome), against the repo served by the CSP
+  scratch server that IMPORTS `src.security_headers.SECURITY_HEADERS`, so the
+  page carried the production policy verbatim
+  (`default-src 'self'; script-src 'self' ...; frame-ancestors 'none'`), driving
+  `tests/manual/attribution-prompt-harness.html`:
+  - the card mounts INSIDE `#attribution-prompt` (`cardParentId` read back as
+    `attribution-prompt`), `class="attribution-prompt"`,
+    `data-attribution-state="pending"`, box 800 x 449.6, painted background
+    `rgba(251,191,36,0.18)` off the theme's warning token - not a UA default.
+  - all three rows render, tick boxes `display: none` until asked for, every
+    button non-zero and themed (`adopt all` on `rgb(215,119,87)`), the
+    `--picked` action row hidden.
+  - a LABEL containing `<b>not html</b>` renders as TEXT. Svelte's escaping
+    replaced `_escapeHtml` and the fixture proves it.
+  - "choose individually" adds `attribution-prompt--picking`, reveals the tick
+    boxes and swaps the two action rows. Unticking one row and pressing "adopt
+    the ticked ones" POSTed exactly the two ticked names, in order, and skipped
+    the unticked one. "adopt all" POSTed all three. "leave as external" POSTed
+    all three to the decline endpoint. Picking resets after each answer, as the
+    legacy re-render did.
+  - `?fixture=unavailable` renders the notice line with
+    `attribution-prompt--unknown`, `data-attribution-state="unavailable"`, ZERO
+    buttons and ZERO rows. `?fixture=none` renders nothing and the slot measures
+    0px tall.
+  - the close button renders nothing and the close SURVIVES a remount, which is
+    the module-state rule above, measured.
+  - `mountPanel` proven directly: mounting twice leaves ONE card, `unmountPanel`
+    removes it and returns true, a second call returns false, and a missing
+    container returns null and warns.
+  - **ZERO CSP violations** across all three fixtures and every interaction, and
+    the negative control is what makes that mean something: an off-origin
+    `<img>` appended to the same page raised `img-src`, so the policy is live
+    and the collector fires. (The `eval` control was DISCARDED as invalid - the
+    browser tool executes in an isolated world that the page policy does not
+    govern, so it proved nothing.)
+- Console on that page: one message, the deliberate `mountPanel` warning from
+  the missing-container control. No errors.
+
+**Known gaps, carried forward**
+
+- NO COMPONENT TEST. Vitest here runs in a Node environment and neither `jsdom`
+  nor `@testing-library/svelte` is a dependency; adding one for this slice was
+  out of scope. That is why the whole decision ladder was carved into
+  `viewFor()` and asserted there, and why the markup is proven in the browser
+  instead. A later slice that needs a DOM harness should add it once, with its
+  own reason.
+- ADOPT AND DECLINE WERE NOT FIRED AT A REAL SERVER. The tmux socket name
+  `cloude` is hardcoded (`DEFAULT_SOCKET_NAME`), so a second local app instance
+  would re-adopt the owner's 19 live panes, `ensure_pipe_pane` over their live
+  pipes and mint hook tokens - the exact class of damage CLAUDE.md records four
+  hours of. So the buttons were driven against the harness's stubbed `window.API`
+  (proving the component posts the right names to the right method) and the API
+  contract itself is asserted in Vitest. Nothing on the live install was touched.
+- `.attribution-prompt-slot:empty` still matched in Chrome with the component
+  mounted and rendering nothing, because Svelte's `{#if}` anchors are a comment
+  and two EMPTY text nodes, which Selectors 4 ignores. Older engines might not,
+  and the cost if one does not is exactly zero: the slot carries no other rule,
+  so it measures 0px either way. Measured, not assumed.
+- `tests/manual/attribution-adopt-harness.html` was updated to load the bundle,
+  but it cannot be exercised without Playwright: it delegates its API stubs to
+  injected bindings (`window.__srvPrompt`). Its archived verifier was not run.
+- The two archived pixel verifiers under `scripts/archive/verify/` were not run
+  (they need Playwright). The harness they drive still reports the same shape.
+
+---
+
 ## 2026-09-10 - the electron bundle rebuilt at 1.2.0 and installed on live
 
 Closes the one failure recorded above: the footer read v1.0.33 because
@@ -8064,6 +8329,1071 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 would want the same ruling.
 
 
+## 2026-09-09 - 1.2 merge decisions (owner), adamdev/master at 887b8fc
+
+Comparison reports: `.claude/notes/compare-1.2/{status-led,sidebar,toasts-launchpad-terminal,backend,non-overlap}.md`.
+Owner's answers, verbatim: "1. his. 2. keep, make a setting. 3. mine. 4. yes. 5. yes you can. make sure you use his latest."
+1. Unread rides the OUTER ring as a still green ring (HIS model); the `done` bucket and his status-key legend come with it. Supersedes the 2026-09-09 "ring means activity only" paragraph in CLAUDE.md, which must be rewritten, not left contradicting.
+2. Manual mark-unread control is KEPT, behind a setting (config toggle, default on).
+3. Sidebar row controls: OURS (kebab menu with restart). His inline pin/close icons and his removal of restart from live rows are NOT taken.
+4. Dead rows go to Recent (ours). His dead-row restart surface on the live list is not taken.
+5. His CI hardening, skip audit and pytest.ini changes are taken; re-baseline the test counts in CLAUDE.md afterwards.
+6. Version: 1.2 must sort above his v1.0.36.
+- [ ] Merge on `release/1.2` (worktree off `v1.1`), then validate, deploy live, tag.
+
+## 2026-09-10 - 1.3: the plugin surface registry, and mark unread as its first plugin
+
+Branch `feat/svelte-1.3` (off `release/1.2`). Owner's decisions taken as
+given and not relitigated: plugins are build-time TypeScript modules on a
+typed registry, no dynamic loading, no manifest schema, no permissions
+system, no marketplace, no settings UI this round; themes are already
+expandable and are NOT rebuilt; the first plugin is the manual mark-unread
+control, keeping `ui.show_mark_unread_control` as its enable toggle.
+
+- [x] `web/src/lib/plugins/types.ts` - four surfaces (`session-card-action`,
+  `launchpad-panel`, `sidebar-item`, `status-source`), one payload type each,
+  `PluginContext` (flags + refresh) and `SessionCardRow` (name + unread, and
+  nothing a reader does not yet exist for). The three unproven surfaces carry
+  the smallest payload their consumer plainly needs and say so in the file.
+- [x] `web/src/lib/plugins/registry.ts`, 143 lines. `createRegistry()` factory
+  so no mutable singleton is exported and a test gets isolation with no
+  test-only `reset()`; order is `order` then `id`, never insertion; a
+  duplicate plugin id or contribution id is refused, logged, and refused ALL
+  OR NOTHING; `surfacesOf` returns a sorted copy.
+- [x] `web/src/lib/plugins/mark-unread/index.ts` - one `session-card-action`.
+  `enabled` reads `show_mark_unread_control` as `!== false`; `run` calls
+  `window.API.setSessionUnread` and then `context.refresh()`; label, glyphs,
+  class list and aria state are the shipped ones.
+- [x] Legacy wiring, no dual path. `client/js/session-row-menu.js` CONCATENATES
+  `window.CloudeWeb.sessionCardActions(row, context)` where the hardcoded
+  `markUnreadHtml` call sat, and routes `[data-plugin-action]` into
+  `window.CloudeWeb.runSessionCardAction`. DELETED in the same commit: that
+  builder call, the `[data-mark-unread]` dispatch branch,
+  `SessionSidebarClicks.onMarkUnreadClick` and its export, the sidebar's
+  `_onMarkUnreadClick` and the list keydown binding - the last two had been
+  unreachable since the control folded into the kebab menu.
+- [x] Slices 2 to 7 of the launchpad carve remain PAUSED. Nothing else moved.
+
+Measured on this branch, 2026-09-10:
+- vitest 88 passed / 0 failed (4 files), 29 of them new: 12 registry blocks,
+  17 surface blocks. svelte-check 0 errors 0 warnings over 269 files.
+- Node 197 suites, 0 failures, count unchanged because the row-menu
+  assertions EXTEND `tests/test_session_sidebar_rows.node.mjs` rather than
+  adding a 198th file. That sandbox now loads the REAL `client/dist/app.js`
+  beside the legacy modules (the emitted bundle has no import or export
+  statement, so it runs in a `vm`), so the mark-unread assertions are about
+  the shipped path and not a fixture.
+- pytest 2 failed / 5634 passed / 19 skipped, identical to this branch's
+  baseline; the two are the known environmental pair (`test_home_write_guard`,
+  `test_version_probe`).
+- Browser, real production CSP via a static server importing
+  `src.security_headers`: flag ON, the item renders from the plugin path,
+  is decorated into `role="menuitem"`, is visible, and a click on a row
+  painted unread called `setSessionUnread('cloude_harness', false)` once and
+  repainted once; flag OFF, the item is absent and the menu's other three
+  items are untouched. ONE CSP violation in the run and it is the deliberate
+  off-origin image negative control, so the collector is proven live.
+
+**Known gaps, recorded rather than papered over:**
+- `client/js/launchpad.js` still draws its own mark-unread through
+  `SessionStatusUI.markUnreadHtml` with its own `_handleMarkUnread`. That
+  screen is not migrated, so it keeps its path this round; the equivalence
+  test is what stops the two copies drifting. Moving it is the launchpad
+  slice's job.
+- Keyboard activation of the mark-unread item inside the row menu did not
+  work before this change and does not now: it is a `role` span in a panel
+  mounted on `document.body`, and the only Enter/Space handler was bound on
+  the sidebar LIST, which never saw it. Unchanged on purpose - this round is
+  a re-seat, not a fix - but it is a real gap and it is now the plugin
+  surface's to close.
+- Three of the four surfaces have no consumer. Their payload types are a
+  best guess and are marked as such in `types.ts`.
+
+## 2026-09-10: fix literal NUL bytes in tracked source (found by validation)
+
+`web/src/lib/plugins/registry.ts` had a literal NUL byte inside the
+contribution composite-key template literal (`` `${c.surface}<NUL>${c.id}` ``),
+which made `file`/`grep` classify the file as binary (plain `grep` returned
+nothing; `grep -a` was needed). A repo-wide byte scan of every tracked file
+under source/doc extensions found two more independently: `client/js/markdown-lite.js`
+(9 NULs - the `[\s\x00-\x1f]` char-class range plus the `\0CODE...\0` /
+`\0BLOCK...\0` stash sentinels) and `tests/test_restart_continuity_copy.node.mjs`
+(1 NUL, `[^\x00-\x7f]`). All replaced with the `\0` / `\x00` escape - runtime
+value unchanged, only the source encoding fixed. No separator character or
+key semantics changed; NUL-as-separator is the established, correct pattern
+here (same idea as the launchpad's tmux-name+epoch key).
+
+Added a Vitest test to `registry.test.ts` proving the composite key is
+`surface\0id`, not `surface + id` concatenated (negative control: mutating
+the source to drop the separator makes the test fail, confirmed then
+reverted). Added `tests/test_no_literal_nul_in_source.py` as a repo-wide
+guard (git-tracked text files only, `client/dist/`/vendored trees excluded),
+with a negative control against a planted NUL in a tmp file, plus
+parametrized checks on the three files this defect was found in.
+
+Rebuilt and committed `client/dist/app.js` (the fix reaches the compiled
+bundle; confirmed esbuild/vite preserved the `\0` escape rather than writing
+a literal byte in the minified output). `web/npm test`: 89/89 passed.
+`svelte-check --threshold error`: 0 errors. Node suites: 197/197 passed.
+`scripts/scan_secrets.py`: clean, exit 0. Full `pytest -q`: 5639 passed, 2
+failed (both the known environmental failures,
+`test_home_write_guard::test_guard_refuses_the_real_claude_settings_path_by_name`
+and `test_version_probe::test_current_version_empty_when_unresolvable`), 19
+skipped - nothing new introduced.
+
+## 2026-09-10 - BACKLOG: the idle warning goes full width when the sidebar is pinned
+
+Owner's report, verbatim: "also put into backlog the idle warning, is going
+full width when sidebar is pinned".
+
+- [ ] The idle warning bar spans the full viewport width instead of stopping at
+  the sidebar edge when the sidebar is PINNED (open and holding layout space).
+  It presumably renders against the viewport rather than against the content
+  column, so the pinned sidebar's gutter is not subtracted. Unconfirmed: the
+  exact element and whether it is a fixed-position bar or a flow element with a
+  width rule; measure before fixing, do not guess which of the two it is.
+- Not reproduced or diagnosed yet; recorded from the owner's observation only.
+- Related surfaces that already solve this correctly and are worth copying:
+  the sleep/wake away bar (`client/js/terminal-away-bar.js`) and the sidebar
+  gutter token `--sidebar-gutter`.
+- Fix belongs in the SVELTE rewrite if the affected screen has already moved by
+  the time it is picked up, since the vanilla client is being replaced screen by
+  screen (`.claude/notes/svelte-migration-launchpad.md`). If it still bites in
+  the vanilla client before then, a CSS-only fix is acceptable and expected to
+  be thrown away.
+
+## 2026-09-10 - the design notes were never in git, and now are
+
+`.gitignore:183` is `.claude/*`, so everything under `.claude/notes/` was
+UNTRACKED except `HANDOFF.md` (and `TODO.md`), which had already been
+force-added at some point. That meant the whole 1.3 roadmap and every
+comparison report existed only as loose files in ONE working tree, invisible
+from any other worktree, absent from every clone, and one `git clean -x` away
+from gone. Nobody had noticed because reading them from the main repo worked
+perfectly.
+
+Force-added onto `feat/svelte-1.3`:
+- `.claude/notes/svelte-migration-launchpad.md` (522 lines) - the seven-slice
+  carve plan for `launchpad.js`, the state model, the plugin seam, the KISS
+  calls. This is the 1.3 roadmap; losing it would mean re-deriving it.
+- `.claude/notes/plugins-and-themes-research.md` (174) - the herdr teardown and
+  why our themes were already extensible.
+- `.claude/notes/divergence-adamdev-2026-09-09.md` (118).
+- `.claude/notes/troubleshooting.md` (773) - the file CLAUDE.md tells every
+  agent to read before investigating, which no fresh clone has ever had.
+- `.claude/notes/compare-1.2/*.md` (6 files) - the per-subsystem verdicts that
+  the owner's 1.2 decisions rest on, plus the round-2 review of Adam's
+  performance work.
+
+- [ ] Decide whether `.gitignore`'s `.claude/*` should keep excluding notes by
+  default. Force-adding works but is invisible: a NEW note is silently
+  untracked again unless someone remembers `-f`. Options: narrow the ignore to
+  the genuinely local paths (`.claude/sessions/`, `.claude/logs/`,
+  `.claude/tasks/`) and track `notes/` normally, or keep the ignore and add a
+  guard test that fails when a file under `.claude/notes/` is untracked.
+  The second is cheaper and matches how this repo already guards things.
+
+## 2026-09-10 - StatusLed.test.ts split (500-line rule)
+
+- [x] `web/src/lib/StatusLed.test.ts` (635 lines) split along its own
+  describe() seams into four files, no assertion rewritten: `led-legacy-fixture.ts`
+  (62, shared vm sandbox loader), `StatusLed.drift-guard.test.ts` (52, the two
+  legacy-vocabulary-pin cases), `StatusLed.parity.test.ts` (152, the
+  byte-for-byte equivalence matrix), `StatusLed.behaviour.test.ts` (426, the
+  rest of "the vocabularies" + "markup per state" + "the mapping from server
+  signals"). All 39 original test names verified identical before/after via a
+  sorted-name diff (93/93 full-suite names matched). Mutation-tested the drift
+  guard post-split by adding a bogus `shimmer` entry to `OUTER_STATES` in
+  `client/js/status-led.js`: exactly 1 of 93 tests failed (the drift guard
+  case), reverted clean. svelte-check 0 errors, `client/dist` bundle unchanged,
+  node suite 200/200, `scan_secrets.py` clean. Committed `e143ceb` on
+  `feat/svelte-1.3-on-121`.
+
+## 2026-09-10 - the string layer (i18n foundation), issue #61 / PR #62
+
+Owner's direction, verbatim: "making classsed code and probably should have
+language vars if we can get this to be bigger and people want to use this".
+Architecture only; no translations written. Landed BEFORE slice 2 of the Svelte
+migration on purpose, so slices 2 to 7 port their screens straight into it
+instead of every file being rewritten twice.
+
+- [x] ONE catalog both clients read: `client/js/i18n/catalog.en.js`, a plain ES
+  module of flat dotted keys, data only. Four readers, no build step for
+  `client/`: Vite imports it, `boot.js` publishes it to the legacy tree as a
+  same-origin module script, vitest imports it, and the `.node.mjs` suite
+  imports it and injects it into its `vm` sandboxes. That last one is what made
+  this shape work, and it is why the catalog is not JSON and not a classic IIFE.
+- [x] Keys name what a string MEANS, never the screen it is on, so they survive
+  slices 2 to 7. Flat so `grep -rn` finds every use across both trees.
+- [x] No library: `Intl.PluralRules` + `Intl.NumberFormat`, both memoized. Every
+  ICU runtime compiles with `new Function`, which `script-src 'self'` refuses.
+  Plural sets are keyed by CLDR category with `other` mandatory.
+- [x] Missing key renders the KEY, loudly (deduped `console.error`), never
+  throws. Missing runtime does the same, and never a second string table.
+- [x] Locale is browser-local through a ladder (localStorage override,
+  `navigator.languages` prefix-matched, then `en`). NOT the settings block: it
+  must resolve synchronously at first paint, and #43 is redesigning that block.
+  The ladder is the seam for making it a server preference later.
+- [x] Ported surface, chosen by MEASUREMENT rather than by suggestion: the group
+  summary label (`summaryHtml`). It carries an explicit zero, a seven-key
+  lookup, a plural with a count and a second count, and it was the only
+  candidate with just ONE node-test sandbox to update. The alternative,
+  `session-status-ui.js`, had 17.
+- [x] Sentence ASSEMBLY is shared too, not just the copy:
+  `client/js/labels/session-summary.js` is imported by the Svelte tree and
+  reached by the legacy tree through `globalThis.CloudeLabels`. One function,
+  one catalog, two callers.
+- [x] Pseudo-locale, DERIVED from en so it cannot go stale, wrapping and
+  lengthening by 40 percent so it finds unextracted strings and layout that
+  cannot take a longer language in one pass.
+- [x] MUTATION-PROVEN, and the result changed the design. A literal returned at
+  the top level fails all three checks. A literal interpolated INTO another
+  message PASSES the balanced-span check, because the outer message wraps it,
+  and is caught only by the bracket-COUNT assertion and the source scan. The
+  count assertion exists because that mutation was run, not because it was
+  predicted. Reverted byte-identical, suite green.
+
+Verified: `npm test -- --run` 147 passed / 11 files (baseline was 93 / 7, so 54
+added and none broken). `svelte-check --threshold error` 0 errors, 284 files.
+`npm run build` then `git status --porcelain client/dist` empty after committing
+the rebuilt bundle; `./scripts/web-build-check.sh` exit 0. Node suite as CI runs
+it: no FAIL lines, including `test_archive_full_page_mode.node.mjs`, which
+CLAUDE.md records as pre-existing-failing and which passed here.
+`pytest -q tests/test_no_remote_assets.py` 15 passed. `scan_secrets.py` exit 0,
+1448 files. `node --check` on all nine JS files touched.
+
+Open items, stated rather than discovered:
+- [ ] The reactive repaint is proven at the module level (subscription fires,
+  `t()` returns the new locale's string) but NOT by a MOUNTED component, because
+  vitest runs in `node` and jsdom would be a new dev dependency bought to
+  re-test Svelte's own core promise. The first component slice 2 ports is where
+  that last link gets exercised for real.
+- [ ] Server strings are out of scope and the reason is data, not effort: toast
+  bodies are STORED, so translating at write time is wrong and at read time is a
+  schema change. `.claude/notes/i18n-design.md` section 7 prices it.
+- [ ] RTL is a CSS project, not a string project: `client/css/` holds 235
+  physical-direction declarations across 49 files and 16,924 lines, and zero
+  logical equivalents. Nothing here blocks it.
+- [ ] Only ONE surface is ported. The other 12 files carrying `n === 1 ? ...`
+  plural ternaries (launchpad.js, toast.js, terminal-away-gap.js,
+  session-sidebar-groups.js and the rest) are untouched by design; each is a
+  slice's own step 1.
+
+## 2026-09-10 - svelte slice 2: the recent sessions section, ported into the string catalog
+
+Issue #67, PR #68 on `Adoom666/CloudeCodeDev` (the primary; also mirrored to
+`origin`). Branched off `feat/i18n-foundation` (`3cd61a4`), which is PR #62 and
+not merged, so #68 targets `master` ONLY because GitHub refuses to auto-link
+`Closes #N` on a pull request that does not target the default branch - and that
+link is what tells the other side the issue is taken. First attempt targeted
+`feat/i18n-foundation` and polled eight times for a linkage that could never
+appear; worth knowing before someone else loses four minutes to it.
+
+**What moved.** 792 legacy lines deleted. Out of `client/js/launchpad.js`:
+`loadRecentSessions`, `_renderRecentSessionRowHtml`, `renderRecentSessions`,
+`_bindRecentSessionClicks`, `_forkSession`, `_deleteSessionRecord`,
+`_restartPlan`, `_restartNotice`, `_restartRecentSession`,
+`initDeletedSessionsToggle`, `_applyDeletedSessionsToggleState`,
+`getDeletedSessionsVisiblePref`, `setDeletedSessionsVisiblePref` and the four
+fields behind them (-638, +35 for the rewired call sites).
+`client/js/session-recent-visibility.js` (-148) and its `<script>` tag in
+`client/index.html` (-6) are gone outright.
+
+**The store starts here, holding the recent slice only.**
+`web/src/lib/sessions/store.svelte.ts`: `recentPayload` and `recentInFlight` as
+runes, exported through accessors (a `$state` exported by value is read once at
+import and every consumer holds a dead snapshot), plus `refreshRecent(fetch,
+includeArchived, t)` and `reset()`. It owns no timer yet - slice 3 brings the 5s
+poll here WITH the `clearInterval` on teardown that `launchpad.js` has never had.
+
+**The three-outcome contract, and where it is held.** `recentView()` in
+`web/src/lib/launchpad/recent.ts` is a ladder returning one of four values:
+`unavailable` / `empty` / `hidden` / `rows`. `unavailable` carries the notice and
+HAS NO `rows` KEY AT ALL, so a caller cannot reach a row list from a state that
+did not confirm one. The store is the other half: a REJECTED fetch is recorded as
+`probe_unavailable` plus a notice naming the reason, never cleared - clearing
+would read as `never_probed` with no notice, which is a quieter version of the
+same lie. And `stateOf()` defaults an absent state to `never_probed`, never `ok`.
+
+**MUTATION PROOF, three of them.**
+1. Three-outcome gate: `if (state !== 'ok')` -> `if (false)` in `recentView`.
+   4 named tests failed, including "`probe_unavailable` renders the notice and
+   CANNOT render rows, even with sessions present". Reverted; recent.ts back to
+   sha256 `4247d030...`, 302 pass.
+2. i18n, a literal returned at the top level (`recentCountUnavailableLabel`
+   returning its string): source scan FAIL, balanced-span FAIL, bracket count
+   FAIL. All three, as `.claude/notes/i18n-design.md` predicts.
+3. i18n, a literal interpolated INTO another message (`pickNamed` defaulting the
+   title): source scan FAIL, balanced-span PASS, bracket count PASS. Row 2 of the
+   design's measured table reproduced exactly on this surface. Reverted;
+   recent-session.js back to sha256 `8a872a96...`.
+   NOTE the honest limit: on THIS surface every sentence is one whole message, so
+   the bracket count is 1 either way and cannot see mutation 3. The SOURCE SCAN
+   is the only guard that catches it here. It also fired unprompted during the
+   round, on a `warn()` wrapper in `prefs.svelte.ts` that hid two diagnostics
+   from the `console.*` stripper - correct behaviour, and the call sites are
+   literal `console.warn` again because of it.
+
+**33 catalog keys added** (25 -> 58), all `session.recent.*` / `session.archive.*`
+/ `session.restart.*` / `session.fork.*` / `session.name.*` / `error.*`, keyed by
+DOMAIN not by screen. Assembly in `client/js/labels/recent-session.js`, the
+design's step 3. Eight files added to `PORTED_FILES`. Pseudo-locale coverage over
+the ported surface: 32 sentences, every one `isPseudo` true, every count exactly
+as expected, plus a case asserting a user's own TITLE is NOT pseudo-localised
+because it is data, and one asserting a clean resume still says nothing.
+
+**ONE USER-VISIBLE WORDING CHANGE, flagged rather than slipped in.** The
+attention block's title read `CANNOT DETERMINE recent sessions`; the catalog's
+own voice guard refuses a leading capital, so it is now
+`recent sessions CANNOT BE DETERMINED` (shout kept, sentence starts lowercase)
+and the fallback detail became its own distinct message,
+`the last read of the stored session records did not answer`. Nothing else the
+user reads changed. `ENDED` and `ARCHIVED` are lowercase in the catalog and
+uppercased by `text-transform` in `.recent-session-lifecycle` /
+`.recent-session-deleted`, so those pixels are identical.
+
+**Tests: 147 -> 302 vitest (+155), 200 -> 196 node files, 0 failures.**
+Ported and node originals DELETED: `test_recent_sessions`,
+`test_recent_deleted_sessions`, `test_recent_deleted_visibility`,
+`test_no_delete_wording` (the vitest version is a strict SUPERSET - it also scans
+the catalog and `web/src/**`, which is where the copy actually went).
+TRIMMED, keeping everything not about this slice: `test_recent_section_collapse`
+(one repaint case out, four `initSectionDisclosures` cases stay),
+`test_session_restart_identity` (17 out, 3 tree cases stay),
+`test_ended_sessions_visibility` (2 out, 12 stay),
+`test_session_lists_are_disjoint` (7 out, 7 stay).
+NOT touched: `test_row_action_confirm_names_label`. It targets
+`_handleSessionRowAction`, which is slice 5 and has not moved, so deleting it
+would remove a guard for live code.
+
+**Browser proof**, scratch server on 127.0.0.1:5057 importing
+`src.security_headers` via `scripts/lib_csp_static_server.py`, real production
+CSP served (`default-src 'self'; script-src 'self' + the harness's own three
+inline hashes; frame-ancestors 'none'`). Never pointed at the live install and no
+real session touched. Measured: `ok` renders 3 rows with restart gated to the two
+`stopped` ones and `archive` (not delete) on all three; the show-archived toggle
+put `true` on the wire, persisted `1` under the legacy key
+`cloude.launchpad.deletedSessionsVisible`, and the archived row rendered AND
+survived sharing its tmux name `cloude_Mac` with a live session - the six-rows-
+one-shown regression, held in a browser; `probe_unavailable`, `never_probed` and
+a thrown fetch each rendered the notice with ZERO rows and `cannot determine` in
+the count; empty with the filter on kept the section up, empty with it off hid it.
+CSP violations: exactly ONE, the deliberate off-origin `<img>` negative control
+(`img-src`, `https://example.com/...`), which is also what proves the collector
+was live. Zero from the slice. Console: only the two expected warnings from the
+deliberate throw.
+
+Open items, stated rather than discovered:
+- [ ] The vitest suite still cannot MOUNT a component (node environment, and
+  jsdom would be a new dev dependency). The four-branch template is proven in the
+  real browser above and nowhere else. Slice 1's open item is therefore still
+  open, now with a browser measurement behind it rather than nothing.
+- [ ] Cross-surface agreement between RECENT and the project tree is UNGUARDED
+  until slice 4. The case that watched them name the same ended session lived in
+  `test_ended_sessions_visibility` and could not survive the two surfaces living
+  in two trees; each half is asserted separately now. Said out loud because that
+  is exactly how they drifted apart the first time.
+- [ ] The live-sessions list still comes from the legacy `window.Launchpad`
+  singleton, mirrored into component state on each refresh. Slice 3 moves it into
+  the store and that mirror goes.
+- [ ] `_deriveRunningSessionDisplayName` is still legacy (slice 5) and reached
+  through the host. When it is absent the name ladder falls to the working
+  directory rather than guessing at the mapping.
+
+## 2026-09-10 - svelte slice 3, the session data layer into one store (issue #70, PR #71)
+
+Branched off `feat/svelte-slice-2` (`722e903`) onto `feat/svelte-slice-3`.
+The highest-risk slice of the seven, per the carve plan, and it is done.
+
+**787 legacy lines out of `client/js/launchpad.js`** (5726 -> 5162 after the
+sequencers went back in). Thirteen methods: `loadProjects`,
+`loadProjectAuthority`, `loadProjectPresence`, `loadRunningSessions`,
+`loadSessionAttribution`, `_buildWorkStampIndex`, `_resolveSessionAttribution`,
+`_noteListingUnknown`, `_listingReasonFromError`, `_listingDetailFromError`,
+`_sortRunningSessionsByWork`, `_workStampFor`, `_startRunningSessionsPoller`,
+plus the twelve constructor fields they wrote and one misfiled docstring.
+
+**The store is the only data owner now.** `web/src/lib/sessions/store.svelte.ts`
+(487 lines) holds fourteen `$state` fields behind accessors; the pure rules live
+next door in `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`,
+`env.ts` and `types.ts`, each under the 500-line guideline. `launchpad.js` keeps
+four thin sequencers (`loadProjects`, `loadRunningSessions`,
+`loadSessionAttribution`, `_startRunningSessionsPoller`) that hold nothing and
+only order the still-legacy render calls, plus `stopRunningSessionsPoller`, which
+is new. The twelve fields became accessor properties on `Launchpad.prototype`
+with NO fallback object behind them, so a missing bundle throws by name rather
+than quietly becoming a second data owner.
+
+**Four mutations, all measured red, all reverted byte-identical (sha256 checked):**
+
+| mutation | named tests that failed |
+|---|---|
+| `agent_wrapper_label` given a `\|\|` default | 3 in `running.test.ts` |
+| the epoch-keyed rung disabled so the join is always name-only | `attribution.test.ts` + `store.test.ts` |
+| a failed records fetch latching `listingOk` true | 2 in `store.test.ts`, plus the node tree test |
+| `clearInterval` removed from `stop()` | 3 in `poller.test.ts` |
+
+Mutation 3 initially went red only in vitest, because no test walked the whole
+route from a rejected fetch to a rendered group. A case was added to
+`test_session_attribution_join.node.mjs` that starts at the endpoint refusing and
+asserts the row lands in `needsAttention` and NOT in `noProject`; the mutation
+then goes red at both levels. That gap is the reason the mutations are run.
+
+**Counts.** vitest 302 -> 458 (5 new suites, 156 cases). Node suite 196 files,
+0 failures, unchanged from baseline. `svelte-check` 0 errors over 311 files.
+`scan_secrets.py` exit 0. `tests/test_no_remote_assets.py` 15 passed.
+
+**i18n.** 8 keys added under `session.listing.*` and `project.list.*`, assembled
+by the new `client/js/labels/session-listing.js`. 8 files added to `PORTED_FILES`.
+Pseudo-locale: 8 of 8 assembled sentences fully bracketed, with a negative
+control asserting a SERVER-supplied `listing_detail` is passed through and is NOT
+localised - server strings stay out of scope this round, deliberately, and the
+guard is capable of telling the difference. A reason token (`http_500`,
+`tmux_missing`) is an identifier and stays untranslated.
+
+**Browser proof**, against a throwaway server importing `src.security_headers`,
+never the live install and never the owner's sessions. Home up: 3 ticks in 11.5s.
+`#launchpad-screen` off `.active`: ZERO requests, interval still alive. Back to
+home: 3 ticks again with nothing restarting it - which is what makes the zero
+evidence rather than a coincidence. After `stopSessionPolling()`: zero, and
+`polling` false. CSP: exactly 2 violations, both planted controls (`img-src` and
+`script-src-elem`), zero from the bundle.
+
+Two instrument bugs were found and fixed while measuring, and both would have
+produced a false green: a control planted in the HTML fires before a DEFERRED
+module listener exists and is silently missed, so the controls are planted by the
+listener's own module now; and Chrome throttles `setInterval` in a hidden tab, so
+a phase measured while backgrounded reported one tick per 16s. Every phase
+records its own `visibilityState` for that reason.
+
+Findings left alone, on purpose:
+- [ ] The live-only merge branch never sets `status_source`, so a session that
+  reaches the launchpad ONLY through `/sessions/list` carries no status
+  provenance and its tooltip says nothing. It looks like a missing line. Pinned
+  by a test rather than fixed: slice 3 is a MOVE, and fixing a behaviour while
+  relocating it makes a regression impossible to bisect. Slice 5 owns that
+  tooltip.
+- [ ] The name-keyed `.find(s => s.name === tmuxName)` in the merge is the same
+  known-bad lookup that stood in `launchpad.js`, moved rather than fixed, and it
+  is re-registered in `test_no_name_keyed_session_row_lookup`. Fixing it needs the
+  server to ship a durable key on the live row that the attachable row also
+  carries.
+- [ ] `_archivedVisible` is still a real field on `Launchpad`, because the two
+  toggles that write it are still in that file. It moves with the tree prefs in
+  slice 4.
+- [ ] There is still no caller for `stopRunningSessionsPoller` in the legacy
+  shell, because the legacy shell has no teardown. Slice 7's shell is what will
+  use it; until then the store owns a timer that CAN be stopped, which is the
+  half that was missing.
+
+Protocol notes for the next slice:
+- The name-key guard now scans `web/src` as well as `client/js`, and SKIPS
+  `client/dist`. The emitted bundle is generated and minified, so an allowlist
+  keyed on its text would churn on every build; its source is scanned instead.
+  Without that change the guard would have gone quietly green on the day the code
+  it guards moved house.
+- `tests/helpers/cloude-web-sandbox.mjs` is how a node harness gets the store.
+  Nineteen harnesses use it. It supplies the timing globals Svelte's runtime
+  needs (`queueMicrotask` and friends) and the locale ladder's two reads
+  (`navigator`, `localStorage`), because a vm context carries none of them and
+  the failures surface as a ReferenceError from inside minified Svelte.
+
+## 2026-09-10 - svelte slice 4: the project tree, and the render guard it replaces
+
+Issue #76, PR #77 (Adoom666/CloudeCodeDev). Branch `feat/svelte-slice-4` off
+slice 3's `97476a1`.
+
+DONE:
+- [x] The whole project tree out of `client/js/launchpad.js` and into
+  `web/src/lib/launchpad/`: the join (`project-groups.ts`), the per-project
+  decisions (`project-node.ts`), the two three-outcome ladders
+  (`project-chrome.ts`), the fold state (`tree-collapse.svelte.ts`), the
+  navigation seam (`project-tree-host.ts`), the one outside control
+  (`project-chrome-control.ts`) and eight components. `launchpad.js` went from
+  5,106 to 4,093 lines; `renderProjectList()` is one call to
+  `CloudeWeb.launchpad.mountProjectTree()`.
+- [x] `client/js/project-list-render-guard.js` DELETED (220 lines), with
+  `_lastProjectListSig`, `_collapsedProjectNodes`, `_archivedVisible` and the two
+  archived-pref accessors. Its `<script>` tag in `client/index.html` went with it.
+- [x] `mountPanel` gained `ensurePanel`, which is what stops the 5s tick
+  unmounting and rebuilding the tree it just deleted the repaint of.
+- [x] 44 catalog keys under `project.*` and `session.*`, assembled in
+  `client/js/labels/project-tree.js`. Pseudo-locale coverage extended over all 16
+  new files; the seven NEEDS ATTENTION reasons are asserted as catalog keys.
+- [x] Vitest 458 -> 779. Node suite 196 -> 187 files, 0 failures.
+
+THE GUARD'S THREE FUNCTIONS HAD THREE UNRELATED CONSUMERS, and only one of them
+was the project tree. `decide` died with the repaint. `shouldPoll` moved to
+`web/src/lib/sessions/poller.ts`, beside the tick it gates. `isBusy` moved to
+`client/js/session-list-busy-guard.js`, because `renderRunningSessions` still
+writes `innerHTML` and a poll landing under an open rename input still destroys
+it. Slice 5 deletes that file too.
+
+MEASURED, in a real DOM (jsdom) driving the compiled component through the real
+store with a real `MutationObserver`, 9 projects x 5 sessions = 442 elements:
+- 12 ticks, NOTHING changing: 0 records, 0 nodes. The old guard already achieved
+  this and the test asserts it so nobody can sell the slice on it.
+- 12 ticks, EXACTLY ONE status changing: 5 records, 0 nodes. Five because the LED
+  encodes its state in five attributes on ONE element (`class`, `data-inner`,
+  `data-outer`, `title`, `aria-label`). The plan's "under 5" was an estimate; five
+  is the measured floor and the test pins it so a sixth write fails.
+- The legacy mechanism on the same fixture: 1 record carrying 916 nodes.
+- The busy case the guard could not do: a status change lands with a row menu
+  open, the dot updates and the menu is still the same node.
+
+STILL OPEN:
+- [ ] THE REAL-CHROME RUN IS NOT DONE, and it is blocked on a human step. Two
+  scratch servers were stood up (the slice-4 build and a slice-3 baseline, each
+  with its own state dir and `.env`), the slice-4 one loaded correctly in Chrome
+  once - `mountProjectTree` present, the old guard absent, 9 nodes / 45 rows / 442
+  elements painted from the real bundle, matching jsdom's 443 - and then the
+  extension session was lost. Every origin after that (`127.0.0.1:5011`,
+  `:8010`, `localhost:8010`) is refused by the browser before a request leaves
+  it, while `curl` gets 200 and `https://example.com` loads fine, so it is a
+  per-origin extension permission and not the app. Granting the Claude-in-Chrome
+  extension access to the scratch origin is the missing step.
+- [ ] `scripts/ci/mutate-restart-identity-and-content-dedupe.sh` has dead
+  mutations. Its RECENT ones went stale in slice 2 and its TREE ones went stale
+  here; they now report `cannot_determine` rather than a false `killed`. Rebuilding
+  it against the vitest suite is its own job.
+- [ ] `_renderFamilyPillHtml` still exists in `launchpad.js` for the running-row
+  list. `AgentFamilyPill.svelte` is the same rules as a component and
+  `agent-family-pill.test.ts` holds the two to the same verdicts until slice 5
+  deletes the legacy copy.
+- [ ] `StatusLed.svelte` gained a `transport` prop. The legacy tree and running
+  rows both passed `transport` to `SessionStatusUI.dotHtml` and the component
+  silently dropped it, so a disconnected session painted a confident dot. Slice 5
+  should check the running row passes it too.
+- [ ] The fold is still in-memory only, exactly as the legacy field was. A
+  reload opens every project. Persisting it would be a new behaviour and needs
+  its own decision.
+
+Protocol notes for the next slice:
+- `vitest.config.ts` now carries `resolve.conditions: ['browser']`. Without it
+  `import { mount } from 'svelte'` resolves to the SSR build, whose `mount` exists
+  only to throw `lifecycle_function_unavailable`. It reads as a broken test
+  environment and is a resolution setting.
+- A `MutationObserver`'s queue is drained by DELIVERY as well as by
+  `takeRecords()`. Any `await` at all lets the callback run and empties it, so a
+  test that awaits and then calls `takeRecords()` reads ZERO and looks like a
+  perfect score. Collect in the callback. It cost three failing tests to find.
+- Count mutation NODES with their descendants. A record names only the DIRECT
+  children that moved, so an `innerHTML` write over nine project nodes reports
+  nine added and nine removed rather than the 916 they carry.
+- The i18n source guard now strips `<!-- -->` comments too. A `.svelte` header
+  comment that QUOTES the copy it explains was being reported as untranslated
+  copy. A multi-class string literal reads to it as two words, so slice 4 uses
+  Svelte's array `class={['a', 'b']}` form.
+- `jsdom` is a new devDependency in `web/`, and it is there for one reason: the
+  slice's whole claim is a mutation count, and counting real DOM mutations against
+  a real mounted component is the only measurement of it that means anything.
+
+### 2026-09-10 later - the real-browser run, and the number it corrected
+
+Brave, `127.0.0.1:5057` (the port slice 2 used; every NEW origin I invented -
+`5011`, `8010`, `localhost:8010` - was refused by the browser before a request
+left it, which is a per-origin extension permission and not the app). Same
+fixture as the Vitest harness: 9 projects, 45 rows, 442 elements against
+jsdom's 443. `visibilityState` was `hidden` for every phase and is recorded
+with every number below.
+
+| measurement | real browser | vitest DOM | agrees |
+|---|---|---|---|
+| 12 ticks, nothing changing | **6048 records / 16128 nodes** | 0 / 0 | NO |
+| one status change | **5 attribute records on one dot** | 5 / 0 nodes | yes |
+| legacy `innerHTML` rebuild | **1 record / 918 nodes** | 1 / 916 | yes |
+| busy case (menu open) | **dot updated, same node, menu intact** | same | yes |
+
+**THE BROWSER NUMBER IS AUTHORITATIVE FOR THE REAL TICK PATH, and the
+disagreement is a defect this slice introduced rather than an instrument
+artefact.** 6048 over 12 ticks is 504 records and 1344 nodes PER TICK, every one
+a `childList` record on `.project-node__sessions`, with ZERO attribute records -
+so it is not the data changing. Measured about it:
+
+- the rows are MOVED, not rebuilt: the row element, its `.status-dot` and its
+  parent are all the same node after a tick, still connected, still 45 of them.
+- the row ORDER is identical across three consecutive ticks, in the DOM and in
+  the store.
+- EVERY individual store write costs 0: `runningSessions`, `sessionRecords`,
+  `workStampByName`, `projects`, `projectPresence`, the three attribution
+  structures, and all seven of `loadSessionAttribution`'s assignments replayed
+  by hand - synchronously, after a microtask, and after a real fetch.
+- ONLY the real `loadSessionAttribution()` reproduces it: 432 records / 1152
+  nodes standalone. So the trigger is inside `loadAttribution` and it is NOT the
+  seven assignments it ends with. NOT ROOT-CAUSED.
+
+WHY THE VITEST TEST CANNOT SEE IT, which is the part to fix first:
+`tree-harness.ts` writes the store's fields directly through `applyFixture`. It
+never calls `loadRunningSessions` or `loadSessionAttribution`, so it measures the
+tree's response to a DATA CHANGE and not the tick the app actually runs. A
+harness that drove the real load path would have failed on the first run.
+`mutation-count.test.ts`'s "12 ticks, nothing changing: 0 records" is TRUE OF
+THE ASSERTION IT MAKES and NOT true of a real poll tick; the file should say so
+until this is closed.
+
+- [ ] Root-cause the per-tick `childList` churn on `.project-node__sessions`
+  and drive `mutation-count.test.ts` through `loadRunningSessions` rather than
+  through `applyFixture`. Until then the committed "0 records on an unchanged
+  tick" figure describes the harness, not the app.
+- [ ] The 12-tick loop could not be completed in a backgrounded tab: after a few
+  minutes hidden, the browser throttles the inter-tick timer far enough that the
+  run does not finish. The real 5s poller ticked ONCE in 60 seconds, measured.
+  Every figure above was therefore driven by calling the tick's own work
+  directly, which is a deviation from "let the poller drive it" and is stated
+  rather than hidden. Foregrounding the tab needs either the owner or macOS
+  automation permission for AppleScript, which hung when tried.
+
+### 2026-09-10 later still - the churn, root-caused and fixed
+
+ROOT CAUSE, in `web/src/lib/sessions/store.svelte.ts` (SLICE 3's file, not a
+component). `loadRunningSessions` published the row set TWICE:
+
+    runningSessions = rows;                       // fetch order
+    await this.loadSessionAttribution(t);         // <- an await
+    runningSessions = sortRunningSessionsByWork(...);   // sort order
+
+Two assignments either side of an await are two separate effect flushes, so
+every subscriber saw the unsorted order and then the sorted one. The fetch
+order is ascending by creation epoch and `sortRunningSessionsByWork` ends
+`(b.created_at_epoch || 0) - (a.created_at_epoch || 0)`, i.e. DESCENDING - so
+the two orders are exact opposites and a keyed `{#each}` moved all 45 rows to
+match the intermediate and then moved them all back, every tick.
+
+THAT EXPLAINS EVERY MEASUREMENT and nothing else did: rows MOVED not rebuilt
+(identity survives a move), final order stable (it ends on the sorted one),
+`childList` only on `.project-node__sessions`, zero attribute records, and
+every individual store write costing 0 (a single synchronous write is one
+flush; only an await between two of them splits it).
+
+THE LEGACY RENDERER COULD NOT SEE IT. It painted once, at the end, from
+whatever the fields held - so an intermediate state was free. The moment a
+subscription replaced the repaint, it stopped being free. This is the general
+shape to watch for in slices 5 to 7: **anything that publishes an intermediate
+state was invisible before and is not invisible now.**
+
+FIX: one assignment, already sorted, after the await. Attribution still runs
+BEFORE the sort, which was the load-bearing ordering; the rows just stay in a
+local until then. Six lines.
+
+RE-MEASURED, Brave, `127.0.0.1:5057`, one session, `visibilityState: hidden`
+recorded on every phase, 9 projects / 45 rows / 442 elements:
+
+| measurement | before fix | after fix | vitest |
+|---|---|---|---|
+| 12 ticks, nothing changing | 6048 rec / 16128 nodes | **0 / 0** | 0 / 0 |
+| 12 ticks, one status change | (buried in the churn) | **5 records, 0 nodes** | 5 / 0 |
+| legacy `innerHTML` rebuild | 1 / 918 | **1 / 918** | 1 / 916 |
+| busy case, menu open | passed | **passed** | passed |
+
+The five are `class`, `data-inner`, `data-outer`, `title`, `aria-label` on ONE
+`status-dot`, `sameNode: true`. The busy case: dot `idle` to `working` with the
+menu open, dot is the same node, menu still connected, still in the tree, still
+in the same row, text intact. **Browser and Vitest now agree on all four.**
+
+HARNESS GAP CLOSED. `tree-harness.ts` gained `fixtureHost()` and `fleet()`, a
+real `SessionHost` answering a fixed fleet IN FETCH ORDER, so
+`store-tick-mutations.test.ts` drives `sessionStore.loadRunningSessions()` - the
+actual tick - instead of writing store fields. The fixture's fetch order and
+display order DISAGREE on purpose: one whose orders happened to match would
+pass whether the defect was there or not. `mutation-count.test.ts` keeps its
+narrower job (what the TREE does when its data changes) and its header now says
+which file to add to when the question is "what does a tick cost".
+
+MUTATION-PROVEN: reintroducing `runningSessions = rows;` turns
+`store-tick-mutations.test.ts` red on 3 of 8 - 5184 records / 13824 nodes over
+12 ticks, the changed-status case reading 5189 instead of 5, and the source rule
+finding two assignments instead of one. Reverted byte-identical.
+
+- [x] The per-tick churn is closed, and the committed "0 records on an
+  unchanged tick" figure is now true of the app and not only of the harness.
+- [ ] Slice 3's own tests did not catch this and still do not assert it:
+  `store.test.ts` checks WHAT `loadRunningSessions` ends up holding, never how
+  many times it publishes on the way there. The new source-rule test lives in
+  slice 4's directory because that is where the subscriber is; if slice 5 adds a
+  second subscriber it belongs somewhere shared.
+
+---
+
+## 2026-09-10 - SLICE 5, THE RUNNING SESSIONS LIST (issue #90, PR #91)
+
+Branched off `feat/svelte-slice-4` at `e5662d8`. The home screen's flat list of
+live sessions is `web/src/lib/launchpad/RunningSessions.svelte` now.
+
+`client/js/launchpad.js` 4,093 to 3,023 lines, **1,032 gone**: the fifteen
+methods the plan named, `_lastRunningSig`, and two orphan docblocks slice 4 left
+behind when it deleted the tree-row renderers they described. Two whole files
+deleted with their script tags: `client/js/session-list-busy-guard.js` (its own
+header said slice 5 deletes it) and `client/js/launchpad-wrapper-pill.js` (one
+caller, so it moved rather than stayed). `_deriveRunningSessionDisplayName`
+survives as a four-line shim because `app.js:1403` derives a deep-link slug from
+it; the rule itself is `web/src/lib/sessions/session-label.ts`.
+
+### The double-publish audit, and what it found
+
+Slice 4's defect was the ROW SET published twice per tick. Audited every path
+this slice touches for the same shape and found it ONE FIELD OVER:
+`loadRunningSessions` opened with `runningSessionsListing = emptyListing()` and
+assigned the real verdict after the same await. The later assignment is
+UNCONDITIONAL, so the reset changed nothing about the answer and everything
+about how many times it was published - and this list is the ONLY surface that
+renders that verdict, so nothing before it could have caught it. On a screen
+whose probe is failing, every 5s tick removed the NEEDS ATTENTION block and put
+it back and flipped the heading between a number and "could not be determined".
+Fixed; `running-tick-mutations.test.ts` holds it as a source-shape assertion AND
+as a measured count, and re-asserts slice 4's row-set rule from this surface
+because two subscribers now depend on it.
+
+Nothing else published twice. The chrome writes (`setCount`,
+`setSectionVisible`) are `$effect`s over `$derived` values, so an unchanged tick
+recomputes and writes nothing.
+
+### Measured in Brave, production CSP, 127.0.0.1:5057
+
+`tests/manual/running-sessions-mutation-harness.html`, served by
+`scripts/lib_csp_static_server.py`'s handler, 45 rows over 9 projects, driven
+through the real `loadRunningSessions`.
+
+| window | records | nodes |
+|---|---|---|
+| 12 idle ticks | **0** | **0** |
+| 12 ticks, ONE status change | **5**, all attributes | **0** |
+| 12 ticks, failing probe | **0** | **0** |
+| busy: rename editor open + status change | **10**, all attributes | **0** |
+| NEGATIVE CONTROL: one legacy `innerHTML` rebuild | 1 | **2,439** |
+| NEGATIVE CONTROL: twelve of them | 12 | **29,256** |
+
+The five are the LED's own `class`, `data-inner`, `data-outer`, `title`,
+`aria-label` on ONE `status-dot`. Busy case: the editor kept its node and its
+half-typed text AND the dot updated, which the guard could not do - it skipped
+the paint. Menu case: with `SessionRowMenuOpen.isOpen()` forced true (the
+guard's other trigger, and a GLOBAL one, so a sidebar menu froze this list too)
+the dot still moved, because nothing consults that predicate any more.
+
+CSP: exactly one violation in every run, the deliberate off-origin image, and it
+is planted from the listener's own script rather than the markup - an `<img>` in
+the HTML is fetched during parse, before a deferred listener exists, so its
+violation is never collected and the control silently proves nothing.
+
+TWO CAVEATS, STATED RATHER THAN BURIED. The tab reported
+`visibilityState: hidden` on every phase with `hasFocus()` true, which is an
+occluded window rather than a backgrounded tab; a microtask-only control using
+no timer at all returned identical counts, so the throttle is not in the
+numbers. And the `innerHTML` negative control REPLACES the nodes Svelte owns, so
+every reading after it is about a detached tree - it must run last, and the
+harness header now says so. That cost a round: three post-control readings
+looked like a component that had stopped updating.
+
+### Mutations
+
+| # | mutation | result |
+|---|---|---|
+| 1 | publish the listing verdict twice per tick | RED, 2 tests (shape + measured count) |
+| 2 | inline the LED markup instead of `ledStateFor` | RED, 5 tests across 4 files |
+| 3 | hardcode mark unread instead of the plugin bridge | RED, 3 tests |
+| 4 | drop restart from a live row | **GREEN - the test was wrong** |
+
+All four reverted byte-identical (sha256 checked). Mutation 4 is the one worth
+keeping: it went through `browserRunningHost.actionsFor`, and nothing tested
+that function. The component tests drive a RECORDING host and the parity test
+drives the legacy module DIRECTLY, so neither crossed the seam between them.
+`web/src/lib/launchpad/running-host.test.ts` now hangs the real legacy modules
+on the real `window` under jsdom and asserts the host answers exactly what the
+module answers, id for id and in order; mutation 4 re-applied turns it red on
+two cases. A pass-through needs a test of its own.
+
+### Tests
+
+Vitest 787 to **995**, 37 files. Node 187 files / 0 failures to **180 / 0**.
+`svelte-check --threshold error` 0 errors and 0 warnings.
+
+Seven node files deleted, their assertions ported to behaviour tests:
+`test_agent_family_pill`, `test_launchpad_wrapper_pill`,
+`test_launchpad_rename_edits_label`, `test_running_sessions_unknown`,
+`test_session_label_rendering`, `test_dead_pane_not_running`,
+`test_row_action_confirm_names_label`. Nine more trimmed at the launchpad case
+and pointed at where it went.
+
+### i18n
+
+43 keys, all under `session.*`, extending rather than duplicating -
+`session.badge.tmux`, `session.badge.external` and the family-pill keys are
+reused from slice 4. `client/js/labels/running-session.js` is the assembler.
+Four buckets for the relative age and a plural set for the count, both through
+`Intl`; no zero key, because the section HIDES on a measured zero and copy no
+translator can see in context is worse than none.
+
+The pseudo-locale coverage guard caught TWO literals the eye did not:
+`'the api client is not loaded'` thrown from the host (a thrown sentence is
+still a sentence, and `reasonFrom` prints it on screen - it is
+`ApiUnavailableError` with a catalog message now) and a class list that its
+heuristic reads as prose (the array form fixes it). 12 files appended to
+`PORTED_FILES`.
+
+`.running-sessions-attention__head` gained `text-transform: uppercase`, the same
+move slice 4 made for `.badge`: casing is the stylesheet's job so the catalog
+can keep the voice rule.
+
+- [x] Slice 5 shipped, measured in a real browser, four mutations run.
+- [x] The slice 3 follow-up above ("if slice 5 adds a second subscriber the
+  source rule belongs somewhere shared") is answered the cheap way for now: the
+  rule is asserted in BOTH surfaces' tick tests, over the same method. A shared
+  file would be one more thing to find; two assertions over one function are
+  cheaper than one assertion nobody can locate.
+- [ ] `SessionStatusUI.markUnreadHtml` now has NO caller. It is kept
+  deliberately as the anchor both parity tests compare the catalog against, and
+  that is written into the code. If a later slice wants it gone, the words have
+  to move somewhere a test can still reach independently.
+- [ ] The four `surface === 'launchpad'` branches in
+  `client/js/session-row-menu-actions.js` were never reachable - nothing passes
+  that surface, which IS issue #66 - and two of them named methods this slice
+  deleted. `runClose` and `runRename` now say so instead of calling a dead name;
+  `repaintSurface` was repointed at the store. Whoever takes #66 wires the menu
+  to the Svelte row, not to `window.Launchpad`.
+- [ ] `running-host.ts::resolveSessionId` is still a name-keyed round trip
+  (`x.tmux_session === tmuxName`), moved from `launchpad.js` unchanged. It is
+  NOT registered in `test_no_name_keyed_session_row_lookup.node.mjs` because
+  that scanner's pattern is single-line and this call is written across
+  several - registering it would be a dead entry failing the test the other
+  way. Named in that file's prose instead. The real fix is a durable key on the
+  live row, which is its own change.
+
+## 2026-09-10 - svelte slice 6: the modals and the create flows (#98, PR #99)
+
+`client/js/launchpad.js` 3,023 -> 1,875 lines: 1,219 lines removed and 71
+added back as the two forwards and the comments explaining them. Plus
+`client/js/project-create-folder.js` (312) deleted outright, so 1,531 lines of
+legacy are gone. NOTE the commit message for `1f98e2d` says "3,023 to 1,866" -
+that figure was measured before the last two shim comments landed and
+understates the file by nine lines. The number here is the measured one. Two survive as one-line forwards because their callers are
+slice 7's: `showConfirmModal` (providers.js:476) and `createConsoleSession`
+(terminal-commands-panel.js:256). `_escapeHtml` stays for providers.js:83 and
+now has NO caller in its own file; the three modal-local copies and the one
+injected into `folder-picker-modal.js` are gone, so that picker runs on its
+own default escaper for the first time.
+
+THE FIVE FOLDER RULES, each held and tested by name.
+1. The folder step cannot be skipped. `create-flow.ts` asks provider, name,
+   FOLDER, then creates, and a cancel at any step creates NOTHING. The
+   generated-id fallback in `SessionManager.create_session` is untouched and
+   stays for an old client.
+2. `realpath`, never `expanduser`. Unchanged on the server, where it belongs.
+3. Containment is component-wise, never `str.startswith`. Also unchanged.
+4. `project_parent_dir`, never `working_dir`. The clone, the console and
+   open-from-folder still post `working_dir` with a folder from anywhere.
+5. A name is REFUSED, never rewritten. `validateName` returns a CODE and
+   `client/js/labels/project-create.js` renders the sentence, so the rule and
+   the copy are two things and the en values stay byte-identical to
+   `src/core/project_directory.py`.
+
+Four mutations, all RED, all reverted byte-identical (sha256 compared, no
+`git checkout --`): expanduser for realpath (2 python tests), startswith
+containment (1), sanitise a slash (8 vitest), skip the folder step (4 vitest).
+None came back green.
+
+The intermediate-publish audit found NONE on any path this slice touches.
+`loadProjects`, `loadProjectPresence` and `loadProjectAuthority` each assign
+once, after their await. The two in-flight pairs in this slice (`placeholder`
+loading -> unavailable, and the clone's `status` busy -> error) are a state
+machine rather than a clear-and-restore, which is the shape slices 4 and 5
+each found.
+
+`openProjectFromFolder` was NOT in the slice plan and moved anyway: it is the
+only caller of `saveProjectWithUniqueName` and `showFolderPickerModal`, both of
+which were, so leaving it would have left one method reaching across the seam
+four times for a flow whose every step had gone.
+
+- [x] Slice 6 shipped: 1236 vitest (was 995), 176 node files 0 failures (was
+  180; four ported and deleted), svelte-check 0 errors 0 warnings.
+- [x] Browser proof under the real CSP on 127.0.0.1:5057, via
+  `tests/manual/create-flow-modal-harness.html`: the create flow asks for a
+  folder and posts `project_parent_dir` with no `working_dir` and no `ses_`
+  shape; `punch/list test` is refused with a visible sentence and comes back
+  still typed; the clone modal collects its parent and sends it as `parentDir`;
+  cancelling the folder step performs no write at all.
+- [ ] EVERY BROWSER PHASE MEASURED `visibilityState: hidden` while
+  `document.hasFocus()` was true - the extension drives a Brave window that is
+  not the foreground OS window. The flows all completed anyway, which is the
+  harder case given gotcha 9, but nothing here is a measurement of a PAINTED
+  modal. A repeat with a foreground window would be worth one run.
+- [ ] `project.create.console.description` ("console session") goes through the
+  catalog and is then STORED as the console project's description. A locale
+  switch does not retranslate a description already written. That is the
+  server-strings gap `.claude/notes/i18n-design.md` section 7 names, and this
+  is the first place in the client that writes a translated string into
+  durable data.
+- [ ] `cloneFailure` no longer renders the word "Error" for an Error with an
+  empty message. The hand-written mapper did (`(e && e.message) || e` falls
+  through to the object), and the pseudo-locale case is what caught it.
+- [ ] The i18n source guard learned two things it did not know: `class="a b"`
+  is a stylesheet contract and not copy, and a short list of SERVER error
+  fragments (`already exists`, `not authenticated`, ...) are matched but never
+  rendered. Both are asserted by negative controls; `title`, `aria-label` and
+  `placeholder` are still scanned.
+
+## 2026-09-10 - svelte slice 7: the shell, the shim, and the end of launchpad.js
+
+Issue #102, draft PR #103 on `Adoom666/CloudeCodeDev`. Branch
+`feat/svelte-slice-7`, off `feat/svelte-slice-6` at `1da6528`.
+
+**DONE. `client/js/launchpad.js` IS DELETED.** The last 1,875 lines moved:
+`renderLaunchpadUI`'s 363-line template string, the six FAB methods,
+`bindHeaderHelpToggle`, `initSectionDisclosures` / `setSectionExpanded` and the
+collapsed-section map, `renderHomeBarVersion`, `wireServerControls`,
+`updateStatus`, `showError`, `_explainRefusedProject`, and the eight navigation
+methods (`openProjectByName`, `selectProject`, `detachAndOpenProject`,
+`connectToExistingSession`, `detachAndCreateNew`, `_handleAttachRunningSession`,
+`_returnToActiveRunningSession`, `_findRunningSessionBySlug`). Sixteen new
+modules under `web/src/lib/launchpad/`, plus `client/js/labels/home-screen.js`
+and 62 catalog keys. The script tag left `client/index.html`.
+
+**`window.Launchpad` is eight members and MERGES rather than assigns.**
+`launchpadScreen`, `init`, `loadProjects`, `loadRunningSessions`,
+`openProjectByName`, `_deriveRunningSessionDisplayName`, `sessionRecords`,
+`showProviderModal`. The merge is an ordering fact: the bundle is a deferred
+module and `providers.js` publishes the launch picker onto that object earlier,
+from a classic script. The plan predicted twelve members; the three it expected
+to survive were resolved at their call sites instead - `providers.js` got its
+own escaper and calls `App.showConfirmModal` directly, and
+`terminal-commands-panel.js` calls `window.CloudeWeb.launchpad`.
+
+**The four load-bearing ids re-derived and unchanged**: `app.js:896`
+(`.active` on `#launchpad-screen`), `app.js:358` (re-parent `#statusText` into
+`#home-bar-status`), `app.js:381` (`#home-bar-status-text`),
+`globalAudioToggle.js:300` (sibling insert into `.home-bar`). Not drifted at
+all. Anchors enumerated in `home-anchors.ts`; the re-parenting is left alone,
+no message bus.
+
+**Repaint audit: the shell holds no reactive state and paints once.** The one
+change is the refetch path - `loadProjects()` used to REMOUNT the attribution
+card and the RECENT list; both now export `refresh()` on their mount handle and
+`panels.ts::refreshLaunchpadPanels` calls it.
+
+**Four mutations, all red, all reverted byte-identically** (verified with
+`git diff --stat` empty, never `git checkout --`): removing
+`#home-bar-status-text`; letting a deep-link miss fall through to
+`selectProject`; painting a theme in `onMount`; dropping `openProjectByName`
+from the shim.
+
+**Slice 6's finding closed: `project.create.console.description` is gone.** It
+was a catalog sentence STORED in `config.json`, so a locale change could never
+retranslate it. The console project is created with no description, which is
+what an adopted session's row has always carried.
+
+**Two test-guard refinements, both with negative controls, both worth keeping:**
+`tests/test_no_remote_assets.py` flagged the home bar's `<a href="https://nyedis.ai">`
+once that markup moved into the bundle - an anchor NAVIGATES and loads nothing,
+and the same link in `client/index.html` was never checked, so the bundle rule
+was stricter than the hand-written one by accident. An ordered no-capture branch
+exempts anchors and a new control asserts a `<link href>`, a `<script src>`, an
+import, a Worker, an `@import` and a `url()` all still fail.
+`tests/test_archive_entry_points.node.mjs` matched the bare substring
+`showArchive`, which also matches `showArchived` - the RECENT and PROJECTS
+filter label. Tightened to the CALL.
+
+**Test moves.** Node: 176 to 171 files, 0 failures. Deleted:
+`test_home_screen_mechanics`, `test_deeplink_resolver`, `test_deeplink_fork_name`,
+`test_header_help_and_toggle` (ported to
+`web/src/lib/launchpad/{HomeScreen.behaviour,navigation}.test.ts`) and
+`test_launchpad_create_label` (its last payload is asserted behaviourally in
+`navigation.test.ts`). Sixteen re-pointed at the new `tests/lib-home-source.mjs`.
+`tests/lib-home-mechanics.mjs` lost its `vm` launchpad sandbox.
+Vitest 1,236 to 1,334.
+
+### OPEN, carried out of this slice
+
+- **`web/src/lib/launchpad/navigation.ts:119` is a name-keyed session lookup.**
+  Moved, not introduced: it resolves the listing row whose label the adopt
+  response does not carry, and `tmuxName` is the only handle an adopt is made
+  with. Registered in `tests/test_no_name_keyed_session_row_lookup.node.mjs`
+  with its reason. The fix is the same one `web/src/lib/sessions/running.ts`
+  needs: a durable key on the live row that the attachable row also carries.
+- **The server-strings gap itself is still open.** Slice 7 closed the one place
+  the CLIENT reached it. Stored toast bodies still cannot follow a locale
+  change; that needs a message id plus parameters on the stored record, an
+  `Accept-Language` on the API client and a Python catalog. See
+  `.claude/notes/i18n-design.md` section 7.
+- **The home screen's CSS was not ported and should not be.** Components still
+  use the legacy class names and `client/css/`, which is what keeps all 26
+  themes working with zero theme work. Revisit after the sidebar round, or
+  never.
+- **`#58` and `#66` remain open and unclaimed** (re-checked 2026-09-10, both
+  labelled `blocked`).
+
+### 2026-09-11 - what the browser proof found, and the two fixes it forced
+
+Driven in Brave against a scratch server on 127.0.0.1:5057 that imports
+`src.security_headers`, so the page ran under the real
+`default-src 'self'; script-src 'self'` policy. **Zero CSP violations across
+every phase.** `document.visibilityState` read **`hidden`** with
+`hasFocus: false` in every phase, exactly as slices 5 and 6 measured; no
+foreground window was available, so nothing here is a claim about painted
+pixels - it is a claim about the DOM, the network calls and the CSP.
+
+**FOUND 1: a static placeholder inside a panel container survives forever.**
+`#project-list` shipped `<div class="launchpad-empty">loading projects...</div>`
+in the shell markup, and `mountPanel` APPENDS into its container - it never
+clears what was already there. The legacy `renderProjectList()` cleared it with
+an `innerHTML` write, so the line was on screen above the tree permanently.
+Fixed by emptying the container: `ProjectTree.svelte` renders its own empty
+state, so the placeholder had nothing left to say. The `home.projects.loading`
+key is deleted with it. **The rule this leaves behind: a panel owns its
+container, so no markup goes inside one.**
+
+**FOUND 2: gotcha 9 was ported verbatim and it hung a real tab.** The rejoin's
+pre-fit did `await new Promise(r => requestAnimationFrame(() =>
+requestAnimationFrame(r)))`. A browser does not paint a backgrounded tab, so it
+never runs that tab's rAF callbacks - a deep link resolved in the hidden tab
+froze inside `prepareTerminal` and never returned (the CDP call timed out at
+45s). MOVED, not introduced: `launchpad.js` had the same two lines. Slice 7 is
+the moment it became measurable, because the path is now reachable from a test.
+`nav-host.ts::twoFrames` races the pair against a 250 ms timer, the same number
+and the same rule `client/js/terminal-layout-wait.js` already uses for the
+terminal's own connect: a layout wait may DELAY the work, never cancel it.
+
+**Proven, in order:** a hard reload of `/` publishes the bundle, carries no
+`launchpad.js` script tag, and leaves `window.Launchpad` a PLAIN OBJECT with
+exactly the eight members (so `providers.js`'s earlier write survived the
+merge); `App.showLaunchpad()` renders the whole screen - help disclosure, five
+FAB actions, three sections, four panel containers, both archive filters, the
+home bar; `#statusText` sits inside `#home-bar-status` and `globalAudioBtn` is
+its sibling in `.home-bar`, still true after three navigations away and back;
+a deep link to `slice7demo` resolves to the live row and enters the terminal
+via `getSession` in 1.0s with ZERO `createSession` calls; a deep link to a
+ghost AND a deep link to a name that IS a launcher project with no live session
+behind it both create nothing, show ONE `#deep-link-error` banner naming the
+target, and return to `/` with the launchpad active; mounting the shell issues
+ZERO `applyTheme` calls and each hop issues exactly one, through
+`ThemeNavigation`, returning home to the theme it started on.
+
+### OPEN, and named rather than left silent: the seven manual pixel harnesses
+
+`tests/manual/*.html` are hand-run geometry harnesses that mount the shipped
+markup so a real headless Chromium can MEASURE it - real pixels, which no node
+or vitest assertion can produce. Seven of them carry
+`<script src="../../client/js/launchpad.js">` and that file is gone, so each
+now 404s on that tag:
+
+    attribution-prompt-harness.html        attribution-adopt-harness.html
+    ended-sessions-harness.html            home-mechanics-geometry-harness.html
+    header-icons-and-menu-harness.html     project-tree-geometry-harness.html
+    project-authority-geometry-harness.html
+
+They already load `client/dist/app.js` beside it, so the fix is mechanical and
+small per file: drop the dead tag and call
+`window.CloudeWeb.launchpad.mountHomeScreen({})` where the harness currently
+waits for the legacy shell to render. Their drivers -
+`scripts/verify_home_mechanics.py`, `scripts/verify_header_icons_and_menu.py`
+and the ones under `scripts/archive/verify/` - then need re-running to confirm
+the numbers did not move. NOT done in this slice because it is a second,
+independent verification surface and doing it badly would leave a green pixel
+check measuring nothing, which is worse than a red one. None of the seven is in
+`.github/workflows`, so CI is unaffected.
+
+**And `scripts/ci/mutate_message_archive_flag.py` carries two DEAD mutations**,
+C1 and C2, both keyed on markup (`id="archive-section"`, the `ArchiveEntry.ensure()`
+call) that left the home screen well before slice 7 - they were already
+unfindable, and now the file they name does not exist either. They should be
+retired or re-pointed at whatever still carries that gate. Not in CI either.
 ## 2026-09-10 - GAME PLAN: four tracks, and the dependency that orders them
 
 Owner's direction, verbatim: "come up with a game plan, lets get this all into

@@ -19,6 +19,12 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
+import { glyphSvg } from '../client/js/icons/glyphs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -107,8 +113,17 @@ function makeSandbox() {
     };
     fakeWindow.window = fakeWindow;
 
-    const context = { window: fakeWindow, document: fakeDocument, console };
+    // THE GLYPH GEOMETRY IS INJECTED the way client/js/i18n/boot.js
+    // publishes it in a browser. Every icon in session-status-ui.js reads
+    // its coordinates from `globalThis.CloudeGlyphs` at call time, so a
+    // sandbox without it gets the empty string back from every builder.
+    const context = {
+        window: fakeWindow, document: fakeDocument, console,
+        CloudeGlyphs: { glyphSvg },
+    };
+    context.globalThis = context;
     vm.createContext(context);
+    installCloudeWeb(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
@@ -382,6 +397,7 @@ function makeRenderSandbox(moduleFile, containerId) {
         setTimeout() { return 0; },
     };
     vm.createContext(context);
+    installCloudeWeb(context);
     vm.runInContext(readClientJs('session-status-ui.js'), context);
     vm.runInContext(readClientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(readClientJs('session-row-actions.js'), context);
@@ -400,21 +416,22 @@ function makeRenderSandbox(moduleFile, containerId) {
     return { win, container };
 }
 
-test('launchpad running-session rows paint the right control per state', () => {
-    const { win, container } = makeRenderSandbox('launchpad.js', 'running-sessions-list');
-    win.Launchpad.runningSessions = [
-        { name: 'cloude_alive', created_by_cloude: true, is_active: true, session_id: 's1', status: 'working' },
-        { name: 'cloude_gone', created_by_cloude: true, is_active: false, session_id: null, status: 'dead' },
-    ];
-    win.Launchpad.renderRunningSessions();
-    const html = container.innerHTML;
-    // The bug that started this: the X had an aria-label and no title.
-    assert.ok(!/aria-label="[^"]*"(?![^>]*title=)[^>]*data-session-action/.test(html));
-    assert.equal((html.match(/data-session-action="close"/g) || []).length, 1);
-    assert.equal((html.match(/data-session-action="remove"/g) || []).length, 1);
-    assert.ok(html.includes('title="close session"'));
-    assert.ok(html.includes('title="remove from the list"'));
-});
+// THE LAUNCHPAD CALL SITE MOVED IN SLICE 5, and it is measured where it
+// lives now. `renderRunningSessions()` is `RunningSessions.svelte`, whose
+// row builds its controls from `SessionRowActions.actionsFor` through
+// `RunningHost.actionsFor` rather than splicing `SessionRowActions.html`,
+// because there is no `{@html}` anywhere in this migration - so there is
+// no markup for this harness to read.
+//
+// The same four claims are asserted against the RENDERED DOM in
+// web/src/lib/launchpad/RunningSessions.behaviour.test.ts under "the
+// destructive row controls": a live row paints close then restart, a dead
+// one restart then remove, `unknown` is never treated as dead, and every
+// control is a real `<button>` carrying BOTH a title and a matching
+// aria-label - which was the bug that started this file. That the card
+// and the sidebar agree about WHICH controls a status earns is asserted
+// against the REAL module in
+// web/src/lib/launchpad/running-copy.parity.test.ts.
 
 test('sidebar rows paint the same control with the same wording', () => {
     // THE CONTROL MOVED, THE WORDING DID NOT. The sidebar row folded its

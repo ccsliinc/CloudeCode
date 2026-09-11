@@ -49,8 +49,18 @@ TESTS="tests/test_transcript_content_dedupe.py \
 tests/test_session_restart_source.py \
 tests/test_transcript_corpus_ingest.py \
 tests/test_transcript_prefix_dedupe.py"
-NODE_TESTS="tests/test_session_restart_identity.node.mjs \
-tests/test_recent_sessions.node.mjs"
+# SLICE 4 REMOVED `tests/test_session_restart_identity.node.mjs`: its
+# last three cases were all about the project tree's ended restart
+# button, and the tree is a Svelte component now. The equivalent
+# assertions live in
+# web/src/lib/launchpad/ProjectTree.behaviour.test.ts, which this script
+# cannot drive - it mutates `client/js/launchpad.js` and runs node
+# scripts. THE BLOCK 1 TREE MUTATIONS BELOW ARE THEREFORE DEAD: the
+# strings they patch no longer exist in that file, so they will report
+# `cannot_determine` rather than a false `killed`, which is the honest
+# outcome and is what that counter is for. Rebuilding this script against
+# the vitest suite is its own job.
+NODE_TESTS="tests/test_recent_sessions.node.mjs"
 
 FILES=(
   "src/core/transcript_corpus_ingest.py"

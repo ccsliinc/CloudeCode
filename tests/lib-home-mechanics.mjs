@@ -6,7 +6,15 @@
 // to the module under test. mini-dom.mjs is scoped to the dismiss-guard /
 // header-menu / terminal-tools surface; the launchpad render path needs a
 // different one (an element tree with `style`, plus a vm sandbox wired
-// with the globals launchpad.js reaches for), so this is that stub.
+// with the globals the home screen reached for), so this is that stub.
+//
+// SLICE 7 REMOVED THE LAUNCHPAD SANDBOX FROM IT. `loadLaunchpad`,
+// `LAUNCHPAD_SRC` and `renderProjects` evaluated `client/js/launchpad.js`
+// in a vm, and that file no longer exists. What they stood in for is
+// measured properly now by `web/src/lib/launchpad/HomeScreen.behaviour
+// .test.ts` and the tree/running behaviour tests beside it, which mount
+// the real components in jsdom. Do not rebuild it here. The element stub,
+// the CSS rule reader and the tally are still shared and still used.
 //
 // It is NOT a browser and computes NO layout. Real pixels for this
 // feature are measured by scripts/verify_home_mechanics.py in a real
@@ -14,15 +22,15 @@
 //
 // Not a test file: the suites are `tests/*.node.mjs`, this is `.mjs`.
 
+
 import fs from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
+
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.join(__dirname, '..');
-export const LAUNCHPAD_SRC = fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
 export const STYLES = fs.readFileSync(path.join(ROOT, 'client', 'css', 'styles.css'), 'utf8');
 export const INDEX = fs.readFileSync(path.join(ROOT, 'client', 'index.html'), 'utf8');
 
@@ -128,75 +136,4 @@ export function el(tag, opts = {}) {
     return node;
 }
 
-/**
- * Load launchpad.js in a vm sandbox and return the Launchpad instance
- * plus the fake document, so a test can drive real methods.
- * @param {object} [docOverrides]  Extra ids for getElementById.
- * @returns {{lp: object, doc: object, body: object, win: object}} `win`
- *   is the sandbox's own window, which is where launchpad.js reads
- *   window.API from - stubbing a global here would reach nothing.
- */
-export function loadLaunchpad(docOverrides = {}) {
-    const body = el('body');
-    const byId = Object.assign({}, docOverrides);
-    const doc = {
-        body,
-        getElementById(id) { return byId[id] || null; },
-        querySelector() { return null; },
-        querySelectorAll() { return []; },
-        addEventListener() {},
-        removeEventListener() {},
-        createElement() { return el('created'); },
-    };
-    const win = {
-        API: {},
-        SessionStatusUI: {
-            dotHtml() { return '<span class="status-dot"></span>'; },
-            pencilIconSvg() { return '<svg class="pencil"></svg>'; },
-            trashIconSvg() { return '<svg class="trash"></svg>'; },
-            archiveIconSvg() { return '<svg class="archive-icon"></svg>'; },
-        },
-        localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
-        addEventListener() {},
-        dispatchEvent() {},
-        CustomEvent: function CustomEvent(type, opts) { this.type = type; this.detail = opts && opts.detail; },
-        requestAnimationFrame(cb) { cb(); },
-        matchMedia() { return { matches: false, addEventListener() {} }; },
-    };
-    win.window = win;
-    const ctx = {
-        window: win,
-        document: doc,
-        console: { log() {}, warn() {}, error() {}, debug() {} },
-        localStorage: win.localStorage,
-        requestAnimationFrame: win.requestAnimationFrame,
-        CustomEvent: win.CustomEvent,
-        setInterval() { return 0; },
-        clearInterval() {},
-        setTimeout() { return 0; },
-        clearTimeout() {},
-        alert() {},
-    };
-    vm.createContext(ctx);
-    vm.runInContext(LAUNCHPAD_SRC, ctx, { filename: 'launchpad.js' });
-    return { lp: ctx.window.Launchpad, doc, body, win: ctx.window };
-}
-
-/**
- * Render one project list and hand back the container's markup.
- * @param {object} fixture {projects, presence, runningSessions, attribution}
- * @returns {{html: string, lp: object, projectList: object}}
- */
-export function renderProjects(fixture) {
-    const projectList = el('project-list', { id: 'project-list' });
-    const { lp } = loadLaunchpad({ 'project-list': projectList });
-    lp.projects = fixture.projects;
-    lp.projectPresence = new Map((fixture.presence || []).map((r) => [r.raw_path, r]));
-    lp.runningSessions = fixture.runningSessions || [];
-    lp.sessionAttribution = new Map((fixture.attribution || []).map((r) => [r.tmux_name, r]));
-    lp.sessionAttributionListingOk = true;
-    lp.projectAuthority = { mode: 'db', degraded: false, disagreement: null };
-    lp.renderProjectList();
-    return { html: projectList.innerHTML, lp, projectList };
-}
 
