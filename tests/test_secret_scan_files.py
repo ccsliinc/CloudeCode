@@ -196,7 +196,7 @@ def test_the_pragma_does_not_reach_the_transcript_detector():
 def test_should_skip_rejects_binary_suffixes_and_vendored_paths():
     assert should_skip(Path("client/vendor/xterm/xterm.js"))
     assert should_skip(Path("logo.png"))
-    assert not should_skip(Path("src/config.py")), "positive control"
+    assert not should_skip(Path("src/config/settings.py")), "positive control"
 
 
 def test_reading_a_binary_file_returns_none_rather_than_garbage(tmp_path):

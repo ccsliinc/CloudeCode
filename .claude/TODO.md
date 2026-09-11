@@ -7520,3 +7520,129 @@ INFRA-49 flake class, not a regression either way. Node 200/200,
 assertion now read `manager._registry` - and this slice did not repair them,
 because they belong to the log-buffer half and the real legs for the live table
 are in the new file. Worth a follow-up.
+
+## 2026-09-10 - backend decomposition v2, slice S5: src/config.py into src/config/
+
+`src/config.py`, 2,112 lines, is DELETED. In its place a 23-module package:
+13 typed `config.json` blocks and the one named error in their own files
+(bodies byte-exact, carved by source span including the comment above each,
+the same machinery slice S2 proved on `src/models.py`), and the 1,426-line
+`Settings` split into a LOADER plus typed READERS - `auth_loader`,
+`state_paths`, `agent_command`, `config_file`, `config_writes`, `summary`,
+`wrappers`, `provider_models`, `bootstrap`. `__init__.py` is a 73-line
+re-export, so not one of the 111 importers changed.
+
+**PROOF THAT NOTHING MOVED: A FINGERPRINT, NOT A READING.** Every public
+name the flat module exposed was recorded before and after - pydantic json
+schema, field annotations and defaults for all 13 models, plus all 31
+`Settings` method signatures and all 19 field annotations. Over the 21
+shared public names there is exactly ONE difference, and it is an
+improvement the standards require: `_mutate_wrappers(self, mutation)` gained
+`mutation: Callable[[List[dict]], List[dict]]`.
+
+**THE FINGERPRINT EARNED ITS KEEP IMMEDIATELY.** The first run found FOUR
+models whose schema would no longer build - `AgentsConfig`, `AuthConfig`,
+`ProjectConfig`, `WorkspaceConfig` - because a carved module did not import a
+name its annotations use (`AgentWrapper`, `Union`, `Literal`, `Dict`). They
+became unresolved ForwardRefs. Every one of those models still CONSTRUCTED
+fine, so the suite was green on three of the four; only a schema build says
+so. This is the S2 trap restated: a package split fails by an annotation
+resolving somewhere new. A fifth, `default_terminal_commands` missing in
+`auth.py`, was caught by `test_no_unresolved_names.py` and would have been a
+NameError the first time that default fired.
+
+**37 NAMES THE FLAT MODULE LEAKED ARE NOT RE-EXPORTED** - its own imports
+(`json`, `os`, `Path`, `Field`, `TerminalCommand`, `MODEL_ID_PATTERN`,
+`wrapper_store` and the rest). Checked rather than assumed: zero of the 37 is
+imported from `src.config` anywhere in `src/`, `tests/`, `scripts/` or
+`macOS/`.
+
+**DUPLICATION REMOVED, AND THE BIGGEST ONE HAD NO TEST UNDER IT.**
+`load_auth_config` carried the four-line malformed-block pattern TWELVE
+times. It is now `auth_loader.parse_block`, with the event name and the log
+payload as arguments because those genuinely differ - a workspace env VALUE
+can be a secret, so that block logs key names only. **Measured before
+touching it: 21 test files reach `load_auth_config` and NOT ONE asserts any
+of the twelve `invalid_*_config_block` fallbacks.** The whole degraded path
+was unmeasured. `tests/test_config_block_tolerance.py` is 20 new tests over
+it, including the two extremes pointing OPPOSITE ways on purpose (a mangled
+`message_archive` yields disabled, the safe direction; a mangled `ui` yields
+the ALL-DEFAULT object, because an unparseable block must not be able to HIDE
+a capability) and the negative controls: a valid block round-trips, a missing
+file and invalid JSON and a missing secret are all still REFUSED. Also
+collapsed: four copies of the "run setup_auth.py" `FileNotFoundError`, four
+of the invalid-JSON wrap, and TWO copies of the atomic write, into
+`config_file.py`.
+
+**SEVEN MUTATIONS. THREE RED IMMEDIATELY, FOUR CAME BACK GREEN, AND ALL FOUR
+WERE A MISSING TEST RATHER THAN A MEANINGLESS MUTATION.** Reverted from
+`.pristine` copies, never `git checkout`; every revert byte-identical by
+sha256.
+1. RED. The plan's named mutation: the atomic write stops making the `.bak`.
+   Two tests. (Note this IS the write that has a `.bak`; the S3 entry
+   recorded that the plan had aimed the same mutation at the session-metadata
+   write, which never had one.)
+2. GREEN, then RED. The write stops being atomic - in place instead of
+   tmp-plus-rename. Green because BOTH PATHS PRODUCE IDENTICAL FINAL BYTES;
+   they differ only when the write does not finish, which no outcome
+   assertion can see. Two new tests stage the difference: a serialisation
+   that fails part way must leave `config.json` untouched, and the
+   destination must never be opened for writing at all.
+3. RED. `parse_block` stops falling back: 14 red.
+4. RED. The state-file pin stops sticking: 3 red, including the two that
+   exist because a re-derived pin silently MOVED `session_metadata.json`.
+5. GREEN, then RED. `get_agent_command` resolves the state directory
+   EAGERLY. Green because no test had ever made that resolution FAIL, which
+   is the only thing the laziness protects: `get_state_dir` raises on an
+   unwritable directory, and the wrapper-less branch has no scripts
+   directory to need. A launch that always worked would start failing on
+   the box least able to afford it.
+6. GREEN, then RED. A writer stops invalidating `_auth_config_cache`. Green
+   for a precise and worrying reason: `test_config_settings.py`'s fixture
+   EMPTIES the cache before every test, so no test in that file had ever
+   exercised a WARM cache - which is the only state a running server is in
+   after its first read. The new test warms it first; without the
+   invalidation the PATCH writes correctly and reports the PRE-write value
+   straight back.
+7. GREEN, then RED. The merge stops re-validating, so a block pydantic
+   refuses reaches disk and the next load quietly falls back to that block's
+   defaults - the user's notifications setup gone with no error anywhere.
+
+**THE ONE RULE THIS SLICE COULD NOT MEET, SAID PLAINLY.**
+`src/config/settings.py` is **632 lines, over the 500-line guideline**. It is
+109 lines of pre-existing field declarations plus 31 typed entry points
+averaging 13 lines; every method BODY is gone. It cannot go lower without
+either inheritance (banned) or deleting `Settings`' public surface and
+migrating its ~45 callers - Rule B applied to `Settings`, which plan v2's S5
+does not specify and which is its own slice. Measured reason the surface has
+to stay: 111 modules import from this package and the suite patches these
+members on the CLASS, 23 sites on `state_dir_override`, eight on
+`type(sm.settings).get_state_dir`. **This needs the owner's call**: accept it,
+or schedule S5b to migrate the callers. Recorded in CLAUDE.md as a known
+measured exception so the next agent does not read it as drift.
+
+**CARVED OUT, DELIBERATELY.** Plan v2's S5 also asks for a validated
+`AgentChoice` value object that only `validate_agent_choice` can construct.
+That is a typed-API change threading through four restart paths, not a
+relocation, and folding it into a commit that moves 2,112 lines would make a
+failure unattributable to either half. Not done, not hidden.
+
+**Two other things found and fixed rather than left.**
+`test_config_defaults_source_of_truth.py` sliced the loader with
+`source.index("\n    def ")`; it now slices by AST. Its known HOLE is
+recorded in the test: the four blocks read through a CONSTANT (`ui`,
+`workspace`, `server_prefs`, `message_archive`) are invisible to its regex
+AND absent from `supported_keys()`, so the two agree by both being blind.
+And `socket.gethostname()`'s `except Exception` narrowed to `OSError`, which
+is what it raises.
+
+**Verification.** Control for this slice is the S4 commit, measured: 6,200
+passed / 2 failed / 20 skipped, 6,222 collected. After: **6,248 passed / 2
+failed / 20 skipped, 6,270 collected.** +52 added (20 tolerance, 4 config
+settings, 2 agent families, 26 from `test_no_unresolved_names.py`, which is
+parametrised over source FILES and the package has 22 more of them), -4
+removed, and all four are the SAME parametrised test's ids being
+re-disambiguated by pytest (`agents.py` became `agents.py0`/`agents.py1`
+because the name now exists in two places). **ZERO tests removed.** The two
+failures are the known environmental pair. Node 200/200, four cost ceilings
+pass, `scan_secrets.py` exit 0, pre-commit hook left enabled.

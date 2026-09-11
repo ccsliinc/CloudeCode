@@ -287,3 +287,167 @@ def test_patch_result_is_valid_json_at_every_step(client, config_path):
     )
     assert resp.status_code == 200, resp.text
     json.loads(config_path.read_text())  # raises if corrupted
+
+
+# --------------------------------------------------------------------------- #
+# The atomic write, tested by its MECHANISM rather than by its outcome         #
+# --------------------------------------------------------------------------- #
+#
+# A mutation that replaced tmp-plus-fsync-plus-os.replace with a plain
+# in-place ``open(path, "w")`` came back GREEN across every test above,
+# and the reason is that both paths produce IDENTICAL final bytes. Only a
+# failure PART WAY THROUGH tells them apart, and that is precisely the
+# case the atomic write exists for: a half-written config.json costs the
+# user their whole setup.
+#
+# So the property is staged rather than waited for. ``json.dump`` is made
+# to raise after it has already emitted some output; with a temp file the
+# destination is untouched, and with an in-place write the destination is
+# left truncated.
+
+
+def test_a_write_that_fails_part_way_leaves_config_json_intact(
+    config_path, monkeypatch
+):
+    """THE ATOMIC WRITE, stated as the harm it prevents.
+
+    Description: this is the test the plan names for slice S5. Without
+      it, replacing the temp-file-plus-rename with a direct write passes
+      every other assertion in this file, because the two differ only
+      when the write does not finish.
+    Inputs: config_path (Path) - the fixture's config.json;
+      monkeypatch - used to make serialisation fail mid-stream.
+    Output: None.
+    """
+    import json as _json
+
+    from src.config import config_file
+
+    before = config_path.read_text()
+
+    def _dump_then_die(obj, fp, **kwargs):
+        """Emit a plausible prefix, then fail the way a full disk would."""
+        fp.write('{"agents": {"claude_comm')
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(config_file.json, "dump", _dump_then_die)
+
+    with pytest.raises(OSError):
+        config_file.write_config_atomic(
+            config_path,
+            {"agents": {"claude_command": "new"}},
+            previous=before,
+            event="test_backup_failed",
+        )
+
+    assert config_path.read_text() == before, (
+        "a write that failed part way through changed config.json; the "
+        "destination must only ever be replaced by a completed rename"
+    )
+    # And it is still parseable, which is the form the user meets it in.
+    assert _json.loads(config_path.read_text())
+
+
+def test_the_destination_is_reached_by_a_rename_and_not_by_a_write(
+    config_path, monkeypatch
+):
+    """The mechanism itself, so the property cannot be satisfied by luck.
+
+    Description: the test above proves the OUTCOME. This proves HOW: the
+      destination path is never opened for writing, only renamed onto.
+      An implementation that wrote in place and happened to survive would
+      pass the first test on a machine where nothing failed, and fails
+      here by construction.
+    """
+    from src.config import config_file
+
+    real_open = open
+    opened_for_write = []
+
+    def _tracking_open(file, mode="r", *args, **kwargs):
+        if "w" in mode or "a" in mode or "+" in mode:
+            opened_for_write.append(str(file))
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(config_file, "open", _tracking_open, raising=False)
+
+    config_file.write_config_atomic(
+        config_path,
+        {"agents": {"claude_command": "renamed-in"}},
+        previous=config_path.read_text(),
+        event="test_backup_failed",
+    )
+
+    assert str(config_path) not in opened_for_write, (
+        "config.json itself was opened for writing; the destination must "
+        f"only be reached by os.replace. Opened: {opened_for_write}"
+    )
+    assert any(p.endswith(".tmp") for p in opened_for_write), (
+        "nothing was written through a temp file at all"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The cache, and the merge guard                                              #
+# --------------------------------------------------------------------------- #
+#
+# Two more mutations came back GREEN against everything above, and both
+# for the same reason: the fixture empties ``_auth_config_cache`` before
+# every test, so no test in this file has ever exercised a WARM cache -
+# which is the only state a running server is ever in after its first
+# read.
+
+
+def test_a_save_is_visible_through_an_already_warm_cache(client, config_path):
+    """A writer must invalidate the parse taken before the write.
+
+    Description: the read below WARMS the cache, which is what a running
+      server's is after the first request. Without the invalidation the
+      PATCH writes to disk correctly and then reports the PRE-write value
+      straight back, so the settings screen repaints with the change
+      apparently undone.
+    """
+    from src.config import settings as live_settings
+
+    # Warm it, the way any earlier request would have.
+    assert live_settings.load_auth_config().agents.claude_command != "warm-cache-cmd"
+    assert live_settings._auth_config_cache is not None
+
+    resp = client.patch(
+        "/api/v1/config/settings",
+        json={"agents": {"claude_command": "warm-cache-cmd"}},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert resp.json()["agents"]["claude_command"] == "warm-cache-cmd", (
+        "the response carried the pre-write value; the cached config was "
+        "not invalidated by the write"
+    )
+    assert (
+        live_settings.load_auth_config().agents.claude_command == "warm-cache-cmd"
+    )
+
+
+def test_a_merge_that_would_not_validate_never_reaches_disk(config_path):
+    """DEFENCE IN DEPTH, and it is defending something reachable.
+
+    Description: the route does field-level checks first, so this state
+      is reached only from a config.json a human edited into a shape a
+      valid partial update cannot fix. Without the re-validation the bad
+      merge is written, and the NEXT load quietly falls back to that
+      block's defaults - which is the user's whole notifications setup
+      disappearing with no error anywhere.
+    """
+    from src.config import config_writes
+
+    before = config_path.read_text()
+
+    with pytest.raises(ValueError):
+        config_writes.update_settings_config(
+            config_path,
+            notifications_update={"enabled": "not-a-boolean-at-all"},
+        )
+
+    assert config_path.read_text() == before, (
+        "a merged block that pydantic refuses was written to disk"
+    )

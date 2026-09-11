@@ -322,7 +322,7 @@ reverse lookup - `src/core/session_fork.py::children_of` - which costs nothing
 and cannot go stale.
 
 The fork arguments travel THROUGH the user's own wrapper rather than around
-it (`src/config.py::Settings.get_agent_command`, `extra_args`), because the
+it (`src/config/settings.py::Settings.get_agent_command`, `extra_args`), because the
 wrapper is where their auth is set up. They are deliberately not gated on
 `accepts_model`: that flag is about consuming an OpenRouter model id, and
 gating the fork flags on it would make a fork through a modelless wrapper

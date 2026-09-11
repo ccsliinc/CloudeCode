@@ -16,7 +16,7 @@ Read this before writing code here. It is orientation first, conventions second.
 | Terminal | tmux (live backend) driving a PTY, xterm.js client-side | `src/core/tmux_backend.py`, `client/js/terminal.js` |
 | Frontend | vanilla JS, no framework, NO build step for `client/` | `client/` |
 | Desktop shell | Electron wrapper (has its own `package.json`) | `macOS/` |
-| State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config.py`, `src/core/refresh_store.py` |
+| State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config/`, `src/core/refresh_store.py` |
 
 `client/` is served straight off disk under `/static`. There is no bundler, no
 transpile, no `client/package.json`. A file you add there is live on reload, so
@@ -337,11 +337,19 @@ beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
 
-**Config writes are atomic and backed up.** Copy the pattern in
-`Settings.update_settings_config()` (`src/config.py`): write the `.bak` of the
-pre-write bytes first, then temp file, `fsync`, `os.replace`. A half-written
-`config.json` costs the user their whole setup, so there is no "just dump the
-JSON" shortcut anywhere in this codebase.
+**Config writes are atomic and backed up, and there is now ONE of them.**
+`src/config/config_file.py::write_config_atomic` is the pattern: write the
+`.bak` of the pre-write bytes first, then temp file, `fsync`, `os.replace`. A
+half-written `config.json` costs the user their whole setup, so there is no
+"just dump the JSON" shortcut anywhere in this codebase. Do not re-spell it;
+both writers (the settings PATCH and the wrapper CRUD) call that one function.
+
+**AND ITS ATOMICITY IS TESTED BY ITS MECHANISM, NOT BY ITS OUTCOME.** Replacing
+tmp-plus-rename with a plain in-place write leaves IDENTICAL final bytes, so
+every outcome assertion stays green; the two differ only when the write does not
+finish. `tests/test_config_settings.py` therefore stages a failure part way
+through and asserts the destination is untouched, and separately asserts the
+destination is never opened for writing at all.
 
 ## The `/sessions/list` shape
 
@@ -737,8 +745,24 @@ per server process and no subprocess at all.
 - **New logic goes in new focused modules.** These files are already past the
   500-line guideline and should not grow: `client/js/terminal.js`,
   `client/js/launchpad.js`, `client/js/app.js`, `client/css/styles.css`,
-  `src/config.py`, `src/api/routes.py`, `src/core/session_manager.py`. Edit them
-  when the change belongs there; do not use them as the default landing spot.
+  `src/api/routes.py`, `src/core/session_manager.py`. Edit them when the change
+  belongs there; do not use them as the default landing spot.
+- **`src/config/` is a package**, not a module: one typed block of `config.json`
+  per file, `settings.py` holding only the env-backed fields and the two caches,
+  and the behaviour in named siblings (`auth_loader`, `state_paths`,
+  `agent_command`, `config_file`, `config_writes`, `summary`, `wrappers`,
+  `provider_models`). `__init__.py` re-exports every public name the flat module
+  had, so `from src.config import settings` is unchanged.
+  **`settings.py` IS OVER THE 500-LINE GUIDELINE AT 632 AND THAT IS A KNOWN,
+  MEASURED EXCEPTION, NOT AN OVERSIGHT.** The class keeps 31 public names
+  because 111 modules import from this package and the suite patches those
+  members on the CLASS (23 sites patch `state_dir_override`, eight patch
+  `type(sm.settings).get_state_dir`); a name that stopped resolving there would
+  be invisible to every one of them. The bodies are all gone - what remains is
+  109 lines of pre-existing field declarations and 31 typed entry points
+  averaging 13 lines. Getting under 500 needs the entry points DELETED and
+  their ~45 callers migrated, which is Rule B applied to `Settings` and is its
+  own slice.
 - **`src/core/sessions/` holds the collaborators `SessionManager` composes**, one
   mutable state cluster each, per
   `.claude/notes/backend-decomposition-plan.md`. THE STATE MOVES, IT NEVER
