@@ -13,8 +13,6 @@ ruling about another.
 
 ---
 
-<<<<<<< HEAD
-=======
 ## Both update checkers point at Adam's main repo
 **2026-09-10, scope: all repos**
 
@@ -89,7 +87,6 @@ Also measured the same day: `CloudeCode` has Issues DISABLED, being a fork, so
 it cannot act as a fallback tracker while that holds. `CloudeCodeDev` is the
 only issue tracker either side has.
 
->>>>>>> 6012467
 ## The row menu is one superset, not two implementations
 **2026-09-10, scope: CloudeCodeDev**
 
@@ -140,8 +137,6 @@ of that binds CloudeCodeDev, which is a Python project with an unprotected
 main by choice. Adam owning both codebases makes him the tie-breaker in both;
 it does not make a decision about one a decision about the other.
 
-<<<<<<< HEAD
-=======
 ## ccsliinc's open draft PRs land first; the colliding issues get re-scoped
 **2026-09-10, scope: CloudeCodeDev, ruled by Adam as code owner and sole
 tie-breaker**
@@ -275,7 +270,6 @@ Adam's to decide, per the issue that raised them:**
    that split is deliberate and should be written down here once decided,
    rather than left implicit.
 
->>>>>>> 6012467
 ## The outer ring carries unread, as a still green ring
 **2026-09-09, scope: all repos**
 
@@ -350,7 +344,6 @@ PUSH url set to the sentinel `DISABLED_do_not_push_to_Adoom666_CloudeCode` so a
 push there fails by construction. Do not repair it, and re-apply it on any fresh
 clone. This is a ruling about ccsliinc's remotes and says nothing about anyone
 else's.
-<<<<<<< HEAD
 
 ## `src/config/settings.py` stays over 500 lines
 **2026-09-10, scope: ccsliinc CloudeCode**
@@ -375,5 +368,114 @@ callers. That is Rule B of the decomposition plan applied to `Settings`, it is
 its own slice, and it is **not scheduled**. It is recorded as a future optional
 slice in `.claude/notes/backend-decomposition-plan.md` so that it is a choice
 someone makes deliberately rather than a line count someone reacts to.
-=======
->>>>>>> 6012467
+
+## Two lines declared 1.3.0 on the same morning; his stands and ours is 1.4.0
+**2026-09-11, scope: all repos**
+
+Verbatim: "make ours 1.4 thats fine."
+
+Adoom666 set `macOS/package.json` to 1.3.0 at 09:48 in `6012467` on
+`adamdev/master`. ccsliinc set the same field to the same number at 10:10 in
+`76de420` on `integration/1.3.0`. Twenty two minutes apart, neither knowing.
+Neither was tagged and nothing was published, so nothing downstream had to be
+unwound.
+
+HIS 1.3.0 STANDS. Ours becomes 1.4.0, and 1.4.0 CONTAINS his 1.3.0 rather than
+racing it: the release folds in `adamdev/master` at `6012467` in full. The
+separately planned 1.3.1, which existed to carry his work as a follow-up, is
+collapsed into this release and is not cut.
+
+The branch keeps the name `integration/1.3.0`. It is already on both remotes,
+the name is a handle rather than a declaration, and renaming a pushed branch
+costs more than the tidiness is worth.
+
+### The rule this exists to stop happening again
+
+**WHOEVER IS ABOUT TO BUMP A VERSION SAYS SO FIRST, BEFORE THE COMMIT.** Not
+after, and not in the commit body, because by then the other line may already
+have taken the number.
+
+The coordination protocol covers file paths and design approach and could not
+have caught this: a version number is neither. It is one shared value in one
+shared namespace with no lock on it, which is precisely the shape of thing that
+needs an announcement rather than a convention. Announcing costs one message;
+the alternative is what happened here, which is two releases wearing one number
+and a merge to decide which survives.
+
+## The session's own pin outranks its folder's `.cc.theme`
+**2026-09-11, scope: ccsliinc CloudeCode, taken from Adoom666's issue #65**
+
+Both lines had a theme precedence order and they disagreed. ccsliinc's read the
+dotfile first; Adoom666's inverted it so the per-session pin wins.
+
+HIS IS TAKEN, on merit. `pinned_themes.json` records the theme a user chose for
+THIS conversation and `<working_dir>/.cc.theme` records the default the FOLDER
+carries. A default that outranks an explicit choice is not a default, it is an
+override, and dotfile-first meant every server restart and every boot re-adopt
+threw away a pin that was sitting on disk the whole time, while two sessions
+running out of one repo could never hold two different themes.
+
+Two things follow from it and are part of the same ruling, so neither is to be
+reinstated on its own:
+
+- **The pin-to-dotfile migration is deleted**, on both call sites and in the
+  store. It existed to decay the legacy map while the dotfile was the winner.
+  Under the inversion the same code writes one session's private choice into a
+  folder-wide default that every OTHER session in that directory then inherits.
+- **The reconcile no longer prunes a pin whose tmux name is absent from the live
+  listing.** Deleting a decaying fallback cost nothing; deleting the durable
+  record of a deliberate choice is data loss, and it would have fired for every
+  session not running at the moment the reconcile happened.
+
+`PATCH /sessions/{name}/theme` writes the pin and no longer touches the dotfile,
+for the same reason.
+
+## One config.json writer, and it is the one that takes the lock
+**2026-09-11, scope: ccsliinc CloudeCode**
+
+Both lines independently made config.json have a single writer, and the two
+claims are not the same claim. ccsliinc's relocated the atomic write into
+`src/config/config_file.py`. Adoom666's `src/core/config_writer.py` takes the
+path's lock, reads the file FRESH inside it, and hands the caller that document.
+
+HIS IS TAKEN, because ATOMIC AND SERIALIZED ARE DIFFERENT PROPERTIES and only
+one line had the second. Every writer on both sides was atomic, so a crash could
+never truncate the file. Two arriving together each merged into the base they had
+already read and the second replace threw the first one's block away: the file
+was never corrupt and the update was still lost.
+
+`write_config_atomic` is gone. `config_writes.update_settings_config` and
+`wrappers.mutate` are mutators passed to `config_writer.commit`, which is what
+makes a stale base unrepresentable - a caller cannot supply one because it never
+supplies one. `tests/test_one_config_writer.py` fails the build if a second
+writer of that file appears.
+
+## The bounded viewer fan-out, on ccsliinc's registry
+**2026-09-11, scope: ccsliinc CloudeCode**
+
+Adoom666 bounded the per-viewer outbox (issue #38); ccsliinc moved the
+subscriber containers onto `SessionRegistry`. BOTH ARE TAKEN and neither was
+dropped: the registry hands out a `BoundedStream`, `publish` is SYNCHRONOUS and
+offers rather than awaits, an overflowed viewer is closed and dropped from the
+list so the overflow is one event and not a storm, and `forget` closes each
+outbox rather than only dropping the list.
+
+The synchronous signature is the load-bearing half. `TmuxBackend._emit_output`
+awaits whatever the output handler returns, so a coroutine there puts the tail
+loop - the thing reading the pipe that carries every keystroke echo for every
+session - one await away from a viewer's outbox.
+
+## NavigationGeneration lands in 1.4.0 rather than as a follow-up
+**2026-09-11, scope: ccsliinc CloudeCode**
+
+Adoom666's twelve NavigationGeneration hunks had ZERO references anywhere in
+`web/src` after ccsliinc's Svelte rewrite, and `app.js` tests `detail.nav != null`
+BEFORE it consults the guard - so every Svelte launch path was dispatching an
+event whose stale-navigation guard was silently waived. The absence was measured;
+the user-visible consequence is derived from reading the listener rather than
+reproduced in a browser.
+
+It ships in this release rather than being tracked. The merge is the one moment
+both halves are in one tree, and deferring it means publishing 1.4.0 with a guard
+that is present, dispatched, and waived - which is the false-green shape this
+project keeps paying for.

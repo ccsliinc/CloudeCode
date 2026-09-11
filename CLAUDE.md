@@ -740,7 +740,7 @@ would make the flag a suggestion.
 
 **THE WORKED EXAMPLE IS MARK UNREAD, AND IT IS A RE-SEAT, NOT A REDESIGN.**
 The control shipped in 1.2 behind `ui.show_mark_unread_control`
-(`src/config.py::UIConfig`, served on `GET /api/v1/features`). 1.2.1 then
+(`src/config/ui.py::UIConfig`, served on `GET /api/v1/features`). 1.2.1 then
 rewrote the row menu into a DECLARATIVE TABLE and mark unread was one of the
 eight items in it: an entry in `session-row-menu-items.js`, an availability
 probe in `session-row-menu.js::contextFromRow` asking whether
@@ -1436,21 +1436,6 @@ beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
 
-<<<<<<< HEAD
-**Config writes are atomic and backed up, and there is now ONE of them.**
-`src/config/config_file.py::write_config_atomic` is the pattern: write the
-`.bak` of the pre-write bytes first, then temp file, `fsync`, `os.replace`. A
-half-written `config.json` costs the user their whole setup, so there is no
-"just dump the JSON" shortcut anywhere in this codebase. Do not re-spell it;
-both writers (the settings PATCH and the wrapper CRUD) call that one function.
-
-**AND ITS ATOMICITY IS TESTED BY ITS MECHANISM, NOT BY ITS OUTCOME.** Replacing
-tmp-plus-rename with a plain in-place write leaves IDENTICAL final bytes, so
-every outcome assertion stays green; the two differ only when the write does not
-finish. `tests/test_config_settings.py` therefore stages a failure part way
-through and asserts the destination is untouched, and separately asserts the
-destination is never opened for writing at all.
-=======
 **AND THE 150 ms ATTACH SETTLE IS NOW PAID ONLY WHEN A RESIZE ACTUALLY
 WENT OUT.** The handshake slept 150 ms on every attach so a `SIGWINCH`
 raised by the handshake resize could reach the pane's foreground process
@@ -1753,7 +1738,7 @@ at boot (`src/main.py:537-539`), stopped on shutdown (`:776-777`), read by
 `GET /sessions/{session_name}/local-servers` (`src/api/routes.py:2614`) and
 cleared when a session is destroyed (`:963`). **The owner ruled it STAYS.** Do
 not remove the tracker, the route, the two WebSocket message models
-(`src/models.py:1818, 1826`) or the model fields, and do not disable the
+(`src/models/websocket.py`) or the model fields, and do not disable the
 janitor. It is dead code retained deliberately, which is not the same thing as
 dead code nobody noticed, and this paragraph exists so a dead-code sweep can
 tell the two apart.
@@ -1769,7 +1754,8 @@ and unread. **Do not put any panel back in flow beside the terminal container.**
 
 **AND THE `local_servers` FIELD ON THE API IS HARDCODED EMPTY, SO IT DOES NOT
 REFLECT WHAT THE TRACKER KNOWS.** `SessionInfo.local_servers` and
-`SessionStats.local_servers` (`src/models.py:229, 236`) are assigned an empty
+`SessionStats.local_servers` (`src/models/sessions.py:136`, and the
+resolved list on `SessionInfo`) are assigned an empty
 value at all four assignment sites: `session_manager.py:4845` (`0`),
 `session_manager.py:5167` (`[]`), `routes.py:1459` (`[]`) and `:1461` (`0`).
 Those literals PREDATE the panel removal, so this is not a consequence of it.
@@ -1791,7 +1777,6 @@ seconds and ZERO probes, not a sweep per session. That is small, and it is not
 nothing; the open question of whether it is worth paying while nothing reads
 the result is the owner's to answer, and it is written down here so he can
 answer it with the real number in front of him.
->>>>>>> 6012467
 
 ## The `/sessions/list` shape
 
@@ -2377,6 +2362,54 @@ The write happens at most once per pane: the WHERE clause requires
 false, and an in-process memo keyed on the tmux INSTANCE keeps a `ps` off the
 `PreToolUse` path. Steady state on a healthy box is one indexed SELECT per pane
 per server process and no subprocess at all.
+
+## Where the 1.4.0 integration moved things
+
+`integration/1.4.0` folded the other party's `adamdev/master` at `6012467`
+into this line in full: 89 of his non-merge commits, 245 files. Most of it
+merged with no conflict, and the interesting part of the round was the code
+that merged CLEANLY AND WAS WRONG, because his tree reaches for seams this
+line's decomposition had already moved. If you are porting anything else
+across, this is the map.
+
+| His spelling | This line |
+|---|---|
+| `session_manager.sessions` / `.backends` | `session_manager._registry.sessions` / `.backends` |
+| `session_manager._subscribers` | `session_manager._registry.subscribers` |
+| `session_manager.subscribe_output` / `unsubscribe_output` | `SessionRegistry.subscribe` / `.unsubscribe` |
+| `session_manager._pending_toasts`, `ack_toast`, `get_toasts` | `session_manager._toast_inbox.pending` / `.ack` / `.get` |
+| `session_manager._hook_tmux_names`, `_mint_hook_token` | `session_manager.hook_tokens.tmux_names` / `.mint` |
+| `session_manager.pinned_themes`, `set_project_theme`, `resolve_project_theme` | `session_manager._theme_store.*` |
+| `session_manager.pending_terminal_commands` | `session_manager._sidecars` |
+| `session_manager._owned_instances_from_db`, `is_owned_tmux_name` | `session_manager._owned.instances_from_db` / `.is_owned_name` |
+| `session_manager._last_probe_socket` | `session_manager._probe_health.socket` |
+| `src/api/routes.py` handlers | the sibling module that owns the resource |
+| `src/config.py`, `src/models.py` | the `src/config/` and `src/models/` packages |
+
+**THE DANGEROUS HALF IS THE ONE THAT DOES NOT RAISE.** Three of those reads
+arrived behind a `hasattr` or a `getattr(..., {})` default, so on this line
+they would have answered falsy rather than failing: `_drain_viewer` would
+have run with no idle watcher and no pattern detection on every session,
+silently, with the whole suite green. `tests/test_listing_off_the_loop.py`'s
+thread tripwire was worse - `setattr` on a name an object does not carry
+SUCCEEDS, so it would have wrapped four decoy containers and passed while
+measuring two of six.
+
+**THE SWEEP THAT FOUND THEM IS WORTH RE-RUNNING AFTER THE NEXT FOLD.** An
+AST pass over every `self.<attr>` in `session_manager.py`, resolved against
+the real class, plus every `from src.config import X` / `from src.models
+import Y` resolved against the package. Static import plus an attribute
+existence check beats reading diffs here, because the whole point is that
+the diff looks fine.
+
+**AND `src/api/routes.py` IS THE ONE TO WATCH ON A MERGE.** This line carved
+it from 4,387 lines to 106 - the assembly and the registration order, which
+is the route table's matching order - while his line kept editing the flat
+file. The merge resolved that to his file plus his additions, 4,593 lines,
+ZERO conflicts reported, the decomposition silently reverted and every route
+declared twice. Nothing would have thrown; FastAPI takes the first match, so
+which handler answered would have depended on include order. If a future
+merge touches that file, check its LINE COUNT before you check anything else.
 
 ## How we work here
 
@@ -2990,7 +3023,7 @@ poison every downstream reader, and until 2026-09-08 it did.
 |---|---|
 | Compose, validate and create the directory | `src/core/project_directory.py` |
 | The folder step, and the pure rules behind it | `client/js/project-create-folder.js` |
-| Where it is wired in | `src/api/routes.py` (`create_session`), `web/src/lib/launchpad/create-flow.ts` (slice 6 moved it out of `launchpad.js::_createNewSessionInner`) |
+| Where it is wired in | `src/api/session_crud_routes.py` (`create_session`), `web/src/lib/launchpad/create-flow.ts` (slice 6 moved it out of `launchpad.js::_createNewSessionInner`) |
 
 **"START EMPTY" HAD NO FOLDER STEP AT ALL.** The chain was "+" > new
 claude project > start empty > provider > name this project > create
@@ -4022,7 +4055,6 @@ tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
 
-<<<<<<< HEAD
 ## The string layer, and the one catalog rule
 
 Every user-visible string comes from ONE catalog that BOTH clients read. Full
@@ -4108,7 +4140,6 @@ checks, but **a literal interpolated INTO another message passes the span check*
 because the outer message wraps it, and is caught only by the count assertion
 and the source scan. `PORTED_FILES` in that test is the list a slice APPENDS TO;
 a file not on it is not covered.
-=======
 ## One navigation generation, and what a completion is allowed to write
 
 **A COMPLETION MAY ONLY WRITE TO SHARED UI STATE WHILE ITS NAVIGATION IS
@@ -4493,7 +4524,6 @@ moved the right way (p50 warm 22.1 / 21.3 ms before against 19.0 /
 RE-MEASURE ON A QUIET MACHINE before quoting any figure from this
 paragraph, and prefer the deterministic numbers above, which no amount of
 load can move.
->>>>>>> 6012467
 
 ## Gotchas that have cost real time
 
