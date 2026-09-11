@@ -83,7 +83,14 @@ MIN_MASTER_VOLUME = 0.35
 """Mirrors ``themeAudioSettings.js``'s floor. A value at or below zero is
 silence the user cannot recover from by looking at the slider."""
 
-THEME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+THEME_ID_RE = theme_script_consent.THEME_ID_RE
+"""IMPORTED, NEVER RESTATED. This file carried its own copy of the pattern
+until 2026-09-10, and the two answered the same question: a theme id has to
+be spellable BOTH as a consent key and as the selected theme, so a folder
+name one accepted and the other refused is a theme the user can select and
+cannot record a decision about, or the reverse. Two definitions of one rule
+are two rules the moment somebody widens one of them."""
+
 MODEL_ID_RE = re.compile(r"^(?!-)[A-Za-z0-9._~/-]{1,120}$")
 """Mirrors ``providers.js``'s client-side check and the server's own
 ``MODEL_ID_PATTERN``. An empty string is legal and means "claude, no
