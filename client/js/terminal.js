@@ -1284,7 +1284,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // the bound is a warn and never a refusal to connect.
         const measured = window.TerminalReadiness
             ? await window.TerminalReadiness.measure(this)
-            : { fitted: false, reason: 'no-fit-wait', attempts: 0, waitedMs: 0 };
+            : { fitted: false, reason: 'no-readiness-module', attempts: 0, waitedMs: 0 };
         console.log('Terminal size:', this.term.cols, 'x', this.term.rows,
             `measured=${measured.fitted} reason=${measured.reason} in ${measured.waitedMs}ms`);
 
