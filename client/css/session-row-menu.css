@@ -49,10 +49,34 @@
     background: transparent;
     border: none;
     border-radius: 0;
-    color: var(--color-fg-faint);
+    /* --color-fg-faint read too bold for a control that just opens a
+     * menu (owner: "make the dots not as bold"). --color-fg-subtle is
+     * the same token the row's own placeholder/disabled text already
+     * uses for the quietest legible weight; hover/focus still light it
+     * up to --color-fg-strong below, so it stays fully readable on
+     * intent. */
+    color: var(--color-fg-subtle);
     cursor: pointer;
     line-height: 0;
     transition: color 120ms ease;
+}
+
+/* Owner: "remove the gap between the dots and the pin". The row's own
+ * flex `gap` (session-sidebar-density.css) is uniform across every
+ * control on the row - grip, dot, name, pin, this trigger - so it cannot
+ * be zeroed there without also collapsing spacing the request did not
+ * name. This cancels it for JUST this one adjacent pair, by pulling the
+ * trigger back toward the pin by exactly the gap it would otherwise
+ * leave. `.session-row-menu-trigger` only ever follows the pin directly
+ * on a LIVE row (a dead row's inline restart/remove sits there instead),
+ * which is the one case this request is about. Matches the gap per
+ * density: 8px in cozy/detailed (the base rule's value), 5px in compact. */
+.session-sidebar-row-pin + .session-row-menu-trigger {
+    margin-inline-start: -8px;
+}
+
+.session-sidebar-panel[data-density="compact"] .session-sidebar-row-pin + .session-row-menu-trigger {
+    margin-inline-start: -5px;
 }
 
 .session-row-menu-trigger:hover,
@@ -118,11 +142,19 @@
     flex-direction: column;
     gap: 1px;
     background: var(--color-bg-elevated, var(--color-bg));
-    border: 1px solid var(--color-border-subtle);
+    /* --color-border-subtle used to sit here, and on the default theme it
+     * is the EXACT same value as --color-bg-elevated above - an invisible
+     * border on a panel with no other edge, which is why the menu read as
+     * loose text over the sidebar rather than a surface. --color-border is
+     * the token the app's other floating popovers already use for this
+     * (.fab-menu-btn, .dpad-float-button, .slash-commands-btn,
+     * .fab-menu in terminal-tools.css), and it reliably differs from
+     * --color-bg-elevated across the theme set. --shadow-modal is the
+     * same elevation token those popovers use in place of a hardcoded
+     * shadow, so the lift is theme-aware rather than a fixed black glow. */
+    border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
-    box-shadow:
-        0 1px 2px rgba(0, 0, 0, 0.18),
-        0 8px 28px rgba(0, 0, 0, 0.34);
+    box-shadow: var(--shadow-modal);
     /* A MENU TALLER THAN THE SCREEN SCROLLS ITSELF. The JS cap measures
      * the visual viewport and wins over these; they are the fallback for
      * a run where it has not been applied yet. vh then dvh, in that
@@ -141,12 +173,16 @@
 
 .session-row-menu .session-row-menu__item {
     display: grid;
-    /* Label takes the room, the shortcut letter is pinned to the right
-     * edge in its own column so every letter lines up whatever the label
-     * length. The reason, when there is one, spans both under them. */
-    grid-template-columns: 1fr auto;
+    /* The icon sits in its own fixed column so every label starts at the
+     * same x whatever glyph is beside it - the same reasoning the group
+     * header applies to its count (--sidebar-gutter in
+     * session-sidebar-groups.css). Label takes the room, the shortcut
+     * letter is pinned to the right edge in its own column so every
+     * letter lines up whatever the label length. The reason, when there
+     * is one, spans all three columns under them. */
+    grid-template-columns: 16px 1fr auto;
     align-items: center;
-    gap: 2px 12px;
+    gap: 2px 10px;
     width: 100%;
     min-width: 0;
     min-height: 40px;
@@ -157,10 +193,34 @@
     border-radius: var(--radius-sm);
     color: var(--color-fg);
     font-family: inherit;
-    font-size: 0.86rem;
+    /* Matches the status key toggle's label ("what the lights mean" in
+     * client/js/session-status-key.js, sized by
+     * .session-status-key__toggle in session-status-key.css) - same
+     * 0.68em value, and both resolve against the same unstyled 16px root,
+     * so this computes to the identical pixel size. Size only: the
+     * status key label is an uppercase section heading with letter-
+     * spacing and bold weight, none of which belongs on a command. */
+    font-size: 0.68em;
     text-align: left;
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
+}
+
+/* The item's prefix icon. Fixed at the grid's 16px first column so every
+ * glyph occupies the same box regardless of its own drawn size (each is
+ * rendered at 14px, see client/js/session-row-menu-icons.js), which is
+ * what keeps every label starting at the same x. No colour of its own -
+ * it inherits the button's `color`, which is how the close item's glyph
+ * turns red on hover/focus along with its label and shortcut, with no
+ * extra rule needed. */
+.session-row-menu .session-row-menu__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    line-height: 0;
 }
 
 .session-row-menu .session-row-menu__label {

@@ -31,6 +31,13 @@ const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
 
 const attachSrc = read('client', 'js', 'attachment-toast.js');
 const toastSrc = read('client', 'js', 'toast.js');
+// issue #55 split ToastManager's class body across three files that each
+// extend ToastManager.prototype (client/js/api-toasts.js's pattern for
+// API.prototype). All three must load right after toastSrc, or add(),
+// dismissForSessionActivity() and _render() are undefined on the manager.
+const toastGroupingSrc = read('client', 'js', 'toast-grouping.js');
+const toastRenderSrc = read('client', 'js', 'toast-render.js');
+const toastLifecycleSrc = read('client', 'js', 'toast-lifecycle.js');
 // attachment-toast.js asks this module whether a payload is a pointer
 // report rather than carrying a second copy of the patterns. Without it
 // loaded the guard is skipped and the mouse assertions below would be
@@ -171,6 +178,9 @@ function makeSandbox(opts = {}) {
     vm.runInContext(summarySrc, sandbox);
     vm.runInContext(toastGroupSrc, sandbox);
     vm.runInContext(toastSrc, sandbox);
+    vm.runInContext(toastGroupingSrc, sandbox);
+    vm.runInContext(toastRenderSrc, sandbox);
+    vm.runInContext(toastLifecycleSrc, sandbox);
     vm.runInContext(attachSrc, sandbox);
     return sandbox;
 }
@@ -571,16 +581,29 @@ test('terminal.js hands the sent bytes down to the dismissal seam', () => {
     assert.ok(src.includes('this._noteUserInputToSession(keyData)'));
     // Shift+Enter deliberately passes NOTHING: it bypasses onData and
     // sends ESC+CR, which is a newline, so it must not look like a send.
-    assert.ok(/this\.ws\.send\(bytes\);\s*\n\s*this\._noteUserInputToSession\(\);/.test(src));
+    // The send goes through _sendUserBytes now (it holds input typed
+    // before the pane is ready instead of dropping it), and the receipt
+    // clear is gated on delivery having actually happened - a chord that
+    // was only BUFFERED has not been sent, so it must not retire a card.
+    assert.ok(/this\._sendUserBytes\(bytes\)\)\s*this\._noteUserInputToSession\(\);/.test(src),
+        'shift+enter must pass no bytes to the dismissal seam, and must '
+        + 'only reach it when the bytes were really delivered');
 });
 
-test('toast.js dispatches the receipt clear and keeps the submit test out', () => {
-    const src = read('client', 'js', 'toast.js');
+test('toast-lifecycle.js dispatches the receipt clear and keeps the submit test out', () => {
+    // issue #55 moved dismissForSessionActivity (the caller of
+    // AttachmentToast.noteUserInput) out of toast.js and into
+    // toast-lifecycle.js, along with every other add/dismiss method.
+    const src = read('client', 'js', 'toast-lifecycle.js');
     assert.ok(src.includes('AttachmentToast.noteUserInput(sessionId, data)'));
-    // This file is the registry of what a toast KIND means. Knowing that
-    // ESC+CR is a newline while a bare CR is a send belongs next to the
-    // receipt, not here, or the rule ends up spelled in two places.
+    // The toast module registry (toast.js, plus its grouping/render/
+    // lifecycle extensions) is the registry of what a toast KIND means.
+    // Knowing that ESC+CR is a newline while a bare CR is a send belongs
+    // next to the receipt, not here, or the rule ends up spelled in two
+    // places.
     assert.ok(!src.includes("'\\x1b\\r'"),
+        'the submit vocabulary must live in attachment-toast.js alone');
+    assert.ok(!toastSrc.includes("'\\x1b\\r'"),
         'the submit vocabulary must live in attachment-toast.js alone');
 });
 

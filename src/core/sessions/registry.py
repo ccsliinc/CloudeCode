@@ -41,13 +41,18 @@ with one writer.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import structlog
 
+from src.core import viewer_fanout
+from src.core.bounded_stream import (
+    OFFER_ACCEPTED,
+    OFFER_OVERFLOWED,
+    BoundedStream,
+)
 from src.core.session_backend import SessionBackend
 from src.models import LogEntry, Session
 
@@ -59,6 +64,23 @@ logger = structlog.get_logger()
 #: never written to, rather than an exception it would have to special
 #: case.
 ORPHAN_BUCKET = "__orphan__"
+
+
+def _close_viewer(candidate: Any) -> None:
+    """Close a viewer outbox, tolerating anything that is not one.
+
+    Description: :meth:`SessionRegistry.subscribe` has always been
+      callable by test doubles and older shims that hand back a bare
+      queue, and a teardown that raised on one of those would turn an
+      ordinary disconnect into a 500. So this ASKS whether the object is
+      a viewer stream rather than assuming, and does nothing when it is
+      not.
+    Inputs: candidate (Any) - whatever the caller was handed.
+    Output: None.
+    Example: _close_viewer(stream)
+    """
+    if viewer_fanout.is_viewer_stream(candidate):
+        candidate.close()
 
 
 class SessionRegistry:
@@ -103,7 +125,7 @@ class SessionRegistry:
         #: session_id -> the backend driving its pane.
         self.backends: Dict[str, SessionBackend] = {}
         #: session_id -> the queues watching its output bytes.
-        self.subscribers: Dict[str, List[asyncio.Queue]] = {}
+        self.subscribers: Dict[str, List[BoundedStream]] = {}
         #: session_id -> its log lines, oldest first, capped on append.
         self.log_buffers: Dict[str, List[LogEntry]] = {}
         #: session_id -> how many commands have been sent to it.
@@ -166,7 +188,14 @@ class SessionRegistry:
         """
         self.sessions.pop(session_id, None)
         self.backends.pop(session_id, None)
-        self.subscribers.pop(session_id, None)
+        # CLOSE EACH VIEWER'S OUTBOX, do not just drop the list. See
+        # :meth:`unsubscribe` - the writer task is parked in a ``get()``
+        # and closing is the only thing that wakes it. Each stream's own
+        # teardown reason is preserved, so a viewer that had already
+        # overflowed still reports the overflow rather than an ordinary
+        # close.
+        for stream in self.subscribers.pop(session_id, []) or []:
+            _close_viewer(stream)
         self.log_buffers.pop(session_id, None)
         self.command_counts.pop(session_id, None)
         if self.last_session_id == session_id:
@@ -296,75 +325,110 @@ class SessionRegistry:
 
     # ---- output fan-out -------------------------------------------------
 
-    def subscribe(self, session_id: Optional[str] = None) -> asyncio.Queue:
-        """Hand back a queue receiving one session's output bytes.
+    def subscribe(self, session_id: Optional[str] = None) -> BoundedStream:
+        """Hand back a BOUNDED outbox receiving one session's output bytes.
 
-        Description: the returned queue receives ONLY that session's
+        Description: the returned stream receives ONLY that session's
           bytes, as base64-encoded strings; a session's output never
-          leaks into another's queue. ``session_id`` None means the
+          leaks into another's stream. ``session_id`` None means the
           current session, and an id that resolves to nothing lands in
           :data:`ORPHAN_BUCKET` rather than raising.
+
+          BOUNDED, NOT AN ``asyncio.Queue``, SINCE 1.4.0. An unbounded
+          queue never blocks and therefore never shows the problem: it
+          simply grows, holding every byte a stalled browser has not
+          read. :mod:`src.core.viewer_fanout` caps a viewer at
+          ``MAX_VIEWER_QUEUE_CHUNKS`` chunks or
+          ``MAX_VIEWER_QUEUE_BYTES`` bytes and REFUSES rather than
+          waiting, so one stuck viewer costs that viewer its socket
+          instead of costing the pane its memory.
         Inputs: session_id (str | None).
-        Output: asyncio.Queue.
-        Example: queue = registry.subscribe("ses_1")
+        Output: BoundedStream.
+        Example: stream = registry.subscribe("ses_1")
         """
         sid = self.resolve_session_id(session_id)
         key = sid if sid is not None else ORPHAN_BUCKET
-        queue: asyncio.Queue = asyncio.Queue()
-        self.subscribers.setdefault(key, []).append(queue)
-        return queue
+        stream = viewer_fanout.new_viewer_stream(key)
+        self.subscribers.setdefault(key, []).append(stream)
+        return stream
 
     def unsubscribe(
-        self, queue: asyncio.Queue, session_id: Optional[str] = None
+        self, stream: Any, session_id: Optional[str] = None
     ) -> None:
-        """Detach a queue from a session's output stream. Idempotent.
+        """Detach one viewer from a session's output stream. Idempotent.
 
         Description: ``session_id`` None searches every bucket, which
           covers callers that did not keep track of which session the
-          queue belonged to.
-        Inputs: queue (asyncio.Queue) - the one handed out by
-          :meth:`subscribe`. session_id (str | None).
+          stream belonged to. The stream is CLOSED on the way out, not
+          merely dropped: the writer task draining it is parked in a
+          ``get()``, and closing is what wakes it so it can finish. Drop
+          the reference alone and that task sits there until the socket
+          itself fails.
+        Inputs: stream (Any) - the one handed out by :meth:`subscribe`.
+          Anything that is not a viewer stream is removed from the bucket
+          and not closed, because test doubles and older shims hand back
+          bare queues and a teardown that raised on one would turn an
+          ordinary disconnect into a 500. session_id (str | None).
         Output: None.
-        Example: registry.unsubscribe(queue, "ses_1")
+        Example: registry.unsubscribe(stream, "ses_1")
         """
         if session_id is not None:
             subs = self.subscribers.get(session_id)
-            if subs and queue in subs:
-                subs.remove(queue)
+            if subs and stream in subs:
+                subs.remove(stream)
+            _close_viewer(stream)
             return
         for subs in self.subscribers.values():
-            if queue in subs:
-                subs.remove(queue)
-                return
+            if stream in subs:
+                subs.remove(stream)
+                break
+        _close_viewer(stream)
 
-    async def publish(self, session_id: str, data: bytes) -> None:
-        """Fan one chunk of a session's output out to its subscribers.
+    def publish(self, session_id: str, data: bytes) -> None:
+        """Fan one chunk of a session's output out to its viewers. NEVER awaits.
 
-        Description: encodes once and delivers to every queue registered
-          for THIS session id and no other. A queue that fails to accept
-          the chunk is logged and DROPPED, because the alternative is
-          letting one stuck viewer stop delivery to every other viewer of
-          the same pane. The catch is deliberately broad for the same
-          reason: the queue is a foreign object supplied by the websocket
-          layer and this code cannot enumerate how it might fail. It does
-          not swallow - it logs the error and removes the subscriber.
+        Description: encodes once and offers to every stream registered
+          for THIS session id and no other.
+
+          THE SYNCHRONOUS SIGNATURE IS THE CLAIM, not a style choice.
+          ``TmuxBackend._emit_output`` awaits whatever the output handler
+          returns, so a coroutine here would put the tail loop - the
+          thing reading the pipe that carries every keystroke echo for
+          every session - one await away from a viewer's outbox.
+
+          A viewer that crosses its bound is CLOSED AND DROPPED FROM THE
+          LIST: its writer task sees the stream finish, closes the socket
+          with a distinguishable code, and the client recaptures the
+          pane. No byte is ever dropped from the middle of a stream -
+          half an escape sequence does not corrupt one cell, it leaves
+          the VT parser wrong for everything after it - so disconnecting
+          is the only complete recovery available. Dropping it from the
+          list is also what makes an overflow ONE event rather than a
+          storm: a finished stream is never offered a second chunk.
         Inputs: session_id (str); data (bytes) - the raw pane output.
         Output: None.
-        Example: await registry.publish("ses_1", b"hello")
+        Example: registry.publish("ses_1", b"hello")
         """
         subs = self.subscribers.get(session_id)
         if not subs:
             return
         encoded = base64.b64encode(data).decode("utf-8")
-        for queue in list(subs):
+        for stream in list(subs):
+            outcome = viewer_fanout.offer_pty(stream, encoded)
+            if outcome == OFFER_ACCEPTED:
+                continue
+            if outcome == OFFER_OVERFLOWED:
+                logger.warning(
+                    "viewer_output_queue_overflow",
+                    session_id=session_id,
+                    queued_chunks=viewer_fanout.MAX_VIEWER_QUEUE_CHUNKS,
+                )
+            # OFFER_CLOSED reaches here too - a socket torn down whose
+            # endpoint has not unsubscribed yet.
             try:
-                await queue.put(encoded)
-            except Exception as e:  # pragma: no cover - defensive
-                logger.error("failed_to_send_to_subscriber", error=str(e))
-                try:
-                    subs.remove(queue)
-                except ValueError:
-                    pass
+                subs.remove(stream)
+            except ValueError:  # pragma: no cover - concurrent removal
+                pass
 
     # ---- log buffer -----------------------------------------------------
 

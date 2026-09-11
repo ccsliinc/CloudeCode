@@ -447,10 +447,7 @@ class AppController {
             console.log('App: User has token, verifying...');
             const isValid = await window.Auth.verifyToken();
             if (isValid) {
-                // Phase 2: load full theme manifests + mount selector BEFORE
-                // launchpad render or any deep-link resolves. Failure here is
-                // non-fatal - registry has its own claude fallback.
-                await this._initThemes();
+                await this._initAuthenticatedState();
                 this.showLaunchpad();
             } else {
                 console.log('App: Token invalid, showing auth');
@@ -474,6 +471,55 @@ class AppController {
      * the first time the panel opens). Only the registry needs to be
      * live at boot; the picker DOM is built lazily on demand.
      */
+    /**
+     * Everything that must be true before an authenticated screen paints.
+     *
+     * ORDER IS THE POINT. Preferences are hydrated FIRST, because the
+     * theme registry is a preference-dependent control: it reads the
+     * user's default theme, and a control that initialises on its own
+     * default and then persists it overwrites the real setting. Both
+     * post-auth paths call this one function so neither can drift.
+     *
+     * NEITHER STEP IS FATAL. A preferences read that fails leaves the
+     * module refusing every write, so the app runs on local defaults and
+     * cannot save one of them over a setting it was unable to read.
+     *
+     * Inputs: none. Output: Promise<void>.
+     */
+    async _initAuthenticatedState() {
+        // OPEN THE APPLICATION EVENT CHANNEL, once we hold a credential.
+        // Started here rather than in either caller because this function
+        // is the ONE thing both post-auth paths run - two copies of the
+        // sequence is how one of them acquires a step the other never
+        // gets (gotcha 7). Idempotent, synchronous and non-throwing: it
+        // is an optimisation over the existing polls and must never be
+        // able to stop authenticated state from finishing.
+        if (globalThis.AppEvents) {
+            try { globalThis.AppEvents.start(); } catch (err) {
+                console.warn('App: event channel failed to start', err);
+            }
+        }
+        await this._hydratePreferences();
+        // Phase 2: load full theme manifests + mount selector BEFORE
+        // launchpad render or any deep-link resolves. Failure here is
+        // non-fatal - registry has its own claude fallback.
+        await this._initThemes();
+    }
+
+    /**
+     * Read the server-owned preference block before anything uses it.
+     *
+     * Inputs: none. Output: Promise<void> - never rejects; the module
+     *   records its own read status and refuses writes on a failure.
+     */
+    async _hydratePreferences() {
+        if (!globalThis.Preferences) return;
+        const status = await globalThis.Preferences.hydrate(window.api);
+        if (status !== globalThis.Preferences.HYDRATED) {
+            console.warn('App: preferences unavailable - running on local defaults');
+        }
+    }
+
     async _initThemes() {
         if (!window.Themes) return;
         try {
@@ -553,9 +599,10 @@ class AppController {
         // Auth events
         window.addEventListener('authenticated', () => {
             console.log('App: User authenticated');
-            // Bring up the theme registry post-auth (for the TOTP-flow path
-            // that doesn't go through init()'s `if (verifyToken())` branch).
-            this._initThemes().finally(() => this.showLaunchpad());
+            // Same post-auth bring-up as init()'s verifyToken() branch,
+            // through the SAME function. Two copies of this sequence is
+            // how one of them acquires a step the other never gets.
+            this._initAuthenticatedState().finally(() => this.showLaunchpad());
         });
 
         window.addEventListener('auth-required', () => {
@@ -573,8 +620,20 @@ class AppController {
         // launchpad dispatched after adopting an external session -
         // forward the whole thing so showTerminal() can plumb to the
         // terminal controller's connectToSession() opts.
+        // THE CREATE PATHS' OWNERSHIP CHECK, IN ONE PLACE. Six surfaces
+        // dispatch this event and every one of them POSTs first, so a
+        // sidebar row clicked while a create is in flight would otherwise
+        // be painted over by the create landing after it. Each dispatcher
+        // declares its intent with NavigationGeneration.begin() before its
+        // POST and carries the token here as `detail.nav`; this listener
+        // is the only thing that has to check it, so a new dispatcher
+        // cannot invent a different rule. A dispatcher that carries no
+        // token falls through to showTerminal()'s own read of the current
+        // generation, which is exactly what happened before this existed.
         window.addEventListener('session-created', (e) => {
             console.log('App: Session created', e.detail);
+            if (window.NavigationGeneration && e.detail.nav != null
+                && !window.NavigationGeneration.keep(e.detail.nav, 'session create')) return;
             this.showTerminal(e.detail.session, {
                 initialScrollbackB64: e.detail.initialScrollbackB64,
                 fifoStartOffset: e.detail.fifoStartOffset,
@@ -658,7 +717,14 @@ class AppController {
         // showLaunchpad/showTerminal.
         if (this.configEditorBtn) {
             this.configEditorBtn.addEventListener('click', () => {
-                if (window.ConfigEditorPanel) window.ConfigEditorPanel.open(this.configEditorBtn);
+                // The config-editor family (CodeMirror + config-editor-*.js,
+                // issue #48) loads lazily; see client/js/config-editor-loader.js.
+                if (window.ConfigEditorLoader && typeof window.ConfigEditorLoader.openWhenReady === 'function') {
+                    window.ConfigEditorLoader.openWhenReady(this.configEditorBtn);
+                } else {
+                    console.error('App: ConfigEditorLoader is not loaded - ' +
+                        'the config editor family cannot be fetched.');
+                }
             });
         }
     }
@@ -698,6 +764,12 @@ class AppController {
      */
     showAuth() {
         console.log('App: Showing auth screen');
+        // Same rule as showLaunchpad(), including the boot gate: this
+        // screen replaces whatever was being navigated to, but the FIRST
+        // paint of a page that has no token replaces nothing.
+        if (this.currentScreen && window.NavigationGeneration) {
+            window.NavigationGeneration.begin('auth');
+        }
         this.hideAllScreens();
         document.getElementById('auth-screen').classList.add('active');
         // NO PER-BUTTON HIDE LIST HERE ANY MORE. Three
@@ -830,6 +902,18 @@ class AppController {
             && typeof window.TerminalController.pauseForHome === 'function') {
             window.TerminalController.pauseForHome();
         }
+        // Same boot-paint guard as showLaunchpad()/showAuth(): only bump
+        // the generation once a screen has actually been shown, so a cold
+        // load of /archive/t/<id> is not superseded by its own first paint.
+        // Loading the archive family (issue #48) is the first async gap
+        // this entry path has ever had, so this is where a stale
+        // completion could first paint over a navigation the user has
+        // since moved on from - see client/js/navigation-generation.js.
+        if (this.currentScreen && window.NavigationGeneration) {
+            window.NavigationGeneration.begin('archive');
+        }
+        const archiveNav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
         this.hideAllScreens();
         document.getElementById('archive-screen').classList.add('active');
         // Same one-way opt-in as showLaunchpad(): these ship
@@ -873,14 +957,16 @@ class AppController {
         // The tab title said the session's name for as long as the user
         // browsed the archive. It is not that session any more.
         setPageTitle(null);
-        if (window.ArchiveScreen && typeof window.ArchiveScreen.show === 'function') {
-            window.ArchiveScreen.show(params || {});
+        // The archive script family (issue #48) loads lazily; see
+        // client/js/archive-loader.js. archiveNav is checked there before
+        // ArchiveScreen.show() runs, so a completion that arrives after
+        // the user has navigated elsewhere is discarded rather than
+        // painted over whatever is on screen now.
+        if (window.ArchiveLoader && typeof window.ArchiveLoader.showWhenReady === 'function') {
+            window.ArchiveLoader.showWhenReady(params, archiveNav);
         } else {
-            // A NAMED refusal. The screen div is active and empty at this
-            // point, and a blank screen with no console line is the
-            // hardest defect to trace back to a missing script tag.
-            console.error('App: ArchiveScreen is not loaded - check the ' +
-                'archive script tags in index.html.');
+            console.error('App: ArchiveLoader is not loaded - the archive ' +
+                'family cannot be fetched.');
         }
     }
 
@@ -889,6 +975,33 @@ class AppController {
      */
     showLaunchpad() {
         console.log('App: Showing launchpad screen');
+        // PRE-begin() snapshot, for clearError() further down: a stale
+        // notice must clear on a real navigation, never on this call's
+        // OWN bounce - see that call site's comment.
+        var navGenBeforeEntry = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
+        // LEAVING A SESSION IS A NAVIGATION TOO, and it is the half that
+        // is easy to forget. A session entry still resolving its fetch
+        // when the user goes home must not paint that session over the
+        // launcher a moment later, so this bumps the generation rather
+        // than reading it. See client/js/navigation-generation.js.
+        //
+        // A BOOT PAINT IS NOT A NAVIGATION, and the gate is what keeps a
+        // cold-load deep link alive. Router.init() runs while App.init()
+        // is still awaiting verifyToken(), so on /session/<name> the
+        // router has ALREADY declared the deep link's intent and
+        // openProjectByName() is already resolving it by the time this
+        // runs - and an unconditional bump here would supersede the very
+        // target the user typed. `currentScreen` is unset until the first
+        // screen paints, which is exactly that moment and no other.
+        if (this.currentScreen && window.NavigationGeneration) {
+            window.NavigationGeneration.begin('launchpad');
+        }
+        // Tidy up a stale notice on this navigation; guarded so it can
+        // never silence a rejection its own bounce just raised.
+        if (window.Router && typeof window.Router.clearError === 'function') {
+            window.Router.clearError(navGenBeforeEntry);
+        }
         // Archive deep link: consumed FIRST, and it RETURNS. See
         // _showArchiveIfDeepLinked() for why the position matters.
         if (this._showArchiveIfDeepLinked()) return;
@@ -986,6 +1099,23 @@ class AppController {
      */
     async showTerminal(session, opts = {}) {
         console.log('App: Showing terminal screen');
+        // READS the generation, never begins one. The gesture that led
+        // here already declared its intent before the fetch it awaited;
+        // bumping the counter here would let a caller that ALREADY lost
+        // the race mint itself a fresh win a few awaits later. There are
+        // two real awaits below - xterm's first-time init and the slash
+        // command modal's - and a second navigation can land in either.
+        // See client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
+        // Tidy up a stale deep-link/toast notice - this call only happens
+        // once a session has actually resolved, so it IS a successful
+        // navigation. Guarded on `nav`: a message raised by the gesture
+        // that led here (same generation) is refused, same rule as
+        // showLaunchpad() above. See client/js/router.js clearError().
+        if (window.Router && typeof window.Router.clearError === 'function') {
+            window.Router.clearError(nav);
+        }
         // Outbound URL sync: capture whether we were ALREADY viewing a
         // session before this call flips currentScreen below. Deciding
         // push-vs-replace off the PREVIOUS screen is what tells "entering
@@ -1072,24 +1202,27 @@ class AppController {
             window.DPad.show();
         }
 
-        // Initialize slash commands modal
-        if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
-            await window.SlashCommandsModal.init((command) => {
-                // Insert command into terminal without Enter
-                window.TerminalController.insertText(command);
-            }, session && session.working_dir);
+        // START the slash command palette, do NOT wait for it. It is a
+        // property of the session's AGENT, not of the socket, and its two
+        // server round trips used to sit directly above the connect. It
+        // carries the navigation token so a palette that lands after the
+        // user has left cannot populate another session's menu. See
+        // client/js/slash-commands-boot.js.
+        if (window.SlashCommandsBoot) {
+            window.SlashCommandsBoot.start(session && session.working_dir, nav);
         }
 
-        // Show slash command button on terminal screen
-        if (window.SlashCommandsModal) {
-            window.SlashCommandsModal.show();
-        }
-
+        // THE LAST CHECK BEFORE THE SOCKET. Everything above this line is
+        // chrome the next navigation repaints for itself; connectToSession
+        // resets xterm and opens a WebSocket, which is the write that
+        // cannot be taken back. A superseded navigation stops here.
+        if (window.NavigationGeneration
+            && !window.NavigationGeneration.keep(nav, 'terminal connect')) return;
         // Connect terminal to session. Adopt-path opts (scrollback,
         // fifo offset) are forwarded through - a plain new-session
         // create leaves them undefined and connectToSession treats
         // that as a normal (non-adopt) path.
-        window.TerminalController.connectToSession(session, opts);
+        window.TerminalController.connectToSession(session, opts, { nav: nav });
         this.focusTerminal();
     }
 
@@ -1135,6 +1268,19 @@ class AppController {
      */
     async returnToExistingTerminal(session) {
         console.log('App: Returning to existing terminal', session && session.id);
+        // READS the generation, never begins one - same rule and same
+        // reason as showTerminal(). This is the busiest session-entry
+        // path in the app (the conversation sidebar, the launcher, the
+        // toast stack and the restart return all land here), so it is
+        // also the one where a second click is most likely to overtake
+        // the first. See client/js/navigation-generation.js.
+        const nav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
+        // Tidy up a stale deep-link/toast notice - same call, same guard,
+        // as showTerminal() above. See client/js/router.js clearError().
+        if (window.Router && typeof window.Router.clearError === 'function') {
+            window.Router.clearError(nav);
+        }
         // Outbound URL sync: see showTerminal()'s identical comment -
         // same push-vs-replace rule, off the screen we were on BEFORE
         // this call. Callers: the launchpad's active-session banner
@@ -1217,16 +1363,18 @@ class AppController {
         if (window.DPad) {
             window.DPad.show();
         }
-        if (window.SlashCommandsModal && !window.SlashCommandsModal.button) {
-            await window.SlashCommandsModal.init((command) => {
-                window.TerminalController.insertText(command);
-            }, session && session.working_dir);
-        }
-        if (window.SlashCommandsModal) {
-            window.SlashCommandsModal.show();
+        // Same rule as showTerminal()'s copy: started, never awaited, and
+        // carrying the token so a late palette cannot land on the wrong
+        // session's menu.
+        if (window.SlashCommandsBoot) {
+            window.SlashCommandsBoot.start(session && session.working_dir, nav);
         }
 
-        window.TerminalController.reconnectToExistingSession(session);
+        // THE LAST CHECK BEFORE THE SOCKET - see showTerminal()'s copy of
+        // this guard for why it sits here and not higher.
+        if (window.NavigationGeneration
+            && !window.NavigationGeneration.keep(nav, 'terminal rejoin')) return;
+        window.TerminalController.reconnectToExistingSession(session, { nav: nav });
         this.focusTerminal();
     }
 

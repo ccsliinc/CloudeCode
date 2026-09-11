@@ -61,6 +61,14 @@ regexes = [
     '''your-?subdomain\.yourdomain\.com''',
     '''(?i)change[-_]?me''',
     '''(?i)replace[-_]?me''',
+    # The one-time settings import suite's fake bearer token, arriving with
+    # the other line's work at the 1.4.0 integration. It is the NEGATIVE
+    # control of that feature: the test asserts the collector never picks a
+    # credential-shaped localStorage key up, so the value has to look like
+    # one. Its own bytes say what it is, and it is matched by VALUE rather
+    # than by path, so a real credential pasted into that same file is still
+    # reported. tests/test_settings_import_collect.node.mjs.
+    '''tok_this_must_never_travel''',
 ]
 
 # ---------------------------------------------------------------------------

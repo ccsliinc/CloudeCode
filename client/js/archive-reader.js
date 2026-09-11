@@ -28,6 +28,30 @@
  * One delegated listener sits on the render window and resolves its
  * target out of the DOM.
  *
+ * A ROW IS REUSED WHEN THE WINDOW HAS NOT MOVED IT AND NOTHING ABOUT IT
+ * HAS CHANGED. paint() used to call ArchiveLineRender.renderItem() for
+ * every visible row on every call, which is a full DOM rebuild - new
+ * elements, new text nodes, new badges - even when scrolling had not
+ * moved the window at all, or when an unrelated row's body just
+ * finished loading. archive-row-cache.js is a keyed {signature, node}
+ * cache: a row's KEY is its line_no (or a progress run's `from`, the
+ * same value `expanded` is already keyed on), and its SIGNATURE folds
+ * in the body cache entry's state - which IS the disclosure/mask
+ * decision for that row - so a node built under one disclosure outcome
+ * cannot be handed back once that outcome changes. Rows are keyed on
+ * line_no rather than a transcript-wide identity because one reader
+ * instance ever holds one transcript's spine at a time (line_no is
+ * UNIQUE per transcript on the server, see archive_lines.py), and
+ * setSpine() clears the cache below precisely because a NEW transcript
+ * can reuse the same line_no values for entirely different rows.
+ * Selection is NOT part of the signature: the roving tabindex and
+ * data-selected attribute are patched onto whichever node occupies an
+ * index on every paint (cache hit or miss alike), because an item's
+ * INDEX can move - a progress run above it expanding or collapsing
+ * reshapes every later index - independently of whether that item's own
+ * content changed.
+ *
+
  * EVERY READER STATE IS ONE OF THE SIX OUTCOME TOKENS OR ONE OF THE TWO
  * NON-OUTCOME STATES, all rendered by archive-outcome-view.js. There is
  * no hand-rolled empty state and no hand-rolled error state.
@@ -68,6 +92,11 @@ console.log('[ArchiveReader Module] Loading...');
             'and archive-reader-dom.js must ALL load BEFORE ' +
             'archive-reader.js. The reader cannot be ' +
             'built without them; nothing below will work.');
+    }
+    if (!window.ArchiveRowCache) {
+        console.error('[ArchiveReader] MISSING DEPENDENCY: window.ArchiveRowCache. ' +
+            'Load client/js/archive-row-cache.js BEFORE this file. Without ' +
+            'it every row rebuilds on every paint rather than being reused.');
     }
 
     var DEFAULT_PAGE_ROWS = PAGING.DEFAULT_PAGE_ROWS;
@@ -115,6 +144,14 @@ console.log('[ArchiveReader Module] Loading...');
 
         var list = VL.createList({ overscan: opts.overscan });
 
+        // The reused-row cache. Degrades to "always rebuild" - the old
+        // behaviour - rather than throwing, if the dependency is
+        // missing, so a broken script load still renders a transcript.
+        var rowCache = window.ArchiveRowCache
+            ? window.ArchiveRowCache.createNodeCache()
+            : { get: function (k, s, build) { return build(); },
+                retain: function () {}, clear: function () {} };
+
         // The selection is a PURE INDEX CURSOR - a count and an index,
         // never an element - which is why it survives its row being
         // unmounted by the virtual window. Its absence is named out
@@ -160,6 +197,49 @@ console.log('[ArchiveReader Module] Loading...');
         function isExpandedAt(index) {
             var it = items[index];
             return !!(it && it.kind === 'progress-run' && expanded[it.from]);
+        }
+
+        /**
+         * The row cache's stable identity for one item. A progress run
+         * is keyed by `from`, the same value `expanded` uses, because
+         * appending can reshape a run's `to`/`count` without moving its
+         * first row. A line is keyed by its own line_no, which is
+         * UNIQUE within one transcript's spine (see archive_lines.py);
+         * this reader never holds more than one transcript's rows at
+         * once, and setSpine() clears the cache on every transcript
+         * switch, so a line_no can never collide across transcripts.
+         * @param {object} it @returns {string}
+         */
+        function rowCacheKey(it) {
+            if (it && it.kind === 'progress-run') return 'run:' + it.from;
+            return 'line:' + (it && it.line_no);
+        }
+
+        /**
+         * The row cache's invalidation signature for one item.
+         * DISCLOSURE POLICY IS STRUCTURALLY PART OF THIS, not a
+         * side-channel check: `entry.state` IS the gate/mask outcome
+         * (STATE_OK, STATE_GATED_SOFT, STATE_GATED_HARD,
+         * STATE_MASK_REFUSED, STATE_WITHHELD, STATE_NO_BODY,
+         * STATE_LOADING), so a cache lookup for a row whose entry
+         * changed can never match the signature recorded for the old
+         * one - there is no code path that would have to remember to
+         * check. `entry` is null for "not requested", which folds to
+         * its own signature so those rows are reused too until they
+         * transition to a real state. A progress run's signature is its
+         * shape (`to`, `count`) plus whether it is expanded; selection
+         * is intentionally NOT part of either signature - see the file
+         * header note on why it is patched instead.
+         * @param {object} it @param {?object} entry @param {boolean} expandedFlag
+         * @returns {string}
+         */
+        function rowSignature(it, entry, expandedFlag) {
+            if (it && it.kind === 'progress-run') {
+                return 'run:' + it.to + ':' + it.count + ':' + (expandedFlag ? 1 : 0);
+            }
+            if (!entry) return 'not-requested';
+            return [entry.state, entry.masked || 0, entry.findingCount || 0,
+                entry.reason || '', entry.chars || 0].join(':');
         }
 
         // THE SUB-API CONTEXT. One object, three consumers, all reading
@@ -233,26 +313,47 @@ console.log('[ArchiveReader Module] Loading...');
          * @param {object} win a windowFor() result @returns {void}
          */
         function paint(win) {
-            while (window_.firstChild) window_.removeChild(window_.firstChild);
-            window_.style.transform = 'translateY(' + win.offsetTop + 'px)';
-            spacer.style.height = win.totalHeight + 'px';
-
             var sel = selectedIndex();
+            var activeKeys = [];
+            var newNodes = [];
+
             for (var i = win.first; i <= win.last; i++) {
                 var it = items[i];
                 if (!it) continue;
-                var node = LR.renderItem(doc, it, entryFor(it), {
-                    index: i, expanded: isExpandedAt(i), entryFor: entryFor
+                var expandedFlag = isExpandedAt(i);
+                var entry = entryFor(it);
+                var key = rowCacheKey(it);
+                var sig = rowSignature(it, entry, expandedFlag);
+                activeKeys.push(key);
+                var node = rowCache.get(key, sig, function () {
+                    return LR.renderItem(doc, it, entry, {
+                        index: i, expanded: expandedFlag, entryFor: entryFor
+                    });
                 });
+                node.setAttribute('data-index', String(i));
                 // Roving tabindex: exactly one RENDERED row is reachable
                 // by Tab. A selection outside the window puts neither
                 // attribute anywhere, which is correct - the cursor
                 // still holds the index and the row gets both back when
-                // it next paints.
+                // it next paints. Written every paint, cache hit or not
+                // - see rowSignature's header note on why selection is
+                // patched rather than baked into the signature.
                 node.setAttribute('tabindex', i === sel ? '0' : '-1');
                 if (i === sel) node.setAttribute('data-selected', 'true');
-                window_.appendChild(node);
+                else node.removeAttribute('data-selected');
+                newNodes.push(node);
             }
+
+            while (window_.firstChild) window_.removeChild(window_.firstChild);
+            window_.style.transform = 'translateY(' + win.offsetTop + 'px)';
+            spacer.style.height = win.totalHeight + 'px';
+            for (var n = 0; n < newNodes.length; n++) window_.appendChild(newNodes[n]);
+
+            // Bound the cache to the rows just painted (plus overscan,
+            // already folded into win.first/win.last by the virtual
+            // list) so scrolling through a 30,805-line transcript does
+            // not accumulate one entry per line ever seen.
+            rowCache.retain(activeKeys);
 
             if (!spineComplete) {
                 // A partial spine ends in a named sentinel, not in a
@@ -363,6 +464,11 @@ console.log('[ArchiveReader Module] Loading...');
             // A NEW transcript, so nothing opened in the old one
             // applies. appendSpine deliberately does the opposite.
             expanded = Object.create(null);
+            // A new transcript's line_no values can numerically coincide
+            // with the old one's - they are not the same rows. Reusing a
+            // cached node across that boundary would show the WRONG
+            // transcript's content under the right-looking key.
+            rowCache.clear();
             regroup();
             token = spine.length ? 'ok' : token;
             render();
@@ -477,6 +583,7 @@ console.log('[ArchiveReader Module] Loading...');
             destroy: function () {
                 destroyed = true;
                 shell.destroy();
+                rowCache.clear();
                 root = null;
             }
         };

@@ -143,9 +143,13 @@ test('terminal.js onData guards pinToBottom on the mouse-report check', () => {
         'pinToBottom must be skipped for mouse reports');
     assert.match(body, /window\.AltScreenScroll\s*&&\s*!isMouse.*noteUserInput/,
         'the altscreen typing quiet-period must not be armed by mouse motion');
-    // The bytes still have to reach the session — the running application
-    // asked for these reports and needs them to track the pointer.
-    assert.match(body, /this\.ws\.send\(new TextEncoder\(\)\.encode\(data\)\)/,
+    // The bytes still have to reach the session - the running application
+    // asked for these reports and needs them to track the pointer. They
+    // go through _sendUserBytes now, which holds input while the pane is
+    // still opening rather than dropping it on a readyState check; a
+    // mouse report typed into a connecting session is buffered like any
+    // other input, and buffered is not lost.
+    assert.match(body, /this\._sendUserBytes\(new TextEncoder\(\)\.encode\(data\)\)/,
         'mouse reports must still be forwarded to the session');
 });
 

@@ -213,3 +213,7 @@ web/node_modules.nosync/
 # scripts/web-build-check.sh rebuilds and fails if the committed bundle
 # has drifted from the source, so a stale one cannot ship quietly.
 !client/dist/
+
+# Cross-party coordination skill: both teams run the same workflow, so it has
+# to travel with the repo rather than living in one person's global config.
+!.claude/skills/

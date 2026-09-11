@@ -23,7 +23,33 @@ import url from 'node:url';
 import vm from 'node:vm';
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
+// issue #39 - the render-batch scheduler toast-render.js's `_scheduleRender`
+// reads at call time. Loaded into every env this stub builds so a suite
+// driving the shipped modules exercises the real wiring rather than only
+// the module's own fallback (immediate render) branch.
+const RENDER_BATCH_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-render-batch.js'), 'utf8');
+// issue #39 (server half) - the version-arbitration gate `add()` reads at
+// call time. Loaded like RENDER_BATCH_SRC above and for the same reason:
+// a stub that omitted it would silently measure `add()`'s no-module
+// fallback (always replace) rather than the shipped version-compare path,
+// and every out-of-order/duplicate assertion in this suite family would
+// be testing nothing.
+const VERSION_ARBITRATION_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-version-arbitration.js'), 'utf8');
 const SRC = fs.readFileSync(path.join(ROOT, 'client/js/toast.js'), 'utf8');
+// issue #55 split ToastManager's class body across three files that each
+// extend ToastManager.prototype (client/js/api-toasts.js's pattern for
+// API.prototype). Loaded in the shipped order, right after toast.js:
+// without these, add/dismiss/_groups/_render and everything built on them
+// are undefined on the manager and every case below would fail with "not
+// a function" rather than a useful assertion.
+const GROUPING_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-grouping.js'), 'utf8');
+const RENDER_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-render.js'), 'utf8');
+const LIFECYCLE_SRC = fs.readFileSync(
+    path.join(ROOT, 'client/js/toast-lifecycle.js'), 'utf8');
 // THE TWO MODULES THAT DECIDE WHICH CARD A TOAST LANDS ON, loaded in the
 // shipped order and into the SAME context, because one card per session
 // is not a property of toast.js alone: the attention order lives in
@@ -181,7 +207,12 @@ export function makeEnv(narrow = false) {
     vm.createContext(sandbox);
     vm.runInContext(SUMMARY_SRC, sandbox, { filename: 'session-status-summary.js' });
     vm.runInContext(GROUP_SRC, sandbox, { filename: 'toast-session-group.js' });
+    vm.runInContext(RENDER_BATCH_SRC, sandbox, { filename: 'toast-render-batch.js' });
+    vm.runInContext(VERSION_ARBITRATION_SRC, sandbox, { filename: 'toast-version-arbitration.js' });
     vm.runInContext(SRC, sandbox, { filename: 'toast.js' });
+    vm.runInContext(GROUPING_SRC, sandbox, { filename: 'toast-grouping.js' });
+    vm.runInContext(RENDER_SRC, sandbox, { filename: 'toast-render.js' });
+    vm.runInContext(LIFECYCLE_SRC, sandbox, { filename: 'toast-lifecycle.js' });
     if (!sandbox.ToastSessionGroup) {
         throw new Error(
             'toast-session-group.js did not export itself into the sandbox, so '
@@ -282,8 +313,12 @@ export function fakeTerminal(Klass, sessionId) {
         sent: [],
         ws: { readyState: 1, send: (b) => { self.sent.push(b); } },
     };
+    // _sendUserBytes is the ONE seam every keystroke-shaped path goes
+    // through now: it offers the bytes to the pre-ready input buffer and
+    // only then touches the socket. Without it on this stand-in the
+    // methods under test throw rather than sending.
     for (const name of ['_unwrapSession', '_sessionId', '_noteUserInputToSession',
-        'sendKeyToTerminal', 'insertText', '_writeSynthetic']) {
+        '_sendUserBytes', 'sendKeyToTerminal', 'insertText', '_writeSynthetic']) {
         if (typeof P[name] !== 'function') {
             throw new Error(`terminal.js has no ${name}() any more`);
         }

@@ -104,29 +104,52 @@ console.log('[ArchiveNavMerged Module] Loading...');
     }
 
     /**
-     * Description: render the merged list into a slot, ranked by the
-     *   fuzzy filter and highlighting what matched.
-     * Inputs: doc (Document), slot (Element), state (object) -
-     *   {nodes, unattributed, hostId, filterText, onActivate}.
-     * Output: {rendered: number, total: number} - so a caller can write
-     *   the honest filter sentence without recounting the DOM.
+     * The last (filterByHost + sortNodes) pipeline computed, and the
+     * exact inputs it was computed from. `paint()` runs on every fuzzy-
+     * filter keystroke, but neither host-filtering nor sorting depends on
+     * the filter TEXT - only the fuzzy rank after them does - so
+     * recomputing both on every keystroke was pure waste. `nodes` is
+     * compared BY REFERENCE: archive-nav.js only ever replaces
+     * `merged.nodes` wholesale, on a fresh fetch, and never mutates a
+     * node in place, so an unchanged reference is a real guarantee that
+     * nothing behind it changed either - not an assumption this file
+     * merely hopes holds.
+     * @type {?{nodes: Array, hostId: *, orderMode: *}}
      */
-    function paint(doc, slot, state) {
-        var opts = state || {};
-        var nodes = filterByHost(opts.nodes, opts.hostId);
-        var text = String(opts.filterText || '');
+    var lastNormalizeInput = null;
+    /** @type {?{ordered: Array, parkedReasons: object}} */
+    var lastNormalizeResult = null;
 
-        // ORDER FIRST, THEN FILTER-RANK. When there is no filter text the
-        // fuzzy ranker preserves input order, so the chosen order is what
-        // shows. When there IS filter text, RELEVANCE WINS - a person who
-        // has typed is looking for one project, and re-sorting his best
-        // match to the bottom because it happens to be old would make the
-        // filter useless. The order still decides ties, because it is the
-        // input order the ranker preserves.
-        var ordered = nodes;
+    /**
+     * Description: the host-filtered, sorted project list for `(nodes,
+     *   hostId, orderMode)`, from cache when those three are unchanged
+     *   from the last call.
+     * Inputs: nodes (Array<object>), hostId (number|string|null),
+     *         orderMode (string|undefined).
+     * Output: {ordered: Array<object>, parkedReasons: object} - reasons
+     *   keyed by full_path, per ArchiveNavOrder.sortNodes.
+     */
+    function normalizedProjects(nodes, hostId, orderMode) {
+        if (lastNormalizeInput &&
+                lastNormalizeInput.nodes === nodes &&
+                lastNormalizeInput.hostId === hostId &&
+                lastNormalizeInput.orderMode === orderMode) {
+            return lastNormalizeResult;
+        }
+        var filtered = filterByHost(nodes, hostId);
+
+        // ORDER FIRST, THEN (separately, uncached below) FILTER-RANK.
+        // When there is no filter text the fuzzy ranker preserves input
+        // order, so the chosen order is what shows. When there IS filter
+        // text, RELEVANCE WINS - a person who has typed is looking for
+        // one project, and re-sorting his best match to the bottom
+        // because it happens to be old would make the filter useless.
+        // The order still decides ties, because it is the input order
+        // the ranker preserves.
+        var ordered = filtered;
         var parkedReasons = {};
         if (window.ArchiveNavOrder) {
-            var sorted = window.ArchiveNavOrder.sortNodes(nodes, opts.orderMode);
+            var sorted = window.ArchiveNavOrder.sortNodes(filtered, orderMode);
             ordered = sorted.nodes;
             for (var p = 0; p < sorted.parked.length; p++) {
                 // Keyed on full_path, which is the slug and is unique per
@@ -136,6 +159,26 @@ console.log('[ArchiveNavMerged Module] Loading...');
                     sorted.parked[p].reason;
             }
         }
+
+        lastNormalizeInput = { nodes: nodes, hostId: hostId, orderMode: orderMode };
+        lastNormalizeResult = { ordered: ordered, parkedReasons: parkedReasons };
+        return lastNormalizeResult;
+    }
+
+    /**
+     * Description: render the merged list into a slot, ranked by the
+     *   fuzzy filter and highlighting what matched.
+     * Inputs: doc (Document), slot (Element), state (object) -
+     *   {nodes, unattributed, hostId, filterText, onActivate}.
+     * Output: {rendered: number, total: number} - so a caller can write
+     *   the honest filter sentence without recounting the DOM.
+     */
+    function paint(doc, slot, state) {
+        var opts = state || {};
+        var text = String(opts.filterText || '');
+        var normalized = normalizedProjects(opts.nodes, opts.hostId, opts.orderMode);
+        var ordered = normalized.ordered;
+        var parkedReasons = normalized.parkedReasons;
 
         var ranked = window.ArchiveNavFuzzy
             ? window.ArchiveNavFuzzy.rank(ordered, text, FIELDS)
@@ -184,12 +227,12 @@ console.log('[ArchiveNavMerged Module] Loading...');
             slot.appendChild(ROW.el(doc, 'li', ROW.ROOT_CLASS + '__filter-empty',
                 text
                     ? 'No loaded projects match this filter. ' +
-                      ROW.describeFilter(0, nodes.length, nodes.length, 'projects')
+                      ROW.describeFilter(0, ordered.length, ordered.length, 'projects')
                     : 'No projects in this view.'));
         }
         return {
             rendered: ranked.length,
-            total: nodes.length,
+            total: ordered.length,
             hiddenUnattributed: split.hidden.length
         };
     }

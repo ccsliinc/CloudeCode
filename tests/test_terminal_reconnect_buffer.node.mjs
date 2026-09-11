@@ -320,7 +320,12 @@ function loadTerminal(term) {
     // Its rAF stub fires, so the bounded waits settle on a real frame,
     // which models a PAINTED tab. The unpainted tab is
     // tests/test_terminal_layout_wait.node.mjs.
-    for (const m of ['terminal-layout-wait.js', 'terminal-reconnect-buffer.js', 'terminal.js']) {
+    // terminal-scrollback-paint.js is a REAL dependency of both entry
+    // paths: the ordered pre-connect paint lives there now, and a
+    // sandbox without it measures the "module missing, skip the capture"
+    // branch rather than the code that runs in the browser.
+    for (const m of ['terminal-layout-wait.js', 'terminal-scrollback-paint.js',
+        'terminal-reconnect-buffer.js', 'terminal.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(CLIENT_JS, m), 'utf8'), sandbox, { filename: m });
     }

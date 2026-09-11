@@ -57,6 +57,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import structlog
 
+from src.core import config_writer
 from src.core.config_migration_steps import (
     _step_v0_to_v1,
     _step_v1_to_v2,
@@ -178,13 +179,12 @@ def migrate_config_file(config_path: Path) -> Dict:
     """Run the migration against a real config.json on disk, idempotently.
 
     Description: reads, probes the environment, calls
-      ``migrate_config_dict``, and - only if it reports a change - backs
-      up the pre-write bytes to ``config.json.bak`` (overwritten each
-      call, same one-generation-of-history convention as
-      ``Settings.update_settings_config``) then writes atomically via
-      tmp-file + fsync + os.replace. A no-op migration (already current,
-      or the fail-safe path) touches NEITHER the config file NOR the
-      backup file at all.
+      ``migrate_config_dict`` inside the ONE serialization boundary in
+      ``config_writer``, which - only if it reports a change - backs up
+      the pre-write bytes to ``config.json.bak`` (overwritten each call,
+      one generation of history) then replaces atomically. A no-op
+      migration (already current, or the fail-safe path) touches NEITHER
+      the config file NOR the backup file at all.
     Inputs: config_path (Path) - path to config.json.
     Output: dict - ``{"migrated": bool, "changed": bool, "wrapper_ids":
       list[str]}``. ``migrated`` mirrors ``changed`` (kept as a separate,
@@ -202,39 +202,35 @@ def migrate_config_file(config_path: Path) -> Dict:
     if not config_path.exists():
         raise FileNotFoundError(f"config.json not found: {config_path}")
 
-    with open(config_path) as f:
-        raw = f.read()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in {config_path}: {e}")
-
     has_cld = probe_shell_function("cld")
     has_cldor = probe_shell_function("cldor")
 
-    new_data, changed = migrate_config_dict(data, has_cld, has_cldor)
+    migrated: Dict = {}
 
-    if not changed:
+    def migrate(data: Dict) -> Optional[Dict]:
+        new_data, changed = migrate_config_dict(data, has_cld, has_cldor)
+        if not changed:
+            # Returning None is how the boundary is told to touch NEITHER
+            # config.json NOR the backup, which is the no-op behaviour
+            # this function has always had.
+            return None
+        migrated.clear()
+        migrated.update(new_data)
+        return new_data
+
+    # ``backup_required`` is what keeps this writer's FAIL-SAFE posture,
+    # which is the one thing that differs from every other config.json
+    # writer: a migration that cannot secure a rollback path does not run
+    # at all, where an ordinary save still lands and only logs.
+    outcome = config_writer.commit(config_path, migrate, backup_required=True)
+
+    if not outcome.wrote:
+        if outcome.status == config_writer.BACKUP_UNAVAILABLE:
+            logger.warning("config_migration_backup_failed", path=str(config_path))
         return {"migrated": False, "changed": False, "wrapper_ids": []}
-
-    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
-    try:
-        backup_path.write_text(raw)
-    except OSError as e:
-        logger.warning("config_migration_backup_failed", error=str(e))
-        # Fail-safe: don't write the migrated config if we couldn't
-        # secure a rollback path first.
-        return {"migrated": False, "changed": False, "wrapper_ids": []}
-
-    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-    with open(tmp_path, "w") as f:
-        json.dump(new_data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, config_path)
 
     wrapper_ids = [
-        w["id"] for w in (new_data.get("agents", {}) or {}).get("wrappers", []) or []
+        w["id"] for w in (migrated.get("agents", {}) or {}).get("wrappers", []) or []
     ]
     logger.info("config_migration_applied", wrapper_ids=wrapper_ids)
     return {"migrated": True, "changed": True, "wrapper_ids": wrapper_ids}

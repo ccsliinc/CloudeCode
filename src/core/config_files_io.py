@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 from src.core.test_write_guard import assert_test_write_allowed
+from src.core.unique_tmp_path import unique_tmp_path
 from src.core.config_files_constants import (
     READONLY_COLLAPSED_DIRS,
     SENSITIVE_NAMES,
@@ -78,9 +79,13 @@ def classify(root: Path, path: Path) -> tuple[bool, bool, bool]:
 
 def atomic_write(path: Path, content: str) -> None:
     """
-    Description: write text to ``path`` atomically - tmp file, flush,
-      fsync, ``os.replace`` - so a crash mid-write can never leave a
-      half-written config behind.
+    Description: write text to ``path`` atomically - uniquely named tmp
+      file (``src/core/unique_tmp_path.py`` - two writers of the SAME
+      path can never stream into one shared fd), flush, fsync,
+      ``os.replace`` - so a crash mid-write can never leave a
+      half-written config behind. A failed write cleans up its own tmp
+      file rather than leaving it beside the target for the next reader
+      to wonder about.
     Inputs: path (Path) - destination, already resolved and verified;
       content (str) - the full new contents.
     Output: None.
@@ -96,9 +101,16 @@ def atomic_write(path: Path, content: str) -> None:
     # Inert in production.
     assert_test_write_allowed(path)
 
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(content)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    tmp_path = unique_tmp_path(path)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise

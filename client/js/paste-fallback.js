@@ -174,12 +174,17 @@ console.log('[PasteFallback Module] Loading...');
      * Open the fallback.
      *
      * @param {object} term - the Terminal wrapper, for image upload.
-     * @param {Function} inject - clipboard.js's injectText(term, text).
-     *   Passed in rather than imported so there is exactly one injection
-     *   path in the app.
+     * @param {Function} inject - clipboard.js's injectText(term, text,
+     *   ticket). Passed in rather than imported so there is exactly one
+     *   injection path in the app.
+     * @param {object} [ticket] - ownership claimed at the tap that opened
+     *   this sheet. THE SHEET IS THE LONG AWAIT: it stands on screen
+     *   while the user goes and finds their clipboard, which is ample
+     *   time to change sessions. See
+     *   client/js/terminal-input-ownership.js.
      * @returns {HTMLElement|null} the overlay, or null without a term.
      */
-    function open(term, inject) {
+    function open(term, inject, ticket) {
         if (!term || typeof inject !== 'function') return null;
         close();
         // The overlay IS the feedback now, so a stale notice sitting on
@@ -221,7 +226,7 @@ console.log('[PasteFallback Module] Loading...');
             buildButton('pasteFallbackCancel', 'cancel', 'ghost', close));
         actions.appendChild(
             buildButton('pasteFallbackInsert', 'insert', 'primary', function () {
-                submit(term, inject);
+                submit(term, inject, ticket);
             }));
         panel.appendChild(actions);
 
@@ -233,7 +238,7 @@ console.log('[PasteFallback Module] Loading...');
             if (!picked) return; // text lands in the field as usual
             if (typeof e.preventDefault === 'function') e.preventDefault();
             close();
-            term._uploadAndInjectFile(picked.blob, picked.name);
+            term._uploadAndInjectFile(picked.blob, picked.name, ticket);
         });
 
         onDocKey = function (e) {
@@ -277,7 +282,7 @@ console.log('[PasteFallback Module] Loading...');
      * @param {Function} inject - clipboard.js's injectText.
      * @returns {void}
      */
-    function submit(term, inject) {
+    function submit(term, inject, ticket) {
         var text = inputEl ? String(inputEl.value || '') : '';
         if (!text) {
             report('nothing to paste - the box is empty', 'info');
@@ -285,7 +290,7 @@ console.log('[PasteFallback Module] Loading...');
             return;
         }
         close();
-        inject(term, text);
+        inject(term, text, ticket);
     }
 
     window.PasteFallback = {

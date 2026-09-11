@@ -16,6 +16,8 @@ import pytest
 
 from src.core import update_check
 from src.core.update_check import (
+    DEFAULT_UPGRADE_COMMAND,
+    FALLBACK_REMOTE,
     STATUS_CURRENT,
     STATUS_UNKNOWN,
     STATUS_UPDATE_AVAILABLE,
@@ -412,3 +414,98 @@ def test_malformed_cache_is_not_a_passing_check(tmp_path: Path) -> None:
 
 def test_configured_remote_overrides_origin(tmp_path: Path) -> None:
     assert _checker(tmp_path).resolve_remote() == "https://example.test/x.git"
+
+
+# --- which repository this checker names -----------------------------------
+#
+# THE NEGATIVE CONTROL: the owner's ruling (2026-09-08, "use adams main
+# repo") is Adoom666/CloudeCode. ccsliinc/CloudeCode is the OTHER repo
+# named in this project (see CLAUDE.md's push-target rule), so asserting
+# against the exact string is what makes this fail if the fallback is ever
+# pointed at the wrong one, rather than only checking it is "a URL".
+
+
+def test_fallback_remote_is_the_ruled_on_repo_not_the_other_one() -> None:
+    assert FALLBACK_REMOTE == "https://github.com/Adoom666/CloudeCode.git"
+    assert "ccsliinc" not in FALLBACK_REMOTE
+
+
+def test_default_upgrade_command_points_at_the_ruled_on_repo() -> None:
+    assert DEFAULT_UPGRADE_COMMAND == (
+        "open https://github.com/Adoom666/CloudeCode/releases/latest"
+    )
+    assert "ccsliinc" not in DEFAULT_UPGRADE_COMMAND
+
+
+def test_real_repo_numbers_never_offer_a_downgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the exact scenario the update-checker-repo issue measured.
+
+    Adoom666/CloudeCode published v1.0.36 as its latest tag while this line
+    ships 1.2.1 (measured 2026-09-11, unchanged since the issue was filed).
+    A 1.2.1 install consulting that feed must read CURRENT, never
+    UPDATE_AVAILABLE - offering an older release as an upgrade is the exact
+    defect class this checker exists to prevent.
+    """
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
+    write_version_file("1.2.1", root=tmp_path)
+    monkeypatch.setattr(update_check, "fetch_remote_tags", lambda remote: ["1.0.36"])
+    status = _checker(tmp_path).refresh()
+    assert status.status == STATUS_CURRENT
+    assert status.status != STATUS_UPDATE_AVAILABLE
+
+
+# ---------------------------------------------------------------------- #
+# which repo the checker targets
+# ---------------------------------------------------------------------- #
+
+#: The upstream product both update checkers consult, by the owner's ruling
+#: of 2026-09-10 ("use adams main repo"). Recorded in docs/DECISIONS.md.
+EXPECTED_UPSTREAM_REPO = "Adoom666/CloudeCode"
+
+
+def test_the_fallback_remote_is_the_upstream_product_repo() -> None:
+    """PINNED ON PURPOSE, so moving it is a decision and not a drive-by.
+
+    The remote a packaged install consults is an outward-facing contract with
+    every copy of the app already out there, and the menubar client's own feed
+    URL had drifted away from this one until 2026-09-10. Naming the expected
+    repo here means a future move fails a test rather than shipping quietly.
+    """
+    assert FALLBACK_REMOTE == f"https://github.com/{EXPECTED_UPSTREAM_REPO}.git"
+
+
+def test_the_offered_upgrade_command_points_at_the_same_repo() -> None:
+    """The link a human is handed must not name a different repo from the check.
+
+    Two constants naming two repos is how a user is told "you are current"
+    against one release list and then sent shopping in another.
+    """
+    assert EXPECTED_UPSTREAM_REPO in DEFAULT_UPGRADE_COMMAND
+    assert DEFAULT_UPGRADE_COMMAND.endswith("/releases/latest")
+
+
+def test_a_latest_older_than_the_install_reads_current_not_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote whose newest tag is BEHIND us must never offer an upgrade.
+
+    The measured state on 2026-09-10: the upstream repo publishes v1.0.36
+    while this line ships 1.2.1, so the checker is pointed at a release list
+    that is older than the running install. That the reported figure is wrong
+    is a known and recorded consequence. That it must not become a prompt to
+    install an older build is the invariant, so it is asserted with the real
+    numbers rather than with abstract ones.
+    """
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
+    write_version_file("1.2.1", root=tmp_path)
+    monkeypatch.setattr(
+        update_check, "fetch_remote_tags", lambda remote: ["1.0.35", "1.0.36"]
+    )
+    status = _checker(tmp_path).refresh()
+    assert status.status == STATUS_CURRENT
+    assert status.status != STATUS_UPDATE_AVAILABLE
+    assert parse_version(status.current_version) == (1, 2, 1)
+    # Reported, and wrong, and said out loud rather than hidden.
+    assert parse_version(status.latest_version) == (1, 0, 36)

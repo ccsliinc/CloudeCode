@@ -1,21 +1,25 @@
-"""v0.7.0 — tests for project-scoped themes via ``<working_dir>/.cc.theme``.
+"""Tests for the project default stored in ``<working_dir>/.cc.theme``.
+
+The dotfile is the LOWER of the two theme stores: it is the default a
+folder carries, and a session that has been pinned reads its own pin
+instead. The ladder itself is covered by
+``tests/test_session_theme_precedence.py``; this file covers the dotfile
+store on its own plus the theme PATCH at the wire level.
 
 Covers:
 - ``SessionManager.get_project_theme`` / ``set_project_theme`` round-trip.
 - ``get_project_theme`` returns None when the dotfile is missing.
-- Back-compat: ``resolve_project_theme`` falls through to
-  ``pinned_themes.json`` when no dotfile exists.
-- ``migrate_pinned_theme_to_dotfile`` ferries old entries into ``.cc.theme``.
+- ``resolve_project_theme`` reads the dotfile for a session with no pin,
+  and prefers the pin when both exist.
 - Atomic write: the file exists immediately after ``set_project_theme``
   returns, with the expected content (no torn writes).
-- Two ``Session`` objects pointed at the same working_dir share the same
-  theme without per-session state.
-- New ``PATCH /sessions/{name}/theme`` route writes the dotfile.
-- Deprecated ``PATCH /sessions/{name}/pinned-theme`` alias still works
-  and also writes the dotfile.
-
-The deprecated alias is exercised through the SAME FastAPI app so we
-catch any divergence between the two routes at the wire level.
+- Two ``Session`` objects pointed at one working_dir share that default
+  while neither is pinned.
+- ``PATCH /sessions/{name}/theme`` writes the SESSION'S PIN and leaves
+  the folder-wide dotfile alone.
+- The deprecated ``PATCH /sessions/{name}/pinned-theme`` alias behaves
+  identically, exercised through the SAME FastAPI app so a divergence
+  between the two routes is caught at the wire level.
 """
 from __future__ import annotations
 
@@ -170,33 +174,48 @@ def test_get_cc_theme_returns_none_when_empty(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# 3. back-compat fallback to pinned_themes.json (via resolve_project_theme)
+# 3. how the dotfile takes part in resolve_project_theme
 # --------------------------------------------------------------------------- #
 
 
-def test_resolve_project_theme_falls_back_to_pinned_themes_json(
+def test_resolve_project_theme_reads_the_pin_when_there_is_no_dotfile(
     monkeypatch, tmp_path
 ):
-    """No .cc.theme + entry in pinned_themes.json -> resolve returns it."""
+    """No .cc.theme + a pin for this tmux name -> resolve returns the pin."""
     mgr = _bare_manager(monkeypatch, tmp_path)
-    project = tmp_path / "legacy"
+    project = tmp_path / "pinned_only"
     project.mkdir()
+<<<<<<< HEAD
     mgr._theme_store.pinned_themes["cloude_legacy"] = "lovecraft"
 
     # Dotfile takes precedence when both exist — confirm fallback only
     # fires when no dotfile is present.
     assert mgr._theme_store.get_project_theme(project) is None
     assert mgr._theme_store.resolve_project_theme(project, "cloude_legacy") == "lovecraft"
+=======
+    mgr.pinned_themes["cloude_pinned_only"] = "lovecraft"
+
+    assert mgr.get_project_theme(project) is None
+    assert mgr.resolve_project_theme(project, "cloude_pinned_only") == (
+        "lovecraft"
+    )
+>>>>>>> 6012467
 
 
-def test_resolve_project_theme_dotfile_beats_json(monkeypatch, tmp_path):
-    """Both exist — dotfile is the source of truth."""
+def test_resolve_project_theme_pin_beats_dotfile(monkeypatch, tmp_path):
+    """Both exist - the session's own pin wins over the folder default.
+
+    This is the inversion issue #65 asked for. The dotfile used to win,
+    so a pin was thrown away on every restart and two sessions in one
+    folder could never hold two themes.
+    """
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "both"
     project.mkdir()
     mgr._theme_store.set_project_theme(project, "metal")
     mgr._theme_store.pinned_themes["cloude_both"] = "lovecraft"
 
+<<<<<<< HEAD
     assert mgr._theme_store.resolve_project_theme(project, "cloude_both") == "metal"
 
 
@@ -283,6 +302,9 @@ def test_migrate_pinned_theme_swallows_exceptions(monkeypatch, tmp_path):
 
     # Must not raise.
     assert mgr.migrate_pinned_theme_to_dotfile(sess) is False
+=======
+    assert mgr.resolve_project_theme(project, "cloude_both") == "lovecraft"
+>>>>>>> 6012467
 
 
 # --------------------------------------------------------------------------- #
@@ -346,9 +368,15 @@ def test_set_cc_theme_raises_for_missing_working_dir(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_two_sessions_same_cwd_share_theme(monkeypatch, tmp_path):
-    """The dotfile is the source of truth — two Session records see the same
-    theme regardless of which one wrote it.
+def test_two_sessions_same_cwd_share_the_project_default(
+    monkeypatch, tmp_path
+):
+    """Two sessions in one folder share its default WHILE NEITHER IS PINNED.
+
+    This is the positive control for the project default surviving the
+    #65 inversion. An unpinned session must still inherit its folder's
+    colours; a fix that only made the pin win and broke this would have
+    deleted a shipped feature while passing every precedence test.
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "shared"
@@ -369,15 +397,36 @@ def test_two_sessions_same_cwd_share_theme(monkeypatch, tmp_path):
         tmux_session="cloude_shared_b",
     )
 
+<<<<<<< HEAD
     # Writer #1 pins via the helper as if on machine A.
     mgr._theme_store.set_project_theme(sess_a.working_dir, "metal")
 
     # Reader #2 (machine B) sees the same value.
     assert mgr._theme_store.get_project_theme(sess_b.working_dir) == "metal"
+=======
+    # Machine A records the project's default.
+    mgr.set_project_theme(sess_a.working_dir, "metal")
 
+    # Machine B reads the same value, and so does the full ladder for
+    # each session, because neither carries a pin of its own.
+    assert mgr.get_project_theme(sess_b.working_dir) == "metal"
+    assert mgr.resolve_project_theme(
+        sess_a.working_dir, sess_a.tmux_session
+    ) == "metal"
+    assert mgr.resolve_project_theme(
+        sess_b.working_dir, sess_b.tmux_session
+    ) == "metal"
+>>>>>>> 6012467
+
+
+
+
+def mgr_resolve(sm, working_dir, tmux_name):
+    """Shorthand for the full ladder, so a test reads as one assertion."""
+    return sm.resolve_project_theme(working_dir, tmux_name)
 
 # --------------------------------------------------------------------------- #
-# 7. FastAPI route — new /theme endpoint writes .cc.theme
+# 7. FastAPI route - /theme writes the SESSION'S pin, not the folder file
 # --------------------------------------------------------------------------- #
 
 
@@ -455,8 +504,8 @@ def _build_route_app(monkeypatch, tmp_path):
     return app, sm, project, sess
 
 
-def test_patch_new_theme_endpoint_writes_dotfile(monkeypatch, tmp_path):
-    """PATCH /sessions/{name}/theme persists to <working_dir>/.cc.theme."""
+def test_patch_theme_records_the_pin(monkeypatch, tmp_path):
+    """PATCH /sessions/{name}/theme records this session's own pin."""
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -465,17 +514,45 @@ def test_patch_new_theme_endpoint_writes_dotfile(monkeypatch, tmp_path):
         json={"theme_id": "metal"},
     )
     assert resp.status_code == 200, resp.text
-
-    dotfile = project / ".cc.theme"
-    assert dotfile.is_file()
-    assert dotfile.read_text(encoding="utf-8") == "metal\n"
+    assert sm.pinned_themes["cloude_routeproj"] == "metal"
 
 
-def test_patch_new_theme_endpoint_clears_with_null(monkeypatch, tmp_path):
-    """PATCH with ``theme_id=null`` deletes the dotfile."""
+def test_patch_theme_does_not_touch_the_folder_default(monkeypatch, tmp_path):
+    """A per-session pin must not rewrite the folder-wide .cc.theme.
+
+    THIS IS THE HALF OF #65 THAT THE READ ORDER ALONE DOES NOT FIX. The
+    PATCH used to write both stores, so pinning session B changed the
+    default every unpinned session in the same folder reads. The
+    pre-existing default must come back unchanged.
+    """
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
+<<<<<<< HEAD
     sm._theme_store.set_project_theme(project, "metal")
     assert (project / ".cc.theme").exists()
+=======
+    sm.set_project_theme(project, "hermes")
+
+    client = TestClient(app)
+    resp = client.patch(
+        "/api/v1/sessions/cloude_routeproj/theme",
+        json={"theme_id": "metal"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert sm.pinned_themes["cloude_routeproj"] == "metal"
+    assert (project / ".cc.theme").read_text(encoding="utf-8") == "hermes\n"
+
+
+def test_patch_theme_clears_with_null(monkeypatch, tmp_path):
+    """``theme_id=null`` clears the pin and leaves the folder default alone.
+
+    Clearing a pin means "fall back to my project's default", so the
+    dotfile must survive and the session must resolve to it again.
+    """
+    app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
+    sm.set_project_theme(project, "hermes")
+    sm.pinned_themes["cloude_routeproj"] = "metal"
+>>>>>>> 6012467
 
     client = TestClient(app)
     resp = client.patch(
@@ -483,13 +560,14 @@ def test_patch_new_theme_endpoint_clears_with_null(monkeypatch, tmp_path):
         json={"theme_id": None},
     )
     assert resp.status_code == 200, resp.text
-    assert not (project / ".cc.theme").exists()
+
+    assert "cloude_routeproj" not in sm.pinned_themes
+    assert (project / ".cc.theme").read_text(encoding="utf-8") == "hermes\n"
+    assert mgr_resolve(sm, project, "cloude_routeproj") == "hermes"
 
 
-def test_patch_new_theme_endpoint_404_for_unknown_session(
-    monkeypatch, tmp_path
-):
-    """Unknown tmux name -> 404, no dotfile written."""
+def test_patch_theme_404_for_unknown_session(monkeypatch, tmp_path):
+    """Unknown tmux name -> 404, and nothing is recorded anywhere."""
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -498,6 +576,7 @@ def test_patch_new_theme_endpoint_404_for_unknown_session(
         json={"theme_id": "metal"},
     )
     assert resp.status_code == 404
+    assert "totally_bogus" not in sm.pinned_themes
     assert not (project / ".cc.theme").exists()
 
 
@@ -507,8 +586,11 @@ def test_patch_new_theme_endpoint_404_for_unknown_session(
 
 
 def test_patch_deprecated_pinned_theme_alias_still_works(monkeypatch, tmp_path):
-    """The legacy /pinned-theme endpoint forwards through to the same code
-    path and still writes <working_dir>/.cc.theme."""
+    """The legacy /pinned-theme endpoint reaches the same code path.
+
+    Same store, same scope: the alias records the session's pin and does
+    not write the folder default either.
+    """
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
     client = TestClient(app)
 
@@ -518,9 +600,8 @@ def test_patch_deprecated_pinned_theme_alias_still_works(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200, resp.text
 
-    dotfile = project / ".cc.theme"
-    assert dotfile.is_file()
-    assert dotfile.read_text(encoding="utf-8") == "hermes\n"
+    assert sm.pinned_themes["cloude_routeproj"] == "hermes"
+    assert not (project / ".cc.theme").exists()
 
 
 def test_patch_deprecated_alias_marked_deprecated_in_openapi(

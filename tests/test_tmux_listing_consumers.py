@@ -152,18 +152,32 @@ async def test_failed_probe_does_not_prune_owned_sessions(monkeypatch, tmp_path,
         "a probe that could not evaluate pruned ownership records; an "
         "unanswered question was treated as an answer of zero"
     )
+<<<<<<< HEAD
     assert mgr._theme_store.pinned_themes == {"cloude_Test": "matrix"}, (
         "pinned themes were pruned against an unavailable listing too"
+=======
+    assert mgr.pinned_themes == {"cloude_Test": "matrix"}, (
+        "a session's pinned theme was dropped by the reconcile"
+>>>>>>> 6012467
     )
 
 
 @pytest.mark.asyncio
 async def test_successful_empty_probe_still_prunes(monkeypatch, tmp_path):
-    """The other half. A MEASURED zero must keep pruning as it always did.
+    """The other half. A MEASURED zero must keep pruning OWNERSHIP.
 
     Without this, "never prune" would pass the test above while quietly
     breaking the reconciler - collapsing the third outcome into pass is the
     same defect as collapsing it into fail.
+
+    A PINNED THEME IS DELIBERATELY NOT PRUNED HERE, and that is a policy
+    change, not an oversight. An ownership record claims a session is
+    running, so a measured zero contradicts it outright. A pinned theme
+    claims only "if this name comes back, paint it this colour", which a
+    measured zero does not contradict at all - and since
+    ``resolve_project_theme`` reads that map FIRST, dropping it erases a
+    choice the user made by hand. See issue #65 and
+    ``tests/test_session_theme_precedence.py``.
     """
     mgr = _manager(monkeypatch, tmp_path)
     mgr._owned.names = {"cloude_gone"}
@@ -181,7 +195,14 @@ async def test_successful_empty_probe_still_prunes(monkeypatch, tmp_path):
         "tmux answered 'no server running', which is a real zero - the "
         "stale ownership record should have been pruned"
     )
+<<<<<<< HEAD
     assert mgr._theme_store.pinned_themes == {}
+=======
+    assert mgr.pinned_themes == {"cloude_gone": "matrix"}, (
+        "the pin was pruned because its session was not running; that is "
+        "the user's theme choice, and it must outlive the tmux session"
+    )
+>>>>>>> 6012467
 
 
 @pytest.mark.asyncio

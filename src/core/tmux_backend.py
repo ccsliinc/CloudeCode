@@ -22,8 +22,11 @@ Key design points:
 
 - **Output streaming**: ``tmux pipe-pane -o 'cat >> <fifo>'`` streams every
   pane byte to a file. We tail that file asynchronously and call
-  `on_output(bytes)` for every chunk. The file is rotated when it exceeds
-  ``MAX_LOG_BYTES`` or is older than ``ROTATE_AGE_HOURS``.
+  `on_output(bytes)` for every chunk. The file is trimmed IN PLACE when it
+  exceeds ``MAX_LOG_BYTES`` or is older than ``ROTATE_AGE_HOURS``: the shell
+  running ``cat >>`` opened that path once and holds the descriptor, so
+  renaming the file would strand the rotation on a decoy rather than
+  reclaim anything. See ``src/core/pipe_rotation.py``.
 
 - **Single-active invariant**: the backend itself does NOT enforce
   one-at-a-time; `SessionManager` does. This backend DOES refuse to start
@@ -42,7 +45,6 @@ import os
 import re
 import shlex
 import shutil
-import stat
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -52,7 +54,10 @@ import structlog
 from src.core import debug_trace
 
 from src.core.pane_locale import apply_pane_locale
+from src.core.pipe_rotation import rotation_reason, truncate_in_place
 from src.core.pipe_wakeup import PipeWaiter
+from src.core.tmux_command_batch import environment_commands, run_optional_batch
+from src.core.tmux_server_config import write_server_config
 from src.core.tmux_discovery import resolve_tmux_path, tmux_argv_prefix
 from src.core.tmux_listing_parse import (
     LISTING_FORMAT,
@@ -324,29 +329,21 @@ class TmuxBackend(SessionBackend):
         """
         return tmux_argv_prefix(self.socket_name)
 
-    async def _apply_history_limit(self) -> None:
-        """Set this socket's scrollback depth to :data:`HISTORY_LIMIT`.
-
-        Idempotent and cheap; tmux ignores a repeat set of the same value.
-        ``check=False`` because a socket that cannot take the option is not
-        a reason to refuse the session - the pane just keeps the stock
-        depth, which is what it had before this existed.
+    def _history_limit_command(self) -> tuple:
+        """The ``set-option`` that sets this socket's scrollback depth.
 
         Returns:
-            None.
+            tuple[str, ...]: an argv fragment for
+            :func:`src.core.tmux_command_batch.run_optional_batch`.
+
+        Example:
+            >>> backend._history_limit_command()
+            ('set-option', '-g', 'history-limit', '50000')
         """
-        await self._run_tmux(
-            "set-option", "-g", "history-limit", str(HISTORY_LIMIT), check=False
-        )
+        return ("set-option", "-g", "history-limit", str(HISTORY_LIMIT))
 
-    async def _apply_remain_on_exit(self) -> None:
-        """Turn on ``remain-on-exit`` globally, BEFORE any window exists.
-
-        Inputs:
-            None.
-
-        Returns:
-            None.
+    def _remain_on_exit_command(self) -> tuple:
+        """The ``set-option`` that turns ``remain-on-exit`` on globally.
 
         ``remain-on-exit`` is a WINDOW option, so it has to be set with
         ``-w``; ``-g`` alone writes the session table and the window is
@@ -363,11 +360,114 @@ class TmuxBackend(SessionBackend):
         previous session five test failures to work out why. The pane is
         now guaranteed to exist for the probe to read.
 
-        ``check=False`` for the same reason as the history limit: a socket
-        that will not take the option is not a reason to refuse a session.
+        It is sent with tolerated failure, for the same reason as the
+        history limit: a socket that will not take the option is not a
+        reason to refuse a session.
+
+        Returns:
+            tuple[str, ...]: an argv fragment for
+            :func:`src.core.tmux_command_batch.run_optional_batch`.
+
+        Example:
+            >>> backend._remain_on_exit_command()
+            ('set-option', '-wg', 'remain-on-exit', 'on')
         """
-        await self._run_tmux(
-            "set-option", "-wg", "remain-on-exit", "on", check=False
+        return ("set-option", "-wg", "remain-on-exit", "on")
+
+    def _server_config_argv(self) -> List[str]:
+        """Build the ``-f <conf>`` server option a cold socket needs.
+
+        THIS IS THE ONLY THING THAT CAN GIVE THE FIRST PANE ITS FULL
+        SCROLLBACK DEPTH. A pane's depth is fixed into its grid when the
+        pane is created and no later ``set-option`` moves it (measured on
+        tmux 3.6a against a global set, a session-scoped set and
+        ``respawn-pane -k``), while ``set-option`` cannot run before the
+        pane exists on a cold socket because it does not start a server.
+        tmux reads a ``-f`` file when it STARTS the server, which on a
+        cold socket happens inside the ``new-session`` invocation itself
+        and strictly before the session is created.
+
+        It costs NO EXTRA TMUX PROCESS: these are two more argv elements
+        on a call that was being made anyway. On a warm socket tmux
+        ignores ``-f`` entirely, because the server is already up, so the
+        common path is unaffected.
+
+        The commands are the SAME argv fragments the pre-spawn and
+        post-spawn batches send, so all three places that state these two
+        options read one definition.
+
+        Returns:
+            list[str]: ``["-f", "<path>"]``, or ``[]`` when the file could
+            not be written. An empty list means the launch proceeds
+            exactly as it did before this existed, which is the required
+            degradation: losing scrollback depth is survivable, refusing a
+            session is not.
+
+        Example:
+            >>> backend._server_config_argv()
+            ['-f', '/Users/x/Library/Application Support/CloudeCode/cloude-tmux.conf']
+        """
+        # Lazy import for the same reason as _resolve_pipe_path: src.config
+        # pulls env vars and may not be importable in every test context.
+        try:
+            from src.config import settings
+
+            state_dir = settings.get_state_dir()
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - see below
+            # Deliberately broad, and deliberately not swallowed silently.
+            # src.config builds a pydantic Settings at import time and can
+            # raise OR call sys.exit on a machine with no .env - which is
+            # why SystemExit is named here, since it is not an Exception -
+            # and there is no narrower type that covers "this module would
+            # not load". The launch must go ahead regardless, so this
+            # degrades rather than propagates, and says so.
+            logger.warning(
+                "tmux_server_config_state_dir_unavailable",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return []
+
+        path = write_server_config(
+            state_dir,
+            [self._history_limit_command(), self._remain_on_exit_command()],
+        )
+        if path is None:
+            return []
+        return ["-f", str(path)]
+
+    async def _apply_pre_spawn_options(self) -> None:
+        """Set scrollback depth and ``remain-on-exit`` in ONE tmux process.
+
+        BOTH MUST LAND BEFORE ``new-session`` and both are best effort, so
+        they share a batch. The batch runner re-runs them individually if
+        the single invocation fails, which matters here more than
+        anywhere: tmux aborts the rest of a command list at the first
+        error, and ``remain-on-exit`` is what guarantees a fast-failing
+        agent leaves a pane for the dead-on-arrival probe to read.
+        Without the fallback, one socket that refused ``history-limit``
+        would silently take ``remain-on-exit`` down with it.
+
+        **THIS CALL DOES NOTHING AT ALL ON A COLD SOCKET, AND THAT IS
+        TMUX, NOT A BUG HERE.** ``set-option`` does NOT start a tmux
+        server. Measured on tmux 3.6a against a socket with no server:
+        both commands exit 1 with ``error connecting to
+        /private/tmp/tmux-<uid>/<socket> (No such file or directory)``,
+        batched or separate, and ``check=False`` makes that silent. This
+        call is still the ONLY thing that can make a pane be BORN at
+        :data:`HISTORY_LIMIT`, which is why it stays: a pane's scrollback
+        depth is fixed into its grid at creation and no later
+        ``set-option`` moves it. On a warm socket - the common case, every
+        session after the first - it lands and the pane is born correct.
+        The post-spawn re-application in :meth:`start` is what stops a
+        cold socket carrying tmux's stock defaults onward.
+
+        Returns:
+            None.
+        """
+        await run_optional_batch(
+            self._run_tmux,
+            [self._history_limit_command(), self._remain_on_exit_command()],
+            note="pre_spawn_options",
         )
 
     async def read_history_limit(self) -> Optional[int]:
@@ -537,15 +637,17 @@ class TmuxBackend(SessionBackend):
         use_cols = initial_cols if (initial_cols and initial_rows) else INITIAL_COLS
         use_rows = initial_rows if (initial_cols and initial_rows) else INITIAL_ROWS
 
-        # Scrollback depth BEFORE the pane exists - see HISTORY_LIMIT.
-        # ``set-option`` also starts the tmux server when none is running,
-        # which is exactly the ordering we want on a cold socket.
-        await self._apply_history_limit()
-
-        # remain-on-exit BEFORE the window exists - see the method's
-        # docstring. Set after creation it is a race the fast-failing agent
-        # wins.
-        await self._apply_remain_on_exit()
+        # Scrollback depth and remain-on-exit BEFORE the pane exists - see
+        # HISTORY_LIMIT and _remain_on_exit_command. Both travel in ONE tmux
+        # process; both still complete before new-session, which is the
+        # only ordering that matters here.
+        #
+        # ON A COLD SOCKET THIS SILENTLY DOES NOTHING: ``set-option`` does
+        # not start a tmux server, so both commands exit 1 with "error
+        # connecting" and ``check=False`` swallows it. See
+        # _apply_pre_spawn_options, and the re-application in the
+        # decoration batch further down that limits what that costs.
+        await self._apply_pre_spawn_options()
 
         # Build the session. ``new-session -d -s <name> -c <cwd> [command]``.
         # If a command is supplied, tmux runs that as pane 0's process; the
@@ -644,7 +746,14 @@ class TmuxBackend(SessionBackend):
         if command:
             args.append(command)
 
-        argv = self._tmux_base() + args
+        # ``-f <conf>`` goes among the SERVER options, before the command
+        # word, which is where tmux requires it. It is the one thing that
+        # can make this pane be born at HISTORY_LIMIT on a cold socket -
+        # see _server_config_argv. Note what this is NOT: the spawn is
+        # still its own invocation, still carries its own return code, and
+        # nothing has been batched into it. Two extra argv elements, zero
+        # extra processes.
+        argv = self._tmux_base() + self._server_config_argv() + args
         # DEBUG TRACE. The stale-environment bug lived exactly here and was
         # invisible: the spawn succeeded, the variable was set, and its
         # VALUE belonged to a different session. Recording the argv and the
@@ -777,75 +886,114 @@ class TmuxBackend(SessionBackend):
                     f"(pane_dead_status={pane_dead_status or 'unknown'})"
                 )
 
-        # Enable extended keys (tmux 3.2+) so modifier+key sequences like
-        # Shift+Enter arrive as CSI u (`\x1b[13;2u`) at the pane intact,
-        # instead of being collapsed to bare CR. Required for Claude Code
-        # CLI's multi-line input prompt to recognize Shift+Enter as
-        # "newline-insert" vs. CR=submit. Paired with the terminal-features
-        # `extkeys` flag below which advertises extended-key support to the
-        # pane's $TERM - Claude reads the terminfo to decide whether to
-        # emit CSI u or legacy keys.
+        # ---- Session decoration, ONE tmux process ---------------------------
+        # Ten commands that all act on a pane that already exists and
+        # whose failures are all tolerated (eight of them were eight
+        # separate ``check=False`` calls; the two socket options at the
+        # head of the list are the pre-spawn pair re-applied, and cost no
+        # extra process because this batch is issued either way). They
+        # share a batch because they share a
+        # failure behaviour, which is the only thing that makes a batch
+        # legal here. Nothing in this group is ordered against anything in
+        # it, none of them is the spawn, and none of them is read by the
+        # caller - the two commands whose outcome IS read, ``new-session``
+        # above and ``pipe-pane`` below, stay in processes of their own.
         #
-        # ``-s`` targets the tmux server (global, persists for the life of
-        # the tmux socket). Safe to re-run per session; tmux ignores repeat
-        # sets of the same value.
-        await self._run_tmux(
-            "set-option", "-s", "extended-keys", "on", check=False
-        )
-
-        # Enable mouse mode on the cloude socket so wheel events get intercepted
-        # by tmux instead of going through as arrow keys to TUI apps in alt-screen
-        # (e.g. Claude Code, which would otherwise cycle prompt history).
-        # Global session option so all sessions on the cloude socket pick it up.
-        await self._run_tmux("set-option", "-g", "mouse", "on", check=False)
-
-        # Override the default WheelUp/DownPane bindings: in alt-screen (any TUI),
-        # enter copy-mode and let tmux's scrollback drive the wheel. In normal
-        # screen mode (a shell prompt), forward as usual so rare shell-mouse use
-        # still works. -T root binds at the root key-table.
-        await self._run_tmux(
-            "bind-key", "-T", "root", "WheelUpPane",
-            "if-shell", "-Ft=", "#{alternate_on}",
-            "copy-mode -e ; send-keys -X -N 3 scroll-up",
-            "send-keys -M",
-            check=False,
-        )
-        await self._run_tmux(
-            "bind-key", "-T", "root", "WheelDownPane",
-            "if-shell", "-Ft=", "#{pane_in_mode}",
-            "send-keys -X -N 3 scroll-down",
-            "send-keys -M",
-            check=False,
-        )
-        # ``-as`` = append-and-set to the terminal-features option list.
-        # We target xterm-256color (our default TERM set above) and add the
-        # ``extkeys`` feature flag which tells tmux this terminal supports
-        # extended keys. Without this, tmux still processes extended-keys
-        # internally but may not advertise the capability to the pane.
-        await self._run_tmux(
-            "set-option", "-as", "terminal-features",
-            "xterm-256color:extkeys", check=False
-        )
-        # Drop the ESC key-timeout to 0ms on this tmux server so ESC-prefixed
-        # sequences aren't split into "ESC then CR" by the default 500ms
-        # wait window. Defense-in-depth for any fallback client that sends
-        # `\x1b\r` (Alt+Enter) instead of CSI u.
-        await self._run_tmux(
-            "set-option", "-s", "escape-time", "0", check=False
-        )
-
-        # Critical for headless (no-client) operation: lock the window size to
-        # manual so only `resize-window` changes it. Default is ``latest``
-        # which sizes to the most recent attached client; with zero clients
-        # tmux never leaves the 80x24 birth size.
-        await self._run_tmux(
-            "set-option", "-t", self.tmux_session, "window-size", "manual", check=False
-        )
-        # Prevent size clamping based on other windows in the session.
-        # (We only ever have window 0, but be defensive - future code that
-        # adds a second window shouldn't silently shrink pane 0.)
-        await self._run_tmux(
-            "set-option", "-t", self.tmux_session, "aggressive-resize", "off", check=False
+        # Measured on tmux 3.6a at load average 14: p50 206.41 ms as eight
+        # processes, p50 9.35 ms as one. ``run_optional_batch`` re-runs
+        # them individually if the batch exits non-zero, because tmux
+        # aborts the rest of a command list at the first error and every
+        # one of these is idempotent.
+        await run_optional_batch(
+            self._run_tmux,
+            [
+                # The two pre-spawn options, re-applied. THIS IS THE ONLY
+                # THING THAT SETS THEM ON A COLD SOCKET, because
+                # ``set-option`` does not start a tmux server and the
+                # pre-spawn batch therefore exits 1 with "error
+                # connecting" when this is the first session since the
+                # last one closed, since a reboot, or since a tmux server
+                # restart. By here ``new-session`` has started the server
+                # and created the window, so both forms resolve.
+                #
+                # WHAT THIS REACHES, MEASURED ON tmux 3.6a, AND WHAT IT
+                # DOES NOT. It reaches the socket's global tables, so
+                # every pane born afterwards gets the full scrollback
+                # depth and every window gets ``remain-on-exit``. It does
+                # NOT reach THIS pane's scrollback: a pane's depth is
+                # fixed into its grid by ``window_pane_create`` and stays
+                # there - measured, a pane born under the stock 2000
+                # still reports ``#{history_limit} 2000`` after a global
+                # set, after a session-scoped set, and after
+                # ``respawn-pane -k``. So the first session on a cold
+                # socket keeps 2000 rows and only its successors get
+                # 50000. Closing that needs a tmux server to exist BEFORE
+                # ``new-session``, which is a change to the launch
+                # ordering and is not this.
+                #
+                # Both are pure assignments of a constant, so they are
+                # idempotent and safe in a batch whose failure path
+                # re-runs every command individually. Re-running them on
+                # a warm socket writes the value they already hold.
+                self._history_limit_command(),
+                self._remain_on_exit_command(),
+                # Extended keys (tmux 3.2+) so modifier+key sequences like
+                # Shift+Enter arrive as CSI u (`\x1b[13;2u`) at the pane
+                # intact, instead of being collapsed to bare CR. Required
+                # for Claude Code CLI's multi-line input prompt to
+                # recognize Shift+Enter as "newline-insert" vs CR=submit.
+                # Paired with the terminal-features ``extkeys`` flag below.
+                # ``-s`` targets the tmux server (global, persists for the
+                # life of the socket). Safe to re-run per session.
+                ("set-option", "-s", "extended-keys", "on"),
+                # Mouse mode on the cloude socket so wheel events get
+                # intercepted by tmux instead of going through as arrow
+                # keys to TUI apps in alt-screen (e.g. Claude Code, which
+                # would otherwise cycle prompt history).
+                ("set-option", "-g", "mouse", "on"),
+                # Override the default WheelUp/DownPane bindings: in
+                # alt-screen (any TUI), enter copy-mode and let tmux's
+                # scrollback drive the wheel. In normal screen mode (a
+                # shell prompt), forward as usual so rare shell-mouse use
+                # still works. -T root binds at the root key-table.
+                #
+                # NOTE the semicolon inside the if-shell argument. It is
+                # part of ONE argv element, so tmux does not read it as a
+                # batch separator; only a standalone ``;`` argument is one.
+                ("bind-key", "-T", "root", "WheelUpPane",
+                 "if-shell", "-Ft=", "#{alternate_on}",
+                 "copy-mode -e ; send-keys -X -N 3 scroll-up",
+                 "send-keys -M"),
+                ("bind-key", "-T", "root", "WheelDownPane",
+                 "if-shell", "-Ft=", "#{pane_in_mode}",
+                 "send-keys -X -N 3 scroll-down",
+                 "send-keys -M"),
+                # ``-as`` = append-and-set to the terminal-features option
+                # list. Targets xterm-256color (our default TERM) and adds
+                # the ``extkeys`` flag which tells tmux this terminal
+                # supports extended keys. Without it tmux still processes
+                # extended keys internally but may not advertise the
+                # capability to the pane.
+                ("set-option", "-as", "terminal-features",
+                 "xterm-256color:extkeys"),
+                # Drop the ESC key-timeout to 0ms on this tmux server so
+                # ESC-prefixed sequences aren't split into "ESC then CR" by
+                # the default 500ms wait window. Defense-in-depth for any
+                # fallback client that sends `\x1b\r` (Alt+Enter).
+                ("set-option", "-s", "escape-time", "0"),
+                # Critical for headless (no-client) operation: lock the
+                # window size to manual so only ``resize-window`` changes
+                # it. Default is ``latest``, which sizes to the most recent
+                # attached client; with zero clients tmux never leaves the
+                # 80x24 birth size.
+                ("set-option", "-t", self.tmux_session, "window-size", "manual"),
+                # Prevent size clamping based on other windows in the
+                # session. (We only ever have window 0, but be defensive -
+                # future code adding a second window shouldn't silently
+                # shrink pane 0.)
+                ("set-option", "-t", self.tmux_session, "aggressive-resize", "off"),
+            ],
+            note="start_decoration",
         )
 
         # Start pipe-pane - this streams pane output to our file.
@@ -1007,14 +1155,19 @@ class TmuxBackend(SessionBackend):
             # overlap contest here.
             self._record_tail_start_offset()
 
+            # 3 and 4, in ONE tmux process. All four are tolerated-failure
+            # decoration on a pane whose liveness has ALREADY been settled
+            # by ``is_alive()`` and the ``#{pane_dead}`` probe above, and
+            # they run AFTER ``ensure_pipe_pane`` on purpose - the batch
+            # does not move that boundary, it only collapses what sits
+            # behind it. The boot re-adopt runs this once per surviving
+            # session, so on the owner's 21-session box it is 63 fewer
+            # processes at startup.
+            #
             # 3. Defensive remain-on-exit so external death doesn't silently
             # collapse the pane mid-adoption. Users who need tear-down
             # semantics can flip it back themselves.
-            await self._run_tmux(
-                "set-option", "-t", target, "remain-on-exit", "on",
-                check=False,
-            )
-
+            #
             # 4. Make the adopted session RESIZABLE, rather than logging a
             # warning that it is not.
             #
@@ -1029,13 +1182,16 @@ class TmuxBackend(SessionBackend):
             # issue is undone. Adoption is a supported feature, so an
             # adopted session gets the same three settings a created one
             # does and the WS resize handshake then sticks.
-            await self._run_tmux(
-                "set-option", "-t", target, "window-size", "manual", check=False,
+            await run_optional_batch(
+                self._run_tmux,
+                [
+                    ("set-option", "-t", target, "remain-on-exit", "on"),
+                    ("set-option", "-t", target, "window-size", "manual"),
+                    ("set-option", "-t", target, "aggressive-resize", "off"),
+                    self._history_limit_command(),
+                ],
+                note="attach_decoration",
             )
-            await self._run_tmux(
-                "set-option", "-t", target, "aggressive-resize", "off", check=False,
-            )
-            await self._apply_history_limit()
 
         # THE INVARIANT THIS METHOD OWES ITS CALLER: when it returns,
         # tmux's ``pipe-pane`` is writing to the SAME path the tail loop
@@ -1808,13 +1964,23 @@ class TmuxBackend(SessionBackend):
         # the pre-existing behaviour; failing the respawn over it would
         # trade a degraded hook path for a session the user cannot
         # restart at all.
+        #
+        # THE WRITES TRAVEL TOGETHER; THEY NEVER TRAVEL WITH THE SPAWN.
+        # One tmux process for every variable instead of one per variable,
+        # and it completes before ``respawn-pane`` is issued below because
+        # it is a separate, awaited call - not because tmux happens to run
+        # a command list in order. Batching them WITH the spawn would make
+        # the ordering this whole paragraph rests on a property of tmux's
+        # command queue, and would take the spawn's own return code with
+        # it. Measured on tmux 3.6a: two writes cost p50 20.99 ms apart
+        # and p50 9.38 ms together.
         if spawn_env:
             try:
-                for var, val in spawn_env.items():
-                    await self._run_tmux(
-                        "set-environment", "-t", target, var, val,
-                        check=False,
-                    )
+                await run_optional_batch(
+                    self._run_tmux,
+                    environment_commands(target, spawn_env),
+                    note="respawn_set_environment",
+                )
             except OSError as exc:
                 logger.warning(
                     "respawn_set_environment_failed",
@@ -2631,6 +2797,52 @@ class TmuxBackend(SessionBackend):
             return None
         return x, y
 
+    async def pane_geometry(self) -> Optional[Tuple[int, int]]:
+        """Read the pane's own grid as tmux reports it, in (cols, rows).
+
+        The two values are ``#{pane_width}`` and ``#{pane_height}``, which
+        is the pane's ACTUAL size right now - not the last size any client
+        asked for. The attach handshake compares against this rather than
+        against a negotiated cache because a restart, an adoption, or an
+        external ``resize-window`` can all have moved the pane since the
+        cache was written, and a stale cache reading "unchanged" is the
+        silent wrong-grid failure the whole three-outcome rule exists to
+        avoid (see :mod:`src.api.attach_settle`).
+
+        Async rather than sync on purpose: it runs on the attach path,
+        where its whole value is not blocking the event loop. Measured
+        p50 9.85 ms on tmux 3.6a against a 150 ms settle.
+
+        Returns:
+            ``(cols, rows)``, or ``None`` when tmux failed, timed out, or
+            answered something unparseable. ``None`` is a refusal to
+            claim a geometry, never a claim of the default size.
+
+        Example:
+            >>> await backend.pane_geometry()
+            (163, 46)
+        """
+        rc, out, _ = await self._run_tmux(
+            "display-message",
+            "-p",
+            "-t",
+            _safe_target(self.tmux_session),
+            "#{pane_width} #{pane_height}",
+            check=False,
+        )
+        if rc != 0:
+            return None
+        parts = out.decode("utf-8", errors="replace").split()
+        if len(parts) != 2:
+            return None
+        try:
+            cols, rows = int(parts[0]), int(parts[1])
+        except ValueError:
+            return None
+        if cols <= 0 or rows <= 0:
+            return None
+        return cols, rows
+
     async def read_async(self) -> None:
         """Start the background output-tail loop (idempotent)."""
         if self._reader_task and not self._reader_task.done():
@@ -2687,8 +2899,11 @@ class TmuxBackend(SessionBackend):
                     recorded=self._adopt_tail_start_offset,
                     file_size=current_size,
                 )
-                # Single-use - clear so subsequent fd reopens (rotation)
-                # use SEEK_END like the normal path.
+                # Single-use. There is no reopen to inherit it: a
+                # rotation trims THIS inode in place and seeks this
+                # same fd back to 0, so the descriptor really is
+                # stable for the life of the loop. Cleared so a later
+                # rehydrate starts from EOF like the normal path.
                 self._adopt_tail_start_offset = None
             else:
                 try:
@@ -2733,13 +2948,7 @@ class TmuxBackend(SessionBackend):
                     await waiter.wait(PIPE_IDLE_POLL_SECONDS)
                     continue
 
-                if self.on_output is not None:
-                    try:
-                        result = self.on_output(chunk)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception as exc:
-                        logger.error("tmux_on_output_error", error=str(exc))
+                await self._emit_output(chunk)
 
         except asyncio.CancelledError:
             raise
@@ -2757,14 +2966,78 @@ class TmuxBackend(SessionBackend):
             except OSError:
                 pass
 
-    async def _maybe_rotate(self, pipe_path: Path, current_fd: int) -> None:
-        """Rotate the pipe file if it's too big or too old.
+    async def _emit_output(self, chunk: bytes) -> None:
+        """Hand one chunk of pane output to the ``on_output`` callback.
 
-        We rename the current file to ``<name>.1``, then truncate the pipe
-        back to zero. tmux's ``cat >> file`` keeps appending after our
-        rename because the shell re-opens the path each time the pipe-pane
-        hook fires - no tmux restart needed. We re-point our read fd at the
-        freshly-truncated file.
+        Shared by the tail loop and by the pre-truncate drain so both
+        deliver bytes the same way, including the guard that stops a
+        caller's exception from killing the reader.
+
+        Inputs: chunk (bytes) - raw pane output, never empty.
+        Output: None.
+        Example: await self._emit_output(b'hello\\r\\n')
+        """
+        if self.on_output is None:
+            return
+        try:
+            result = self.on_output(chunk)
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as exc:
+            logger.error("tmux_on_output_error", error=str(exc))
+
+    async def _drain_to_eof(self, current_fd: int) -> int:
+        """Read whatever is left in the pipe file and emit it.
+
+        Called immediately before a truncate. The rotation check runs at
+        the TOP of a loop iteration, so it can fire while the previous
+        read left bytes unread; truncating without draining first would
+        destroy exactly those bytes.
+
+        Inputs: current_fd (int) - the tail loop's read descriptor.
+        Output: int - how many bytes were drained, for the rotation log.
+        Example: drained = await self._drain_to_eof(fd)
+        """
+        drained = 0
+        while True:
+            try:
+                chunk = os.read(current_fd, 8192)
+            except BlockingIOError:
+                break
+            except OSError as exc:
+                logger.warning("tmux_pipe_drain_read_error", error=str(exc))
+                break
+            if not chunk:
+                break
+            drained += len(chunk)
+            await self._emit_output(chunk)
+        return drained
+
+    async def _maybe_rotate(self, pipe_path: Path, current_fd: int) -> None:
+        """Trim the pipe file in place if it is too big or too old.
+
+        THE FILE IS NEVER RENAMED, and that is the whole correction.
+        ``pipe-pane`` runs ``cat >> <path>``, which opens the path ONCE
+        and holds the descriptor, so a rename moves the live file out
+        from under its own name and leaves a decoy: nothing is
+        reclaimed, later size checks stat the 0-byte decoy and can never
+        fire again, and the following rotation unlinks the file the
+        writer is still filling. Measured against real tmux 2026-09-10.
+        See ``src/core/pipe_rotation.py`` for the measurements and for
+        why ``O_APPEND`` makes truncating in place correct.
+
+        ``current_fd`` is the loop's own read descriptor and it is
+        genuinely used: the truncate resets the file to zero while that
+        descriptor is still parked at the old end of file, so the same
+        step seeks it back to the start. The two must not be separated.
+
+        Inputs: pipe_path (Path) - the managed pipe file, which must not
+            have been renamed. current_fd (int) - the tail loop's read
+            descriptor on that file.
+        Output: None. Trims the file and re-seeks the descriptor as a
+            side effect, and leaves both untouched on failure so the
+            next check retries.
+        Example: await self._maybe_rotate(pipe_path, fd)
         """
         try:
             st = os.stat(str(pipe_path))
@@ -2772,30 +3045,32 @@ class TmuxBackend(SessionBackend):
             return
 
         age_hours = (time.monotonic() - self._rotation_started_at) / 3600.0
-        too_big = st.st_size > MAX_LOG_BYTES
-        too_old = age_hours > ROTATE_AGE_HOURS
-
-        if not (too_big or too_old):
+        reason = rotation_reason(
+            st.st_size, age_hours, MAX_LOG_BYTES, ROTATE_AGE_HOURS
+        )
+        if reason is None:
             return
 
         logger.info(
             "tmux_pipe_rotating",
             size=st.st_size,
             age_hours=round(age_hours, 2),
-            reason="size" if too_big else "age",
+            reason=reason,
         )
 
-        rotated = pipe_path.with_suffix(pipe_path.suffix + ".1")
-        try:
-            if rotated.exists():
-                rotated.unlink()
-            os.rename(str(pipe_path), str(rotated))
-            # Truncate by creating a new empty file at the original path.
-            pipe_path.touch()
-            # Permissive perms so tmux (same uid) can keep writing.
-            os.chmod(str(pipe_path), stat.S_IRUSR | stat.S_IWUSR)
-        except OSError as exc:
-            logger.warning("tmux_pipe_rotate_failed", error=str(exc))
+        # Drain BEFORE the truncate, or these bytes are destroyed rather
+        # than delivered.
+        drained = await self._drain_to_eof(current_fd)
+
+        if not truncate_in_place(pipe_path, current_fd):
+            # Already logged with the specific errno. Leave the stamp
+            # alone so the next check tries again.
             return
 
         self._rotation_started_at = time.monotonic()
+        logger.info(
+            "tmux_pipe_rotated",
+            session=self.tmux_session,
+            reason=reason,
+            drained_bytes=drained,
+        )

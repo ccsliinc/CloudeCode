@@ -181,6 +181,12 @@
          owns the .settings-field rules this builds on. -->
     <link rel="stylesheet" href="/static/css/settings-audio.css" />
 
+    <!-- The one-time settings import panel's row grid. After styles.css,
+         which owns the .settings-section and .settings-field rules it
+         builds on; it declares layout only and borrows every colour from
+         the active theme's tokens. -->
+    <link rel="stylesheet" href="/static/css/settings-import.css" />
+
     <!-- The global audio on/off control (client/js/globalAudioToggle.js),
          re-parented between .home-bar and .info by app.js. Self-contained:
          it never edits home-bar.css/terminal-tools.css/styles.css, only
@@ -255,6 +261,7 @@
          an ESC[2J that erases the alternate screen. See
          client/css/terminal-away-bar.css. -->
     <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
+<<<<<<< HEAD
 
     <!-- THE COMPILED TREE'S STYLESHEET (see web/ and CLAUDE.md, "The web/
          build"). Built by vite from web/src into client/dist with a FIXED
@@ -268,11 +275,28 @@
          harmless anywhere: a layered rule loses to every unlayered one in
          this file regardless of order. -->
     <link rel="stylesheet" href="/static/dist/app.css" />
+=======
+    <!-- Item 9's notice banner - calm info tokens, not the alarm-red
+         inline style it shipped with. See client/css/deep-link-notice.css. -->
+    <link rel="stylesheet" href="/static/css/deep-link-notice.css" />
+>>>>>>> 6012467
 </head>
 <body>
-    <!-- Item 9: deep-link error banner. Populated by router.js when the
-         URL contains `/session/<invalid>`. Hidden by default. -->
-    <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
+    <!-- Item 9: deep-link / navigation notice banner. Populated by
+         router.js (a deep link or session URL that named nothing) and by
+         toast-navigate.js (a toast pointing at a session that is no
+         longer running). Hidden by default, transient, dismissible - see
+         client/css/deep-link-notice.css and the showError/clearError
+         pair in client/js/router.js. Stays a normal in-flow block at the
+         top of <body>, above `.header` - exactly where it has always
+         been. It must never move inside `.terminal-container`: an
+         in-flow panel toggled there reflows the terminal grid under the
+         user (see CLAUDE.md's `#localServersContainer` precedent). -->
+    <div id="deep-link-error" role="status" aria-live="polite">
+        <span id="deep-link-error-text" class="deep-link-error__text"></span>
+        <button type="button" id="deep-link-error-dismiss"
+                class="deep-link-error__dismiss" aria-label="dismiss notice">&times;</button>
+    </div>
 
     <div class="header">
         <!-- HOME-HEADER-CONSOLIDATION: `.header-row` wraps the original
@@ -804,6 +828,13 @@
          wiring their listeners. See that file for the two shipped bugs it
          exists to retire. -->
     <script src="/static/js/dismiss-guard.js"></script>
+    <!-- The one answer to "is the navigation I started still the one on
+         screen?". Zero dependencies, and loaded here because every
+         surface that navigates - the conversation sidebar, the launcher,
+         the router, the restart return, the toast stack and the terminal
+         itself - reads it, and the earliest load order is the only one
+         that cannot be got wrong by a later insertion. -->
+    <script src="/static/js/navigation-generation.js"></script>
     <!-- The vertical three-dot mark. Its one consumer is the header
          overflow (header-menu.js), so it must load before that. It was
          shared with the conversation rows until their overflow menu was
@@ -813,12 +844,50 @@
          drifting copies of it before. -->
     <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
+    <!-- Issue #48: the same-origin lazy script loader, and the ordered
+         URL lists for the two families it loads on demand (the message
+         archive and the config/project file editor). Both are
+         self-contained IIFEs with no dependency of their own, so they
+         load here, early, once - client/js/archive-loader.js and
+         client/js/config-editor-loader.js (further down, beside each
+         family's eager remnant) are what actually call them. -->
+    <script src="/static/js/module-loader.js"></script>
+    <script src="/static/js/module-families.js"></script>
     <!-- The two CROSS-SESSION toast reads, extending API.prototype the
          way api-archive.js does. MUST load after api.js: `class API` is
          not hoisted across scripts and this file refuses loudly rather
          than defining nothing. -->
     <script src="/static/js/api-toasts.js"></script>
     <script src="/static/js/auth.js"></script>
+    <!-- The client's copy of the server-owned ui_preferences block.
+         MUST load before any preference-dependent control, because a
+         control that initialises on its default and then SAVES it
+         overwrites the user's real setting. The module refuses every
+         write until hydrate() has succeeded, so load order is the first
+         of two defences rather than the only one. Pure state plus one
+         fetch: no DOM, so its position here is about who reads it, not
+         about what it paints. -->
+    <script src="/static/js/preferences.js"></script>
+    <!-- Where the preference block meets the terminal socket: the
+         preferences.changed branch and the authoritative refresh on
+         reconnect. Its own file so terminal.js keeps one delegating line
+         each instead of the reasoning, the same split
+         terminal-socket-abandon.js already uses. Loads after
+         preferences.js and before terminal.js. -->
+    <script src="/static/js/preferences-transport.js"></script>
+
+    <!-- Puts an existing localStorage-backed control on the shared
+         preference: server value wins, local copy is kept as the fallback
+         and is never cleared. Must load AFTER preferences.js and BEFORE
+         any control that calls it. -->
+    <script src="/static/js/preference-bridge.js"></script>
+    <!-- The one-time settings import (#46). The collector is an allowlist
+         of literal storage keys and never iterates storage, which is what
+         keeps the two auth tokens out of the payload by construction. The
+         panel mounts into a settings slot and uploads nothing until the
+         user presses import. -->
+    <script src="/static/js/settings-import-collect.js"></script>
+    <script src="/static/js/settings-import.js"></script>
     <!-- v0.7.0 Part 2 — toast manager loaded EARLY so window.ToastManager
          is defined before terminal.js's WS message handler dispatches
          toast.new / toast.ack frames. -->
@@ -828,7 +897,36 @@
          window.SessionLabel.resolve() to decide what that name is. It has
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
+    <!-- issue #39 - coalesces many toast-model changes into one render
+         pass (a 500-record backfill measured 500 renders and ~173ms of
+         synchronous work otherwise). Pure and dependency-free, so it has
+         no order requirement relative to toast.js or anything else here;
+         it sits beside it because toast-render.js's `_scheduleRender`
+         reads `window.ToastRenderBatch` at CALL time, well after every
+         script on the page has loaded. -->
+    <script src="/static/js/toast-render-batch.js"></script>
+    <!-- issue #39 (server half) - compares a toast's server-stamped
+         monotonic `version` so a duplicated or out-of-order hook-fed
+         update cannot regress a card already applied. Pure and
+         dependency-free like toast-render-batch.js beside it: no order
+         requirement relative to toast.js, because toast-lifecycle.js
+         reads `window.ToastVersionArbitration` at CALL time. -->
+    <script src="/static/js/toast-version-arbitration.js"></script>
     <script src="/static/js/toast.js"></script>
+    <!-- issue #55 - toast.js had grown past the 1000-line guideline, so
+         its class body is split across three files along the seams the
+         file already had: grouping/coalescing, rendering, lifecycle.
+         Each does `Object.assign(ToastManager.prototype, {...})`, the
+         same pattern api-toasts.js uses for API.prototype, so all three
+         MUST load after toast.js - `class ToastManager` is not hoisted
+         across scripts and each one throws loudly if loaded first. Order
+         AMONG the three does not matter: every cross-method call
+         (_render calling _groups, dismiss calling _cardFor, and so on)
+         resolves through the shared prototype at CALL time, well after
+         every script on the page has finished loading. -->
+    <script src="/static/js/toast-grouping.js"></script>
+    <script src="/static/js/toast-render.js"></script>
+    <script src="/static/js/toast-lifecycle.js"></script>
     <!-- punchlist 7 - a toast raised by ANY session reaches the browser,
          whatever session is on screen. Two things used to filter them:
          the toast.new WS frame is fanned out only to sockets bound to the
@@ -1022,6 +1120,13 @@
          measurement is skipped instead of being shipped to tmux. -->
     <script src="/static/js/terminal-metrics.js"></script>
     <script src="/static/js/terminal-layout-wait.js"></script>
+    <!-- Retires a socket a new connect is about to abandon. Must load
+         BEFORE terminal.js, whose connectWebSocket() asks it whether the
+         socket it holds was still mid-handshake. Absent, that connect
+         falls back to the old behaviour of overwriting the reference and
+         leaking the socket, so load order is the only thing making the
+         fix take effect. -->
+    <script src="/static/js/terminal-socket-abandon.js"></script>
     <!-- Transient-geometry guard. Must load BEFORE terminal-layout.js,
          whose requestFit() asks it how long to wait and whose flush()
          asks it whether a settled grid is worth a pty_resize at all. A
@@ -1050,6 +1155,51 @@
     <!-- Must load BEFORE terminal.js: it is the gate that keeps one
          session's bytes out of another session's terminal. -->
     <script src="/static/js/terminal-frame-guard.js"></script>
+    <!-- The input direction of that same gate: the one predicate every
+         path with an await between the gesture and the write asks before
+         it puts bytes into a session. The frame guard above keeps one
+         session's OUTPUT out of another's terminal; this keeps the
+         user's INPUT out, which is worse - output in the wrong pane is
+         confusing, input in the wrong pane runs a command. Must load
+         BEFORE terminal.js and before clipboard.js. -->
+    <script src="/static/js/terminal-input-ownership.js"></script>
+    <!-- The admission policy for bytes on their way into xterm: a byte
+         budget, drop from the FRONT, and one announced marker in place
+         of what went. PURE - measurements in, a number out - so
+         terminal.js keeps the queue and this keeps the rule. Must load
+         BEFORE terminal.js, whose enqueue() reads it on every frame; if
+         it is missing the queue is unbounded, which is the behaviour
+         that shipped. -->
+    <script src="/static/js/terminal-write-queue.js"></script>
+    <!-- What a reconnect attempt MEASURED, what that costs the retry
+         budget, and which named recovery a close code asks for. PURE.
+         Must load BEFORE terminal.js; if it is missing every close falls
+         back to the plain same-id retry, which is what every close
+         reached before the named branches existed. -->
+    <script src="/static/js/terminal-reconnect-policy.js"></script>
+    <!-- What happens to what you typed before the pane could hear it.
+         The attach handshake DISCARDS binary frames until it has the
+         client's dims, so the window before `terminal.ready` is deaf and
+         not merely slow. Holds input by CONNECTION generation, flushes
+         on ready, rejects the whole batch over 64 KiB, and never replays
+         after an ambiguous disconnect. Must load BEFORE terminal.js; if
+         it is missing every input path sends straight through, which is
+         exactly the behaviour that shipped. -->
+    <script src="/static/js/terminal-input-buffer.js"></script>
+    <!-- The two BOUNDED waits between a click and a connected terminal:
+         has the vendored xterm bundle loaded, and can the grid be
+         measured from a container that really has a box. Both replace
+         fixed sleeps, both are polled on a TIMER rather than a frame so a
+         backgrounded tab still resolves them. Must load BEFORE
+         terminal.js, which throws on its absence at init: there is no
+         terminal to degrade into. -->
+    <script src="/static/js/terminal-readiness.js"></script>
+    <!-- The ordered pre-connect screen paint: bounded layout wait,
+         guarded fit, parser reset, raw octets. Both session entry paths
+         used to carry a byte-identical copy. Must load BEFORE
+         terminal.js; if it is missing the capture is skipped and the
+         live stream still comes up. -->
+    <script src="/static/js/terminal-scrollback-paint.js"></script>
     <script src="/static/js/terminal.js"></script>
     <!-- Punchlist item 1: after a measured absence, OFFER full history, a
          summary of what happened, or just carry on, instead of the app
@@ -1086,6 +1236,14 @@
          because slash-commands.js is already past the 500-line budget. -->
     <script src="/static/js/slash-favorites.js"></script>
     <script src="/static/js/slash-commands.js"></script>
+    <!-- Starts the palette WITHOUT the WebSocket waiting for it. The two
+         fetches it makes used to sit directly above the terminal connect,
+         on the critical path between a click and a connected pane, and
+         the list is a property of the session's AGENT rather than of the
+         socket. Carries the navigation token so a palette landing after
+         the user has left cannot populate another session's menu. Must
+         load AFTER slash-commands.js, whose modal it drives. -->
+    <script src="/static/js/slash-commands-boot.js"></script>
     <!-- Item 9: deep-link router. Must load AFTER auth.js + launchpad.js
          so it can call into them once a `/session/<name>` URL is parsed. -->
     <script src="/static/js/router.js"></script>
@@ -1094,6 +1252,14 @@
          BEFORE app.js, whose show*() methods call ScreenChrome.apply(). -->
     <script src="/static/js/screen-chrome.js"></script>
 
+    <!-- The shared CSS-var diff writer registry.js calls into for both
+         :root and #terminal-screen. Must load BEFORE themes/registry.js. -->
+    <script src="/static/js/theme-var-writer.js"></script>
+    <!-- Whether a theme's effects.js may run, and where that answer is
+         kept. Must load AFTER preferences.js (it subscribes to the shared
+         record on load) and BEFORE themes/registry.js, which refuses to
+         run any theme script at all when this module is absent. -->
+    <script src="/static/js/theme-consent.js"></script>
     <!-- Phase 2: theme registry + selector. Must load BEFORE app.js so
          App.init() can call Themes.init() / ThemeSelector.mount(). -->
     <script src="/static/js/themes/registry.js"></script>
@@ -1195,6 +1361,17 @@
          BEFORE it for the same reason: setActiveSession calls into this. -->
     <script src="/static/js/session-entry-toasts.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
+    <!-- The sidebar's one public off-schedule refresh, split out because
+         session-sidebar.js is held to a 500 line budget. Must load AFTER
+         it: it attaches the method to window.SessionSidebar. -->
+    <script src="/static/js/session-sidebar-refresh.js"></script>
+    <!-- The application event channel, /ws/events. Loads AFTER
+         session-sidebar.js and preferences-transport.js because it pokes
+         both by name on a frame, and BEFORE app.js, which calls
+         AppEvents.start() once authentication has succeeded. Everything
+         it does is an optimisation: with this file absent, or its socket
+         down, every list still converges on its own poll. -->
+    <script src="/static/js/app-events.js"></script>
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
     <script src="/static/js/session-sidebar-pin.js"></script>
@@ -1205,9 +1382,18 @@
          when that crossed the 500-line budget; must load BEFORE it. -->
     <script src="/static/js/session-sidebar-drop-target.js"></script>
     <script src="/static/js/session-sidebar-reorder.js"></script>
+    <!-- The shared prefix-glyph builder for a menu item, same pattern as
+         kebab-icon.js. Loads here, BEFORE session-sidebar-group-actions.js
+         below, because that module's group-header menu (rename/move up/
+         move down/remove) now calls it too; it must also still load
+         before session-row-menu.js further down, which is its original
+         consumer. -->
+    <script src="/static/js/session-row-menu-icons.js"></script>
     <!-- Create/rename/delete/reorder groups, and every NON-DRAG way to
          move a session between them. Loads AFTER reorder because it
-         borrows that module's live-region announcer. -->
+         borrows that module's live-region announcer, and AFTER
+         session-row-menu-icons.js, which its group-header menu calls for
+         each item's prefix glyph. -->
     <script src="/static/js/session-sidebar-group-actions.js"></script>
     <!-- The reserved bands' (pinned/other) kebab menu, split out to keep
          session-sidebar-group-actions.js under the 500-line budget. Must
@@ -1228,11 +1414,19 @@
          anchor-popover.js. The gesture module must load after the menu
          AND after session-sidebar.js, whose #session-sidebar-list it
          attaches to; it owns right click and long press only, because
+<<<<<<< HEAD
          -open.js binds the trigger tap itself.
 
          The plugin bridge only READS window.CloudeWeb, which the deferred
          module at the bottom of this file publishes; nothing here runs at
          parse time, and the first row is painted long after that. -->
+=======
+         -open.js binds the trigger tap itself. session-row-menu-icons.js
+         (the shared builder for each item's prefix glyph, same pattern as
+         kebab-icon.js) already loaded earlier, above, for
+         session-sidebar-group-actions.js; it is also required here, since
+         session-row-menu.js calls it too. -->
+>>>>>>> 6012467
     <script src="/static/js/session-row-menu-items.js"></script>
     <script src="/static/js/session-row-menu-plugins.js"></script>
     <script src="/static/js/session-row-menu.js"></script>
@@ -1283,37 +1477,22 @@
     <script src="/static/js/toast-history-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
-    <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -
-         served from this app's own origin so it satisfies the CSP's
-         script-src 'self' with no CDN and no policy change. Exposes
-         window.CodeMirrorBundle. Must load BEFORE config-editor-modal.js. -->
-    <script src="/static/vendor/codemirror/codemirror-bundle.js"></script>
-
-    <!-- Config/project file tree + editor. Must load AFTER api.js
-         (window.API) and BEFORE app.js so App.init() can wire
-         #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
+    <!-- Config/project file tree + editor (issue #48). CodeMirror
+         (client/vendor/codemirror/, see its VERSION.md) and every
+         config-editor-*.js file, plus its config-drawer-pin.js companion,
+         now load LAZILY on first click of #configEditorBtn rather than on
+         every page load - see client/js/module-families.js
+         (window.ModuleFamilies.CONFIG_EDITOR, the ordered URL list) and
+         client/js/config-editor-loader.js (the click-time glue,
+         App.init() wires the button to it). Only markdown-lite.js and
+         modal-stack.js stay eager: both are shared with modules that are
+         NOT part of this lazy family (copy-output.js and
+         server-status-panel.js respectively), so moving them would
+         either load them twice or make an unrelated eager feature depend
+         on a lazy one. -->
     <script src="/static/js/markdown-lite.js"></script>
-    <!-- Escape routing / scroll lock / focus restore for the picker+editor
-         pair. Must load BEFORE both of them. -->
     <script src="/static/js/modal-stack.js"></script>
-    <script src="/static/js/config-editor-modal.js"></script>
-    <!-- "new file" prompt. Must load BEFORE config-editor-panel.js, whose
-         header button calls window.ConfigEditorNewFile.open(). -->
-    <script src="/static/js/config-editor-new-file.js"></script>
-    <!-- Root table + working-directory resolver + the "why is this root
-         absent" sentences. Must load BEFORE config-editor-panel.js, which
-         reads window.ConfigEditorRoots.ROOTS at class-definition time. -->
-    <script src="/static/js/config-editor-roots.js"></script>
-    <!-- Which tree nodes start collapsed, and the localStorage map behind
-         it. Must load BEFORE config-editor-panel.js, which renders against
-         window.ConfigEditorTreeState. -->
-    <script src="/static/js/config-editor-tree-state.js"></script>
-    <script src="/static/js/config-editor-panel.js"></script>
-    <!-- Docking the file drawer open. Must load AFTER
-         config-editor-panel.js (reads window.ConfigEditorPanel.isOpen) and
-         it is the panel's _wire() that calls init(). Same split, same
-         reasons, as session-sidebar-pin.js beside session-sidebar.js. -->
-    <script src="/static/js/config-drawer-pin.js"></script>
+    <script src="/static/js/config-editor-loader.js"></script>
 
     <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
          (window.DismissGuard). It re-parents the existing header control
@@ -1362,117 +1541,31 @@
     <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
-    <!-- Archive (message browser). Order is DEPENDENCY order: the API
-         half first (api-archive.js extends API.prototype and throws if
-         api.js has not run), then pure helpers, then state, then views,
-         then the composition root. app.js MUST stay last - it is the
-         controller and reaches for these globals at parse time. -->
-    <script src="/static/js/api-archive.js"></script>
-    <!-- THE WAY IN. Both the launchpad row and the header overflow item
-         call ArchiveEntry.open(), so there is ONE navigation into the
-         archive rather than two that can drift apart. Before this the
-         only control in the whole DOM matching /archive/ was the archive
-         screen's own Back button - you had to type the URL. -->
-    <script src="/static/js/archive-entry.js"></script>
-    <script src="/static/js/archive-outcome.js"></script>
-    <script src="/static/js/archive-mask.js"></script>
-    <script src="/static/js/archive-format.js"></script>
-    <!-- Subsequence matching for the transcript list's per-column
-         filters. Pure; no DOM. -->
-    <script src="/static/js/archive-fuzzy.js"></script>
+    <!-- Archive (message browser), issue #48. The 51 files that used to
+         load here unconditionally - the API extension, every pure
+         helper, nav, transcript list, reader, chat view and the screen
+         shell itself - now load LAZILY, on first entry into /archive, in
+         their same DEPENDENCY order. See client/js/module-families.js
+         (window.ModuleFamilies.ARCHIVE, the ordered URL list),
+         client/js/module-loader.js (the same-origin script loader) and
+         client/js/archive-loader.js (App.showArchive()'s glue).
+
+         Two files stay eager. archive-deeplink.js is route PARSING:
+         router.js must be able to resolve a deep link to
+         /archive/t/<id> before anything is lazily loaded, or the app
+         cannot tell what to load - see router.js's own
+         parseArchivePath(), which already has a named "did not load"
+         refusal for exactly this reason. archive-entry.js is THE WAY IN:
+         both the launchpad row and the header overflow item call
+         ArchiveEntry.open(), so there is ONE navigation into the archive
+         rather than two that can drift apart, and it has to be present
+         before the user has clicked anything to decide whether either
+         entry point should even be shown. app.js MUST stay last - it is
+         the controller and reaches for archive-loader.js's and every
+         other eager module's globals at parse time. -->
     <script src="/static/js/archive-deeplink.js"></script>
-    <script src="/static/js/archive-virtual-list.js"></script>
-    <script src="/static/js/archive-state.js"></script>
-    <script src="/static/js/archive-outcome-view.js"></script>
-    <script src="/static/js/archive-body-gate.js"></script>
-    <script src="/static/js/archive-body-cache.js"></script>
-    <script src="/static/js/archive-line-render.js"></script>
-    <!-- archive-nav-fuzzy.js defines no dependency of its own; it must
-         simply precede archive-nav-merged.js, which calls it. -->
-    <script src="/static/js/archive-nav-fuzzy.js"></script>
-    <script src="/static/js/archive-nav-row.js"></script>
-    <!-- The next three all read window.ArchiveNavRow at IIFE time, so they
-         load AFTER archive-nav-row.js and BEFORE archive-nav.js.
-         archive-nav-card.js renders a project as a card; archive-nav-row.js
-         delegates to it at CALL time, so the order between those two is not
-         load-bearing, but archive-nav-tree.js IS a hard dependency of
-         archive-nav.js, which reads window.ArchiveNavTree at create() time.
-         archive-nav-info.js is the card's info modal and registers with
-         modal-stack.js, which is already loaded far above. -->
-    <script src="/static/js/archive-nav-card.js"></script>
-    <script src="/static/js/archive-nav-info.js"></script>
-    <script src="/static/js/archive-nav-tree.js"></script>
-    <!-- The rail's ORDER: comparators, the persisted choice, and how a
-         project's date renders. Both readers reach for it at PAINT
-         time, not at load time (archive-nav-row.js calls activityCell
-         inside renderRow, archive-nav-merged.js calls sortNodes inside
-         paint), so any position before the first paint is correct - and
-         both guard on its absence rather than throwing. -->
-    <script src="/static/js/archive-nav-order.js"></script>
-    <!-- The by-machine drill-down, split out of archive-nav.js when the
-         order control took that file over the 500-line cap. Read at
-         create() time, so it must load BEFORE archive-nav.js. -->
-    <script src="/static/js/archive-nav-drill.js"></script>
-    <script src="/static/js/archive-nav-merged.js"></script>
-    <script src="/static/js/archive-nav.js"></script>
-    <script src="/static/js/archive-tlist-row.js"></script>
-    <!-- The compact scheme chooser and the three fuzzy inputs. MUST load
-         before archive-transcript-list.js, which builds one. -->
-    <script src="/static/js/archive-tlist-filter.js"></script>
-    <script src="/static/js/archive-transcript-list.js"></script>
-    <script src="/static/js/archive-keys.js"></script>
-    <!-- The keyboard help MODAL, split out of archive-keys.js when the
-         `v` binding took that file over the 500-line cap. It reads
-         ArchiveKeys.bindings() at OPEN time, so it MUST load after it. -->
-    <script src="/static/js/archive-keys-help.js"></script>
-    <script src="/static/js/archive-reader-dom.js"></script>
-    <script src="/static/js/archive-reader-paging.js"></script>
-    <script src="/static/js/archive-reader-select.js"></script>
-    <script src="/static/js/archive-reader-body.js"></script>
-    <script src="/static/js/archive-reader.js"></script>
-    <script src="/static/js/archive-search-render.js"></script>
-    <script src="/static/js/archive-search.js"></script>
-    <script src="/static/js/archive-export.js"></script>
-    <script src="/static/js/archive-screen-reader.js"></script>
-    <!-- THE CONVERSATION VIEW, which is the reader's DEFAULT. Six files,
-         loaded innermost first because each one reads the globals of the
-         ones above it AT CALL TIME, not at load: block -> estimate,
-         block/info/subagents -> turn, turn/estimate/stack -> view,
-         view -> screen. archive-mask.js, archive-outcome*.js and
-         archive-virtual-list.js are all already loaded above; the chat
-         view reuses them rather than growing its own masking, its own
-         outcome vocabulary or its own windowing engine. -->
-    <script src="/static/js/archive-chat-block.js"></script>
-    <script src="/static/js/archive-chat-info.js"></script>
-    <script src="/static/js/archive-chat-subagents.js"></script>
-    <script src="/static/js/archive-chat-turn.js"></script>
-    <script src="/static/js/archive-chat-estimate.js"></script>
-    <script src="/static/js/archive-chat-stack.js"></script>
-    <script src="/static/js/archive-chat-clicks.js"></script>
-    <script src="/static/js/archive-chat-view.js"></script>
-    <script src="/static/js/archive-chat-screen.js"></script>
-    <!-- Draggable, remembered pane widths. MUST load before
-         archive-screen-shell.js, which attaches the two handles to the
-         grid it creates, at script load. -->
-    <script src="/static/js/archive-pane-resize.js"></script>
-    <!-- What a breadcrumb segment SAYS, so no database id reaches one.
-         Pure; no DOM. -->
-    <script src="/static/js/archive-crumb.js"></script>
-    <!-- Names a project reached by URL rather than by a rail click. Reads
-         window.ArchiveCrumb.indexNodes, so it loads AFTER archive-crumb.js
-         and before archive-screen.js, which builds the resolver. -->
-    <script src="/static/js/archive-crumb-resolve.js"></script>
-    <!-- The screen's DOM, and the cross-pane reader toolbar. Both split
-         out of archive-screen.js for the 500-line cap; both MUST load
-         before it, because it builds its shell at ITS script load. -->
-    <script src="/static/js/archive-screen-shell.js"></script>
-    <script src="/static/js/archive-screen-tools.js"></script>
-    <!-- Both reader-pane views and the switch between them. Reads
-         ArchiveReader, ArchiveChatScreen and ArchiveScreenTools at CALL
-         time, so it only has to load before archive-screen.js, which
-         builds it at wire(). -->
-    <script src="/static/js/archive-screen-views.js"></script>
-    <script src="/static/js/archive-screen.js"></script>
+    <script src="/static/js/archive-entry.js"></script>
+    <script src="/static/js/archive-loader.js"></script>
 
     <script src="/static/js/app.js"></script>
 

@@ -166,6 +166,39 @@
     // builder (buildSessionPath below) so the two halves can never drift.
     var DEEPLINK_PREFIX = '/session/';
 
+    // How long the notice banner stays on screen before it dismisses
+    // itself. Long enough to read one sentence, short enough that it
+    // never becomes furniture - the owner's complaint was that it was
+    // permanent, not that it was ever wrong to show it at all.
+    var AUTO_DISMISS_MS = 8000;
+
+    // The pending auto-dismiss timer, so a second message arriving before
+    // the first one times out resets the clock instead of stacking a
+    // second timer that fires against whatever is on screen by then.
+    var dismissTimerId = null;
+
+    // The navigation generation that was current when the message NOW ON
+    // SCREEN was raised (see NavigationGeneration in
+    // client/js/navigation-generation.js). null means either nothing is
+    // showing or the generation could not be determined. Read by
+    // clearError()'s stale-guard - see its doc comment.
+    var bannerGeneration = null;
+
+    /**
+     * Cancel any pending auto-dismiss timer.
+     * Description: called before arming a new one (so re-raising a
+     *   message resets the clock rather than stacking a second timer)
+     *   and whenever the banner is cleared for any other reason (so a
+     *   stale timer cannot later fire against an unrelated message).
+     * Inputs: none. Output: void.
+     */
+    function clearDismissTimer() {
+        if (dismissTimerId !== null) {
+            clearTimeout(dismissTimerId);
+            dismissTimerId = null;
+        }
+    }
+
     /**
      * Build the URL path for a session, using the SAME encoding the
      * server's `build_deep_link()` (src/core/notifications/events.py)
@@ -261,8 +294,18 @@
     }
 
     /**
-     * Show the top-of-page error banner with the given message. No-op
+     * Show the top-of-page notice banner with the given message. No-op
      * if the target div is missing (shouldn't happen - index.html owns it).
+     *
+     * Description: stamps the message with the navigation generation
+     *   current RIGHT NOW (see `bannerGeneration` above) - that stamp is
+     *   what lets clearError(token) later tell "this message predates the
+     *   navigation asking to clear it" apart from "this message IS the
+     *   result of the navigation asking to clear it". Also (re)arms the
+     *   auto-dismiss timer: a message re-raised while one is already
+     *   showing resets the clock instead of leaving an orphaned timer
+     *   running behind it.
+     * Inputs: message (string). Output: void.
      */
     function showError(message) {
         var el = document.getElementById('deep-link-error');
@@ -270,8 +313,22 @@
             console.warn('Router: #deep-link-error div missing, cannot display', message);
             return;
         }
-        el.textContent = message;
-        el.style.display = 'block';
+        var textEl = document.getElementById('deep-link-error-text');
+        if (textEl) {
+            textEl.textContent = message;
+        } else {
+            // Degraded markup with no child text span - fall back to the
+            // whole-element write rather than showing nothing.
+            el.textContent = message;
+        }
+        el.style.display = 'flex';
+        bannerGeneration = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
+        clearDismissTimer();
+        dismissTimerId = setTimeout(function () {
+            dismissTimerId = null;
+            clearError();
+        }, AUTO_DISMISS_MS);
     }
 
     /**
@@ -301,15 +358,72 @@
     }
 
     /**
-     * Hide the error banner (used when navigating to a valid URL via
-     * popstate back to `/`).
+     * Hide the notice banner.
+     *
+     * Description: called two ways, deliberately.
+     *
+     *   NO ARGUMENT - unconditional clear. This is the pre-existing
+     *   behavior, unchanged: applyCurrentPath()'s own path-based
+     *   transitions (a fresh load, a popstate, landing back on a valid
+     *   path) have always cleared unconditionally, and the manual
+     *   dismiss button does the same - a user's own click must always
+     *   win.
+     *
+     *   A NAVIGATION-GENERATION TOKEN (from
+     *   NavigationGeneration.current()) - a GUARDED clear, used by the
+     *   app's screen-entry points (App.showTerminal,
+     *   App.returnToExistingTerminal, App.showLaunchpad) to tidy up a
+     *   STALE notice on a successful navigation. The guard exists for
+     *   one reason: rejectTarget() (and the deep-link guard in
+     *   Launchpad.selectProject()) raise their banner INSIDE a
+     *   navigation that has ALREADY begun, so if a caller cleared using
+     *   the generation current at that same moment, the clear would
+     *   always succeed and the bounce-to-home would silence its own
+     *   message - the exact silent bounce CLAUDE.md's gotcha 3 forbids.
+     *   The comparison is therefore a STRICT less-than: the message
+     *   clears only once a generation NEWER than the one that raised it
+     *   has become current, which can only be true once some OTHER,
+     *   later navigation has begun. A message raised with no
+     *   determinable generation (NavigationGeneration unavailable, or
+     *   token omitted/not a number) always clears, matching the
+     *   pre-existing unconditional behavior - there is nothing to guard
+     *   against when there is no generation to compare.
+     * Inputs: token (number|undefined).
+     * Output: void.
      */
-    function clearError() {
+    function clearError(token) {
         var el = document.getElementById('deep-link-error');
-        if (el) {
-            el.style.display = 'none';
+        if (!el) return;
+        if (typeof token === 'number' && typeof bannerGeneration === 'number') {
+            if (!(bannerGeneration < token)) {
+                // Same generation as the one that raised this message
+                // (or, impossibly, a newer one) - refuse. See doc comment.
+                return;
+            }
+        }
+        el.style.display = 'none';
+        var textEl = document.getElementById('deep-link-error-text');
+        if (textEl) {
+            textEl.textContent = '';
+        } else {
             el.textContent = '';
         }
+        bannerGeneration = null;
+        clearDismissTimer();
+    }
+
+    /**
+     * Wire the banner's own dismiss button once. A manual dismiss is
+     * unconditional - see clearError()'s doc comment - the user's own
+     * click must always be able to get rid of it.
+     * Inputs: none. Output: void.
+     */
+    function wireDismissButton() {
+        var btn = document.getElementById('deep-link-error-dismiss');
+        if (!btn || typeof btn.addEventListener !== 'function') return;
+        btn.addEventListener('click', function () {
+            clearError();
+        });
     }
 
     /**
@@ -348,6 +462,20 @@
         var target = window.DeepLinkTarget;
         if (!target) {
             return;
+        }
+        // THE ROUTER'S INTENT, DECLARED AT ITS ONE HANDOFF POINT. A deep
+        // link and a Back/Forward are navigations exactly as a click is,
+        // and openProjectByName() can spend well over a second resolving
+        // this name against the session listing. Everything else this
+        // file does either stashes a target or calls App.showLaunchpad(),
+        // which declares its own. See client/js/navigation-generation.js.
+        //
+        // A STALE GENERATION IS NOT A REJECTED TARGET. rejectTarget()'s
+        // banner means "this URL names nothing"; a superseded navigation
+        // means the user simply went somewhere else, and raising a banner
+        // for it would be a lie the user has to dismiss.
+        if (window.NavigationGeneration) {
+            window.NavigationGeneration.begin('deeplink:' + target);
         }
         if (window.Launchpad && typeof window.Launchpad.openProjectByName === 'function') {
             console.log('Router: delivering deep-link target to launchpad:', target);
@@ -478,6 +606,10 @@
     function initRouter() {
         console.log('Router: initializing deep-link router');
 
+        // 0. Wire the banner's own dismiss button before anything below
+        //    can possibly raise a message.
+        wireDismissButton();
+
         // 1. First-load parse. NOT immediate: an archive route is stashed
         //    for App.showLaunchpad() to consume, never rendered from here
         //    while App.init() is still resolving auth. See the comment in
@@ -521,6 +653,11 @@
         // (project OR session) turns out not to exist.
         rejectTarget: rejectTarget,
         showError: showError,
+        // Screen-entry points call this with their navigation-generation
+        // token to tidy up a stale notice on a successful navigation -
+        // see clearError()'s doc comment for the guard that keeps a
+        // rejection from silencing itself.
+        clearError: clearError,
         // Archive routing - the inbound half. Outbound path building
         // lives in archive-deeplink.js and archive-screen.js.
         parseArchivePath: parseArchivePath,

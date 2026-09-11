@@ -24,6 +24,15 @@ a perfectly valid partial update cannot fix.
 
 **NEVER LOG A VALUE FROM ``notifications_update``.** Only the list of
 changed key NAMES, and that happens at the route handler.
+
+**THE MERGE RUNS INSIDE THE WRITE LOCK, ON A FRESH READ, SINCE 1.4.0.**
+It used to read the document, merge, and hand the result to an atomic
+write. Atomic is not serialized: a wrapper edit or a migration arriving
+between that read and that write merged into the same base, and whichever
+replace landed second dropped the other one's block with the file never
+once corrupt. :func:`src.core.config_writer.commit` takes a MUTATOR
+rather than a document, so this module cannot supply a stale base even by
+accident - it never supplies a base at all.
 """
 
 from __future__ import annotations
@@ -32,13 +41,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from src.config.agents import AgentsConfig
-from src.config.config_file import read_config_text, write_config_atomic
 from src.config.notifications import NotificationsConfig
 from src.config.workspace import ServerPrefsConfig, WorkspaceConfig
+from src.core import config_writer
 from src.core.workspace_settings import SERVER_PREFS_KEY, WORKSPACE_KEY
-
-#: The structlog event a failed pre-write backup is reported under.
-BACKUP_FAILED_EVENT = "config_settings_backup_failed"
 
 
 def _merge_block(
@@ -87,13 +93,20 @@ def update_settings_config(
         ValueError: invalid JSON, or a merged block fails validation.
     Example: update_settings_config(path, agents_update={"claude_command": "cld"})
     """
-    raw, data = read_config_text(config_path)
+    def merge(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply every present block to the document read inside the lock.
 
-    _merge_block(data, "agents", agents_update, AgentsConfig)
-    _merge_block(data, "notifications", notifications_update, NotificationsConfig)
-    _merge_block(data, WORKSPACE_KEY, workspace_update, WorkspaceConfig)
-    _merge_block(data, SERVER_PREFS_KEY, server_prefs_update, ServerPrefsConfig)
+        Inputs: data (dict) - the FRESH in-lock read, copied before it is
+          touched so a refused merge leaves the caller's dict alone.
+        Output: dict - the document to write.
+        Raises:
+            ValueError: pydantic refused a merged block.
+        """
+        data = dict(data)
+        _merge_block(data, "agents", agents_update, AgentsConfig)
+        _merge_block(data, "notifications", notifications_update, NotificationsConfig)
+        _merge_block(data, WORKSPACE_KEY, workspace_update, WorkspaceConfig)
+        _merge_block(data, SERVER_PREFS_KEY, server_prefs_update, ServerPrefsConfig)
+        return data
 
-    write_config_atomic(
-        config_path, data, previous=raw, event=BACKUP_FAILED_EVENT
-    )
+    config_writer.commit(config_path, merge)

@@ -20,6 +20,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
 )
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -49,6 +50,11 @@ from src.core.message_archive_flag import (
     resolve as resolve_message_archive,
 )
 from src.core.version import resolve_version
+from src.core.static_serving import (
+    maybe_gzip_file_response,
+    warm_static_gzip_cache,
+    render_compressible_html_response,
+)
 from src.core.update_check import UpdateChecker
 from src.core.setup_state import (
     current_bind_report,
@@ -61,17 +67,32 @@ from src.api import version_routes
 from src.api.version_routes import router as version_router, set_update_checker
 from src.api.routes import router as api_router
 from src.api.websocket import router as ws_router
+<<<<<<< HEAD
 from src.api.auth import limiter as auth_limiter, require_auth
 # The auth-side router is assembled in auth_routes, not in auth: auth is
 # the authority every route module on that side imports require_auth
 # from, so a router there would point the dependency arrow both ways.
 from src.api.auth_routes import router as auth_router
+=======
+from src.api.events_routes import router as events_ws_router
+from src.api.auth import (
+    router as auth_router,
+    limiter as auth_limiter,
+    require_auth,
+)
+>>>>>>> 6012467
 from src.api.config_files_routes import router as config_files_router
 from src.api.session_groups_routes import router as session_groups_router
 from src.api.imported_restart_routes import router as imported_restart_router
 from src.api.away_routes import router as away_router
 from src.api.restart_routes import router as restart_router
 from src.api.status_routes import router as status_router
+from src.api.preferences_routes import router as preferences_router
+from src.api.settings_routes import router as settings_import_router
+from src.api.websocket import connection_manager
+from src.core.ui_preferences_store import UiPreferencesStore
+from src.core.settings_import_store import SettingsImportStore
+from src.core.event_hub import EventHub
 from src.api.toast_routes import router as toast_router
 from src.api.corpus_routes import router as corpus_router
 from src.api.archive_overlay_routes import router as archive_overlay_router
@@ -583,6 +604,31 @@ async def lifespan(app: FastAPI):
     app.state.refresh_store = refresh_store
     app.state.notification_router = notification_router
     app.state.notification_policy_store = notification_policy_store
+    # The UI preference projection, plus the WebSocket manager the
+    # preferences routes fan ``preferences.changed`` out through. The
+    # store registers itself as a config.json commit listener when it is
+    # constructed, so it must exist before anything writes that file for
+    # its projection to stay in step with every other writer.
+    app.state.ui_preferences_store = UiPreferencesStore(
+        lambda: Path(settings.auth_config_file).expanduser()
+    )
+    # The one-time settings import. It writes the preference block AND
+    # the completion marker in ONE config_writer commit, so it is its own
+    # store rather than a method on the one above, which writes the block
+    # alone. It holds no cache of its own: the preference projection is
+    # refreshed by the commit listener that store already registered.
+    app.state.settings_import_store = SettingsImportStore(
+        lambda: Path(settings.auth_config_file).expanduser()
+    )
+    app.state.connection_manager = connection_manager
+    # The application event channel's fan-out (/ws/events). One bounded
+    # stream per connected browser, so a client on the home screen or
+    # looking at another session hears about a change without waiting for
+    # its next five second poll. Attached here, before anything can
+    # publish: every publish site is fail-soft and a missing hub simply
+    # publishes nothing, which costs a client the optimisation and never
+    # correctness. See src/core/event_hub.py.
+    app.state.event_hub = EventHub()
 
     # Background upload-uploads TTL pruner - safety net for long-running
     # servers. Layers 1 (destroy_session rmtree) and 2 (startup orphan
@@ -889,6 +935,8 @@ app.include_router(status_router, prefix="/api/v1")  # Read-only server/host/tmu
 # global) and readable afterwards (history). Dismissal is untouched and stays
 # per session on POST /toasts/{id}/ack. See src/api/toast_routes.py.
 app.include_router(toast_router, prefix="/api/v1")  # Cross-session toast list + history (auth required)
+app.include_router(preferences_router, prefix="/api/v1")  # Typed ui_preferences block: read and partial update (auth required)
+app.include_router(settings_import_router, prefix="/api/v1")  # One-time explicit import of a browser's settings, with a preview (auth required)
 if MESSAGE_ARCHIVE.enabled:
     # THE MESSAGE ARCHIVE'S ENTIRE HTTP SURFACE. Mounted only when the
     # master switch resolved to enabled; otherwise these paths 404 like
@@ -906,6 +954,7 @@ app.include_router(imported_restart_router, prefix="/api/v1")  # Preview and res
 app.include_router(setup_router, prefix="/api/v1")   # Setup wizard JSON (auth ONLY once setup is complete)
 app.include_router(setup_page_router)               # Setup wizard HTML shell at /setup
 app.include_router(ws_router)                       # WebSocket routes
+app.include_router(events_ws_router)                 # /ws/events: per-browser application event channel (JWT via subprotocol)
 
 # Mount static files
 client_dir = Path(__file__).parent.parent / "client"
@@ -941,6 +990,14 @@ class NoCacheStaticFiles(StaticFiles):
     runs on static hits, (b) it can't accidentally leak Cache-Control
     onto API JSON responses, and (c) it sidesteps any ordering tangles
     with the existing CSP middleware.
+
+    ISSUE #49 ADDED PRECOMPRESSED SERVING FOR THE SAME SUFFIX SET. The
+    cache lives in ``src/core/static_cache.py``; this class only decides
+    WHETHER to use it for a given request and builds the swapped response.
+    Every URL served here keeps the EXACT ``Cache-Control`` above -
+    compression changes the bytes on the wire, never how long they may be
+    kept, which is the whole point of not touching this class's original
+    job.
     """
 
     _NO_CACHE_SUFFIXES = (".js", ".html", ".json", ".css")
@@ -949,6 +1006,7 @@ class NoCacheStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         if path.lower().endswith(self._NO_CACHE_SUFFIXES):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response = await maybe_gzip_file_response(response, scope)
         return response
 
 
@@ -972,6 +1030,12 @@ class NoCacheStaticFiles(StaticFiles):
 mimetypes.add_type("audio/mp4", ".m4a")
 
 app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static")
+
+# Issue #49: precompress every static text file once, before the app
+# accepts its first request, so no request pays a cold-compress cost in
+# steady state. See src/core/static_serving.py and static_cache.py.
+_warmed_count = warm_static_gzip_cache(client_dir, NoCacheStaticFiles._NO_CACHE_SUFFIXES)
+logger.info("static_gzip_cache_warmed", files=_warmed_count)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,6 +1070,28 @@ def _render_index_html() -> str:
     html = (client_dir / "index.html").read_text(encoding="utf-8")
     chip = f"v{APP_VERSION}" if APP_VERSION else ""
     return html.replace(_VERSION_PLACEHOLDER, chip)
+
+
+#: Cache key for the rendered shell's compression (issue #49). A fixed
+#: literal, not a file path: the compressed bytes are addressed by the
+#: TEMPLATE file's fingerprint (see render_compressible_html_response),
+#: not by their own content, because nothing else shares this cache key.
+_INDEX_HTML_GZIP_CACHE_KEY = "index.html:rendered"
+
+
+def _render_index_html_response(request: Request) -> Response:
+    """Build the SPA shell response, precompressed when the client
+    accepts gzip - shared by root(), session_deep_link(), archive_root()
+    and archive_deep_link() so the four routes cannot drift apart on
+    either the version chip or the compression decision. See
+    src/core/static_serving.py::render_compressible_html_response for why
+    the index.html template's own mtime/size stand in for the rendered
+    output's freshness.
+    """
+    return render_compressible_html_response(
+        request, _render_index_html, client_dir / "index.html",
+        _INDEX_HTML_GZIP_CACHE_KEY,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1052,16 +1138,15 @@ else:
 
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """Serve the web interface."""
     # See NoCacheStaticFiles docstring - the HTML shell served from "/"
     # bypasses StaticFiles, so stamp the no-cache header here too or the
     # phone will keep booting a stale shell that references old JS URLs.
-    # _render_index_html() also stamps the live app version into the chip.
-    return HTMLResponse(
-        content=_render_index_html(),
-        headers={"Cache-Control": "no-cache, must-revalidate"},
-    )
+    # _render_index_html_response() also stamps the live app version into
+    # the chip and serves it precompressed when the client accepts gzip
+    # (issue #49).
+    return _render_index_html_response(request)
 
 
 # Item 9: deep-link route. `/session/<project>` serves the SAME SPA shell
@@ -1080,7 +1165,7 @@ async def root():
 #   error banner - not a 404 from the server. Security posture is
 #   unchanged because no server-side state is touched by this route.
 @app.get("/session/{project}")
-async def session_deep_link(project: str):
+async def session_deep_link(project: str, request: Request):
     """Serve the SPA shell for deep-link URLs.
 
     The ``project`` path parameter is consumed by the client-side router
@@ -1088,12 +1173,10 @@ async def session_deep_link(project: str):
     """
     # Same no-cache rationale as root(): force the HTML shell to
     # revalidate on every load so a stale cached shell doesn't pin
-    # the phone to an old JS bundle. Shares _render_index_html() with
-    # root() so the version chip is stamped identically on both routes.
-    return HTMLResponse(
-        content=_render_index_html(),
-        headers={"Cache-Control": "no-cache, must-revalidate"},
-    )
+    # the phone to an old JS bundle. Shares _render_index_html_response()
+    # with root() so the version chip and the compression decision are
+    # identical on both routes.
+    return _render_index_html_response(request)
 
 
 # Archive (message browser) SPA routes.
@@ -1132,33 +1215,30 @@ async def session_deep_link(project: str):
 if MESSAGE_ARCHIVE.enabled:
 
     @app.get("/archive")
-    async def archive_root() -> HTMLResponse:
+    async def archive_root(request: Request) -> Response:
         """Serve the SPA shell for the archive screen root.
 
-        Inputs: none.
-        Output: HTMLResponse - the stamped SPA shell.
+        Inputs: request (Request) - read for Accept-Encoding (issue #49).
+        Output: Response - the stamped SPA shell, precompressed when the
+          client accepts gzip.
         Example: GET /archive -> 200 text/html
         """
-        return HTMLResponse(
-            content=_render_index_html(),
-            headers={"Cache-Control": "no-cache, must-revalidate"},
-        )
+        return _render_index_html_response(request)
 
     @app.get("/archive/{rest:path}")
-    async def archive_deep_link(rest: str) -> HTMLResponse:
+    async def archive_deep_link(rest: str, request: Request) -> Response:
         """Serve the SPA shell for any archive deep link.
 
         The ``rest`` path parameter is consumed by the client-side router
         after the SPA boots; this handler does not inspect or validate it.
 
         Inputs: rest (str) - the remainder of the archive path.
-        Output: HTMLResponse - the stamped SPA shell.
+          request (Request) - read for Accept-Encoding (issue #49).
+        Output: Response - the stamped SPA shell, precompressed when the
+          client accepts gzip.
         Example: GET /archive/t/5767/l/7111 -> 200 text/html
         """
-        return HTMLResponse(
-            content=_render_index_html(),
-            headers={"Cache-Control": "no-cache, must-revalidate"},
-        )
+        return _render_index_html_response(request)
 
 else:
 

@@ -486,16 +486,6 @@ class Settings(BaseSettings):
 
         return read_config(config_path)
 
-    def _write_wrappers(self, config_path: Path, agents_data: dict) -> None:
-        """Persist an updated ``agents`` block, then drop the cache.
-
-        Inputs: config_path (Path); agents_data (dict) - the full new
-          block, already re-validated by the caller.
-        Output: None.
-        """
-        _wrappers.write_wrappers(config_path, agents_data)
-        self._auth_config_cache = None
-
     def _mutate_wrappers(
         self, mutation: Callable[[List[dict]], List[dict]]
     ) -> List[dict]:

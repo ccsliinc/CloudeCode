@@ -1,517 +1,773 @@
-# TODO
+# TODO — closing out the open issue board
 
-## In flight (2026-09-08 night)
+Repo: Adoom666/CloudeCodeDev. 53 open at start, 48 now.
+- 11 are ccsliinc's (their draft PRs) — not ours
+- 8 carry `blocked` (waiting on ccsliinc PR #19, Adam's ruling): #31 #32 #35 #36 #37 #50 #51 #58
+- the rest are ours
 
-### 1. Typing lag + cursor renders in the wrong place  [input-lag agent]
-Reported with screenshot: typed text appears BELOW the prompt box, colliding with
-the path/status line, and there is input lag. Appeared after
-`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` shipped in `d407fa1` (classic renderer
-instead of the fullscreen TUI). Suspected cost of the classic renderer, which the
-scrollback diagnosis explicitly warned flickers on redraw.
+## Done and merged to master
 
-Success criteria:
-- Typed characters appear inside the prompt box at the correct column.
-- No perceptible lag beyond the pre-change baseline (measure, do not eyeball).
-- Scrollback still accumulates, or the tradeoff is made an explicit setting with
-  a measured recommendation.
+- [x] #55 split toast.js -> toast-grouping / toast-render / toast-lifecycle (b932252)
+- [x] #6  CLAUDE.md spelling prohibition + all 27 docs indexed (53ed219)
+- [x] #56 perf harness can now measure settings open (53ed219)
+- [x] #57 local server subsystem documented as retained dead code (53ed219)
+- [x] #59 both stale test failures FIXED at root cause. Suite 5656/2 -> 5758/0 (53ed219)
 
-### 2. "attached <file>" toast is unreadable  [attach-toast agent]
-Screenshot: faint low-contrast text painted directly over terminal content.
-Requested: render it like the notification window instead, include a mini
-thumbnail of the attached image, keep it visible until the prompt is SENT, then
-hide.
+## In flight
 
-Success criteria:
-- Readable against terminal content in both themes.
-- Mini thumbnail of the attachment.
-- Persists until prompt submit, then dismisses.
-- Multiple attachments handled.
-- validator-agent confirms in a real browser.
+- [ ] #65 pinned theme overridden by folder .cc.theme
+- [ ] #8 #9 #10 #16 navigation generation token chain (terminal.js)
+- [ ] #30 file-tree scan off the event loop
+- [ ] #42 inventory durable browser preferences (phase 5 prerequisite)
 
-### 3. Local pytest breaks when an agent worktree exists  [pytest-ignore agent]
-`pytest.ini` `norecursedirs` covers `.worktrees` but not `.claude/worktrees`,
-where Claude Code agent worktrees land. Collection aborts with
-`ImportPathMismatchError` (two `tests/conftest.py`).
+## Held — needs Adam
 
-Success criteria: full local run collects cleanly with an agent worktree present.
+- #54 phase 7 control-mode input channel. MEASURED AND NOT PROMOTED, pending a
+  ruling. The 5 ms bar is cleared comfortably: delivery to the pane process is
+  p50 8.880 ms through a `send-keys` subprocess against p50 0.164 ms through a
+  persistent `tmux -C` channel, a p50 saving of 8.717 ms, reproduced to within
+  0.06 ms across two matched interleaved runs of 300 iterations per arm on a box
+  at load average 12.5 to 13.8. A bare `/usr/bin/true` spawn costs p50 4.661 ms
+  on the same path, so about half of what the current transport pays is process
+  creation that buys nothing. All five correctness cases in the issue pass
+  against the prototype, including 531 of 531 bytes exactly once and in order
+  through a 500 byte no-gap burst, and a 4 byte emoji surviving intact because
+  `send-keys -H` carries hex and never touches the line protocol's quoting.
+  THE QUESTION FOR ADAM IS WHERE THE CLIENT LIVES, not whether it is faster.
+  One shared client costs 2592 KiB but must attach to a scratch session, and a
+  scratch session keeps the tmux server alive on the socket after every real
+  session is gone (measured against `exit-empty on`), which is the condition
+  rejected on 2026-09-10. One client per session is lifecycle neutral (measured:
+  the server exits normally when the attached session is killed) and costs
+  130848 KiB across 50 processes at 50 sessions. Numbers are in
+  `docs/webui-performance-and-session-menu-plan.md` under phase 7. No production
+  code changed.
 
-### 4. Rebuild the draft release  [BLOCKED on 1-3]
-Draft release `v1.0.33` and its DMG were built at `f9df612`, before the three
-terminal fixes. Must be rebuilt from master after the above land, or it ships the
-frozen-terminal bug.
+- #64 CI disabled deliberately. Adam's own comment on the issue says do not close it.
+  Now documented in CLAUDE.md + docs/ci.md. Left open per his instruction.
+- #66 home card overflow menu: touches client/js/launchpad.js, which ccsliinc's
+  svelte migration (#11 PR#23, #76 PR#77) is actively rewriting. Real collision.
 
-## Done tonight
-- Grafted the v1.1 lineage onto master (`f9df612`), unrelated histories, tree
-  identical to v1.1. Default branch flipped to master.
-- Fixed the five defects making CI red (`97b947f`). All four jobs green.
-- Untracked `.cc.theme` (`4cc6187`).
-- Live output streaming fix on the reconcile attach path (`9f01c6c`) - the real
-  cause of the frozen terminal, latent, triggered by any server restart.
-- Reapplied the attach-paint + scrollback fix (`d407fa1`) after confirming it was
-  never the cause of the freeze.
-- Verified on live: 13/13 panes streaming, this session off the alternate screen
-  with 904 lines of retained history.
+## Note for every agent from here on
 
-## Agent notes
-Append findings below as `[AGENT-NAME] [TIMESTAMP]: finding`. Append, never
-overwrite.
+docs/ are now PINNED by tests/test_docs_index.py in both directions. Any new doc
+must get a row in CLAUDE.md's docs index or that test fails.
 
-[input-lag] [2026-09-08 22:50 ET]: The typed-text-in-the-wrong-place bug and the
-"input lag" are ONE defect. `capture_visible_screen()` sent the screen without
-the cursor, so the browser's cursor landed after the last captured character
-while the pane's sat five rows higher, inside Claude Code's input box. Harmless
-while Claude Code drew on the alternate screen (that renderer re-anchors with an
-absolute `ESC[r;cH` every frame); fatal since `d407fa1` made the normal screen
-the default, because a normal-screen frame is pure relative motion with zero
-absolute positioning, so the offset never heals. Proved end to end on a
-throwaway socket by replaying a real pane's capture into a second real pane:
-uncorrected, a typed `H` landed on the mode line at row 12 instead of the input
-box at row 8; corrected, the two panes agree cell for cell. Lag hypotheses
-measured and rejected: per-keystroke output is 52 to 650 bytes, the pane scrolls
-4 lines per 10 keystrokes not once per keystroke, and `HISTORY_LIMIT` 50000
-never reaches the attach path, which paints one viewport. The perceived lag is
-keystrokes painted where the user is not looking, then flushed by a later full
-redraw. Fix plus `tests/test_capture_cursor_real_tmux.py` (5 tests, 4 of them
-fail at HEAD). Suite: 5307 passed, 2 pre-existing failures unchanged
-(`test_nuke_sandbox::test_dry_run_deletes_nothing`, the documented-flaky
-`test_respawn_refreshes_pane_env`), no new ones.
+## Agent findings
 
-[attach-toast] [2026-09-08 22:58 ET]: The "attached <name>" confirmation was
-`FabMenu.notify` - one low-contrast line painted straight onto live terminal
-output with no card behind it and a 3-second timer - so it competed with moving
-scrollback and lost. It is now a real toast raised through the SAME
-`ToastManager` the hook notifications use (`client/js/toast.js`), contributing
-only a thumbnail strip: a downscaled `data:` preview for images and a typed chip
-(PDF, GZ) for everything else, never a broken `<img>`. `data:` and not `blob:`
-because `img-src 'self' data:` does not carry `blob:` and an object URL would be
-CSP-blocked with no visible error. Three properties make it differ from a server
-toast, each declared rather than inferred: it is `local` so dismissing it never
-POSTs an ack for an id the server never issued; it SURVIVES TYPING, because a
-receipt describes what is staged in the buffer being typed INTO, so clearing it
-on the first keystroke would flash and vanish; and it is retired by the prompt
-being SENT. The submit test is the load-bearing part - a bare CR sends, while
-ESC+CR (shift+enter) and a lone LF (the mobile Yen key) are newlines and must
-not, and a mouse report can carry 0x0d as a coordinate byte, so pointer motion
-could otherwise "send" a prompt nobody sent. Attachments coalesce on the session,
-so four files are one card with four thumbnails rather than a pile.
-Found and fixed in the in-progress work: `attachment-toast.js` was never
-referenced from `index.html` (dead code), nothing called the dismissal seam so it
-never cleared, the six `.toast__thumb*` classes had no CSS at all, and the card
-rendered "unknown session" because no local toast carries a label. terminal.js
-was left at NET ZERO lines (5 changed, 0 added) - it is one line under the hard
-`< 2425` guard in `tests/test_terminal_layout.node.mjs` - by having
-`dismissForSessionActivity(sessionId, data)` dispatch the receipt clear, which
-also puts the whole "what does user input retire" policy in one file.
-Verified by render, not asserted: `tests/test_attachment_toast.node.mjs` (29
-tests, real ToastManager, negative controls on the image guess and on the ack)
-plus a screenshot of the real CSS and real module in both themes and at phone
-width. Suite: 5307 passed, same 5 failures as my measured pre-change baseline.
-Note `test_status_led`, `test_status_summary` and `test_terminal_layout` were
-failing in the working tree from the concurrent SessionTransport work, not from
-this; my files were staged individually and terminal.js/index.html were staged as
-HEAD-plus-my-hunk so none of that work was swept into this commit.
+(append below, format: [AGENT] [TIME]: finding)
 
-[local-servers] [2026-09-08 23:10 ET]: Removed the "LOCAL SERVERS" panel (the
-horizontal bar listing detected dev ports between the terminal and the session
-status bar) from `client/index.html`, `client/css/styles.css` and
-`client/js/terminal.js`/`client/js/api.js` - the panel's markup, its CSS rule
-block, the `.terminal-container` positioning comment/property that existed only
-for it, and every JS consumer (`loadLocalServers`, `_mergeLocalServer`,
-`_dropLocalServer`, `_renderLocalServers`, `_activeSessionName`,
-`API.getLocalServers`, both WS message branches for
-`local_server_detected`/`local_server_lost`). The panel was ALREADY an absolute-
-positioned overlay (fixed in an earlier incident specifically so it could never
-resize `#terminal`), so removing it required no terminal reflow fix - confirmed
-by a static render harness loading the real CSS/markup before and after, at
-1280x800 and 390x844, screenshots at
-`/private/tmp/claude-502/.../scratchpad/local-servers-removal/{before,after}-{desktop,phone}.png`.
-Left BEHIND ON PURPOSE (scope was "remove the bar", not "remove detection"):
-`src/core/local_servers.py` (`LocalServersTracker` - a 30s janitor loop probing
-each tracked port's TCP listener, pattern-callback hooks into the log monitor for
-5 port-bearing patterns, all wired in `src/main.py` lifespan), the REST endpoint
-`GET /sessions/{name}/local-servers`, and the WS broadcast of
-`local_server_detected`/`local_server_lost`. ALL THREE ARE NOW ORPHANED - nothing
-in the client calls that endpoint or handles those WS messages any more.
-Cost while orphaned: near-zero (the janitor sleeps 30s and iterates an empty
-dict when nothing is tracked, which is now permanent since nothing ever fetches
-or displays a detection), but it is genuinely dead code the user should decide
-whether to remove in a separate change. Also confirmed dead, unrelated to this
-removal: `SessionInfo.local_servers` (list) and `SessionStats.local_servers`
-(int) on `GET /sessions/list` are hardcoded to `[]`/`0` at every construction
-site in `session_manager.py` and were already unpopulated/unconsumed before this
-change - pre-existing dead fields, not something I introduced or touched.
-Updated 2 tests that asserted the panel's presence
-(`tests/test_terminal_resize_settle.node.mjs`,
-`tests/test_terminal_reconnect_buffer.node.mjs`) to assert its absence instead
-of deleting them. Suite: 5313 passed, 4 failed (`test_nuke_sandbox` -
-environmental/unrelated, `test_respawn_refreshes_pane_env` - documented flaky,
-`test_session_row_menu_renders` - Playwright timeout inside Agent C's in-flight
-status-light/menu rewrite, `test_version_probe` - documented pre-existing); none
-touch any file I changed. terminal.js/index.html/styles.css staged as
-HEAD-plus-my-hunk only, same pattern as the attach-toast note above, so none of
-the concurrent SessionTransport or envelope-icon work was swept into this
-commit.
+[ORCH] 2026-09-10 19:07: full suite on merged master read 3 failed / 5769 passed.
+All three drive the REAL tmux socket with a 6.0s wall-clock deadline in _wait_for.
+Box was at load average 19.7 with 11 concurrent pytest processes from parallel
+agents. Verified: the same two fail identically at base commit 53ed219, which was
+measured 0 failed on a quiet box. test_tmux_backend_respawn passes in isolation.
+This is contention, not a regression. A clean full-suite number is OWED on a quiet
+box. Candidate follow-up: the real_tmux marker added for #59 should cover
+tests/test_session_restart_wrapper_choice.py, whose 6s deadline is the tightest
+in the real-tmux family.
 
-[status-light] [2026-09-08]: Five colours on one light, envelope removed from
-both surfaces. Eight LED inner states now paint five hues: green
-`working`/`working_subagent`; yellow `question` AND the startup gate's
-`awaiting_startup_prompt` (both are fully stopped waiting on a human); light
-blue `notice` alone (working, but wants you); grey `idle` and `unknown`, told
-apart by shape (`unknown` stays the one hollow dot) rather than by a louder
-colour; red `dead` and a dropped WebSocket. `finished_unread` is the two rings
-saying two things: a grey dot inside a crisp green ring. State NAMES stay eight
-and every label still says which state it is, so colour is never the only
-signal. Two new inner states, `notice` and `disconnected`. The underlying state
-machine is untouched: `permission_open` and `notice_open` are still two
-independent booleans, permission still read first, both still cleared by
-UserPromptSubmit/PreToolUse/Stop, and summary priority is still
-permission > input > working > unread > done > dead > unknown.
-FOUND BY MEASURING, NOT BY READING: the finished-turn ring shipped as an
-opaque DISC in my first pass and rendered `finished_unread` as a solid green
-blob with no grey in it. The halo pseudo-element carries `z-index: -1`, which
-paints it ABOVE the element background - and the element background IS the dot.
-Every other halo hides that because it is a wash at 0.18-0.55 opacity. Caught in
-a 6x render harness before commit; the ring is now a transparent centre with a
-2.5px inset band. A test pins the shape.
-Transport disconnection is REAL, not asserted: it lives in
-`client/js/terminal.js`'s `ws.onopen`/`ws.onclose`, recorded by the new
-`client/js/session-transport.js` and read by the sidebar rows and launchpad
-cards. This browser holds a socket to at most ONE session, so every other
-session answers `unknown` - a sidebar full of red because one socket dropped
-would be a fabricated measurement. A deliberate detach CLEARS rather than marks.
-`dead` and `disconnected` share the red and are separated only by their labels.
-Envelope removed from: the sidebar row's kebab menu (`session-row-menu.js`), the
-launchpad running-session card and the project-tree rows (`launchpad.js`), its
-builder and both glyphs (`session-status-ui.js`), its click and keyboard
-handlers (`session-sidebar-clicks.js`, `session-sidebar.js`, `launchpad.js`),
-its CSS (`session-sidebar.css`, `session-sidebar-density.css`,
-`session-row-menu.css`) and the kebab's now-unread `data-row-unread`.
-Server-side unread TRACKING is untouched; `PATCH /sessions/{name}/unread` still
-exists and `api.setSessionUnread` is kept as its client with a docstring saying
-nothing calls it.
-Suites: node 187/187 pass (baseline was 184/186, the two failures being another
-agent's in-flight toast/terminal work which has since landed). pytest 5313
-passed / 3 failed, and all three are the documented environmental ones
-(`test_nuke_sandbox`, `test_respawn_refreshes_pane_env` flaky,
-`test_version_probe`); `test_session_row_menu_renders` failed mid-flight against
-my half-applied change and is green again.
+[ORCH] 2026-09-10 19:20: NEGATIVE CONTROL for the entry above. The #42 branch
+changed only docs/ui-preferences-inventory.md and one CLAUDE.md table row, zero
+code, and its own full-suite run read 5753 passed / 5 failed / 18 skipped. The
+failures were in session-restart-wrapper, state-dir-resolution, tmux-respawn and
+tmux-pipe-rotation. A branch that changed no code cannot have caused them, so the
+real-tmux failure family under concurrent agents is CONFIRMED contention rather
+than any of today's work. The clean re-measure on a quiet box is still owed.
 
-[row-icons] [2026-09-08]: pin and close are inline icons on the conversation
-row again, and the three-dot overflow menu is gone. "move the pin and close
-icons back to the inline icons. remove 'add to group' / 'restart the agent'
-and the three dots now that they're not needed."
+[BANNER-FIX] 2026-09-10: fixed the sticky/alarming #deep-link-error notice.
+D1 (sticky): Router.clearError() now accepts an optional navigation-generation
+token; App.showTerminal/returnToExistingTerminal pass their (read-only) nav
+token, App.showLaunchpad passes a snapshot taken BEFORE its own begin() call.
+clearError() refuses to clear when the banner's raise-generation is not
+strictly less than the token, which is what stops a rejection's own bounce
+from silencing itself (proved by a negative control that strips the guard from
+a copy of the source and shows the same scenario then clears).
+D2 (undismissable/permanent): added a close button (#deep-link-error-dismiss,
+always-unconditional clear) and an 8s auto-dismiss timer that resets rather
+than stacks on re-raise.
+D3 (false death claim in toast-navigate.js): moved alreadyAttachedTo() to run
+BEFORE the listing fetch (keyed on the toast's own exact tmux session name -
+safe against name collision because this app uniquifies colliding tmux names
+at create time, so a dead session and its uniquified replacement never share
+one name string - verified against that exact scenario in the new test file).
+A non-array listing payload now returns false without calling announceMissing,
+instead of being reported as a confirmed death. NOTE: per the coordinator's
+mid-task correction, the specific incident that prompted this ("cloudecode is
+no longer running") was a REAL death (cloude_cloudecode's pane genuinely died;
+cloude_cloudecode-2 was a distinct, later, uniquified session) - the fix here
+addresses the ordering/malformed-payload defects, not a false report in that
+incident.
+D4 (styling): moved the inline `background:#c00` alarm-red styling out of
+index.html into client/css/deep-link-notice.css, reusing the existing
+--color-info/--color-info-bg/--color-info-border tokens (same combo as
+.auth-info elsewhere in styles.css) so it now reads as a calm, theme-aware
+informational strip instead of an error bar. Position preserved: still an
+in-flow block at the top of <body>, above .header - never moved into
+.terminal-container.
+Files: client/js/router.js, client/js/toast-navigate.js, client/js/app.js,
+client/index.html, client/css/deep-link-notice.css (new),
+tests/test_deep_link_notice.node.mjs (new, 10 tests, all passing).
+Regression check: tests/test_navigation_generation.node.mjs (15/15),
+tests/test_toast_dismiss/_reconcile/_stacking/_click_single_navigation/
+_history_render/_attachment_toast.node.mjs all still pass unchanged.
+Full python suite NOT run (box under load per orchestrator instruction) - a
+clean-box run is still owed for this branch, same as the entries above.
 
-EVERY ITEM THAT WAS IN THAT MENU, AND WHAT HAPPENED TO IT. Pin: back inline,
-same builder (`SessionSidebarRows.pinButtonHtml`), same `aria-pressed`, same
-labels. Close / remove: back inline, same builder (`SessionRowActions.html`),
-same confirm copy. Add to a group: REMOVED. Restart the agent: REMOVED FROM A
-LIVE ROW ONLY - a dead row still offers it inline. Nothing else was in the
-menu, so the trigger had nothing left and went with it.
+## [TOAST-GUARD-FIX] section
 
-DELETED: `client/js/session-row-menu.js`, `session-row-menu-gestures.js`,
-`client/css/session-row-menu.css`, `SessionSidebarGroupActions.rowMenuItemHtml`,
-`SessionRowActions.LIVE_STATUSES`, the render guard's `SessionRowMenu.isOpen()`
-check, and the `data-row-menu` / `data-row-pinned` attributes. `data-row-status`
-MOVED off the kebab onto the row, because the row is now the only element built
-from the whole payload and `session-sidebar-clicks.js` reads it there for the
-restart picker. Right-click and long-press on a row now open nothing.
+[TOAST-GUARD-FIX] [2026-09-11T03:31:55Z]: Confirmed the live diagnosis by
+reading the code: `SessionManager.auto_ack_toasts` guarded the stale-id remap
+on `session_id not in self._pending_toasts` (does this session have any
+recorded toasts) instead of `session_id not in self.sessions` (is this
+session unknown to me). A live, registered session with an empty toast
+bucket - the common case, since most hook events fire on a session that has
+never raised a toast - fell into `_live_session_id_for_stale_id`, found its
+own tmux name in `_hook_tmux_names`, and matched itself. That is the 339
+`toast_session_id_remapped` events with `stale_id == live_id` measured on
+live, zero genuine remaps. Fixed by changing the guard to `if session_id not
+in self.sessions:`. File: src/core/session_manager.py (`auto_ack_toasts`,
+around what was line 3248, now shifted a few lines by added docstring
+prose).
 
-SURFACES. Only the SIDEBAR row ever had this menu. The launchpad's
-running-session card already drew close/restart inline and changes only by
-losing the live restart; the project-tree row carries no actions at all and is
-untouched. So "one consistent treatment" is what shipped, not three copies.
+[TOAST-GUARD-FIX] [2026-09-11T03:31:55Z]: Added defence-in-depth to
+`_live_session_id_for_stale_id` itself: a loop match onto the caller's own
+id is now treated as no match (no log, loop keeps scanning for a genuinely
+different live session sharing the tmux name, then returns None). Both
+current callers (`record_toast`, `auto_ack_toasts`) already guard on the id
+being absent from `self.sessions`, so this cannot fire from them today -
+this hardens the shared resolver for any future caller. File:
+src/core/session_manager.py (`_live_session_id_for_stale_id`).
 
-REACHABILITY, TRACED. Restart: reachable ONLY from a dead row now (sidebar
-inline, launchpad card inline) plus the launchpad's separate "restart" on an
-ENDED tree row, which is its own path (`imported_restart_routes.py`). No
-command palette, keyboard shortcut or deep link reaches it. The four gates in
-front of a LIVE respawn are all still present server-side and still tested; the
-first one is now shut, so `confirm_restart_live`, `RespawnPlan.kills_live_pane`,
-`SessionRestartLive.armHtml` and `liveConfirmCopy` are ORPHANED - reachable by
-no user action. Left in place deliberately; flagged for the owner to decide.
-Add to a group: the picker itself is untouched and still opens on `g` over a
-focused row, on Alt+Arrow across a band edge, and by dragging onto a group
-header. It has NO POINTER ROUTE left, so on a phone the drag is the only way,
-which breaks the "drag is never the only way to do anything" rule at the head of
-`session-sidebar-group-actions.js`. Also flagged rather than papered over.
+[TOAST-GUARD-FIX] [2026-09-11T03:31:55Z]: Permission-flag safety net fix.
+Read `pane_alive`'s only production source: `_session_info_for` computes
+`True if liveness == LIVENESS_LIVE else None` and, critically, already
+returns None (drops the whole row) on `LIVENESS_GONE` BEFORE the permission
+verify call is ever reached - so `False` never reached
+`should_capture_permission_tail` in production, even though the pure
+function's `Optional[bool]` signature and docstring already anticipated it.
+This is a wiring gap, not a type-expressiveness gap. Closed it three ways:
+(1) added `PERMISSION_CLEARED_PANE_DEAD` verdict constant in
+src/core/session_permission_verify.py; (2) added a branch in
+`session_permission_verify_apply.verify_open_permission` that, on
+`pane_alive is False` (measured dead, never confused with `None`/unknown),
+clears an open permission claim directly with NO tail capture (nothing left
+to read) and logs `permission_flag_cleared_pane_dead`; `None` still falls
+through to the unchanged cost-gate path and KEEPS the flag; (3) wired
+`pane_alive=False` into the one call site, inside `_session_info_for`'s
+`LIVENESS_GONE` branch in src/core/session_manager.py, right before the
+existing `return None` that drops the row from the list - this is NOT a
+reaper rung and does not change whether/when the row disappears from
+`/sessions/list`, it only retires the in-memory tracker flag so a stuck bit
+cannot resurface if the same row is ever recreated onto a new tmux
+instance. Updated one pre-existing test
+(tests/test_session_permission_verify.py::test_the_seam_refuses_a_dead_or_unmeasured_pane)
+that had asserted the OLD (buggy) contract - both `None` and `False` kept
+the flag forever - split into two tests, one unchanged for `None`, one new
+for `False` asserting the clear.
 
-TOUCH TARGETS, MEASURED IN CHROMIUM. The kebab bought a 44px target from a
-transparent `::after` reaching sideways, which is free when nothing sits to your
-right. Two neighbours cannot do that, so `client/css/session-row-inline-
-controls.css` grows WIDTH on the real box (36px) and HEIGHT on the overlay
-(44px), cozy and detailed only. At a 330px viewport that left the name column at
-81.9px live and 22.6px on a DEAD row (three controls), which paints "Punchlist
-Test" as "P...". The ownership badge is 58px of that line and is the glyph the
-row builder already drops outright at compact density, so it is hidden under
-`(pointer: coarse) and (max-width: 420px)` - a display rule, still in the
-markup. After: name 125.5px live (the kebab layout gave 117.9, the ORIGINAL
-pre-kebab inline layout gave 85.9 with 18px targets), 81.5px dead, row height
-unchanged at 46px, no horizontal scroll, both controls fully on screen.
+[TOAST-GUARD-FIX] [2026-09-11T03:31:55Z]: Test results - ran only the
+directly related fast suites (not the full python suite; box is under load,
+a clean-box full run is still owed): 151 passed in
+tests/test_permission_verify_pane_dead.py,
+tests/test_toast_stale_id_self_remap.py, tests/test_session_permission_verify.py,
+tests/test_permission_verify_cost.py, tests/test_toast_auto_ack.py,
+tests/test_toast_cross_session.py, tests/test_toast_lifecycle.py,
+tests/test_toast_supersede.py, tests/test_hook_toast_subagent_suppression.py.
+Widened to every tests/test_toast*.py plus test_permission_verify_pane_dead.py,
+test_toast_stale_id_self_remap.py, test_session_permission_verify.py,
+test_permission_verify_cost.py, test_led_real_hooks.py: 126 passed, 9 skipped
+(real-hook tests skip without CLOUDE_REAL_HOOK_TESTS=1 / no tmux+claude), 0
+failed.
 
-TESTS. `tests/test_session_row_menu.node.mjs` deleted (its module is gone) and
-replaced by `tests/test_session_row_inline_controls.node.mjs`, 14 assertions.
-`tests/test_session_row_menu_renders.py` renamed to
-`tests/test_session_row_controls_render.py` and rewritten against the same real
-harness, 18 assertions including the 330px squeeze and the dead-row case.
-Updated: `test_session_sidebar_rows`, `test_session_row_actions`,
-`test_session_row_restart`, `test_restart_live_gate`, `test_dead_row_renders_dead`,
-`test_kebab_icon_shared`, `test_sidebar_group_menu_stacking`,
-`test_project_list_render_guard`, `test_session_status_ui`, and
-`scripts/verify_sidebar_group_drag.py` (now opens the picker with `g`).
+[TOAST-GUARD-FIX] [2026-09-11T03:31:55Z]: Negative controls were actually
+mutated and watched go red, not just written: (a) temporarily set the
+auto_ack_toasts guard to `if False:` (never remap) - test
+`test_genuinely_stale_id_still_remaps_and_acks` failed as expected, all
+other tests in that file still passed; reverted, all green again. (b)
+temporarily widened the new permission branch from `pane_alive is False` to
+`pane_alive is not True` (collapsing measured-dead and unknown into one
+clear-on-both branch, the exact anti-pattern being guarded against) - test
+`test_unmeasured_pane_liveness_keeps_the_open_permission_flag` failed as
+expected, the measured-dead test still passed; reverted, all green again.
 
-[sidebar-polish] [2026-09-09 10:55 PT]: four sidebar changes shipped together.
+[TOAST-GUARD-FIX] [2026-09-11T03:31:55Z]: Did not touch
+src/core/session_lifecycle.py and added no reaper rung keyed on pane_dead,
+per the explicit constraint. The one call-site wiring change (passing
+pane_alive=False into the existing verify_open_permission helper from
+inside _session_info_for's pre-existing LIVENESS_GONE branch) was necessary
+for the fix to be reachable in production at all - flagged explicitly in the
+session report as an interpretation beyond the literal file/line named in
+the brief, since without it the fix would be dead code.
 
-THE OVERSIZED GREEN DOT WAS NOT AN OVERSIZED DOT. Measured in Chromium
-across all forty (inner, outer) pairs: the ELEMENT box read 9.00 x 9.00 in
-every single one, which is why the whole node suite was green while the
-owner could plainly see the difference. What varied was the HALO, which
-was sized per state AND painted partly outside its own box by
-`box-shadow: 0 0 1.5px 1.5px`. Lit diameters before: `active` about
-14.7px (an 11.69px disc plus 3px of glow, in the dot's own hue at 0.55
-opacity), `unread` 15.30px (that block set `--led-halo-scale: 1.7` of its
-own), and `steady` / `dim` / `off` all effectively 9px because a grey
-halo at 0.18-0.30 opacity on a grey dot is invisible. So a working
-session in a column of resting ones read about 60 percent wider than its
-neighbours. Fix: `--led-lit-scale` declared ONCE on `.status-led`, no
-state may override it, and the glow is now a radial gradient (fades out
-AT the box edge, so painted extent is the declared box) instead of a
-spread shadow (paints beyond the element by definition, so it could never
-be held to a number). After, every pair: dot 9.00px, lit 15.30px, nothing
-painting outside. Verified by `scripts/verify_status_led_geometry.py`
-against `tests/manual/status-light-key-harness.html`, three themes, two
-viewports.
+## [LAG-FIX] event loop stalls on GET /sessions/list
 
-THE YELLOW `(n)` BADGE is gone from `summaryHtml` and its
-`.status-summary-badge` rule is gone from `status-led.css`. `unreadCount`
-is still RETURNED by `summarizeStates` and rendered by nothing. The plain
-count pill on the header is a different control and stays.
+[LAG-FIX] [2026-09-11T03:45:00Z]: DIAGNOSIS CONFIRMED WITH A CONTROL. Interleaved
+A/B, 409 paired samples over 90s: the app's /health read p50 74.8ms / p99 1262ms
+while an idle asyncio server in a separate process, sampled at the same instants
+on the same box, read p50 1.2ms / p99 30.7ms with zero samples over 250ms. So the
+machine's load is not the cause and the app's own event loop is blocked.
+/sessions/list measured p50 291ms; /health sampled INSIDE a listing window
+measured p50 211ms against 48ms outside one.
 
-THE HEADER ROLL-UP already called `StatusLed.ledHtml`; the tests now
-assert it byte-for-byte against what a row builds for the same pair, so
-the two cannot be reimplemented apart. With the badge gone the ring on
-the roll-up is the only thing saying a group holds an unread turn.
+[LAG-FIX] [2026-09-11T03:45:00Z]: THE PER-PASS COST IS NOT REGRESSED. Both
+ceiling tests still pass (tests/test_listing_pass_datastore_cost.py, the 4N+2
+datastore bound; tests/test_listing_subprocess_cost.py). The 2026-09-09 work
+genuinely cut what one pass costs. What it never did was cut HOW MANY passes run,
+or move any of them off the loop.
 
-THE FOOTER NOTE is gone. The remembered-position FEATURE is NOT orphaned:
-`session-sidebar-arrangement.js` still keeps the slots, they still reach
-the repaint signature, and `session-sidebar.js` still stamps
-`data-order-missing` on the list element. `listHtml` lost its now-unused
-`missing` parameter; the two call sites moved with it.
+[LAG-FIX] [2026-09-11T03:45:00Z]: THE MULTIPLIER WAS 15. Fifteen established
+connections (5 Brave, 2 Electron, 7 python) each poll this endpoint every 5s from
+BOTH the sidebar and the launchpad, so the measured stall signature had a period
+of about 0.85s rather than 5s and the passes overlapped almost continuously.
+Every one of those callers was paying for a full synchronous pass to receive an
+identical answer.
 
-NEW: `client/js/session-status-key.js` + `client/css/session-status-key.css`,
-a foldable legend at the foot of the list, collapsed by default on
-`cloude.statusKey.open` (the app's existing `cloude.*` preference
-convention). Every swatch is a real `ledHtml`, and
-`tests/test_status_key.node.mjs` asserts both directions of coverage so a
-state added to the component and not to the key fails the build.
+[LAG-FIX] [2026-09-11T03:45:00Z]: PART 1 SHIPPED - src/core/single_flight.py.
+While a pass is in flight a concurrent caller awaits THAT pass. It is NOT a cache
+and must never become one: a caller arriving after a pass completes gets a fresh
+pass, because a remembered list paints a session alive after its pane died. The
+pass is owned by an independent asyncio.Task and every caller awaits it through
+asyncio.shield, so cancelling one caller (a phone locking its screen) cancels only
+that caller's wrapper and the remaining awaiters still get their result. A failure
+reaches every caller awaiting that flight and leaves nothing parked behind.
+Wired at src/api/routes.py list_sessions, which is the only production caller of
+list_session_infos.
 
-[ci-flake] [2026-09-09 10:58 PT]: the macos-latest `python tests` job was failing
-intermittently on `test_readopted_backend_streams_live_output_without_a_reattach`
-with `pane_pipe='1'` and `bytes_seen=0`. It is NOT a slow test, it is a real
-defect in the streaming path. `TmuxBackend.attach_existing` recorded
-`_adopt_tail_start_offset` only inside the external-setup branch, so on the
-owned/boot-re-adopt branch the tail loop seeked to plain `SEEK_END` whenever the
-event loop first scheduled it. `read_async()` only calls `create_task` and
-nothing awaits after it, so every byte tmux appends between the attach and the
-reader's first run was dropped. Reproduced deterministically with a fast pane
-shell plus a blocking window: 9 of 10 attaches delivered ZERO bytes while the
-marker sat in the pipe file every time; even the passing runs lost 29 of 116
-bytes. macOS loses because a `tmux send-keys` subprocess costs more there than
-the pane needs to echo, so the whole burst lands before the reader opens, and an
-idle pane then produces nothing to reveal the loss. Fix: record the offset on
-BOTH attach paths via one `_record_tail_start_offset()` helper. Added
-`test_output_written_before_the_reader_opens_is_still_delivered`, which uses that
-window instead of racing it and so fails on any platform if the offset is
-dropped. Also replaced two fixed `sleep(1.0)` waits in
-`test_respawn_refreshes_pane_env.py` with the pane-dead poll the first test in
-that file already used (that flake reproduced in my clean-tree baseline run), and
-raised the dead-pane poll budget in `test_attach_to_a_dead_pane_still_succeeds`
-from 5s to 15s after measuring real death latency at ~0.01s. Full suite: 3
-failed / 5307 passed baseline, 2 failed / 5309 passed after; remaining two are
-the environmental `test_nuke_sandbox` and `test_version_probe`.
+[LAG-FIX] [2026-09-11T03:45:00Z]: THE ONLY BEHAVIOUR CHANGE IS FEWER PASSES, and
+the pass's own side effects (the permission re-verify capture, the transcript
+unread claim, the settled-state write) are already throttled per session rather
+than per poll, so running fewer passes cannot skip one.
 
-[mobile-chrome] [2026-09-09 13:40]: Two chrome moves the owner asked for with
-screenshots. (1) The clipboard FAB over the terminal's bottom-right corner and
-its three-row menu are now PHONE ONLY, hidden above 769px by one media query in
-terminal-tools.css - the same breakpoint styles.css already uses to make the
-d-pad beside it touch-only, chosen over the app's other "mobile" number
-(MOBILE_MAX_PX = 700, which answers "is there room to dock a panel"). Pure CSS,
-so there is no flash of a control desktop is not meant to have. WHAT DESKTOP
-LOSES, traced before shipping: "paste from clipboard" is fully covered (xterm's
-own cmd+V plus terminal.js's capture-phase file-paste handler, which uploads a
-pasted file and injects its path); "copy output" and "attach file" have NO other
-desktop entry point - CopyOutput.open has exactly one caller, the hidden file
-input is clicked from exactly one row, and there is no drag-and-drop handler
-anywhere in client/. cmd+C still copies a mouse selection, which is a different
-job. Reported, not fixed: inventing replacement desktop UI is the owner's call.
-(2) The floating "session editor" (sliders) button moved into the header's
-.controls row immediately after the folder icon, carrying .btn-icon so its box,
-gap, hover, focus and tooltip come from the header rather than from anything
-written for it. Deleted rather than overridden: the .session-editor-fab rule, the
---fab-top-edge token in styles.css, and the ios-chrome.css safe-area pair plus
-the :not(.session-editor-fab) exclusion that existed only to keep it off the
-bottom row. Its session scoping is now an ALLOW-LIST in the new
-client/css/session-editor-header.css (body:has(#terminal-screen.active)) instead
-of the deny-list of three sessionless screens it used to inherit - that list had
-already needed amending once when the archive screen arrived. The home header's
-title centring is untouched because the button is display:none there, so
---home-header-flank-w needs no new branch. Header does NOT overflow at 330px:
-measured in headless Chrome, four controls occupy x 140-318 of a 330px header at
---control-size 40 (the 480px breakpoint's value, not 44), which is what its three
-neighbours have always been. The menu needed no code change - AnchorPopover
-already prefers above and falls to below, and from the header there is never room
-above. Tests: added test_mobile_only_fab_and_header_editor.node.mjs, which
-RESOLVES the cascade at a width rather than grepping source, with the unchanged
-d-pad as a control and a loud refusal on any selector its matcher cannot read;
-updated (not deleted) the placement assertions in test_terminal_tools_menu,
-test_session_editor_menu, test_terminal_layout and test_button_box_sizing. Node
-191/191 suites pass (was 190/190). Note for the next person: several of those
-updates needed a comment-stripping pass first, because these stylesheets explain
-retired layouts in prose and a bare includes() cannot tell a declaration from the
-sentence saying there is no declaration.
+[LAG-FIX] [2026-09-11T03:45:00Z]: PART 2 NOT SHIPPED, AND THE REASON IS A DURABLE
+FILE. Moving the synchronous body into asyncio.to_thread is FEASIBLE on three of
+the four axes and unsafe on the fourth. Safe: no asyncio touch anywhere in the
+synchronous region (swept session_manager.py:4688-5365 plus every helper module,
+zero hits; the one await, _flush_startup_toasts at :5391, is after the loop);
+every SQLite connection is created and closed inside one call
+(_writable_datastore_connection, session_manager.py:5638, returns a fresh
+db.connect each time, nothing cached on self or at module level), so the default
+check_same_thread=True is harmless because no connection would cross a thread; and
+all three tmux calls are blocking subprocess.run through _run_tmux_sync
+(tmux_backend.py:581) and _run_listing (:1493), which is exactly the kind of work
+a thread is for.
 
-[cross-session-bleed] [2026-09-09 16:40 ET]: One session's transcript rendered
-inside another session's terminal. THE CROSSING IS IN THE BROWSER, NOT ON THE
-SERVER, and that was settled by measurement before a line was changed. Every
-pipe-pane file on disk was clean: one working directory per file (a footer scan
-of `tmux_ses_18ec7875`, `tmux_ses_732c7cd6`, `tmux_ses_2a0b116d` found exactly
-one cwd each), one `cat >>` writer per pane (15 writers, 15 panes, all distinct
-targets) and ONE reader per file under `lsof` (all in pid 66406). Decisive
-control: `tmux_ses_18ec7875.pipe` holds ZERO bytes matching `InlineAdjustEditor`
-or `step4-inventory`, yet that text was photographed inside ses_18ec7875's
-terminal - and it is native to ses_732c7cd6, whose own pipe holds 38 and 1. Text
-that is not in a session's pipe file cannot have reached its browser through the
-server, so tonight's streaming commits (`9f01c6c`, `230bad8`, `3366257`) and the
-two-backends-on-one-pane defect are both RULED OUT. No commit was reverted.
+[LAG-FIX] [2026-09-11T03:45:00Z]: WHAT IS UNSAFE IS SHARED MUTABLE STATE, AND IT
+IS NOT ONE CONTAINER. The listing pass WRITES, and the event loop writes the same
+things from the hook endpoint (routes.py:2305 claude_event_hook), the WS bind
+(websocket.py:308) and the unread route (routes.py:1543). The worst one is
+durable: UnreadStore._save builds a FIXED temp filename,
+src/core/unread_store.py:94, tmp = self._path.with_suffix(suffix + '.tmp'), then
+os.replace. The pass writes that file (session_transcript_status_read.py:382
+store.set_flag) and so does the Stop branch of record_hook_event
+(session_manager.py:2838). Two concurrent _save calls interleave their json.dump
+into ONE temp file before either rename, which corrupts the unread state on disk.
+The worst in-memory one is a two-field invariant written in two statements:
+session_activity.py:688-689 clears permission_open then permission_opened_at while
+:402-404 sets them in the opposite order, so a torn interleave leaves
+permission_open true with no stamp, and permission_open_since (:708) reads both as
+one fact. Eight more read-modify-write spans behind those: _pending_toasts rebuilt
+and rebound (session_manager.py:2409-2422) against a hook-side append (:2634), the
+_pending_startup_toasts drain-and-rebind (:5488-5489), the once-per-instance
+claim_toast check-then-set (session_startup_gate_ledger.py:315-320) whose record
+object can be replaced underneath it by record_hook (:122-123), the seed store's
+due-then-remember (session_status_seed_read.py:408-414), and
+TranscriptTurnLedger.observe (session_transcript_status_read.py:252-261).
 
-THE CAUSE: there is ONE xterm in the page and the user moves between sessions
-inside it. `WebSocket.close()` only STARTS the closing handshake, so a socket
-already replaced keeps dispatching the frames that were in flight, and the
-handlers `setupWebSocketHandlers()` installs close over the CONTROLLER rather
-than over their own socket and were never detached. `onmessage` went straight to
-`this.enqueue()` with nothing checking which socket, or which session, the bytes
-belonged to. Reproduced headlessly by loading the real `client/js/terminal.js`
-into a `vm` realm, attaching to session A, navigating to B, then firing one
-frame on A's superseded socket: it landed in B's buffer.
+[LAG-FIX] [2026-09-11T03:45:00Z]: THE SMALLEST CORRECT WAY TO MAKE THE MOVE SAFE
+is to split the pass rather than to add locks. Every expensive thing in it is a
+READ (tmux list-panes, tmux capture-pane, the row reads) and every unsafe thing in
+it is a WRITE. A measurement phase that opens its own connections, spawns its own
+subprocesses and touches no shared container is safe in a thread by construction;
+an apply phase that performs every mutation stays on the loop, where it is already
+correct today. That is the config_files.list_subtree pattern applied properly, and
+it is a real refactor of a 400-line function rather than a one-line await. Locking
+each container instead would mean a lock held across a subprocess and a SQLite
+open, which is the stall moved rather than removed. Note the coalescer does help a
+future attempt: it makes pass-versus-pass impossible, so only pass-versus-loop
+would remain.
 
-`3366257` is not the cause but IS why this reads as corruption rather than as
-stray text: an attach capture carries an absolute cursor sequence, so a foreign
-frame moves the live session's cursor and the user's own typing lands elsewhere.
+[LAG-FIX] [2026-09-11T03:45:00Z]: SEPARATELY, unread_store.py:94 IS A LATENT
+DEFECT TODAY, independent of any threading decision. The app already runs
+_mark_closed_in_datastore and other work through run_in_threadpool, and a fixed
+temp name is one concurrent writer away from a truncated unread file whichever
+thread arrangement it is reached from. A unique temp name (pid plus a random
+suffix, as config_writer already does) is the one-line fix and was NOT made here
+because it is outside this brief.
 
-FIX: `client/js/terminal-frame-guard.js` is now the one place that decides
-whether a WS event may touch the terminal - socket identity AND session
-identity, both checked, with an unknown session id never refusing (the server
-documents a WS with no `?session_id=` as "the current session"). A superseded
-socket is detached on its first stray event. `onclose` no longer nulls the LIVE
-socket when an OLD socket's close lands late, which was a second defect in the
-same handler. A missing guard module falls back to the socket-identity half
-rather than to "allow".
+[LAG-FIX] [2026-09-11T03:45:00Z]: TESTS. tests/test_single_flight.py, 12 passed,
+structural and never timed: every wait is an asyncio primitive or a count of loop
+turns, so load can make them slow and cannot make them wrong. Each of the four
+properties carries a negative control that reproduces the wrong implementation
+inline, and each control was WATCHED GOING RED against a deliberately mutated
+single_flight.py - never coalescing (5 red), joining a finished flight (the
+ordering-independent guard test, 1 red), a true cache (3 red), keeping a failed
+flight parked (1 red), and a bare await instead of asyncio.shield (the
+cancellation test, 1 red). tests/test_listing_pass_datastore_cost.py and
+tests/test_listing_subprocess_cost.py still pass (7). 105 more passed across the
+route-adjacent suites. A FULL SUITE NUMBER IS OWED ON A QUIET BOX - this one was
+at load average about 250 and the full run was not attempted.
 
-WATCH OUT (measured, unresolved, NOT part of this fix): three panes named
-`cloude_Insiders App`, `-2`, `-3` all report `pane_current_path` =
-`.../DiscountCodeGenerator/thcdiscountcodes`, and rows 18-21 of `sessions` record
-that same `working_dir` for titles `Insiders App` / `Insiders - Codex` /
-`Insiders - Fable`. The app recorded it, so it is consistent rather than
-corrupt, but those sessions are not sitting where their names say. Also
-`tmux_ses_63beb976.pipe` is 3.0 MB with NO writer and NO reader - an orphaned
-pipe from a session now streaming through `tmux_ext_cloude_cloudecode.pipe`.
-Neither is the bleed; both are worth a separate look.
+## [UNREAD-TEMP-FIX] unread store temp filename
 
-[toast-per-session] [2026-09-09]: The toast stack coalesced on (kind,
-session), so one session painted one card per KIND - a "wants your
-attention" card AND a "Your turn" card, about the same session. The x5 and
-x2 badges the owner saw were the coalescing working; what was missing was
-collapsing ACROSS kinds. `client/js/toast.js` now keys the group on the
-session alone and `client/js/toast-session-group.js` picks which pending
-event that one card shows, by READING `SUMMARY_PRIORITY` out of
-`session-status-summary.js` rather than declaring a second order.
-Mapping: PermissionRequest -> permission, StartupPrompt and Notification
--> input, Stop -> unread, an unknown kind -> input; toast.js's own
-severity table breaks a tie inside a bucket, so a blocking startup prompt
-is not displaced by a chatty notification. The `x n` badge counts the
-WINNER'S KIND (what the title claims); the dismiss control, the "Dismiss
-all" total and the overflow row's worst-severity label count RECORDS -
-two numbers because they answer two questions, and the per-group counts
-those last three used to do would have reported six finished turns as six
-permission prompts. The attachment receipt is deliberately outside the
-grouping and keeps its own card. Screens measured in a real Chromium:
-13 records across 3 sessions paint 3 cards on desktop and 2 plus an
-accurate overflow row at 330px, in both a dark and a light theme.
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: CONFIRMED, AND IT IS LATENT, NOT
+REACHABLE TODAY. The prior report (logged above as [LAG-FIX]) reproduced on (a)
+and (b) and was overstated on (c). (a) UnreadStore._save built a FIXED temp name,
+verbatim: `tmp = self._path.with_suffix(self._path.suffix + ".tmp")` - one shared
+filename for every writer of unread_state.json, the same shape config_writer.py
+was written to end for config.json. (b) FIVE distinct call paths write it, not
+two: the Stop branch of SessionManager.record_hook_event (session_manager.py:2834)
+from the async hook route; SessionManager.set_manual_unread (:2038) from the async
+PATCH /sessions/{name}/unread; session_transcript_status_read._claim_unread (:384)
+from the listing pass; session_view_clears.clear_view_state (:153) from the
+WebSocket bind and from mark-read; and the boot reconcile's prune (:1504).
 
-[key-collapse] [2026-09-09T21:28:22Z]: the status-light key is seven rows, one per LIGHT
-rather than one per state, and the finished-turn ring lost its grey fill.
-The owner's ask was "one entry per colour", so the two yellow rows
-(permission, startup prompt) collapsed into "stopped, waiting on you" and
-the two red rows (dead pane, dead socket) into "dead / disconnected
-session". Green and grey still appear twice because a solid dot and an
-outline are two different things on screen; the last row is reworded to
-say what the outline means ("not measured - nothing reported in, so this
-is not idle"). THE STATE MACHINE DID NOT CHANGE - eight inner states,
-four of them now sharing two rows, and the dot's own title/aria-label is
-the only place left that says which of a pair it is, which is now pinned
-by tests rather than left as decoration. The visual fix went into the LED
-COMPONENT, not the key: `--led-fill` is a new token that the dot's
-background reads instead of `--led-ink`, and ONE rule naming both
-`[data-inner='unknown']` and `[data-outer='unread']` sets it to
-transparent, so the two hollow lights cannot drift into two ideas of what
-a dark centre is. The trap the token also closes is the legacy
-`.status-dot.status-led` compat block: it outranks the unread selector
-and sits later in the file, so a `var(--led-ink)` there silently refills
-both hollow states everywhere. Clearing a fill moves paint and not
-geometry, and that was MEASURED rather than reasoned: rendered at 8x
-device scale off the real stylesheet, all nine (inner, outer) pairs
-painted an identical extent before and after, to the hundredth of a pixel
-(15.75 for the four breathing states, 16.00 for the ring, 15.62 steady,
-15.38 dim, 9.00 for the two `off` states, which carry no halo by
-design). Note for whoever reads the history: commit 65faa8c, another
-agent's toast change, swept this round's docs/session-status.md edits
-into itself, so part of this work is recorded under that message.
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: (c) THE CORRUPTION CANNOT HAPPEN TODAY
+and the report should not have implied it could. _save contains NO await - the
+open, the json.dump, the fsync and the os.replace are one synchronous block - and
+every one of the five writers runs on the single uvicorn event loop. Every route
+in src/api is `async def` (checked: there is not one sync `def` handler), no
+asyncio.to_thread, run_in_executor or threading.Thread path reaches the store, so
+two saves cannot interleave. What makes it worth fixing anyway is that the
+serialisation is a property of TODAY'S THREADING, not of this module: the pending
+move of the listing pass into a worker thread activates it, and that move was
+already held back partly for this.
 
-[header-wrap] [2026-09-09T00:00:00Z]: Screenshot complaint ("session editor
-sliders button still floats top-right, clipboard FAB still shows bottom-right")
-is NOT a code defect. Built a Playwright harness (real client/index.html header
-markup, all 46 real CSS files, real header-menu.js building the real kebab,
-served same-origin via request interception against the live 127.0.0.1:8000 so
-no file:// cross-origin CSS quirks) and swept 330-1435px. Result: at every
-width the session editor button sits inline between the folder icon and the
-kebab, `wraps=false` everywhere, matching `tests/test_mobile_only_fab_and_header_editor.node.mjs`
-(10/10 pass, unchanged). The terminal-tools clipboard FAB flips exactly at the
-documented 769px line (flex through 768, none from 769), also as coded. The
-screenshot is 1435 physical px wide; at a plausible 2x Retina scale that is a
-~717 CSS px window, comfortably under 769, so the FAB showing there is BY
-DESIGN, not a bug. The floating sliders button in the screenshot is styled
-like the OLD retired `.fab-menu-btn`/`.session-editor-fab` rail (dark
-`--color-bg-elevated` circle, `--color-fg-muted` icon) that 07a202b deleted
-from both CSS and JS - no code path in the current tree can produce that
-look (grepped, only `.btn-icon` touches `#sessionEditorBtn` now). Most likely
-explanation: the browser tab in the screenshot was opened before 07a202b
-deployed and was never reloaded, so it is still running pre-deploy JS/HTML
-held in memory - a `<link>`/`<script>` already loaded does not refetch just
-because the server's cache-control says no-cache; that header only matters on
-a NEW request. No code changed. Recommend: reload/refresh that window and
-re-screenshot before assuming anything is still broken.
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: THE FIX. src/core/unread_store.py only.
+New module-level `_unique_tmp_path(path: Path) -> Path` applying the same
+pid-plus-random-suffix rule config_writer._replace_atomically already uses, rather
+than a second spelling of it. NOT shared as a common helper: config_writer's
+version is private, is bound to the config.json boundary, and does the json.dump
+itself, so importing it would have meant taking its logging level (warning) and
+its key ordering too - and the brief was to preserve this store's write sequence,
+fsync placement and `logger.error("failed_to_save_unread_state", ...)` exactly. A
+local helper was the smaller, more faithful change. No lock added, no caller
+touched, no restructuring.
 
-[slash-fab-mobile] [2026-09-09 18:12 ET]: Owner's screenshot (round "/" button,
-bottom-left, circled in yellow) is `#slash-commands-btn` (client/js/slash-commands.js),
-confirmed by grepping its id/class against `position: fixed; bottom: var(--fab-edge);
-left: var(--fab-edge);` in styles.css - matches the screenshot's position and glyph
-exactly. Hidden on desktop with the same rule as the terminal-tools clipboard FAB:
-new file `client/css/slash-commands-fab.css`, `@media (min-width: 769px) {
-.slash-commands-btn, #slash-commands-modal { display: none !important; } }`, linked
-from index.html after slash-command-chips.css. Hides both the button AND
-`#slash-commands-modal` (the command-list panel it opens), same half-change
-guard as terminal-tools.css. Reachability: typing "/" in the terminal reaches
-claude's own CLI directly, but the modal offers something typing does not - every
-command grouped with a description, starred favorites, live filtering - so the
-owner is losing a real (if replaceable) discovery feature, recorded in CLAUDE.md
-rather than fixed. Extended tests/test_mobile_only_fab_and_header_editor.node.mjs
-(14/14 pass, was 10/10). Full suite baseline unaffected: 192/192 node suites,
-5309 passed/2 known-environmental-failed/18 skipped pytest (same 2 failures
-CLAUDE.md already documents as environmental, no new ones). Committed `4435edb`,
-pushed to master. Deployed live: killed the old Electron+Python tree (PID 48586
-Electron, PID 48595 Python child on port 8000 - both had to go, confirmed via
-`ps -o ppid` that killing Electron alone would NOT have taken the Python child,
-so it was targeted explicitly), relaunched via `nohup npm start` from macOS/,
-verified HTTP 200 on `/` and on `/static/css/slash-commands-fab.css` from the
-derived copy at `~/Library/Application Support/cloude-code-menubar/server/`.
-15 live tmux sessions and `cloude_cloudecode` (the user's own live pane)
-confirmed untouched throughout.
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: CLEANUP IS NOW REQUIRED, NOT OPTIONAL.
+A fixed temp name self-limited to ONE orphan that the next write overwrote; a
+unique name would drop a fresh corpse into the state directory on every failure.
+The except branch unlinks it, guarded by OSError only (FileNotFoundError is an
+OSError, and it is reached only when os.replace did not run). The pre-existing
+blanket `except Exception` on _save was left alone: it is outside this brief and
+the brief was explicit about preserving the error handling.
+
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: STILL OPEN, SAME SHAPE, DELIBERATELY
+NOT TOUCHED. Three more fixed-`.tmp` writers remain in session_manager.py -
+_save_pinned_themes and the two beside it at :1817, :1932 and :2231 - plus
+config_files_io.py:99. They are the identical latent defect and were left out of
+scope rather than folded into an unrelated change. json_artifact.py,
+hook_tokens.py and tmux_server_config.py already use tempfile.NamedTemporaryFile
+and are fine.
+
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: TESTS. New
+tests/test_unread_store_temp_name.py, 7 passed, and every assertion OBSERVES the
+temp path by spying on os.replace inside the module rather than importing the
+implementation's format string - a test that read the constant would agree with it
+whatever it said, including a fixed one. NEGATIVE CONTROL WATCHED GOING RED: with
+_unique_tmp_path mutated back to `path.with_suffix(path.suffix + ".tmp")`, three
+tests failed naming the defect (two writes reusing one name, two store instances
+sharing one name, and the legacy name `unread_state.json.tmp` reappearing);
+reverted and all 7 green again. Targeted run of the unread-touching suites plus
+the config-writer boundary guard: 146 passed. Wider run over every tests/*.py
+mentioning "unread": 2075 passed, 9 skipped, 0 failed. A FULL SUITE NUMBER IS
+OWED ON A QUIET BOX - this one was at load average about 250 and the full run was
+not attempted.
+
+[UNREAD-TEMP-FIX] [2026-09-11T05:10:00Z]: ONE FLAKE, NOT ATTRIBUTED TO THIS
+CHANGE, RECORDED SO NOBODY CHASES IT TWICE. The first wide run reported 3 failures
+in tests/test_state_dir_resolution.py, all on the get_session_metadata_path
+parametrisation. The identical command was re-run twice afterwards and passed both
+times (2075 and 2077 passed, 0 failed), and the same set WITHOUT this change's new
+test file also passed clean (2067). That file is already named in CLAUDE.md as
+carrying environmental failures. Treat a lone failure there on a loaded box as
+noise and re-run before investigating.
+
+[IDLE-NAG] 2026-09-11T00:00:00Z: Suppressed claude's idle-nudge Notification
+(measured on ses_63beb976: Stop followed by Notification at +60.1s, twelve
+consecutive times, with no sub-agent involved). New pure function
+`session_activity.idle_notification_should_suppress(permission_open, turn_open,
+stop_seen)` reuses the existing `turn_open` flag - suppresses a Notification only
+when a Stop was positively seen, nothing has reopened the turn since, and no
+permission is open. Wired via `SessionActivityTracker.should_suppress_idle_notification`
+-> `SessionManager.should_suppress_idle_notification` -> a new gate in
+`claude_event_hook` (src/api/routes.py), checked only for event_kind == "Notification",
+read BEFORE record_hook_event, right after the existing sub-agent gate. Returns
+`{"ok": true, "toast_suppressed": "turn_closed"}` and logs `hook_toast_suppressed_turn_closed`.
+State machine untouched (record_hook_event still runs; notice_open still flips).
+Fails toward notifying on an unknown session, no Stop ever seen, a reopened turn,
+an open permission, or a read that throws.
+Three pre-existing tests in tests/test_hook_toast_subagent_suppression.py
+(test_the_latch_expires_and_the_notification_is_raised,
+test_a_session_that_never_had_subagents_is_unaffected,
+test_an_unreadable_latch_still_notifies) were exercising exactly the plain
+Stop-then-Notification case this fix now correctly suppresses; each got one
+extra monkeypatch line neutralizing the new gate so that file keeps testing the
+sub-agent-specific latch in isolation - no assertions were rewritten.
+New test file tests/test_hook_toast_idle_nudge_suppression.py, 15 tests, all
+passing. Mutation-tested two negative controls and watched them go red: (1)
+widening the route's gate to also cover PermissionRequest failed
+test_permission_request_always_raises_even_after_a_clean_stop; (2) dropping the
+`stop_seen` requirement from the pure function failed
+test_pure_function_refuses_when_any_one_condition_fails[kwargs2]. Both mutations
+reverted immediately after confirming red, verified back to clean via py_compile
+and a full re-run (281 passed, 9 skipped).
+Ran, not the full suite (box load ~250): the above plus test_session_activity.py,
+test_hook_driven_status.py, test_toast_auto_ack.py, test_toast_lifecycle.py,
+test_toast_supersede.py, test_toast_cross_session.py,
+test_toast_carries_session_identity.py, test_session_notification_mute.py,
+test_claude_hooks.py, test_toast_stale_id_self_remap.py, test_led_real_hooks.py -
+281 passed, 9 skipped, 0 failed. A full-suite number (`venv/bin/python3 -m pytest -q`)
+is owed on a quiet box; not run here given load.
+
+[HUSK-REAPER] [2026-09-10]: Closed the `STILL OPEN` item under CLAUDE.md's "A DEAD PANE DROPS OFF THE LIVE LIST AND BELONGS IN RECENT". A session whose pane died stayed `lifecycle='running'` forever, because `remain-on-exit` keeps the husk LISTED and the only reaper argues from ABSENCE. The row was therefore in no group the user can see: gone from the live list, never arriving in RECENT.
+[HUSK-REAPER] [2026-09-10]: New pure module `src/core/session_pane_death.py` holds the whole rule with no I/O. It answers `dead` ONLY on a `#{pane_dead}` of exactly "1", from a COMPLETE pane listing, taken from the socket the reconcile is about, for a row whose creation epoch matches the stored one. Eleven other paths answer `unknown` and reap nothing. Vocabulary reused from `session_respawn` (`PANE_DEAD`/`PANE_ALIVE`/`PANE_UNKNOWN`), not re-minted.
+[HUSK-REAPER] [2026-09-10]: ZERO new subprocesses. `TmuxBackend.list_pane_status_all` already carries `#{pane_dead}` AND `#{session_created}` in its `list-panes -a` format string, and `list_attachable_sessions` was already calling it a few lines BELOW the reaper. The only change is that it is now called a few lines ABOVE it. Pinned by `test_the_reap_adds_no_tmux_subprocess_of_its_own`, which counts tmux invocations rather than timing anything.
+[HUSK-REAPER] [2026-09-10]: The reap does EXACTLY what the absence reap does - the same four columns (`lifecycle`, `lifecycle_source`, `lifecycle_checked_at`, `updated_at`), in the same single writer function, so there is one reap behaviour and not two. It does NOT delete, does NOT touch `archived_at`, `origin`, `session_uuid`, `last_seen_running_at` or `tmux_session_id`, does NOT unregister the in-memory session, and does NOT kill the tmux session. Project binding, title, pinned theme, unread flag and group filing all ride on the row and are untouched. `lifecycle_source='pane_dead'` is the only thing that distinguishes it from `tmux_missing`.
+[HUSK-REAPER] [2026-09-10]: `status_map_from_listing` added to `src/core/session_status_map.py` and used by BOTH construction sites, so "the socket travels with the listing" is stated once. It also carries `refused_rows` through as `complete`, which the hand-rolled version at the attachable site did not.
+[HUSK-REAPER] [2026-09-10]: Four separate mutations were run and watched go red, then reverted: gate always returns dead (44 of 53 failed), the `complete` gate removed (3 failed), the socket gate removed (3 failed), the epoch gate removed (2 failed). The always-dead mutation also fails the real-tmux test, by reaping the live control session beside the husk.
+[HUSK-REAPER] [2026-09-10]: RECOMMENDATION, NOT IMPLEMENTED - the tmux husk is left alive, so it keeps squatting its name and the next session for that project is still uniquified (`cloude_cloudecode-2`). Freeing the name means killing a tmux session, which destroys the dead pane's final screen that `remain-on-exit` exists to preserve. Needs the owner's explicit yes.
+[HUSK-REAPER] [2026-09-10]: FOUND, NOT FIXED - `tests/conftest.py` derives the `real_tmux` marker from a fixed list of socket-guard symbol names that does NOT include `derive_test_socket`, so `tests/test_recreate_gate_real_tmux.py` runs in the FAST loop despite driving a real tmux server. The conftest's own comment says the derivation "may over-include and must never under-include". One line fixes it (add `derive_test_socket` to `_SOCKET_GUARD_NAMES`); left alone as a shared-file change outside this task.
+
+[ISSUE-39] [2026-09-11]: Claimed via PR #104 (Adoom666/CloudeCodeDev), branch feat/39-toast-render-batch, linkage confirmed on first poll. Client-side render batching shipped: ToastManager._scheduleRender() (client/js/toast-render.js) coalesces any number of add/dismiss/updateLocal calls in one synchronous burst into ONE call to _render(). client/js/toast-render-batch.js is the frame-or-timer scheduler (races requestAnimationFrame against a 32ms setTimeout fallback per gotcha 9), loaded via a new script tag in client/index.html right before toast.js.
+[ISSUE-39] [2026-09-11]: add() still refreshes a known id in place, unchanged. A version-aware skip/replace/discard rule was written and then REMOVED before commit: `Toast` (src/models.py) carries no `version` field, so the rule was inert today and would have armed itself the moment anyone added one, with no server-side test in this tree to catch a mistake. If the server half is ever built - a `version` on the Toast model, incremented on supersession in session_manager.py, returned by the backfill and list endpoints in src/api/routes.py - the client rule goes in with it, in the same change, with tests on both sides.
+[ISSUE-39] [2026-09-11]: New test tests/test_toast_render_batch.node.mjs (8 cases): burst-add collapses to one render pass, a second burst after a flush gets its own single pass, dismissAll collapses to one render pass, the batch still flushes when rAF never fires (hidden tab), a committed NEGATIVE CONTROL proving a bare-rAF-only scheduler never flushes in that same scenario, grouping/winner-pick/xn-badge semantics unchanged under batching, the attachment receipt still renders as its own card, and a supersession reusing an id refreshing that card in place. Manually mutated the shipped client/js/toast-render-batch.js to strip the timer fallback (bare rAF only) and confirmed exactly the two hidden-tab-dependent tests went red, then reverted and reconfirmed green.
+[ISSUE-39] [2026-09-11]: Extended tests/lib_toast_dom_stub.mjs to also load toast-render-batch.js into the shared sandbox so every existing toast suite exercises the real wiring; its stub requestAnimationFrame is synchronous so all existing suites remain byte-identical in observable timing (schedule() resolves synchronously under that stub, same as calling _render() directly before this change). Ran all 20 node suites that mention "toast": 100% pass, no regressions. Full python suite NOT run (box load ~250 per instruction); owed on a quiet box.
+[ISSUE-39] [2026-09-11]: docs/notifications.md updated: file table (toast-render.js description, new toast-render-batch.js row, toast-lifecycle.js description), tests table (new suite), and a new "Rendering many toasts at once (issue #39)" section explaining the batching mechanism.
+[ISSUE-69] [2026-09-11]: Claimed as free work (issue is explicitly filed non-claimed/documentation, no linked PR found via search on "69" or "update check"). Found three update-checker-relevant repo pointers: macOS/update-check.js UPDATE_FEED_URL (was ccsliinc/CloudeCode, WRONG per the owner's 2026-09-08 ruling "use adams main repo"), src/core/update_check.py FALLBACK_REMOTE + DEFAULT_UPGRADE_COMMAND (already Adoom666/CloudeCode, unchanged), and macOS/main.js's About-window "View on GitHub" link (a duplicate hardcoded Adoom666/CloudeCode literal, not itself a checker).
+[ISSUE-69] [2026-09-11]: Fixed macOS/update-check.js: added DEFAULT_RELEASE_REPO = 'Adoom666/CloudeCode' as the single named constant, plus resolveReleaseRepo()/readConfiguredRemote()/ownerRepoFromRemoteUrl()/feedUrlFor() reading the SAME `updates.remote` key config.json already supports on the Python side (no new config system), with DEFAULT_RELEASE_REPO as the safe default for a packaged build. checkForUpdate() gained an optional third `configPath` arg (backward compatible, all 13 pre-existing tests pass unmodified). main.js's caller now passes serverManager.getConfigPath(); its About-window link now reads DEFAULT_RELEASE_REPO instead of a second hardcoded literal.
+[ISSUE-69] [2026-09-11]: Added 13 new JS assertions to tests/test_update_check.node.mjs (26 total, all pass) covering the negative control (DEFAULT_RELEASE_REPO must equal Adoom666/CloudeCode, not ccsliinc/CloudeCode), URL parsing, config-override resolution (missing file/malformed JSON/no updates block/valid override/unparseable override), checkForUpdate actually using the resolved feed, and the real 1.2.1-vs-1.0.36 no-downgrade scenario from the issue. Mutated DEFAULT_RELEASE_REPO back to ccsliinc/CloudeCode: confirmed exactly 2 tests went red, reverted, reconfirmed 26/26 green.
+[ISSUE-69] [2026-09-11]: Added 3 new pytest cases to tests/test_version_and_update_check.py (38 total, all pass) pinning FALLBACK_REMOTE/DEFAULT_UPGRADE_COMMAND against the ruled-on repo by name, plus the same real 1.2.1-vs-1.0.36 no-downgrade regression. Mutated FALLBACK_REMOTE to ccsliinc/CloudeCode: confirmed 1 test went red, reverted, reconfirmed 38/38 green. tests/test_docs_index.py also run clean (2 passed) since docs/DECISIONS.md was touched.
+[ISSUE-69] [2026-09-11]: docs/DECISIONS.md: added "Both update checkers point at Adam's main repo" entry recording the 2026-09-08 verbatim ruling, the measured 1.2.1-vs-1.0.36 consequence (re-verified live via gh api on 2026-09-11, unchanged from the issue), what this change adds (single constant, config override, no git-origin rung replicated in JS), and the three open questions from the issue left explicitly unresolved (canonical feed for both lines, version-scheme reconciliation, whether public distribution stays on ccsliinc/CloudeCode) - these remain Adam's to decide, not answered here.
+[ISSUE-69] [2026-09-11]: NOT fixed (adjacent, reported only per instruction): README.md (clone URL, releases link, license) and client/js/launchpad.js:3409 (a README-anchor link) also hardcode Adoom666/CloudeCode but are static documentation/informational links, not update checkers - out of the issue's scope, left untouched. Also noted but unchanged: src/core/update_check.py's DEFAULT_UPGRADE_COMMAND is a fixed string regardless of which remote a dev's `updates.remote` override resolves to, so a developer running a personal fork gets an accurate "latest tag" comparison but an "upgrade_command" that still opens Adoom666/CloudeCode's releases page - pre-existing asymmetry, not introduced or touched by this change.
+[ISSUE-69] [2026-09-11]: Full python suite NOT run (box load per instruction, ~250); only tests/test_version_and_update_check.py and tests/test_docs_index.py run directly. Full-suite number owed on a quiet box. No commit made (orchestrator owns staging/commit per instruction); no PR/draft opened since the issue itself says "not a task we are claiming... left FREE" and is a documentation/decision issue with no linked-PR claim mechanics implied - flagging this for the orchestrator's judgment on whether a claim PR is still wanted for the record.
+
+---
+
+## [P38-LISTING-THREAD] 2026-09-11
+
+### PHASE 1 INVENTORY - what `SessionManager.list_session_infos` actually does
+
+Counts: **6 pure reads (a)**, **7 concurrent-mutable in-memory reads (b)**,
+**8 in-memory writes by the pass (c)**, **4 durable writes by the pass (d)**.
+All citations are `src/core/session_manager.py` unless named otherwise, at the
+state of this change.
+
+**(a) PURE READS - safe in a thread. All six are now gathered off the loop.**
+
+| Read | Site | Cost |
+|---|---|---|
+| bulk `tmux list-panes -a` | `_build_tmux_status_map` :4767 | 1 subprocess; measured p50 24.0 ms, max 140.1 ms on the live socket with 14 sessions |
+| instance index (triple-keyed) | `_instance_index_for_listing` :6699 | 1 SQLite connection, or 0 when no seed candidate |
+| stored label (name-keyed) | `_label_for_tmux_name` :6612 | 1 connection PER ROW |
+| row identity (name-keyed) | `_identity_for_live_name` :6658 | 1 connection PER ROW |
+| durable activity state (name-keyed) | `_restored_activity_state` :3072 | 1 connection PER ROW |
+| owned instance set (whole-table, takes no name) | `_owned_instances_from_db` :5700 | 1 connection PER ROW for an answer that does not vary by row |
+
+Measured SQLite open+select on this box: p50 1.13 ms, max 6.78 ms. At `4N+2`
+with 14 sessions that is ~58 connections, ~65 ms p50, all on the event loop.
+
+**(b) READS OF IN-MEMORY STATE THE EVENT LOOP MUTATES CONCURRENTLY.** Every
+one of these is a CONCURRENT-WRITE HAZARD and every one was left on the loop.
+
+| State | Owner | Written from the loop by | Read at |
+|---|---|---|---|
+| `SessionSignals.permission_open` / `permission_opened_at` | `SessionActivityTracker._signals` (`src/core/session_activity.py`) | the hook route, `claude_event_hook`. **THE PAIR IS SET IN ONE ORDER AND CLEARED IN THE OPPOSITE ORDER, so a threaded read can see half a transition, silently** | :5152, :5207, :5214 |
+| `SessionSignals.notice_open` | same | `clear_notice` / `record_event` | :5214 |
+| `SessionSignals.subagent_depth`, `turn_open`, heartbeat stamps | same | `record_hook_event` | :5214 |
+| `self.sessions` / `self.backends` | manager | create, adopt, close, reaper | :5526 (loop) |
+| `self._unread_epochs` | manager | `unread_identity.remember` | :5186 |
+| `self.owned_tmux_sessions` | manager | adopt, create | :5469 via `is_owned_tmux_name` |
+| `self.log_buffers` / `self.command_counts` | manager | the pty reader | :5418, stats block |
+
+**(c) IN-MEMORY WRITES PERFORMED BY THE PASS ITSELF.** Eight, all kept on the loop.
+
+1. `unread_identity.remember(self._unread_epochs, ...)` :5188 - memoise the measured tmux epoch for the unread key.
+2. `verify_open_permission` :5152 (dead path) - clears `permission_open` against a measured-dead pane.
+3. `verify_open_permission` :5207 (live path) - clears the flag when a `capture-pane` shows no dialog; writes the permission ledger.
+4. `self._activity_tracker.resolve` :5214 - resolves and can expire the heartbeat.
+5. `seeded_display` :5272 - writes the 60s seed cache and can SET the unread flag.
+6. `self._startup_gate_for` :5331 - writes `StartupGateLedger` (first-hook time, tail verdict, tail age).
+7. `self._pending_startup_toasts.append` :4962 - claims a once-per-instance toast.
+8. `self._listing_fingerprint_cache` (via the agent evidence path) - memoises a pane fingerprint per instance triple.
+
+**(d) DURABLE WRITES PERFORMED BY THE PASS.** Four, all kept on the loop.
+
+1. `self._persist_settled_activity_state` :5301 - writes `sessions.activity_state`.
+2. The unread store file, via `seeded_display` rung 0's auto-unread claim.
+3. The startup-gate toast record (`toast_store`).
+4. The permission-verify ledger's recorded verdict.
+
+**Subprocesses still on the loop, deliberately:** `backend.is_alive()` :5098
+(only for a row the listing did not name, i.e. a row about to be dropped);
+`capture-pane` inside the permission verify and the startup gate (both
+throttled, both entangled with a write).
+
+### WHAT SHIPPED: a PARTIAL split. GATHER threaded, DECIDE and APPLY untouched.
+
+- `src/core/listing_prefetch.py` (NEW) - the four name-keyed reads as one
+  immutable lookup table, with `has()` / `owned_read` keeping "not read" apart
+  from "read and found nothing". Does NOT fold them into `InstanceIndex`: those
+  are name-keyed with a recency rule and the index is triple-keyed, and
+  answering one from the other is the silent duplicate-name behaviour change
+  CLAUDE.md forbids. Same readers, same queries, different thread.
+- `src/core/listing_gather.py` (NEW) - `ListingSnapshot` (taken ON THE LOOP),
+  `ListingReaders` (bound methods only, so the thread cannot reach a live
+  container), `gather_listing_inputs` (the thread body, reads only its two
+  arguments).
+- `src/core/session_manager.py` - `list_session_infos` is snapshot then
+  `await asyncio.to_thread(gather)` then the unchanged per-row loop;
+  `_listing_snapshot` / `_listing_readers` added; `_session_info_for` takes an
+  optional `prefetch`; `is_owned_tmux_name` takes an optional `prefetch` that
+  supplies ONLY its database rung.
+
+### STALENESS RULE, PER ITEM
+
+- **Every prefetched value: no rule needed, because NOTHING IS WRITTEN BACK.**
+  Each is a decoration derived from a stored row, exactly as it was when read
+  per row. Taking it earlier changes which moment a label reflects and cannot
+  make one wrong. There is no apply stage here by construction.
+- **`is_owned_tmux_name`: the in-memory set is read LIVE, only the DB rung is
+  gathered.** An adoption landing while the gather thread runs is therefore
+  still seen. Snapshotting the in-memory set would have lost it silently.
+- **`owned_read=False` falls back to the datastore.** A read that did not
+  happen is not a reading of nothing.
+- **A name the prefetch never covered falls through to the live per-row read**,
+  which is byte-identically the pre-change behaviour. This is what covers a
+  session registered while the gather ran.
+- **The row set (`self.sessions`) is read AFTER the gather**, making it fresher
+  rather than staler.
+- **`_owned_instances_from_db` collapses from N identical whole-table reads to
+  1.** Under the blocked loop that was already a no-op; off the loop it makes
+  the pass MORE self-consistent, not less.
+
+### REFUSED, AND WHY
+
+Threading the DECIDE/APPLY stages was **refused**. All eight in-memory writes
+and all four durable writes are read-modify-writes against state the hook route
+mutates concurrently, and the permission pair's opposite set/clear order means a
+torn read there is silent and wrong. Moving them needs a real apply stage with
+per-write re-validation in the manner of `config_writer.commit`'s fresh read
+inside the lock. That is the 400-line refactor the prior audit named and it was
+not attempted. A locking shortcut was also refused: a lock held across a 291 ms
+pass is the same blocking under a different name.
+
+### TESTS
+
+`tests/test_listing_off_the_loop.py` (NEW, 15 tests, all passing). Structural,
+never timed, modelled on `tests/test_config_files_shallow.py`. The negative
+control was **watched go red**: with `gather_listing_inputs` called
+synchronously the structural test fails with "the event loop never got to run
+while the gather was in progress: the gather is ON the loop".
+
+Cost ceilings unchanged and passing: `test_listing_pass_datastore_cost.py`,
+`test_listing_subprocess_cost.py`, `test_listing_seed_row_cost.py`. Per-pass
+datastore opens go `4N+2` to `3N+2`, so the ceiling is met with more room, not
+less. **A FULL-SUITE NUMBER IS OWED ON A QUIET BOX.**
+
+[P36-P37-HARDEN] [2026-09-11T04:59:31Z]: TASK A (four temp-name sites) - all
+four confirmed and fixed, all LATENT ONLY today (each save function is fully
+synchronous with no `await`, and every caller runs on the single uvicorn
+event loop, so two writes cannot interleave yet - identical shape to the
+unread_store fix in f0e07de). `SessionManager._write_metadata_atomic`
+(session_metadata.json), `SessionManager._save_pinned_themes`
+(pinned_themes.json, `.bak` behaviour preserved unchanged), and
+`SessionManager.set_project_theme` (`<working_dir>/.cc.theme`, already had
+failure cleanup, only the name changed) in src/core/session_manager.py;
+`config_files_io.atomic_write` (the file editor's write chokepoint,
+cleanup-on-failure ADDED where it was missing) in
+src/core/config_files_io.py. Created src/core/unique_tmp_path.py as the one
+shared helper (pid+random-suffix) and rewired unread_store.py's own local
+`_unique_tmp_path` onto it too, so there is one copy of the rule across all
+five call sites instead of two. All four negative controls watched RED
+(reverted to the fixed `.tmp` name one at a time, confirmed test failure,
+reverted back) before being left green. New suite:
+tests/test_unique_tmp_writers.py (14 tests, all passing).
+
+[P36-P37-HARDEN] [2026-09-11T04:59:31Z]: TASK B (real_tmux marker hole) -
+confirmed and fixed: `tests/conftest.py`'s `_SOCKET_GUARD_NAMES` was missing
+`"derive_test_socket"`, so any module doing ONLY
+`from tests.socket_guard import derive_test_socket` (no other socket_guard
+name, no `tmux_test_socket` fixture) escaped the `real_tmux` marker entirely.
+This was NOT a one-file hole - measured via real `pytest --collect-only -m
+real_tmux` before/after: 11 files / 144 tests marked before, 31 files / 348
+tests marked after (+20 files, +204 tests), all newly gained, none lost.
+Newly-marked files beyond test_recreate_gate_real_tmux.py: test_attach_paint,
+test_capture_cursor_real_tmux, test_cold_socket_born_at_depth_real_tmux,
+test_cold_socket_options_real_tmux, test_listing_liveness_socket_scope,
+test_pane_locale_spawn, test_respawn_refreshes_pane_env, test_server_status,
+test_session_respawn_api, test_session_restart_live,
+test_session_restart_resumes_the_conversation,
+test_session_restart_wrapper_choice, test_shell_init,
+test_tmux_backend_respawn, test_tmux_pipe_rotation,
+test_tmux_remain_on_exit_ordering, test_tmux_respawn_real,
+test_workspace_env_reaches_terminal, test_ws_startup_paint (all .py). Total
+suite collection count is unaffected by this fix (tests only move between
+the `real_tmux` / `not real_tmux` buckets); the 6391 vs 6409 total seen
+across before/after runs is the OTHER concurrent agent's uncommitted work
+landing test files mid-session, unrelated to this change. New suite:
+tests/test_real_tmux_marker_derivation.py (2 tests, subprocess-driven against
+the real conftest.py, both passing). Negative control watched RED (removed
+the added name, confirmed the positive-case test failed, restored it).
+**A FULL-SUITE NUMBER IS OWED ON A QUIET BOX** for both tasks.
+
+### POST-REVIEW ROUND - the three changes an adversarial review required
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 1, the blocker. Removed the ownership
+read from the listing prefetch entirely. `SessionManager.adopt_external_session`
+states in its own docstring that it does NOT add to `owned_tmux_sessions`, and
+the only three `.add` sites are the boot backfill (`:1601`), create (`:3845`)
+and rename (`:4582`), so an ADOPTION moves ONLY the datastore rung - which is
+exactly the rung the prefetch was freezing. Freeing the loop is what makes an
+adoption able to land mid-gather at all, so the threading change had
+INTRODUCED a window where `created_by_cloude` dropped off a freshly adopted row
+for one poll cycle. Measured before deciding, 4 live sessions, attributed by
+caller: the pass opened 14 connections with ownership prefetched
+(`_owned_instances_from_db` 1) and 17 with it on the loop (that reader 4), so
+ownership is 4 of 17 and the other three readers carry 13 of 17 - a clear
+minority, which is what the decision was conditioned on. `is_owned_tmux_name`
+lost its `prefetch` keyword and reads both rungs live again;
+`ListingPrefetch.owned_instances` / `.owned_read` and
+`ListingReaders.owned_instances_from_db` are gone.
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 1, the misleading test. Deleted
+`test_a_name_owned_while_the_gather_ran_is_still_reported_owned`, which faked
+the adoption by calling `owned_tmux_sessions.add(...)` - a mechanism production
+never uses for adoption - so it was green while vouching for nothing. That is
+this repo's own "a guard whose only exercised caller sets the flag it checks"
+shape. Replaced by
+`test_an_adoption_landing_during_the_gather_is_reported_owned`, which drives
+the REAL pass and moves the DATASTORE answer from inside the gather window,
+plus `test_ownership_is_never_answered_from_the_prefetch`, which reads the
+dataclass field tables (a `hasattr` on the class cannot answer this: a field
+with no default is not a class attribute).
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 2, rotted docs corrected in the same
+change per gotcha 8. CLAUDE.md: "THE LISTING PASS RUNS ON THE EVENT LOOP"
+rewritten to describe the three stages, with the history kept because every
+cost round in that section was aimed at it, plus new paragraphs on why the
+twelve writes stayed on the loop (the permission pair's set-order and
+clear-order are opposites, which makes a torn read SILENT), on the single-flight
+coalescer preventing two gathers overlapping, and on the safety property being
+a test rather than an audit. "FOUR PER-ROW READERS REMAIN" rewritten: still
+four, still not folded in, three now in the thread and ownership deliberately
+not. `tests/test_listing_pass_datastore_cost.py` module docstring corrected -
+it claimed every connection was opened with the loop blocked, which stopped
+being true for 13 of 17; its assertion message said the same thing and was
+corrected too.
+
+[P38-LISTING-THREAD] [2026-09-11]: FIX 3, the ceiling re-measured and the
+tripwire added. `MAX_DATASTORE_OPENS_PER_LISTING` was `4N + 2` while the pass
+cost less, so the alarm was simply off. Re-measured after FIX 1 at exactly
+`4N + 1` (17 at 4 sessions) on three consecutive runs and set to that with NO
+headroom; watched it go RED at `4N` and confirmed the failure still names the
+caller that grew. Renamed that test from `..._three_connections_per_row` to
+`..._four_connections_per_row`, which was already wrong before this round.
+New `test_the_gather_thread_touches_no_live_shared_container` wraps `sessions`,
+`backends`, `_instance_epochs`, `pinned_themes`, `_hook_tmux_names` and
+`_activity_tracker` in thread recorders and drives the REAL `_listing_readers()`
+bundle through `asyncio.to_thread`. It exists because `ListingReaders` holds
+BOUND METHODS and a bound method carries `self`, so the existing
+`test_the_gather_reaches_nothing_but_its_two_arguments` drives lambdas and
+cannot see a reader body growing a `self.sessions` read. NEGATIVE CONTROL
+WATCHED RED: injected `len(self.sessions)` into the real
+`SessionManager._label_for_tmux_name`, the tripwire failed naming
+`{'sessions': ['asyncio_0']}`, then reverted and byte-compared the file against
+its pre-injection copy. A committed control test carries the same proof.
+
+[P38-LISTING-THREAD] [2026-09-11]: Ran tests/test_listing_off_the_loop.py (16),
+test_listing_pass_datastore_cost.py (2), test_listing_subprocess_cost.py,
+test_listing_liveness_socket_scope.py, test_listing_seed_row_cost.py,
+test_single_flight.py (42 together), test_session_rename.py,
+test_unique_tmp_writers.py, test_real_tmux_marker_derivation.py,
+test_docs_index.py, test_session_ownership_origin.py (52 together),
+test_config_files*.py and the four unread suites (155 together),
+test_project_theme.py and test_session_theme_precedence.py (34 together). All
+pass. ruff on every changed file reports only the three errors already present
+at HEAD (verified against `git show HEAD:src/core/session_manager.py`).
+**A FULL-SUITE NUMBER IS OWED ON A QUIET BOX.**
+
+[ISSUE-39B] [2026-09-11]: Server half of issue #39 landed (client half was
+`f0e07de`, PR #104, `feat/39-toast-render-batch`). Claim re-confirmed before
+starting: issue #39 links to PR #104 only, PR #104 is still OPEN/draft,
+authored by us, no competing PR exists.
+
+`Toast.version` (src/models.py) is a monotonic per-record int, default 1.
+`SessionManager.record_toast` (src/core/session_manager.py) bumps it on the
+supersede path ONLY when body/color/session_label/session_name actually
+differ from what is held - an identical re-raise (the common duplicated-Stop
+case) leaves it unchanged. `SessionManager.ack_toast` bumps it once on the
+acked transition, guarded by the same `if t.acknowledged: return False` that
+already makes that method idempotent against a duplicate ack, so a duplicated
+ack cannot double-bump. `src/api/routes.py` needed NO CHANGES: every toast
+broadcast/response already serializes the full pydantic `Toast` object
+(`ToastNewMessage(toast=toast)`, `response_model=Toast`,
+`response_model=List[Toast]`), so `version` rides along automatically -
+verified this against the issue text and it is the one place the handover
+note's file list ("src/api/routes.py, the toast backfill endpoint") turned
+out not to need an edit.
+
+Client arbitration (`ToastManager.add()`'s known-id branch, which previously
+overwrote unconditionally) is gated through a NEW pure module,
+`client/js/toast-version-arbitration.js` (`shouldReplace(held, incoming)`),
+not inlined into `client/js/toast-lifecycle.js` - that file was already past
+its 500-line guideline (547 lines) per CLAUDE.md's own note, so the logic
+went into its own module the same way `toast-render-batch.js` and
+`toast-session-group.js` already do, read at call time off
+`window.ToastVersionArbitration`, no load-order requirement. Wired into
+`client/index.html` beside `toast-render-batch.js`. Rule: higher version
+replaces, equal is a no-op, lower is discarded; a version missing on EITHER
+side (legacy server, or a locally-minted toast like the attachment receipt)
+falls back to "always replace" - the exact pre-#39 behavior - because
+treating absent as zero would let a real update be discarded as "older than
+nothing" or freeze a legacy card on its first content forever. Copied the
+strictly-higher-wins discipline directly from `client/js/preferences.js`'s
+`preferences.changed` revision handling per CLAUDE.md, not reinvented.
+
+Tests: `tests/test_toast_version.py` (12 new, server side - version starts at
+1, real change bumps, identical re-raise does not, three-in-a-row stays
+pinned at 1 (not just "moved"), repeated real changes bump exactly once each,
+color-only change counts as real, duplicate hook-delivered creation does not
+double-count, duplicate ack and duplicate auto-ack do not double-bump,
+unrelated toasts/kinds keep independent version histories).
+`tests/test_toast_version_arbitration.node.mjs` (11 new, client side -
+higher/equal/lower through both the raw module and through `add()`, a
+three-deliveries-out-of-order convergence case, the missing-version fallback,
+and two invariant checks that the x-n badge count and dismiss-all's record
+count are unaffected by arbitration). `tests/lib_toast_dom_stub.mjs` (shared
+node harness) now also loads `toast-version-arbitration.js` into its sandbox,
+same reasoning as its existing SUMMARY_SRC/GROUP_SRC comment: without it the
+shipped `add()` would silently exercise its no-module fallback and every
+out-of-order assertion would test nothing.
+
+NEGATIVE CONTROL WATCHED RED, per protocol: mutated `shouldReplace` to
+`(v || 0)` (treating absent as zero), re-ran the node suite - the negative
+control case and its paired `add()` case both failed as expected (9/11), the
+other 9 unaffected cases stayed green (confirming the mutation was narrow and
+the rest of the suite is not vacuously passing). Reverted with `cp` from a
+pre-mutation backup and confirmed the revert was BYTE-IDENTICAL (`diff`) to
+the shipped file before re-running to 11/11 green. The mutated version was
+never left on disk or committed.
+
+Results: python `tests/test_toast_version.py` + all 8 existing toast python
+suites = 140 passed, 0 failed (was 128 passed before this change, confirming
+zero regressions). Node: all 8 toast `.node.mjs` suites (7 pre-existing + the
+1 new one) = 128 individual cases passed, 0 failed. `node --check` clean on
+every touched/created JS file
+(toast-lifecycle.js, toast-version-arbitration.js, toast.js unchanged,
+lib_toast_dom_stub.mjs, test_toast_version_arbitration.node.mjs). ruff on
+`src/models.py` + `src/core/session_manager.py`: 4 pre-existing errors, same
+4 before and after my edits (compared via `git stash`) - zero new lint
+findings. Did NOT run the full python suite per instruction (owed on a quiet
+box; last known baseline referenced elsewhere in this file is 6406
+passed / 2 failed from tonight's earlier run).
+
+Files touched: `src/models.py` (Toast.version field), `src/core/session_manager.py`
+(record_toast + ack_toast version bumps), `client/js/toast-lifecycle.js`
+(integration point in `add()`), `client/index.html` (script tag), plus the
+three new/modified test files above. `src/api/routes.py` untouched -
+confirmed unnecessary. Did not touch the issue-69 update-checker files
+(macOS/update-check.js, macOS/main.js, docs/DECISIONS.md,
+tests/test_update_check.node.mjs, tests/test_version_and_update_check.py) or
+`docs/webui-performance-and-session-menu-plan.md`, which were already
+modified in the working tree before this task started.

@@ -315,6 +315,9 @@ async function waitForServerHealth(timeoutMs = 30000) {
  */
 function showAboutDialog() {
   const { BrowserWindow } = require('electron');
+  // Same repo identity the update checker's default feed points at - one
+  // named constant, not a second hardcoded "Adoom666/CloudeCode" literal.
+  const { DEFAULT_RELEASE_REPO } = require('./update-check.js');
 
   // Create a small modal window.
   // Uses Electron-recommended secure defaults: no node integration, context isolation on.
@@ -434,7 +437,7 @@ function showAboutDialog() {
         Your AI coding sidekick in the menu bar.<br/>
         Command Claude from anywhere, build anywhere.
       </p>
-      <a class="github-btn" href="https://github.com/Adoom666/CloudeCode" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+      <a class="github-btn" href="https://github.com/${DEFAULT_RELEASE_REPO}" target="_blank" rel="noopener noreferrer">View on GitHub</a>
       <div class="copyright">
         Copyright © ${currentYear} Psyance, LLC. All rights reserved.
       </div>
@@ -1343,7 +1346,12 @@ function updateMenu() {
             const { dialog, shell, app } = require('electron');
             const { checkForUpdate, RESULT_AVAILABLE, RESULT_CURRENT } =
               require('./update-check.js');
-            const r = await checkForUpdate(app.getVersion());
+            // Third arg: config.json, so an `updates.remote` override (the
+            // same key src/core/update_check.py reads) governs this check
+            // too, rather than only the server-side one.
+            const r = await checkForUpdate(
+              app.getVersion(), undefined, serverManager.getConfigPath()
+            );
             if (r.result === RESULT_AVAILABLE) {
               const choice = await dialog.showMessageBox({
                 type: 'info',

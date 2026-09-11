@@ -15,7 +15,15 @@ from src.models import (
     WSPTYDataMessage,
     WSPTYInputMessage,
     WSPTYResizeMessage,
-    WSErrorMessage
+    WSErrorMessage,
+    WSTerminalReadyMessage
+)
+from src.api.attach_settle import (
+    NO_RESIZE_ATTEMPTED,
+    ResizeOutcome,
+    decide_settle,
+    read_pane_geometry,
+    settle_if_needed,
 )
 from src.api.deps import verify_jwt_from_subprotocol, SUBPROTOCOL_MARKER
 from src.api.resize_negotiation import (
@@ -23,6 +31,8 @@ from src.api.resize_negotiation import (
     release_client_resize,
 )
 from src.api.ws_startup_paint import paint_on_attach
+from src.core import viewer_fanout
+from src.core.bounded_stream import OFFER_ACCEPTED, BoundedStream
 
 logger = structlog.get_logger()
 
@@ -62,6 +72,14 @@ class ConnectionManager:
     def __init__(self):
         """Initialize connection manager."""
         self.active_connections: Set[WebSocket] = set()
+        # websocket -> that viewer's ONE outbox. Every broadcast path
+        # OFFERS into this rather than calling `send_text` on the socket,
+        # because a broadcast arriving from a toast, a rename or a resize
+        # while the viewer's writer task is mid-send is a second writer -
+        # and two coroutines awaiting `send` on one socket interleave
+        # frames into a corrupted stream that nothing reports. See
+        # src/core/viewer_fanout.py.
+        self._streams: dict[int, BoundedStream] = {}
         # session_id -> set of WS connections currently bound to that
         # session. Populated by ``connect_to_session`` on the WS handshake;
         # pruned by ``disconnect``. A connection can only ever be bound to
@@ -70,7 +88,7 @@ class ConnectionManager:
         # disconnect, which is O(N_sessions) and dwarfed by the WS RTT.
         self._session_connections: dict[str, Set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, stream=None):
         """
         Accept and register a new WebSocket connection.
 
@@ -84,6 +102,8 @@ class ConnectionManager:
             websocket: WebSocket connection to register (already accepted)
         """
         self.active_connections.add(websocket)
+        if viewer_fanout.is_viewer_stream(stream):
+            self._streams[id(websocket)] = stream
         logger.info("websocket_connected", total_connections=len(self.active_connections))
 
     def bind_session(self, websocket: WebSocket, session_id: Optional[str]) -> None:
@@ -111,6 +131,7 @@ class ConnectionManager:
             websocket: WebSocket connection to unregister
         """
         self.active_connections.discard(websocket)
+        self._streams.pop(id(websocket), None)
         for sid, conns in list(self._session_connections.items()):
             conns.discard(websocket)
             if not conns:
@@ -125,11 +146,9 @@ class ConnectionManager:
             message: Message to broadcast (JSON string)
         """
         for connection in self.active_connections.copy():
-            try:
-                await connection.send_text(message)
-            except Exception as e:
-                logger.error("broadcast_failed", error=str(e))
+            if not self._offer(connection, message):
                 self.active_connections.discard(connection)
+                self._streams.pop(id(connection), None)
 
     async def broadcast_to_session(self, session_id: str, message: str) -> int:
         """Broadcast a message to every WS connection bound to ``session_id``.
@@ -152,20 +171,41 @@ class ConnectionManager:
         if not conns:
             return 0
         for connection in list(conns):
-            try:
-                await connection.send_text(message)
+            if self._offer(connection, message):
                 sent += 1
-            except Exception as e:
-                logger.error(
-                    "broadcast_to_session_failed",
+            else:
+                logger.warning(
+                    "broadcast_to_session_undeliverable",
                     session_id=session_id,
-                    error=str(e),
                 )
                 conns.discard(connection)
                 self.active_connections.discard(connection)
+                self._streams.pop(id(connection), None)
         if not conns:
             self._session_connections.pop(session_id, None)
         return sent
+
+    def _offer(self, websocket: WebSocket, message: str) -> bool:
+        """Queue one text frame for a socket's own writer. Never awaits.
+
+        Description: THE SINGLE-WRITER SEAM. Everything that used to call
+          ``websocket.send_text`` from a broadcast now lands here, so the
+          only coroutine that ever touches a live terminal socket is that
+          viewer's writer task. It also stops one unreachable browser
+          delaying the rest of a fan-out, because an offer cannot block.
+          A socket registered WITHOUT a stream falls back to nothing and
+          is reported undeliverable rather than being sent to directly -
+          that would be the second writer coming back through the door
+          this closes.
+        Inputs: websocket (WebSocket); message (str) - JSON to send.
+        Output: bool - False when the frame could not be queued, which is
+          the caller's signal to drop that socket.
+        Example: if not self._offer(ws, payload): drop(ws)
+        """
+        stream = self._streams.get(id(websocket))
+        if stream is None:
+            return False
+        return viewer_fanout.offer_text(stream, message) == OFFER_ACCEPTED
 
 
 # Global connection manager
@@ -246,7 +286,13 @@ async def websocket_terminal(websocket: WebSocket):
         cur = registry.current_session()
         target_sid = cur.id if cur is not None else None
 
-    await connection_manager.connect(websocket)
+    # Subscribe to THIS session's PTY output only. Taken BEFORE the
+    # registration below because the registration needs the stream: every
+    # broadcast into this socket goes through it, and a socket registered
+    # without one cannot be written to at all.
+    viewer_stream = session_manager.subscribe_output(target_sid)
+
+    await connection_manager.connect(websocket, viewer_stream)
     # v0.7.0 Part 2 - register the WS in the per-session reverse map so
     # ``broadcast_to_session`` can target it for toast fanout. Bind AFTER
     # the validated session id has been resolved so the map never holds
@@ -266,9 +312,12 @@ async def websocket_terminal(websocket: WebSocket):
                 "mark_session_viewed_failed", session_id=target_sid, error=str(exc)
             )
 
+<<<<<<< HEAD
     # Subscribe to THIS session's PTY output only.
     pty_output_queue = registry.subscribe(target_sid)
 
+=======
+>>>>>>> 6012467
     # Subscribe to local-server events (replaces the old tunnel queue -
     # carries `local_server_detected` / `local_server_lost` payloads).
     local_servers_queue = local_servers.subscribe()
@@ -304,10 +353,22 @@ async def websocket_terminal(websocket: WebSocket):
     #                         the 100ms debounce client-side - this is the
     #                         handshake path, not a normal user-driven
     #                         resize)
-    #   3. Server applies backend.resize(cols, rows)
+    #   3. Server reads the PANE's own #{pane_width}/#{pane_height}, then
+    #      applies backend.resize(cols, rows) unless the pane is already
+    #      measured at the negotiated size.
     #   4. Server sleeps ~150ms so SIGWINCH reaches the pane's foreground
     #      process (Claude/bash/etc.) and that process has a chance to
-    #      finish any in-flight ANSI write before we stomp its buffer.
+    #      finish any in-flight ANSI write before we stomp its buffer -
+    #      but ONLY when there is something to wait for. Three outcomes,
+    #      and the third is why this is not a two-way branch:
+    #        - pane measured AND already at the negotiated grid: no
+    #          resize, no sleep. The common reconnect.
+    #        - pane measured and DIFFERENT: resize issued, sleep as ever.
+    #        - pane could not be measured, or the resize failed: sleep as
+    #          ever. A reading that did not happen is not a reading of
+    #          nothing, and treating unknown as unchanged would leave the
+    #          pane's grid disagreeing with the browser, invisibly, until
+    #          the user typed. See src/api/attach_settle.py.
     #   5. Server paints the pane's screen (see ws_startup_paint). Every
     #      pane, full-screen TUI or not, gets its visible screen captured
     #      post-resize and sent to the client. Nothing is written into
@@ -376,19 +437,41 @@ async def websocket_terminal(websocket: WebSocket):
                 cols=handshake_cols,
                 rows=handshake_rows,
             )
+            # Measured BEFORE the resize, off the PANE rather than off any
+            # cache: a previous socket's negotiated size says nothing about
+            # where the pane is now, and a stale value reading "unchanged"
+            # is exactly the silent wrong-grid failure this guards.
+            measured = await read_pane_geometry(
+                _resolve_backend(session_manager, target_sid)
+            )
             try:
-                await apply_negotiated_resize(
+                outcome = await apply_negotiated_resize(
                     session_manager, target_sid, websocket,
                     handshake_cols, handshake_rows, connection_manager,
+                    known_pane_size=measured,
                 )
             except Exception as exc:
                 logger.error("ws_handshake_resize_failed", error=str(exc))
+                # A resize that raised leaves the pane's geometry unknown,
+                # which is the strongest possible reason to wait.
+                outcome = ResizeOutcome(
+                    target=(handshake_cols, handshake_rows),
+                    issued=True,
+                    failed=True,
+                )
 
             # Let SIGWINCH propagate + foreground app finish any mid-flight
-            # write. 150ms is empirically enough for tmux -> pane delivery
-            # and for Claude/bash to ack the signal. We use asyncio.sleep
-            # so the event loop keeps draining other tasks.
-            await asyncio.sleep(0.15)
+            # write, when a resize actually went out. 150ms is empirically
+            # enough for tmux -> pane delivery and for Claude/bash to ack
+            # the signal. We use asyncio.sleep so the event loop keeps
+            # draining other tasks.
+            verdict = decide_settle(measured, outcome)
+            await settle_if_needed(verdict)
+            logger.debug(
+                "ws_handshake_settle",
+                settled=verdict.settle,
+                reason=verdict.reason,
+            )
 
             # Make the pane's screen visible at the new size. A TUI gets
             # Ctrl+L and repaints itself; anything else gets the pane's
@@ -404,7 +487,14 @@ async def websocket_terminal(websocket: WebSocket):
             # (timeout, bad dims, or disconnect-during-handshake recovered).
             # A frozen banner is the worst possible UX - paint at the
             # pane's current (birth) size so the user sees SOMETHING.
-            await asyncio.sleep(0.15)
+            #
+            # SAME RULE, SAME FUNCTION, and it can never take the fast
+            # path: with no client geometry there is nothing to confirm
+            # unchanged, so this always settles, exactly as before. Both
+            # sleep sites go through one gate on purpose - a fast path
+            # that is fast on only one branch is worse than either.
+            verdict = decide_settle(None, NO_RESIZE_ATTEMPTED)
+            await settle_if_needed(verdict)
             _strategy = await paint_on_attach(
                 websocket,
                 _resolve_backend(registry, target_sid),
@@ -419,16 +509,59 @@ async def websocket_terminal(websocket: WebSocket):
         # the user lands on a blank prompt. Popped on flush, so a reconnect
         # never re-runs it. Only an ID ever crossed the API boundary; the
         # text comes from config.json (src/core/terminal_commands.py).
+        startup_command = "unknown"
         if target_sid and hasattr(session_manager, "flush_pending_terminal_command"):
             try:
-                await session_manager.flush_pending_terminal_command(target_sid)
-            except Exception as exc:
+                startup_command = await session_manager.flush_pending_terminal_command(
+                    target_sid)
+            except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                # The flush swallows its own write failures, so reaching
+                # here means something structural went wrong instead.
+                # That leaves what reached the pane UNESTABLISHED, which
+                # is a different answer from "nothing was configured".
                 logger.warning("ws_pending_terminal_command_failed", error=str(exc))
+                startup_command = "unknown"
+        elif not target_sid:
+            # No session id to resolve a pending command against. Nothing
+            # was looked up, so nothing may be claimed about it.
+            startup_command = "unknown"
+        else:
+            # A session manager without the method cannot have a pending
+            # command, because nothing could ever have recorded one.
+            startup_command = "none"
+
+        # THE PANE CAN TAKE INPUT NOW, AND THIS IS THE ONLY THING THAT
+        # SAYS SO. Everything above it - the dims handshake, the settle,
+        # the attach paint, the startup command - happens with the socket
+        # OPEN and with the handshake loop DISCARDING binary frames, so a
+        # client that treats "socket open" as "ready" loses whatever the
+        # user typed in that window. Sent once, after all of it, and
+        # never withheld: a startup command that failed does not make the
+        # pane unable to receive input, so `startup_command` reports what
+        # happened rather than gating the message.
+        #
+        # ADDITIVE. Nothing waits for a reply and nothing is gated on the
+        # client having read it, so a client that ignores this message
+        # behaves exactly as every client did before it existed.
+        try:
+            await websocket.send_text(json.dumps(
+                WSTerminalReadyMessage(startup_command=startup_command).model_dump()
+            ))
+            logger.debug("ws_terminal_ready_sent", startup_command=startup_command)
+        except (WebSocketDisconnect, RuntimeError) as exc:
+            # The client left between the paint and here. The outer
+            # handler owns the cleanup; say it happened and carry on so
+            # the disconnect is handled in exactly one place.
+            logger.info("ws_terminal_ready_not_delivered", error=str(exc))
     except WebSocketDisconnect:
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
+<<<<<<< HEAD
         registry.unsubscribe(pty_output_queue, target_sid)
+=======
+        session_manager.unsubscribe_output(viewer_stream, target_sid)
+>>>>>>> 6012467
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         await release_client_resize(
@@ -439,29 +572,63 @@ async def websocket_terminal(websocket: WebSocket):
         logger.error("ws_handshake_error", error=str(exc))
 
     try:
-        # Create tasks for receiving and sending
+        # ONE WRITER, THREE FEEDERS. Until issue 38 this was four tasks
+        # all calling `websocket.send_*` concurrently, plus whatever a
+        # broadcast reached in with. Two coroutines awaiting `send` on one
+        # socket interleave frames, and the result is a corrupted stream
+        # rather than an exception - nothing in the system reports it. So
+        # `_drain_viewer` is now the only thing that touches this socket
+        # after the handshake, and everything else OFFERS into the
+        # viewer's bounded outbox.
+        writer_task = asyncio.create_task(
+            _drain_viewer(websocket, viewer_stream, log_monitor, target_sid)
+        )
         receive_task = asyncio.create_task(
-            receive_messages(websocket, session_manager, target_sid)
+            receive_messages(websocket, session_manager, target_sid, viewer_stream)
         )
-        send_pty_task = asyncio.create_task(
-            send_pty_output(websocket, pty_output_queue, log_monitor, target_sid)
+        pump_local_servers_task = asyncio.create_task(
+            _pump_text(local_servers_queue, viewer_stream)
         )
-        send_local_servers_task = asyncio.create_task(
-            send_queue_messages(websocket, local_servers_queue)
-        )
-        send_logs_task = asyncio.create_task(
-            send_queue_messages(websocket, log_queue)
+        pump_logs_task = asyncio.create_task(
+            _pump_text(log_queue, viewer_stream)
         )
 
         # Wait for any task to complete (or fail)
         done, pending = await asyncio.wait(
-            [receive_task, send_pty_task, send_local_servers_task, send_logs_task],
+            [receive_task, writer_task, pump_local_servers_task, pump_logs_task],
             return_when=asyncio.FIRST_COMPLETED
         )
 
-        # Cancel remaining tasks
+        # A viewer that crossed its bound is told so with a code it can
+        # tell apart from a server restart, so the client recaptures the
+        # pane silently instead of showing a reconnect banner. Read BEFORE
+        # the cancellations below, because the teardown closes the stream.
+        overflowed = viewer_stream.overflowed
+
+        # Cancel remaining tasks. CANCEL AND DO NOT AWAIT: a task parked
+        # in an `await` takes the cancellation AT that await and can never
+        # resume to send again, so the single-writer claim holds through
+        # teardown without this handler waiting on anything.
         for task in pending:
             task.cancel()
+
+        if overflowed:
+            logger.warning(
+                "viewer_disconnected_queue_overflow",
+                session_id=target_sid,
+                close_code=viewer_fanout.VIEWER_OVERFLOW_CLOSE_CODE,
+                max_chunks=viewer_fanout.MAX_VIEWER_QUEUE_CHUNKS,
+                max_bytes=viewer_fanout.MAX_VIEWER_QUEUE_BYTES,
+            )
+            try:
+                await websocket.close(
+                    code=viewer_fanout.VIEWER_OVERFLOW_CLOSE_CODE,
+                    reason="viewer queue overflow",
+                )
+            except RuntimeError:
+                # Already closing from the other end. The client notices
+                # the drop and recaptures, which is the same recovery.
+                pass
 
     except WebSocketDisconnect:
         logger.info("websocket_client_disconnected")
@@ -470,7 +637,11 @@ async def websocket_terminal(websocket: WebSocket):
     finally:
         # Cleanup - unsubscribe ONLY this session's queue. Do NOT detach or
         # destroy the session: other tabs (or a later reconnect) may want it.
+<<<<<<< HEAD
         registry.unsubscribe(pty_output_queue, target_sid)
+=======
+        session_manager.unsubscribe_output(viewer_stream, target_sid)
+>>>>>>> 6012467
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         # fix/multiclient-tmux-size - drop this client from size negotiation
@@ -484,14 +655,26 @@ async def websocket_terminal(websocket: WebSocket):
         connection_manager.disconnect(websocket)
 
 
-async def receive_messages(websocket: WebSocket, session_manager, session_id=None):
+async def receive_messages(
+    websocket: WebSocket, session_manager, session_id=None, stream=None
+):
     """
     Receive messages from the WebSocket client.
+
+    IT READS AND IT DOES NOT SEND. Its two replies - the pong and the
+    input-failure error - are OFFERED into the viewer's outbox so the
+    writer task delivers them, because a send from here would be a second
+    coroutine on this socket and two of those interleave frames into a
+    stream nothing reports as broken. With no stream (an older caller, a
+    test double) those replies are skipped rather than sent directly: a
+    dropped pong costs a keepalive, and a silent second writer costs a
+    corrupted terminal.
 
     Args:
         websocket: WebSocket connection
         session_manager: SessionManager instance
         session_id: the session this WS is bound to (None = current)
+        stream: this viewer's outbox (BoundedStream), or None
     """
     try:
         while True:
@@ -511,11 +694,14 @@ async def receive_messages(websocket: WebSocket, session_manager, session_id=Non
                         await session_manager.send_input(text, session_id=session_id)
                     except Exception as e:
                         logger.error("input_failed", error=str(e))
-                        error_msg = WSErrorMessage(
-                            error="input_failed",
-                            message=str(e)
-                        )
-                        await websocket.send_text(error_msg.model_dump_json())
+                        if viewer_fanout.is_viewer_stream(stream):
+                            error_msg = WSErrorMessage(
+                                error="input_failed",
+                                message=str(e)
+                            )
+                            viewer_fanout.offer_text(
+                                stream, error_msg.model_dump_json()
+                            )
 
                 # Handle text messages (control messages)
                 elif "text" in message:
@@ -538,9 +724,11 @@ async def receive_messages(websocket: WebSocket, session_manager, session_id=Non
                                 logger.error("resize_failed", error=str(e))
 
                         elif msg_type == WSMessageType.PING:
-                            # Respond to ping
-                            pong_msg = {"type": WSMessageType.PONG}
-                            await websocket.send_text(json.dumps(pong_msg))
+                            # Respond to ping, THROUGH THE ONE WRITER.
+                            if viewer_fanout.is_viewer_stream(stream):
+                                viewer_fanout.offer_text(
+                                    stream, json.dumps({"type": WSMessageType.PONG})
+                                )
 
                     except json.JSONDecodeError:
                         logger.warning("invalid_json_received", data=data[:100])
@@ -566,18 +754,24 @@ async def receive_messages(websocket: WebSocket, session_manager, session_id=Non
         raise
 
 
-async def send_pty_output(websocket: WebSocket, queue: asyncio.Queue, log_monitor=None, session_id=None):
-    """
-    Send PTY output from queue to the WebSocket client as binary frames.
+async def _pump_text(queue: asyncio.Queue, stream: BoundedStream) -> None:
+    """Move text messages from a source queue into a viewer's outbox.
 
-    Args:
-        websocket: WebSocket connection
-        queue: Queue containing PTY output (base64 encoded strings)
-        log_monitor: Optional LogMonitor for pattern detection
-        session_id: the session this stream is bound to (None = current)
+    Description: A FEEDER, NOT A WRITER. It never touches the socket, so
+      adding a source of server-to-client messages cannot add a second
+      coroutine sending on it. The log monitor and the local-server
+      tracker each hand out their own unbounded fan-out queue; this is
+      where their output enters this viewer's bound and starts counting
+      against the same budget as its terminal bytes. Returns when the
+      viewer's stream is finished, which is the teardown signal.
+    Inputs: queue (asyncio.Queue) - the source's own subscription;
+      stream (BoundedStream) - this viewer's outbox.
+    Output: None.
+    Example: asyncio.create_task(_pump_text(log_queue, viewer_stream))
     """
     try:
         while True:
+<<<<<<< HEAD
             # Wait for PTY output (base64 encoded)
             encoded_data = await queue.get()
 
@@ -658,18 +852,92 @@ async def send_queue_messages(websocket: WebSocket, queue: asyncio.Queue):
     try:
         while True:
             # Wait for message in queue
+=======
+>>>>>>> 6012467
             message = await queue.get()
-
-            try:
-                # Send to client
-                await websocket.send_text(message)
-            except Exception as e:
-                logger.error("send_message_error", error=str(e))
-                raise
-
+            if stream.closed:
+                return
+            viewer_fanout.offer_text(stream, message)
     except asyncio.CancelledError:
-        # Task was cancelled, exit gracefully
         pass
-    except Exception as e:
-        logger.error("send_queue_messages_error", error=str(e))
+
+
+async def _drain_viewer(
+    websocket: WebSocket,
+    stream: BoundedStream,
+    log_monitor=None,
+    session_id=None,
+) -> None:
+    """THE ONE WRITER for this viewer's socket.
+
+    Description: drains the viewer's bounded outbox and is the only
+      coroutine that calls ``websocket.send_*`` once the handshake is
+      over. A pty frame is base64 and goes out as a BINARY frame after
+      the same pattern detection and idle watching the old
+      ``send_pty_output`` did; everything else goes out verbatim as text.
+      Returns when the stream finishes - an ordinary teardown or an
+      overflow - and the caller reads ``stream.overflowed`` to decide
+      what to tell the client.
+
+      A SEND THAT RAISES ENDS THE VIEWER, and the stream is closed so the
+      feeders stop offering into a queue nobody will drain.
+    Inputs: websocket (WebSocket); stream (BoundedStream) - this viewer's
+      outbox; log_monitor - optional, for pattern detection; session_id -
+      the session this stream is bound to.
+    Output: None.
+    Example: asyncio.create_task(_drain_viewer(ws, stream, lm, sid))
+    """
+    try:
+        while True:
+            frame = await stream.get()
+            if frame is None:
+                return
+            if frame.kind == viewer_fanout.FRAME_TEXT:
+                await websocket.send_text(frame.payload)
+                continue
+
+            raw_bytes = base64.b64decode(frame.payload)
+
+            # Pattern detection + idle watching, scoped to THIS session.
+            # We skip both when the backend is in replay mode so replayed
+            # scrollback doesn't look like "new" activity downstream.
+            sm = websocket.app.state.session_manager
+            _backend = None
+            _idle_watcher = None
+            if sm is not None:
+                if session_id and hasattr(sm, "get_backend"):
+                    _backend = sm.get_backend(session_id)
+                    _idle_watcher = getattr(sm, "idle_watchers", {}).get(session_id)
+                else:
+                    _backend = getattr(sm, "backend", None)
+                    _idle_watcher = getattr(sm, "idle_watcher", None)
+            in_replay = (
+                _backend is not None
+                and getattr(_backend, "replay_in_progress", False)
+            )
+            if log_monitor and not in_replay:
+                try:
+                    text = raw_bytes.decode("utf-8", errors="replace")
+                    log_monitor._detect_patterns(text)
+                except Exception as e:
+                    # Don't let pattern detection errors break streaming.
+                    logger.debug("pattern_detection_error", error=str(e))
+
+            if _idle_watcher is not None and not in_replay:
+                try:
+                    await _idle_watcher.handle_chunk(raw_bytes)
+                except Exception as e:
+                    # Terminal streaming is load-bearing, notifications
+                    # are not.
+                    logger.debug("idle_watcher_chunk_error", error=str(e))
+
+            await websocket.send_bytes(raw_bytes)
+    except asyncio.CancelledError:
         raise
+    except Exception as e:
+        logger.error("drain_viewer_error", error=str(e))
+    finally:
+        # Stop the feeders offering into a queue nothing will drain. The
+        # first close reason wins, so a stream that already overflowed
+        # still reports the overflow to the endpoint.
+        stream.close()

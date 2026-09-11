@@ -125,6 +125,14 @@
     height: 16px;
 }
 
+/* The gap above a section header (session-sidebar-groups.css) scales
+ * down here rather than staying at the full-density 28px: compact mode
+ * exists to show more rows in the same height, and a full-size band gap
+ * would eat back the room the tighter rows just bought. */
+.session-sidebar-panel[data-density="compact"] .session-sidebar-group + .session-sidebar-group {
+    margin-top: 16px;
+}
+
 /* ---- cozy (default) -------------------------------------------------
  * The row exactly as it shipped: 10px padding on both axes. */
 

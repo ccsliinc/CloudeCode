@@ -420,12 +420,35 @@ test('the container is a polite live region', () => {
 
 // ------------------------------------------------------------- session name
 
-test('clicking the session name runs the SAME switch the sidebar row runs', () => {
+test('the session name is a real control, and does NOT navigate on its own', () => {
+    // THIS CASE USED TO ASSERT THE OPPOSITE, and the reversal is the
+    // point rather than a regression. It required the name click to reach
+    // `SessionSidebarClicks.activateRow` exactly once, which was correct
+    // on the branch it was written on: nothing on `.toast` listened for a
+    // click then, so the name element was the only way in. A later merge
+    // added a click handler to the CARD calling `ToastNavigate.go`, and
+    // the name element is a CHILD of that card - so from then on ONE
+    // click ran BOTH, each of which closes the live WebSocket and opens
+    // a new one. Measured on live: 161 connects against 116 disconnects,
+    // 45 sockets opened and never closed, and a session that took about
+    // thirty seconds to settle.
+    //
+    // The card's handler is the one that survives, because it hands
+    // `App.returnToExistingTerminal` the row the SERVER has (so
+    // `pinned_theme` and `tmux_session` arrive on the wrapper where that
+    // function reads them) and announces a dead session out loud.
+    // `activateRow` was reached here through a fabricated
+    // `{_activeTmuxName: null}` controller, whose null disabled its
+    // already-in-this-session guard by construction.
+    //
+    // The COUNT of navigations from one click is pinned in
+    // tests/test_toast_click_single_navigation.node.mjs, which dispatches
+    // a bubbling click; the stub's `click()` here fires one element's
+    // listeners only, which is why this case can assert the name handler
+    // in isolation.
     const { container, mgr, sandbox } = makeEnv();
     mgr.add(toast('Stop', 'Your turn', null, 'ses_1', 'cloude_myproject'));
     const calls = [];
-    // Stand in for the real module: proves toast.js calls THIS function
-    // rather than reimplementing the switch itself.
     sandbox.window.SessionSidebarClicks = {
         activateRow: (ctrl, rowEl) => calls.push({ ctrl, rowEl }),
     };
@@ -434,10 +457,9 @@ test('clicking the session name runs the SAME switch the sidebar row runs', () =
         'a session with somewhere to switch to must be a real, keyboard-activatable control');
     assert.equal(nameBtn.getAttribute('type'), 'button');
     nameBtn.click();
-    assert.equal(calls.length, 1, 'the click must reach SessionSidebarClicks.activateRow exactly once');
-    assert.equal(calls[0].rowEl.dataset.name, 'cloude_myproject',
-        'the tmux name the sidebar switch needs must be the toast record\'s session_name');
-    assert.equal(calls[0].rowEl.dataset.sessionId, 'ses_1');
+    assert.equal(calls.length, 0,
+        'the name handler must no longer navigate: the card it sits inside '
+        + 'already does, and two navigations from one click is the defect');
 });
 
 test('clicking the session name also dismisses the card', async () => {

@@ -1,4 +1,4 @@
-"""Reading and writing ``config.json``, and the one atomic write pattern.
+"""Reading ``config.json``, and the errors four call sites used to spell out.
 
 Carved out of the flat ``src/config.py`` by slice S5 of
 ``.claude/notes/backend-decomposition-plan.md``. Four methods raised the
@@ -6,31 +6,25 @@ same "run setup_auth.py" ``FileNotFoundError`` and four wrapped the same
 ``json.JSONDecodeError`` into the same ``ValueError``; those are one copy
 each now.
 
-**THE ATOMIC WRITE IS WHY THIS MODULE EXISTS SEPARATELY.** A half-written
-``config.json`` costs the user their whole setup, so every writer here
-does the same four things in the same order: back up the PRE-WRITE bytes
-to ``config.json.bak``, write a temp file beside the target, ``fsync``
-it, then ``os.replace``. The rename is atomic on the same filesystem, so
-no crash mid-write can leave a truncated config behind. The backup is
-ONE generation and is best-effort - a backup that cannot be written must
-not block the write it was protecting.
+**THIS MODULE NO LONGER WRITES, AND THAT IS THE POINT OF THE 1.4.0
+INTEGRATION.** It used to own ``write_config_atomic``, which was atomic
+and was NOT serialized: two writers of different blocks each merged into
+the base they had already read, and the second replace threw the first
+one's block away. The file was never corrupt and the update was still
+lost. :mod:`src.core.config_writer` is the one boundary now - it takes
+the lock, reads FRESH inside it, and hands the caller that document, so a
+caller cannot supply a stale base because it never supplies one.
+``tests/test_one_config_writer.py`` fails the build if a second writer of
+this file reappears, here included.
+
+The read helpers stay, because reading is not the racing half.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict
-
-import structlog
-
-logger = structlog.get_logger()
-
-#: Suffix appended to ``config.json`` for the one-generation backup.
-BACKUP_SUFFIX = ".bak"
-#: Suffix for the temp file the atomic write renames from.
-TEMP_SUFFIX = ".tmp"
 
 
 def require_config_file(config_path: Path) -> None:
@@ -100,36 +94,3 @@ def read_config_text(config_path: Path) -> tuple[str, Dict[str, Any]]:
             f"Invalid JSON in auth config file: {e}\n"
             f"Check {config_path}"
         )
-
-
-def write_config_atomic(
-    config_path: Path, data: Dict[str, Any], *, previous: str, event: str
-) -> None:
-    """Replace ``config.json`` without ever leaving it half written.
-
-    Description: backs up ``previous`` to ``config.json.bak`` first, then
-      writes a temp file, ``fsync``s it, and ``os.replace``s it over the
-      target. Ordering is the whole claim: the backup has to land BEFORE
-      the file it is a backup of is touched, and the rename has to be the
-      last thing that happens. The backup is best-effort and a failure is
-      logged rather than raised, because a missing backup must not block
-      the write it was protecting.
-    Inputs: config_path (Path); data (dict) - the complete new document;
-      previous (str) - the file's pre-write text, backed up verbatim;
-      event (str) - the structlog event for a failed backup, so a reader
-      can tell which writer could not make one.
-    Output: None.
-    Example: write_config_atomic(p, data, previous=raw, event="config_settings_backup_failed")
-    """
-    try:
-        backup_path = config_path.with_suffix(config_path.suffix + BACKUP_SUFFIX)
-        backup_path.write_text(previous)
-    except OSError as e:
-        logger.warning(event, error=str(e))
-
-    tmp_path = config_path.with_suffix(config_path.suffix + TEMP_SUFFIX)
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, config_path)

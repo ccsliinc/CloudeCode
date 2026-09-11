@@ -50,7 +50,21 @@
     // as an injected flag to claude --dangerously-skip-permissions.
     const MODEL_ID_RE = /^(?!-)[A-Za-z0-9._~/-]{1,120}$/;
 
+    // The server-owned field LAST_MODEL_KEY now mirrors, so the model a
+    // launch pre-selects is the last one chosen on ANY device.
+    const LAST_MODEL_FIELD = 'launch_last_model';
+
     function readLastChoice() {
+        const bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.read === 'function') {
+            const shared = bridge.read(LAST_MODEL_FIELD, readLastChoiceLocally);
+            return typeof shared === 'string' ? shared : '';
+        }
+        return readLastChoiceLocally();
+    }
+
+    /** This browser's own copy, still written on every change. */
+    function readLastChoiceLocally() {
         try {
             return localStorage.getItem(LAST_MODEL_KEY) || '';
         } catch (_) {
@@ -59,12 +73,22 @@
     }
 
     function rememberChoice(model) {
-        try {
-            localStorage.setItem(LAST_MODEL_KEY, model || '');
-        } catch (_) {
-            // localStorage unavailable (private mode, quota) - non-fatal,
-            // just means next launch won't pre-select this choice.
+        const writeLocal = function () {
+            try {
+                localStorage.setItem(LAST_MODEL_KEY, model || '');
+            } catch (_) {
+                // localStorage unavailable (private mode, quota) - non-fatal,
+                // just means next launch won't pre-select this choice.
+            }
+        };
+        const bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.write === 'function') {
+            bridge.write(LAST_MODEL_FIELD, model || '', writeLocal).catch(function (err) {
+                console.warn('Providers: could not share the model choice', err);
+            });
+            return;
         }
+        writeLocal();
     }
 
     /**

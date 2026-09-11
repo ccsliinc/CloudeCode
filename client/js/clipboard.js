@@ -145,7 +145,12 @@
         input.addEventListener('change', async () => {
             const file = input.files && input.files[0];
             if (!file) return;
-            await uploadAndInject(term, file, file.name || '');
+            // OWNERSHIP, CLAIMED AT THE GESTURE. The upload below is a
+            // network round trip and the user is free to switch sessions
+            // during it. See client/js/terminal-input-ownership.js.
+            const ticket = window.TerminalInputOwnership
+                ? window.TerminalInputOwnership.claim('upload') : null;
+            await uploadAndInject(term, file, file.name || '', ticket);
             input.value = '';
         });
     }
@@ -175,15 +180,26 @@
      * @param {Blob} blob - the bytes to upload.
      * @param {string} [filename] - declared name; empty for a nameless
      *   clipboard blob, where api.js derives "paste.<ext>" from the type.
+     * @param {object} [ticket] - ownership claimed at the user's gesture
+     *   by TerminalInputOwnership.claim(). Absent means the caller has
+     *   declared it needs none; present and stale means the bytes are
+     *   DROPPED and the user is told, because a path inserted into a
+     *   session the user has left runs a command in the wrong pane.
      * @returns {Promise<void>}
      */
-    async function uploadAndInject(term, blob, filename) {
+    async function uploadAndInject(term, blob, filename, ticket) {
         report(term, 'uploading...', 'info');
         try {
             // Multi-session: scope the upload to THIS tab's session so the
             // file lands in the right project's working dir.
             const sessionId = typeof term._sessionId === 'function' ? term._sessionId() : null;
             const result = await window.API.uploadFile(blob, filename || '', sessionId);
+            // THE CHECK, AT THE WRITE. The upload itself is left standing
+            // - the file is on the server and costs the user nothing
+            // sitting there - but nothing about it is inserted, and no
+            // attachment card is raised for a session nobody is in.
+            if (window.TerminalInputOwnership
+                && !window.TerminalInputOwnership.deliver(term, ticket)) return;
             term.insertText(quotePathForPrompt(result.path) + ' ');
             // THE CONFIRMATION IS A TOAST, NOT AN OVERLAY. report() paints
             // one line of text straight onto live terminal output with
@@ -256,7 +272,13 @@
      * @param {object} term - the Terminal wrapper.
      * @returns {Promise<void>}
      */
-    async function pasteFromClipboard(term) {
+    async function pasteFromClipboard(term, ticket) {
+        // Claimed here when the caller did not: this function is only
+        // reached from a menu tap, so "now" IS the gesture. Every await
+        // below - the clipboard read, the blob read, the upload - is a
+        // window a session switch can land in.
+        const own = ticket || (window.TerminalInputOwnership
+            ? window.TerminalInputOwnership.claim('paste') : null);
         const canRead = !!(navigator.clipboard && typeof navigator.clipboard.read === 'function');
         const canReadText = !!(navigator.clipboard && typeof navigator.clipboard.readText === 'function');
 
@@ -274,14 +296,14 @@
                         const blob = await item.getType(imageType);
                         // A clipboard blob carries no name; api.js derives
                         // "paste.<ext>" from the blob's own mime type.
-                        await uploadAndInject(term, blob, '');
+                        await uploadAndInject(term, blob, '', own);
                         return;
                     }
                 }
                 for (const item of items) {
                     if ((item.types || []).indexOf('text/plain') !== -1) {
                         const blob = await item.getType('text/plain');
-                        injectText(term, await blob.text());
+                        injectText(term, await blob.text(), own);
                         return;
                     }
                 }
@@ -297,7 +319,7 @@
             try {
                 const text = await navigator.clipboard.readText();
                 if (text) {
-                    injectText(term, text);
+                    injectText(term, text, own);
                 } else {
                     report(term, 'clipboard is empty', 'info');
                 }
@@ -307,7 +329,7 @@
             }
         }
 
-        openFallback(term);
+        openFallback(term, own);
     }
 
     /**
@@ -316,11 +338,14 @@
      * injection path rather than growing a second one.
      *
      * @param {object} term - the Terminal wrapper.
+     * @param {object} [ticket] - ownership from the tap that opened this.
+     *   The SHEET is the long await: it stands on screen while the user
+     *   finds their clipboard, which is ample time to change sessions.
      * @returns {void}
      */
-    function openFallback(term) {
+    function openFallback(term, ticket) {
         if (window.PasteFallback && typeof window.PasteFallback.open === 'function') {
-            window.PasteFallback.open(term, injectText);
+            window.PasteFallback.open(term, injectText, ticket);
             return;
         }
         report(term,
@@ -341,9 +366,15 @@
      *
      * @param {object} term - the Terminal wrapper.
      * @param {string} text - the text to inject, newlines included.
+     * @param {object} [ticket] - ownership claimed at the gesture that
+     *   produced this text. Checked FIRST, before the empty and the
+     *   not-connected reports: "you changed sessions" is the true reason
+     *   and "terminal not connected" would be a misleading one.
      * @returns {void}
      */
-    function injectText(term, text) {
+    function injectText(term, text, ticket) {
+        if (window.TerminalInputOwnership
+            && !window.TerminalInputOwnership.deliver(term, ticket)) return;
         if (!text) {
             report(term, 'clipboard is empty', 'info');
             return;

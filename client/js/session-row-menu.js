@@ -57,8 +57,9 @@
  * paints, it takes focus, it states why in text an assistive technology
  * reads, and it refuses to activate.
  *
- * No dependencies beyond an optional SessionSidebarRows for escaping and
- * an optional KebabIcon for the glyph. Must load BEFORE
+ * No dependencies beyond an optional SessionSidebarRows for escaping, an
+ * optional KebabIcon for the trigger's glyph and an optional
+ * SessionRowMenuIcons for each item's prefix icon. Must load BEFORE
  * session-row-menu-actions.js and session-row-menu-open.js, and before
  * session-sidebar-rows.js and launchpad.js paint anything.
  */
@@ -80,6 +81,7 @@ console.log('[SessionRowMenu Module] Loading...');
     var KEY_CLASS = 'session-row-menu__key';
     var LABEL_CLASS = 'session-row-menu__label';
     var REASON_CLASS = 'session-row-menu__reason';
+    var ICON_CLASS = 'session-row-menu__icon';
 
     /**
      * The eight items, in render order. LIFTED OUT to
@@ -393,6 +395,12 @@ console.log('[SessionRowMenu Module] Loading...');
      *   need it. The reason is rendered as TEXT inside the item and
      *   referenced by ``aria-describedby``, so it is announced rather
      *   than left in a tooltip a keyboard never opens.
+     *
+     *   Each item is prefixed with an icon from SessionRowMenuIcons,
+     *   keyed on the item's own id so it cannot drift from the item it
+     *   sits beside. ``aria-hidden`` lives on the glyph itself (built by
+     *   that module); the icon span carries none of the accessible name,
+     *   which stays on the label text alone.
      * Inputs: ctx (object). Output: string - HTML.
      */
     function panelHtml(ctx) {
@@ -406,6 +414,10 @@ console.log('[SessionRowMenu Module] Loading...');
                 ? '<span class="' + REASON_CLASS + '" id="' + reasonId + '">'
                   + esc(item.reason) + '</span>'
                 : '';
+            var icon = '<span class="' + ICON_CLASS + '">'
+                + (window.SessionRowMenuIcons
+                    ? window.SessionRowMenuIcons.svg(item.id, 14) : '')
+                + '</span>';
             return sep
                 + '<button type="button" class="' + ITEM_CLASS + '" role="menuitem" '
                 + ITEM_ATTR + '="' + esc(item.id) + '" '
@@ -417,6 +429,7 @@ console.log('[SessionRowMenu Module] Loading...');
                        + 'aria-describedby="' + reasonId + '" '
                        + 'title="' + esc(item.reason) + '" '))
                 + '>'
+                + icon
                 + '<span class="' + LABEL_CLASS + '">' + esc(item.label) + '</span>'
                 + '<span class="' + KEY_CLASS + '" aria-hidden="true">'
                 + esc(item.shortcut) + '</span>'
@@ -459,6 +472,7 @@ console.log('[SessionRowMenu Module] Loading...');
         KEY_CLASS: KEY_CLASS,
         LABEL_CLASS: LABEL_CLASS,
         REASON_CLASS: REASON_CLASS,
+        ICON_CLASS: ICON_CLASS,
         ITEMS: ITEMS,
         esc: esc,
         mutedFor: mutedFor,

@@ -228,6 +228,32 @@ def sandbox(tmp_path: Path) -> dict:
             # Empty disables the machine-wide process match. The script
             # reports that as CANNOT DETERMINE rather than pretending it ran.
             "CLOUDE_NUKE_PGREP_PATTERN": "",
+            # KEEP THE INTERPRETER'S OWN LITTER OUT OF THE FAKE HOME.
+            #
+            # nuke.sh's resolve_python() falls through to the python3 on
+            # PATH whenever the install has no runnable venv/bin/python3,
+            # which is this sandbox. When that interpreter lives inside a
+            # read-only bundle, CPython cannot write .pyc files beside the
+            # source and redirects its bytecode cache to
+            # $HOME/Library/Caches/com.apple.python/<mirrored source path>.
+            # HOME here is the sandbox, so a --dry-run that deleted nothing
+            # still grew the manifest by the cache tree and
+            # test_dry_run_deletes_nothing failed on the interpreter's
+            # side effect rather than on the script's.
+            #
+            # Measured 2026-09-10 on the developer's box: /usr/bin/python3
+            # resolves to the Xcode-bundled Python 3.9
+            # (sys.prefix /Applications/Xcode.app/Contents/Developer/Library/
+            # Frameworks/Python3.framework/Versions/3.9), the dry run created
+            # 49 directories under home/Library/Caches/com.apple.python/, and
+            # every one of them disappears with this variable set. CI uses
+            # actions/setup-python, whose interpreter writes __pycache__ next
+            # to the source, which is why this only ever failed locally.
+            #
+            # This suppresses ONLY .pyc writing. Anything nuke.sh itself
+            # creates, moves or deletes in HOME is still measured, so no
+            # assertion is weakened by it.
+            "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
     env.pop("CLOUDE_STATE_DIR", None)

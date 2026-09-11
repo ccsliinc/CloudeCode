@@ -7,10 +7,17 @@ tmux. ``SessionManager`` owns one instance, resolves a session_id to a
 tmux name itself (this module has no way to do that), and delegates the
 actual flag storage here. Mirrors the on-disk shape and atomic-write
 protocol ``SessionManager._save_pinned_themes`` already uses, so anyone
-who has read that code recognizes this one immediately.
+who has read that code recognizes this one immediately - with ONE
+deliberate divergence: the temp file is named uniquely per write, via
+``unique_tmp_path`` (see ``src/core/unique_tmp_path.py`` for why).
 
 Why server-side, not localStorage: the user drives this from both a phone
 browser and a desktop browser, and the unread flag must follow him.
+
+The unique-temp-name rule this module first applied that shape to now
+lives in ``src/core/unique_tmp_path.py`` - the three other fixed-``.tmp``
+writers named above were widened to the same helper in the same change
+that created it, so there is one copy of the rule rather than five.
 
 Why keyed on the INSTANCE, not on the session_id and not on the tmux name
 alone: a session_id dies on detach/destroy/restart, so it is too short-
@@ -32,7 +39,21 @@ from typing import Optional
 
 import structlog
 
+from src.core.unique_tmp_path import unique_tmp_path
+
 logger = structlog.get_logger()
+
+# Five call paths write this store: the ``Stop`` hook branch of
+# ``SessionManager.record_hook_event``, the manual mark-unread control,
+# the listing pass's transcript turn-end claim in
+# ``session_transcript_status_read``, the WebSocket view-clear in
+# ``session_view_clears``, and the boot reconcile's ``prune``. They
+# cannot interleave TODAY, because every one of them runs on the single
+# uvicorn event loop and ``_save`` contains no ``await``; that is a
+# property of today's threading, not of this module, and the pending
+# move of the listing pass into a worker thread would end it. The
+# unique name (``unique_tmp_path``) costs nothing and removes the
+# question regardless of whether today's threading holds.
 
 
 class UnreadStore:
@@ -89,10 +110,11 @@ class UnreadStore:
             logger.warning("failed_to_load_unread_state", error=str(exc))
 
     def _save(self) -> None:
-        """Persist atomically (write-to-tmp + rename). Never raises."""
+        """Persist atomically (write-to-unique-tmp + rename). Never raises."""
+        tmp: Optional[Path] = None
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+            tmp = unique_tmp_path(self._path)
             with tmp.open("w") as f:
                 json.dump(self._data, f, indent=2)
                 f.flush()
@@ -103,6 +125,17 @@ class UnreadStore:
             os.replace(str(tmp), str(self._path))
         except Exception as exc:
             logger.error("failed_to_save_unread_state", error=str(exc))
+            # The temp name is unique per write, so a failure that left it
+            # behind would litter the state directory with one orphan per
+            # failure instead of reusing a single dead file. Reached only
+            # when os.replace did NOT run, so FileNotFoundError here means
+            # the temp was never created - both are OSError, both are
+            # nothing to report on top of the error already logged.
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
 
     @staticmethod
     def compose_key(tmux_name: str, epoch: Optional[int]) -> str:

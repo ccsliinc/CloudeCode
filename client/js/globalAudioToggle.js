@@ -88,6 +88,10 @@
 
     /** localStorage key for the one global on/off choice. */
     var STORAGE_KEY = 'cloude.audio.enabled';
+    // The server-owned field STORAGE_KEY now mirrors. Silent-by-default
+    // is preserved: the server holding nothing falls through to the
+    // local read, which answers false.
+    var PREFERENCE_FIELD = 'audio_enabled';
 
     /** The one button node, built lazily on first use. */
     var btnEl = null;
@@ -101,6 +105,18 @@
      * @returns {boolean}
      */
     function isOn() {
+        // Shared first, local as the fallback. Silent-by-default is
+        // preserved in both directions: a preference block that holds
+        // nothing falls through to the local read, which answers false.
+        const bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.read === 'function') {
+            return bridge.read(PREFERENCE_FIELD, isOnLocally) === true;
+        }
+        return isOnLocally();
+    }
+
+    /** This browser's own copy, still written on every change. */
+    function isOnLocally() {
         try {
             return localStorage.getItem(STORAGE_KEY) === 'on';
         } catch (err) {
@@ -121,9 +137,19 @@
      * @returns {void}
      */
     function persist(on) {
-        try {
-            localStorage.setItem(STORAGE_KEY, on ? 'on' : 'off');
-        } catch (err) { /* see doc comment: degrades, does not throw */ }
+        const writeLocal = function () {
+            try {
+                localStorage.setItem(STORAGE_KEY, on ? 'on' : 'off');
+            } catch (err) { /* see doc comment: degrades, does not throw */ }
+        };
+        const bridge = globalThis.PreferenceBridge;
+        if (bridge && typeof bridge.write === 'function') {
+            bridge.write(PREFERENCE_FIELD, !!on, writeLocal).catch(function (err) {
+                console.warn('GlobalAudioToggle: could not share the choice', err);
+            });
+            return;
+        }
+        writeLocal();
     }
 
     /**

@@ -1,6 +1,7 @@
 /**
- * The foot of the conversations list: the remembered-positions note, the
- * status-light key, and the app's version.
+ * The foot of the conversations list: the status-light key and the app's
+ * version. Also carries missingNoteHtml(), kept as a no-op stub - see
+ * that function's own docblock.
  *
  * WHY ITS OWN MODULE. Both halves are shared components that live
  * elsewhere (client/js/session-status-key.js and
@@ -45,47 +46,27 @@ console.log('[SessionSidebarFooter Module] Loading...');
     }
 
     /**
-     * Escape a value for interpolation into an HTML attribute or text.
+     * Held slots for gone sessions render nothing on screen now.
      *
-     * Description: string-based on purpose - the `textContent`/`innerHTML`
-     *   idiom does not escape quotes, and a tmux session name is free
-     *   text the user chose, so it can carry one.
-     * Inputs: v (any) - stringified; null/undefined become ''.
-     * Output: string.
-     * Example: esc('a"b') -> 'a&quot;b'
-     */
-    function esc(v) {
-        return String(v == null ? '' : v)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    /**
-     * The note naming remembered positions whose sessions are not running.
-     *
-     * Description: deliberately not an error and not a silent drop. The
-     *   slots are KEPT and the count says so out loud, because a
-     *   remembered position quietly vanishing is how a user comes to
-     *   believe the app forgot their arrangement.
+     * Description: the owner read the sentence this used to print
+     *   ("N remembered positions are held for sessions not currently
+     *   listed") and asked for it gone outright - it explained bookkeeping
+     *   no reader could act on. The slots themselves are UNTOUCHED: they
+     *   are still kept rather than dropped, and the count is still
+     *   stamped on the list element itself as `data-order-missing` (see
+     *   client/js/session-sidebar.js). This function only ever produced
+     *   the sentence, so deleting the sentence means this always returns
+     *   ''.
      * Inputs: missing (Array<string>) - the tmux names with no live row.
-     * Output: string - HTML, or '' when nothing is missing.
+     *   Kept as a parameter so the call site in session-sidebar-rows.js
+     *   does not have to change.
+     * Output: string - always ''.
      * Example:
-     *   SessionSidebarFooter.missingNoteHtml(['ghost'])
-     *   // '<div class="session-sidebar-note" data-order-missing="1" ...'
+     *   SessionSidebarFooter.missingNoteHtml(['ghost'])   // ''
      */
     function missingNoteHtml(missing) {
-        if (!missing || !missing.length) return '';
-        const n = missing.length;
-        const names = esc(missing.join(', '));
-        return (
-            `<div class="session-sidebar-note" data-order-missing="${n}" title="${names}">` +
-            `${n} remembered ${n === 1 ? 'position is' : 'positions are'} held for ` +
-            `${n === 1 ? 'a session' : 'sessions'} not currently listed` +
-            '</div>'
-        );
+        void missing;
+        return '';
     }
 
     window.SessionSidebarFooter = { html, missingNoteHtml };

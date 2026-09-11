@@ -40,6 +40,27 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = ROOT / "client" / "index.html"
 CSS_DIR = ROOT / "client" / "css"
+MODULE_FAMILIES_JS = ROOT / "client" / "js" / "module-families.js"
+
+
+def _config_editor_family_pos(name: str) -> int:
+    """Position of one file within window.ModuleFamilies.CONFIG_EDITOR.
+
+    Issue #48 moved every config-editor-*.js file (plus the CodeMirror
+    bundle) out of index.html's eager <script> list and into this array,
+    which client/js/module-loader.js downloads concurrently but executes
+    in the array's own order. So the load-bearing order for this family
+    now lives here, not in index.html.
+
+    Inputs: name (str) - bare filename under client/js.
+    Output: int - the file's index within the CONFIG_EDITOR array.
+    """
+    src = MODULE_FAMILIES_JS.read_text(encoding="utf-8")
+    match = re.search(r"var\s+CONFIG_EDITOR\s*=\s*\[(.*?)\];", src, re.DOTALL)
+    assert match, "could not find the CONFIG_EDITOR array in module-families.js"
+    urls = re.findall(r"'/static/js/([^']+)'", match.group(1))
+    assert name in urls, f"{name} is not listed in the CONFIG_EDITOR family"
+    return urls.index(name)
 
 # Rules for buttons that carry a TEXT LABEL rather than an icon, and so
 # cannot survive being forced into a fixed square.
@@ -190,7 +211,13 @@ def test_new_file_button_and_module_are_wired():
     html = INDEX_HTML.read_text(encoding="utf-8")
     assert 'id="config-editor-new"' in html
     # Load order matters: the panel's click handler calls into the module.
-    assert _script_pos(html, "config-editor-new-file.js") < _script_pos(html, "config-editor-panel.js")
+    # Both files are lazy now (issue #48), loaded through
+    # window.ModuleFamilies.CONFIG_EDITOR rather than as index.html
+    # <script> tags, so the order check moved with them.
+    assert (
+        _config_editor_family_pos("config-editor-new-file.js")
+        < _config_editor_family_pos("config-editor-panel.js")
+    )
 
 
 def test_command_description_module_loads_before_its_consumers():

@@ -305,6 +305,14 @@ def test_patch_result_is_valid_json_at_every_step(client, config_path):
 # to raise after it has already emitted some output; with a temp file the
 # destination is untouched, and with an in-place write the destination is
 # left truncated.
+#
+# RETARGETED AT THE 1.4.0 INTEGRATION. The mechanism moved to
+# ``src/core/config_writer.py``, which is now the ONLY module allowed to
+# write this file (``tests/test_one_config_writer.py``). These two keep
+# asserting the same property against the module that performs it; the
+# second one in particular is not duplicated by that module's own suite,
+# which proves the temp file is used and not that the destination is
+# never opened.
 
 
 def test_a_write_that_fails_part_way_leaves_config_json_intact(
@@ -322,7 +330,7 @@ def test_a_write_that_fails_part_way_leaves_config_json_intact(
     """
     import json as _json
 
-    from src.config import config_file
+    from src.core import config_writer
 
     before = config_path.read_text()
 
@@ -331,14 +339,12 @@ def test_a_write_that_fails_part_way_leaves_config_json_intact(
         fp.write('{"agents": {"claude_comm')
         raise OSError("no space left on device")
 
-    monkeypatch.setattr(config_file.json, "dump", _dump_then_die)
+    monkeypatch.setattr(config_writer.json, "dump", _dump_then_die)
 
     with pytest.raises(OSError):
-        config_file.write_config_atomic(
+        config_writer.commit(
             config_path,
-            {"agents": {"claude_command": "new"}},
-            previous=before,
-            event="test_backup_failed",
+            lambda data: {**data, "agents": {"claude_command": "new"}},
         )
 
     assert config_path.read_text() == before, (
@@ -360,7 +366,7 @@ def test_the_destination_is_reached_by_a_rename_and_not_by_a_write(
       pass the first test on a machine where nothing failed, and fails
       here by construction.
     """
-    from src.config import config_file
+    from src.core import config_writer
 
     real_open = open
     opened_for_write = []
@@ -370,13 +376,11 @@ def test_the_destination_is_reached_by_a_rename_and_not_by_a_write(
             opened_for_write.append(str(file))
         return real_open(file, mode, *args, **kwargs)
 
-    monkeypatch.setattr(config_file, "open", _tracking_open, raising=False)
+    monkeypatch.setattr(config_writer, "open", _tracking_open, raising=False)
 
-    config_file.write_config_atomic(
+    config_writer.commit(
         config_path,
-        {"agents": {"claude_command": "renamed-in"}},
-        previous=config_path.read_text(),
-        event="test_backup_failed",
+        lambda data: {**data, "agents": {"claude_command": "renamed-in"}},
     )
 
     assert str(config_path) not in opened_for_write, (

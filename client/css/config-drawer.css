@@ -145,9 +145,14 @@
  * ANNOUNCED to TerminalLayout.requestFit() rather than left to the
  * ResizeObserver - the sidebar pin shipped on that assumption once and the
  * terminal was reported not to resize. */
+/* NO TRANSITION HERE, ON PURPOSE - same reasoning as
+ * session-sidebar.css's docked .screen rule. config-drawer-pin.js
+ * measures this box to refit the terminal; an animated padding-right
+ * used to make it wait a fixed 200ms guess before reading it, and the
+ * final geometry now lands the instant the class toggles. Only
+ * requestFit's own short debounce still coalesces a rapid toggle. */
 body.config-drawer-docked .screen {
     padding-right: var(--config-drawer-w);
-    transition: padding-right 160ms ease;
 }
 
 /* The header pays the dock width PLUS its own side padding, for the same
@@ -155,7 +160,6 @@ body.config-drawer-docked .screen {
  * content edge, so the bare width would glue it to the drawer's border. */
 body.config-drawer-docked .header {
     padding-right: calc(var(--config-drawer-w) + var(--header-pad-x));
-    transition: padding-right 160ms ease;
 }
 
 /* A docked drawer covers nothing, so a backdrop would only be a full

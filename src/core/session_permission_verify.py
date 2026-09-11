@@ -143,13 +143,19 @@ PERMISSION_TAIL_LINES: int = 60
 #: "how long a pane reading stands" is better served than by two.
 PERMISSION_TAIL_RECHECK_SECONDS: int = 30
 
-#: Verdicts. Four, because "kept" has two genuinely different reasons and
+#: Verdicts. Five, because "kept" has two genuinely different reasons and
 #: collapsing them would make an unreadable pane indistinguishable from a
 #: pane that was read and showed a dialog - the difference between evidence
-#: and the absence of a look.
+#: and the absence of a look. ``PERMISSION_CLEARED_PANE_DEAD`` is the fifth:
+#: a pane MEASURED dead (as opposed to one merely unreadable) has no dialog
+#: anyone can answer, so the flag clears on that measurement alone, with no
+#: tail capture at all - there is nothing left to read a tail FROM. See
+#: ``session_permission_verify_apply.verify_open_permission`` for the one
+#: caller that can reach it.
 PERMISSION_KEPT_DIALOG: str = "kept_dialog_present"
 PERMISSION_KEPT_UNREADABLE: str = "kept_tail_unreadable"
 PERMISSION_CLEARED_NO_DIALOG: str = "cleared_no_dialog"
+PERMISSION_CLEARED_PANE_DEAD: str = "cleared_pane_dead"
 PERMISSION_NOT_CHECKED: str = "not_checked"
 
 #: Markers whose presence means "a permission dialog is on this pane NOW".
@@ -253,6 +259,14 @@ def should_capture_permission_tail(
         pane_alive: True/False/None from the caller's liveness read. Only
             True qualifies - a pane that could not be read cannot be
             captured either, and a dead one has no dialog to answer.
+            ``False`` (MEASURED dead, as opposed to unmeasured) refuses a
+            capture here for that reason, but is not the same as "leave
+            the flag alone": ``verify_open_permission`` checks for a
+            measured-dead pane BEFORE calling this gate at all and clears
+            the flag directly, with no tail needed, since there is
+            nothing left to capture a tail from. This gate's False and
+            None therefore agree only on "do not spend a subprocess" -
+            they disagree on what happens to the flag, one level up.
         permission_open: the flag as the tracker holds it.
         opened_at: when the flag went False -> True, or None. None with
             the flag SET means the stamp was lost (a signal that predates

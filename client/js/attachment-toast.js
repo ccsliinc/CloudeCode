@@ -299,8 +299,8 @@ console.log('[AttachmentToast Module] Loading...');
     /**
      * Build the thumbnail strip for one card and attach it.
      *
-     * Called by client/js/toast.js from `_renderCard`, which owns the
-     * card and knows nothing about attachments; everything
+     * Called by client/js/toast-render.js from `_renderCard`, which owns
+     * the card and knows nothing about attachments; everything
      * attachment-shaped lives here so that file stays the notification
      * card and nothing else.
      *

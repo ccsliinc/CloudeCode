@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -55,7 +56,10 @@ from fastapi.testclient import TestClient
 import src.api.routes as routes_mod
 import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
-from src.core.session_activity import SessionActivityTracker
+from src.core.session_activity import (
+    SUBAGENT_WAIT_LATCH_SECONDS,
+    SessionActivityTracker,
+)
 from src.core.session_manager import SessionManager
 from src.models import Session, SessionStatus
 
@@ -157,6 +161,25 @@ def _start_subagents(mgr: SessionManager, count: int) -> None:
     for _ in range(count):
         mgr.record_hook_event("ses_hook", "SubagentStart", {})
     assert mgr.subagent_depth("ses_hook") == count
+
+
+def _latch_stamp(mgr: SessionManager):
+    """The raw ``subagent_wait_since`` value, or None. Read-only."""
+    return mgr._activity_tracker._signals["ses_hook"].subagent_wait_since
+
+
+def _age_the_latch(mgr: SessionManager, seconds: float) -> None:
+    """Backdate the latch stamp so it reads ``seconds`` old.
+
+    The endpoint reads the wall clock, so moving the stamp is how a test
+    advances time without patching ``datetime`` out from under the whole
+    request path.
+    """
+    state = mgr._activity_tracker._signals["ses_hook"]
+    assert state.subagent_wait_since is not None, "nothing latched to age"
+    state.subagent_wait_since = state.subagent_wait_since - timedelta(
+        seconds=seconds
+    )
 
 
 # =========================================================================== #
@@ -419,3 +442,327 @@ def test_another_sessions_subagents_do_not_silence_this_one(
     resp, _ = _post_event(app, mgr, "Stop")
 
     assert "toast_id" in resp.json()
+
+
+# =========================================================================== #
+# 7. The latch: the depth alone only covers the FIRST event of a wait         #
+# =========================================================================== #
+#
+# ``Stop`` resets ``subagent_depth`` to 0, so the gate suppresses that Stop
+# correctly and is then blind for the rest of the same background wait.
+# Measured live 2026-09-10 on ``ses_63beb976``: a Stop suppressed at depth 1
+# at 20:38:53.879, then an idle ``Notification`` RAISED at 20:39:53.964,
+# plus 60.09s. Reproduced twice more, once with a second ``Stop`` raised at
+# plus 19.22s as well. Every one summoned the user to a pane reading
+# "Waiting for N background agents to finish".
+
+
+def test_the_notification_after_a_suppressed_stop_is_suppressed(
+    monkeypatch, tmp_path
+):
+    """THE BUG. The trailing idle Notification must stay quiet too."""
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 1)
+
+    first, _ = _post_event(app, mgr, "Stop")
+    assert first.json()["toast_suppressed"] == "subagents_running"
+    # The depth is gone. Only the latch can answer from here.
+    assert mgr.subagent_depth("ses_hook") == 0
+
+    resp, mock_bcast = _post_event(app, mgr, "Notification")
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert "toast_id" not in payload
+    assert payload["toast_suppressed"] == "subagents_running"
+    assert mgr.get_toasts("ses_hook") == []
+    mock_bcast.assert_not_called()
+
+
+def test_a_second_stop_after_a_suppressed_stop_is_suppressed(
+    monkeypatch, tmp_path
+):
+    """The plus 19.22s second Stop from the third live reproduction."""
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 2)
+
+    first, _ = _post_event(app, mgr, "Stop")
+    assert first.json()["toast_suppressed"] == "subagents_running"
+
+    resp, mock_bcast = _post_event(app, mgr, "Stop")
+
+    assert resp.json()["toast_suppressed"] == "subagents_running"
+    assert mgr.get_toasts("ses_hook") == []
+    mock_bcast.assert_not_called()
+
+
+def test_the_latch_expires_and_the_notification_is_raised(
+    monkeypatch, tmp_path
+):
+    """THE MUTE IS BOUNDED, and that is the safety property.
+
+    An over-long background wait degrades to a DELAYED notification, never
+    a lost one. A latch with no expiry would be an unbounded mute, and a
+    missed "your turn" is a worse failure than a spurious one.
+    """
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 1)
+    _post_event(app, mgr, "Stop")
+
+    _age_the_latch(mgr, SUBAGENT_WAIT_LATCH_SECONDS + 1)
+
+    # The separate, unbounded idle-nudge gate (see
+    # tests/test_hook_toast_idle_nudge_suppression.py) would ALSO suppress
+    # this Notification on its own evidence (a clean Stop, nothing reopened
+    # since) - correctly, but that is not what THIS test is about. Neutralize
+    # it so this file keeps testing the sub-agent latch's own boundedness in
+    # isolation.
+    monkeypatch.setattr(mgr, "should_suppress_idle_notification", lambda sid: False)
+
+    resp, mock_bcast = _post_event(app, mgr, "Notification")
+
+    assert "toast_id" in resp.json()
+    assert "toast_suppressed" not in resp.json()
+    assert len(mgr.get_toasts("ses_hook")) == 1
+    mock_bcast.assert_called_once()
+
+
+def test_the_latch_still_holds_just_inside_the_window(monkeypatch, tmp_path):
+    """The boundary from the other side, so the expiry test proves a TTL
+    rather than proving the latch never worked."""
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 1)
+    _post_event(app, mgr, "Stop")
+
+    _age_the_latch(mgr, SUBAGENT_WAIT_LATCH_SECONDS - 5)
+
+    resp, _ = _post_event(app, mgr, "Notification")
+
+    assert resp.json()["toast_suppressed"] == "subagents_running"
+
+
+@pytest.mark.parametrize(
+    "opening", ["UserPromptSubmit", "PreToolUse", "SubagentStart"]
+)
+def test_an_opening_event_clears_the_latch(monkeypatch, tmp_path, opening):
+    """A new turn beginning is positive proof the previous wait is over.
+
+    ``SubagentStart`` is in the list even though it also RAISES the depth:
+    the gate is covered by the live count from there until the next Stop,
+    and clearing is the fail-toward-notifying direction anyway.
+    """
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 1)
+    _post_event(app, mgr, "Stop")
+    assert _latch_stamp(mgr) is not None
+
+    mgr.record_hook_event("ses_hook", opening, {})
+    assert _latch_stamp(mgr) is None
+
+    if opening == "SubagentStart":
+        # It raised the depth, so drain it: this test is about the latch,
+        # and the live count would suppress on its own.
+        mgr.record_hook_event("ses_hook", "SubagentStop", {})
+    assert mgr.subagent_depth("ses_hook") == 0
+
+    resp, mock_bcast = _post_event(app, mgr, "Stop")
+
+    assert "toast_id" in resp.json()
+    assert len(mgr.get_toasts("ses_hook")) == 1
+    mock_bcast.assert_called_once()
+
+
+def test_a_session_that_never_had_subagents_is_unaffected(
+    monkeypatch, tmp_path
+):
+    """No sub-agent, no latch, no behaviour change of any kind - OF THIS
+    GATE. The separate idle-nudge gate (see
+    tests/test_hook_toast_idle_nudge_suppression.py) does now suppress a
+    plain Notification following a clean Stop with nothing reopened since,
+    which is the whole point of that gate - so it is neutralized here to
+    keep this file testing the sub-agent-specific mechanism alone."""
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    monkeypatch.setattr(mgr, "should_suppress_idle_notification", lambda sid: False)
+
+    first, _ = _post_event(app, mgr, "Stop")
+    assert "toast_id" in first.json()
+    assert _latch_stamp(mgr) is None
+
+    second, _ = _post_event(app, mgr, "Notification")
+    assert "toast_id" in second.json()
+
+    third, _ = _post_event(app, mgr, "Stop")
+    assert "toast_id" in third.json()
+
+    # Every one of the three RAISED, which is the claim. The stored count
+    # is 2, not 3: two Stops of the same kind supersede each other, which
+    # is toast_supersede's job and nothing to do with this gate.
+    assert _latch_stamp(mgr) is None
+    assert all(
+        "toast_suppressed" not in r.json() for r in (first, second, third)
+    )
+
+
+def test_permission_request_raises_with_the_latch_stamped(
+    monkeypatch, tmp_path
+):
+    """NEGATIVE CONTROL, and it is the load-bearing one.
+
+    A hard block stays true however the session got quiet. The latch is a
+    new way to buy silence, so it needs the same exception the depth has:
+    a suppression rule that quietly grew to cover PermissionRequest would
+    pass every positive test above and strand claude mid-turn behind a
+    yes/no nobody was told about.
+
+    Both halves of the evidence are set here on purpose - the latch
+    stamped AND the depth positive - so neither one can be the reason it
+    passes.
+    """
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 1)
+    _post_event(app, mgr, "Stop")
+    assert _latch_stamp(mgr) is not None
+    _start_subagents(mgr, 1)
+    assert mgr.subagent_depth("ses_hook") == 1
+
+    resp, mock_bcast = _post_event(app, mgr, "PermissionRequest")
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert "toast_id" in payload
+    assert "toast_suppressed" not in payload
+    assert len(mgr.get_toasts("ses_hook")) == 1
+    mock_bcast.assert_called_once()
+
+
+def test_an_unreadable_latch_still_notifies(monkeypatch, tmp_path):
+    """Fail toward notifying applies to the new reading too."""
+    app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    _start_subagents(mgr, 1)
+    _post_event(app, mgr, "Stop")
+
+    def _boom(_session_id: str) -> bool:
+        raise RuntimeError("tracker unavailable")
+
+    monkeypatch.setattr(mgr, "subagent_wait_active", _boom)
+    # Neutralize the separate idle-nudge gate, which would otherwise
+    # suppress this same Notification on its own (unrelated) evidence - see
+    # tests/test_hook_toast_idle_nudge_suppression.py for its own coverage.
+    monkeypatch.setattr(mgr, "should_suppress_idle_notification", lambda sid: False)
+
+    resp, _ = _post_event(app, mgr, "Notification")
+
+    assert "toast_id" in resp.json()
+    assert len(mgr.get_toasts("ses_hook")) == 1
+
+
+# =========================================================================== #
+# 8. The latch under duplicated, dropped and out-of-order delivery            #
+# =========================================================================== #
+
+
+def test_a_plain_stop_never_stamps_the_latch():
+    """Stamped from the depth as it stood BEFORE the reset, so a Stop with
+    no sub-agent open latches nothing at all."""
+    tracker = SessionActivityTracker()
+    tracker.record_event("s1", "Stop")
+    assert tracker.subagent_wait_active("s1") is False
+
+
+def test_an_unknown_session_has_no_latch():
+    """Absence of a record is not evidence a wait is in progress."""
+    tracker = SessionActivityTracker()
+    assert tracker.subagent_wait_active("never-seen") is False
+
+
+def test_a_duplicate_stop_cannot_extend_the_latch():
+    """THE STAMP IS THE TRANSITION, NOT THE EVENT.
+
+    The same discipline ``permission_opened_at`` uses. A duplicate Stop
+    arrives with the depth already reset to 0, so it finds nothing to
+    stamp from and leaves the original stamp alone. Without this a
+    repeating hook would push the mute out for as long as it kept
+    arriving, which is exactly when a bounded mute matters most.
+    """
+    tracker = SessionActivityTracker()
+    t0 = datetime(2026, 9, 10, 20, 38, 53)
+    tracker.record_event("s1", "SubagentStart", now=t0)
+    tracker.record_event("s1", "Stop", now=t0)
+
+    late = t0 + timedelta(seconds=SUBAGENT_WAIT_LATCH_SECONDS - 10)
+    tracker.record_event("s1", "Stop", now=late)
+
+    past_ttl = t0 + timedelta(seconds=SUBAGENT_WAIT_LATCH_SECONDS + 1)
+    assert tracker.subagent_wait_active("s1", now=past_ttl) is False
+
+
+def test_a_duplicate_subagent_stop_cannot_retire_the_latch():
+    """RETIRE BY COUNTING DOWN IS IMPOSSIBLE, so nothing tries.
+
+    After a Stop the depth is already 0, so a later SubagentStop hits the
+    floor branch and decrements nothing. A design that retired the latch
+    that way would never retire at all.
+    """
+    tracker = SessionActivityTracker()
+    tracker.record_event("s1", "SubagentStart")
+    tracker.record_event("s1", "Stop")
+    tracker.record_event("s1", "SubagentStop")
+    tracker.record_event("s1", "SubagentStop")
+    assert tracker.subagent_depth("s1") == 0
+    assert tracker.subagent_wait_active("s1") is True
+
+
+def test_a_straggler_subagent_start_after_stop_clears_the_latch():
+    """Out of order, and it resolves in the loud direction.
+
+    A duplicated SubagentStart delivered after the Stop raises the depth
+    off the floor by itself. Clearing the latch there costs at most one
+    spurious toast; leaving it standing could cost a missed one.
+    """
+    tracker = SessionActivityTracker()
+    tracker.record_event("s1", "SubagentStart")
+    tracker.record_event("s1", "Stop")
+    assert tracker.subagent_wait_active("s1") is True
+
+    tracker.record_event("s1", "SubagentStart")
+    assert tracker.subagent_wait_active("s1") is False
+    assert tracker.subagent_depth("s1") == 1
+
+
+def test_replaying_the_whole_event_stream_twice_converges():
+    """Idempotency: the same stream applied twice reaches the same state."""
+    t0 = datetime(2026, 9, 10, 20, 38, 0)
+    stream = [
+        "UserPromptSubmit",
+        "PreToolUse",
+        "SubagentStart",
+        "SubagentStart",
+        "PostToolUse",
+        "Stop",
+    ]
+
+    once = SessionActivityTracker()
+    for kind in stream:
+        once.record_event("s1", kind, now=t0)
+
+    twice = SessionActivityTracker()
+    for kind in stream:
+        twice.record_event("s1", kind, now=t0)
+        twice.record_event("s1", kind, now=t0)
+
+    assert once.subagent_wait_active("s1", now=t0) is True
+    assert twice.subagent_wait_active("s1", now=t0) is True
+    assert once.subagent_depth("s1") == twice.subagent_depth("s1") == 0
+
+
+def test_the_session_manager_latch_passthrough_matches_the_tracker(
+    monkeypatch, tmp_path
+):
+    _, mgr = _build_hook_app(monkeypatch, tmp_path)
+    assert mgr.subagent_wait_active("ses_hook") is False
+    assert mgr.subagent_wait_active("ghost") is False
+
+    _start_subagents(mgr, 1)
+    mgr.record_hook_event("ses_hook", "Stop", {})
+
+    assert mgr.subagent_wait_active("ses_hook") is True

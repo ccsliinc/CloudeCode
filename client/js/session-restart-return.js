@@ -66,6 +66,16 @@ console.log('[SessionRestartReturn Module] Loading...');
     async function reopen(result) {
         var name = (result && result.name) || '';
         var sessionId = (result && result.session_id) || null;
+        // THE INTENT, DECLARED BEFORE THE FETCH. A restart's reopen is a
+        // navigation like any other, and the user is free to click a
+        // conversation row while it is resolving. See
+        // client/js/navigation-generation.js.
+        var nav = window.NavigationGeneration
+            ? window.NavigationGeneration.begin('restart:' + (name || sessionId)) : null;
+        var stillOurs = function () {
+            return !window.NavigationGeneration
+                || window.NavigationGeneration.keep(nav, 'restart reopen');
+        };
 
         if (sessionId) {
             var info;
@@ -99,6 +109,13 @@ console.log('[SessionRestartReturn Module] Loading...');
                         + 'was restarted, so nothing was opened',
                 };
             }
+            if (!stillOurs()) {
+                return {
+                    status: 'not_reopened',
+                    detail: 'the session restarted but you moved to another '
+                        + 'conversation before it came back, so it was not opened',
+                };
+            }
             window.App.returnToExistingTerminal(info);
             return { status: 'reopened', detail: '' };
         }
@@ -113,9 +130,17 @@ console.log('[SessionRestartReturn Module] Loading...');
         try {
             var response = await window.API.adoptSession(name, true);
             var session = response.session || response;
+            if (!stillOurs()) {
+                return {
+                    status: 'not_reopened',
+                    detail: 'the session restarted but you moved to another '
+                        + 'conversation before it came back, so it was not opened',
+                };
+            }
             window.dispatchEvent(new CustomEvent('session-created', {
                 detail: {
                     session: session,
+                    nav: nav,
                     initialScrollbackB64: response.initial_scrollback_b64 || '',
                     fifoStartOffset:
                         typeof response.fifo_start_offset === 'number'

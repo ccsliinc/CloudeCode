@@ -53,7 +53,7 @@ class SlashCommandsModal {
      *   floating button. Does NOT create the modal itself - that still
      *   happens lazily on first open() (unchanged from before).
      * Inputs:
-     *   onCommandSelect (function(string): void) - called with the bare
+     *   onCommandSelect (function(string, object=): void) - called with the bare
      *     command string (e.g. "/clear") when the user picks one.
      *   projectPath (string|null) - absolute path of the active project's
      *     working directory, forwarded to the server for project-scope
@@ -511,6 +511,14 @@ class SlashCommandsModal {
      */
     open() {
         console.log('[SlashCommands] open() called');
+        // OWNERSHIP, CLAIMED WHEN THE PANEL OPENS. Nothing closes this
+        // modal on a session switch, so it can stand on screen across
+        // one - and inserting a command into a session the user has
+        // since left does not just look wrong, it runs there. Opening
+        // the list IS the gesture; the pick that follows is the write.
+        // See client/js/terminal-input-ownership.js.
+        this._ownership = window.TerminalInputOwnership
+            ? window.TerminalInputOwnership.claim('command') : null;
 
         // Lazy initialization - create modal on first open
         if (!this.modal) {
@@ -561,7 +569,7 @@ class SlashCommandsModal {
      */
     selectCommand(command) {
         if (this.onCommandSelect) {
-            this.onCommandSelect(command);
+            this.onCommandSelect(command, this._ownership);
         }
         this.close();
 

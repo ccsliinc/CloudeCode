@@ -79,9 +79,10 @@ still unacked, and feeding that through `add()` would resurrect the card
 the user just dismissed, in front of them.
 `client/js/toast-dismissed-ring.js` is a bounded, expiring set of
 locally dismissed ids that the poller filters every result through.
-`toast.js` announces each dismissal as a `cloude:toast-dismissed`
-CustomEvent so the ring hears it without the toast module gaining a hard
-dependency on the poller.
+`toast.js`'s lifecycle half (`client/js/toast-lifecycle.js`) announces
+each dismissal as a `cloude:toast-dismissed` CustomEvent so the ring
+hears it without the toast module gaining a hard dependency on the
+poller.
 
 **IT IS A SUPPRESSION, NEVER AN ACK.** Nothing in the ring talks to the
 server. If the ack genuinely FAILED, the record is still unacked
@@ -241,15 +242,109 @@ nothing else. A guessed reason on a page whose only job is to be trusted
 about what happened would be worse than the missing column. See the open
 items below.
 
+## The external push channels, and why they now go out at once
+
+A toast is raised in the browser. The three EXTERNAL channels - ntfy,
+Slack and Pushover - are a separate path: `NotificationRouter` holds a
+bounded queue of 100 and a single worker task drains it.
+
+Until #40 that worker awaited the three channels ONE AFTER THE OTHER.
+Each channel builds its httpx client with `httpx.Timeout(5.0,
+connect=5.0)`, which bounds every PHASE of a request at 5s and the
+request as a whole at nothing, so a peer that accepts the connection and
+never answers costs 5s per channel and the three of them cost it three
+times over. Measured 2026-09-10 against a local blackhole peer, one
+queue entry with all three channels configured: **15.075s serially
+against 5.018s concurrently**, a ratio of 3.00. Both arms ran in one
+process against one peer so the same load hit both, and the figures land
+within 1.5 percent of the 3x5s and 1x5s the timeouts predict, which is
+what says the box's load average of 20 did not inflate them.
+
+**THAT COST WAS NEVER TERMINAL LATENCY, AND SAYING SO ACCURATELY
+MATTERS.** The worker is its own task and every one of those awaits
+yields the event loop, so unlike the listing pass this was not stealing
+keystrokes. What it was, is HEAD-OF-LINE BLOCKING in a queue that DROPS
+THE OLDEST ON OVERFLOW: every entry behind the slow one waited the full
+serial cost, and at 100 queued events that converts into notifications
+never sent at all. A missed "your turn" is a worse failure than a
+spurious one, which is the whole reason this was worth fixing.
+
+**THE QUEUE IS STILL SEQUENTIAL.** Concurrency is WITHIN one entry.
+Entries are still drained one at a time, in order, which is what
+preserves the rate limit and the ordering the router already promised.
+Both mute gates are untouched and both still run: at `emit`, so a muted
+session cannot evict another session's alerts from the bounded queue,
+and at drain, where the policy GENERATION is checked. Concurrency sits
+BELOW the drain gate, so the generation check still runs exactly once
+per entry, before any channel is contacted.
+
+**ORDERING BETWEEN CHANNELS IS DELIBERATELY GIVEN UP.** The old code
+called ntfy first and said so as a feature, "so a slow Slack request
+never delays the snappier ntfy push". Concurrency delivers that properly
+rather than by queueing behind it. The RESULT list is still in a fixed
+order because `asyncio.gather` preserves argument order; only the order
+the network is contacted in is now unspecified, and nothing downstream
+ever depended on it.
+
+**ONE CHANNEL MAY NOT TAKE THE OTHERS WITH IT, TWICE OVER.** An
+unhandled exception inside a gather CANCELS its siblings, which would
+turn one channel's timeout into a dropped notification on every other
+channel. So each channel is wrapped individually and reports an outcome
+instead of raising, AND the gather still takes `return_exceptions=True`
+on top of that, so a defect in the wrapper itself cannot do it either.
+Failures are logged per channel with the channel name and the
+exception's own type - three channels down is three facts, not one
+opaque line.
+
+**THE PER-CHANNEL BOUND IS DERIVED, NOT INVENTED, AND THE POLICY
+QUESTION IS STILL OPEN.** `CHANNEL_TIMEOUT_SECONDS = 15.0` is connect
+plus write plus read at the channels' own 5s httpx budget, so it is the
+longest a channel behaving inside its own configuration can legitimately
+take. It therefore NEVER fires on a send that was going to succeed, and
+only catches a stall httpx's phase timeouts cannot see: pool exhaustion,
+a redirect chain, a channel that stops using httpx. It is a BACKSTOP,
+not a decision about when to give up on a notification. Choosing a
+SHORTER number would start abandoning sends that would have landed,
+which is a policy call for the owner; the router reads it through
+`getattr(config, "channel_dispatch_timeout_seconds", ...)` so a config
+field can be added without touching the dispatcher.
+
+**A HUNG CHANNEL IS TORN DOWN, NOT JUST STOPPED WAITING ON.**
+`asyncio.wait_for` cancels the coroutine when the bound expires. A
+timeout that left the hung send running would leak one task per event
+while looking, from the return value, exactly like a working bound -
+which is why `tests/test_notification_channel_dispatch.py` asserts the
+cancellation reached the coroutine rather than only checking the result.
+
+**A PERMISSION REQUEST STILL GETS OUT UNCONDITIONALLY.** Nothing here
+suppresses by kind, and it may not: a permission request is a hard block
+where the agent has stopped mid-turn and cannot continue until a human
+answers. Every rule above fails toward sending, and the test file carries
+that as an explicit case with the other two channels broken.
+
+**THERE IS NO RETRY IN THIS PATH AND NOTHING HERE ADDED ONE.** Each
+channel is contacted exactly once per entry, so a partial failure cannot
+re-send to a channel that already succeeded. That holds because there is
+nothing to retry with, not because a check enforces it, so anything that
+later adds a retry has to key it on the per-channel results the
+dispatcher returns and not on the entry as a whole.
+
 ## The files
 
 | Piece | File |
 |---|---|
+| Fan one event out to every external channel at once | `src/core/notifications/channel_dispatch.py` |
+| The bounded queue, both mute gates, the rate limit | `src/core/notifications/router.py` |
+| The three channels | `src/core/notifications/ntfy.py`, `slack.py`, `pushover.py` |
 | Flatten, order and page the record set (PURE) | `src/core/toast_history.py` |
 | `GET /toasts`, `GET /toasts/history` | `src/api/toast_routes.py` |
 | Record, supersede, ack, prune | `src/core/session_manager.py` |
 | Per-session list/create/ack routes | `src/api/routes.py` |
-| Render the stack, coalesce, cap, dismiss | `client/js/toast.js` |
+| The registry (severity, coalesce keys) and the constructor | `client/js/toast.js` |
+| Coalesce, cap, severity | `client/js/toast-grouping.js` |
+| Render the stack, and schedule a coalesced render pass | `client/js/toast-render.js` |
+| The frame-or-timer race a scheduled render runs on | `client/js/toast-render-batch.js` |
+| Add, dismiss, reconcile, backfill | `client/js/toast-lifecycle.js` |
 | The two cross-session API calls | `client/js/api-toasts.js` |
 | The cross-session poll | `client/js/toast-global-poll.js` |
 | Stop a dismissed card coming back | `client/js/toast-dismissed-ring.js` |
@@ -259,7 +354,29 @@ items below.
 | What a history row CLAIMS (PURE) | `client/js/toast-history-render.js` |
 | The settings-panel slot | `client/js/toast-history-panel.js` |
 | Styling | `client/css/toast.css`, `client/css/toast-history.css` |
-| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs` |
+| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs`, `tests/test_toast_render_batch.node.mjs`, `tests/test_notification_channel_dispatch.py` |
+
+## Rendering many toasts at once (issue #39)
+
+`_render()` rebuilds the whole visible card set from the model on every
+call - the cap, the coalesce counts and the overflow row are all
+functions of the whole set - so calling it once per arriving or dismissed
+record buys nothing over calling it once per BURST. A 500-record backfill
+measured 500 renders and about 173ms of synchronous work, freezing the
+tab; a bulk "dismiss all" has the identical shape from the other
+direction, because each dismissed card's own 220ms fade-out timer used to
+call `_render()` again on its own.
+
+`ToastManager._scheduleRender()` (`client/js/toast-render.js`) coalesces
+any number of model changes in one burst into ONE call to `_render()`.
+Every lifecycle method that used to render directly - `add`, `dismiss`,
+`updateLocal` - now schedules instead. The scheduling itself is
+`client/js/toast-render-batch.js`: it races the next animation frame
+against a short `setTimeout` fallback, because a bare `await
+requestAnimationFrame` never resolves in a hidden tab (CLAUDE.md gotcha
+9) and a scheduler built only on rAF would leave a whole backfill
+unrendered for as long as the tab stays backgrounded. A wait may DELAY
+the flush, never CANCEL it.
 
 ## Open items
 

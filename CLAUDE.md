@@ -7,6 +7,95 @@ is the whole point and the source of most of the interesting design.
 
 Read this before writing code here. It is orientation first, conventions second.
 
+## THE SPELLING "Cloude" IS DELIBERATE. NEVER CORRECT IT.
+
+This product is called **Cloude Code**, one letter off "Claude Code", and that
+is on purpose. Measured 2026-09-10: **214 files** in this tree carry the
+spelling (`grep -rl "Cloude" .`, excluding the repository metadata directory,
+`venv` and `node_modules`). It looks exactly like a typo that propagated, which
+is why this warning is the first thing in the file rather than an entry in the
+gotchas list at the bottom.
+
+A rename is NEVER in scope for a tidying, linting, typo-fixing or naming
+consistency pass. It is not a small change and it is not reversible by a second
+find-and-replace, because the string is load bearing in places that are not
+prose:
+
+- **The tmux socket, `tmux -L cloude`.** Every session this app owns lives on
+  that socket. Rename it and the server addresses a socket with nothing on it,
+  while the user's live panes carry on running somewhere it can no longer see.
+- **The session name prefix, `cloude_*`** (`SESSION_PREFIX`,
+  `src/core/tmux_backend.py`). Discovery, adoption, the boot re-adopt and the
+  recreate gate all scope themselves by that prefix. Change it and every
+  existing session becomes invisible to its own app.
+- **The database filename, `cloude.db`**, and the state directory
+  `~/Library/Application Support/cloude-code-menubar/`. Rename either and the
+  app boots onto an empty database beside the real one, losing every project
+  binding, title, pinned theme and unread flag on disk.
+- **The Electron bundle id, `com.cloudecode.menubar`** (`macOS/package.json`).
+  macOS keys permissions, the login item and the app's own container on that
+  id. A changed bundle id is a different application to the operating system.
+- **Every environment variable, `CLOUDE_*`**, and every log event name a
+  running install and its already-installed hook block emit today.
+
+So the blast radius of "fixing the typo" is: the sessions the user is currently
+working in, their entire database, and the app's identity to macOS. If you were
+told to fix typos, this is not one of them. If a document, a comment, a path or
+a variable reads `Cloude`, leave it.
+
+The same prohibition is carried by `.github/ISSUE_TEMPLATE/task.yml` and by
+`.claude/skills/work/SKILL.md`. Both of those are opt-in and reach only an
+agent that happens to read them. This file is the one every agent loads, which
+is why a third copy is correct rather than duplication.
+
+## Every document in `docs/`, and when to read it
+
+CLAUDE.md is the only entry point guaranteed to be loaded, so a document it
+does not name is effectively invisible: a clean-context agent will re-derive
+what the file already says, or contradict it. Gotcha 8 below is the argument -
+a doc nobody can find is a missing doc that still costs maintenance.
+
+This table is the routing layer. Read the one that answers your question; do
+not read all 27.
+
+| Document | Read it when |
+|---|---|
+| `docs/DECISIONS.md` | **Before you re-litigate any design choice.** Standing rulings from Adam, who owns the code and is the sole tie-breaker. A ruling binds both parties and both sides' agents. This is the file that says double-click rename stays. |
+| `docs/LESSONS.md` | Before you debug something that feels familiar. Defect shapes that have bitten this project more than once, with the evidence. Add one when a pattern REPEATS; once is an incident, twice is a pattern. |
+| `docs/session-status.md` | Anything about the status lights. The single source of truth for the state model, the two rings, the five colours and where each fact is stored. |
+| `docs/session-status-model.md` | You need the transition-by-transition derivation. Four independent state machines, every state citing the symbol it was read out of, drift-tested by `tests/test_status_model_chart_drift.py`. |
+| `docs/notifications.md` | Anything about toasts. Raising is global, dismissing is per session, and those are independent axes. Also the external push channels: the queue stays sequential, the three channels inside one entry go out at once under a per-channel bound. |
+| `docs/alert-state-model.md` | You are designing alerting. DESIGN ONLY, nothing in it is built, and it deliberately disagrees with `docs/session-status-model.md` in two places. Read that one first. |
+| `docs/session-project-operations.md` | You need to know what an operation does to a session row, a project row and the tmux session underneath. Every node cites the symbol it came from. |
+| `docs/project-reconcile.md` | The project list looks wrong after an upgrade. Written after a round trip actually lost rows. |
+| `docs/session-attribution-import.md` | Sessions are reported as external that the launcher itself created. DESIGN ONLY, not implemented. |
+| `docs/reconnect.md` | The terminal repaints wrong after sleep, wake or a dropped socket. Names the two re-attach paths, which behave differently. |
+| `docs/ci.md` | You need to know what CI runs and what it does when a secret it needs is missing. Read it with the CI status paragraph under "How we work here", which says whether it is switched on at all. |
+| `docs/debugging.md` | You need logs. The `CLOUDE_DEBUG=1` switch, from source and inside the packaged app. |
+| `docs/secret-scanning.md` | You are touching the pre-commit hook, `.gitleaks.toml`, or `scripts/scan_secrets.py`. Carries the incident that caused all three. |
+| `docs/test-artifact-cleanup.md` | You are removing a test session or project. It leaves traces in SEVEN places, and killing the tmux session clears exactly one of them. |
+| `docs/upgrade-with-claude.md` | You are upgrading an install. The runbook `/upgrade` follows. Take the baseline FIRST. |
+| `docs/upgrade-downgrade-roundtrip.md` | You are asking whether the previous version can be dropped back in. Answered by executing the round trip, not by reading the migration's own promises. |
+| `docs/deploy-mini.md` | You are pushing this code to the `mac-mini-m4` dev box. A developer tool, NOT the end-user upgrade path. |
+| `docs/deployment-docker.md` | You are running the server as a pure container. Operator facing. |
+| `docs/ios-simulator-testing.md` | You changed anything that renders on a phone. Names the three things desktop responsive emulation cannot show you. |
+| `docs/ios-standalone.md` | You are working on add-to-home-screen. What works over plain http, and what needs TLS. |
+| `docs/perf-baseline-2026-09-10.md` | You need a number to judge a performance change against. Read its machine-load note before quoting any absolute figure. |
+| `docs/webui-performance-and-session-menu-plan.md` | You picked up an issue carrying a `phase:N` label. This is the plan those issues were cut from, with the audit that justified it. |
+| `docs/message-browser-api.md` | You are building the archive browser's server. DESIGN SPEC, not implemented. |
+| `docs/message-browser-ui.md` | You are building the archive browser's client. DESIGN SPEC, not implemented. |
+| `docs/message-model-gate.md` | You are touching the message model's ingest gate or `src/core/message_gate_contract.py`. |
+| `docs/jsonl-shape-inventory.md` | You are writing a test against the transcript archive and need a real exemplar of a given line shape. |
+| `docs/help-content-audit.md` | You are rewriting the launchpad help copy. |
+| `docs/ui-preferences-inventory.md` | You are building the typed `ui_preferences` sync (or its partial-update or import step). Every durable browser-stored preference, classified as shared / per-viewer-only / already server-owned / secret, with the exact key, composition, writer and reader. |
+
+Two rules keep this table honest. **Unreferenced is not unused**, so do not
+delete or move a file in `docs/` because it looks orphaned. And **a new file in
+`docs/` gets a row here in the same change**, or it is invisible on the day it
+is written, which is the failure this table exists to end.
+`tests/test_docs_index.py` fails the build if a `docs/*.md` file is not named
+in this file, on the same principle as `tests/test_no_remote_assets.py`.
+
 ## Stack
 
 | Layer | What | Where |
@@ -857,6 +946,146 @@ having the respawned process write its own inherited value: a mock
 asserting two calls happened in order would only be testing its own
 arrangement.
 
+**THE ENVIRONMENT WRITES TRAVEL TOGETHER NOW, AND THEY STILL NEVER
+TRAVEL WITH THE SPAWN.** `respawn` issued one tmux process per variable;
+`src/core/tmux_command_batch.py` sends them as one `;`-separated command
+list, measured p50 20.99 ms to 9.38 ms for the two we inject. The batch is
+still a SEPARATE, AWAITED call ahead of `respawn-pane`, which is the
+distinction that matters: putting the spawn INSIDE the list would make
+this ordering a property of tmux's command queue rather than of two
+ordered awaits, and would swallow the spawn's own return code. Proved by
+`tests/test_tmux_launch_batching_real_tmux.py`, which has the respawned
+process write its own inherited value, and whose negative control was run
+before it shipped - with the writes moved BEHIND the spawn the pane does
+not come back empty, it comes back holding the tmux server's STALE
+global values, which is the 403 storm above wearing a plausible face.
+
+**THE LAUNCH IS SIX TMUX PROCESSES, DOWN FROM FOURTEEN, AND THE RULE FOR
+WHAT MAY SHARE ONE IS COMPATIBLE FAILURE BEHAVIOUR.** Counted by tracing a
+real `TmuxBackend.start()`, not estimated. Two batches: the pre-spawn
+`history-limit` plus `remain-on-exit`, and the post-probe decorations
+(extended keys, mouse, the two wheel bindings, terminal-features,
+escape-time, `window-size manual`, aggressive-resize), which now carry
+that same pre-spawn pair re-applied at their head and therefore number
+ten rather than eight - see the cold-socket paragraph below. Every
+command in both was already `check=False`. The three whose outcome
+the caller ACTS on - `new-session`, `respawn-pane`, `pipe-pane` - stay in
+processes of their own, because tmux gives no per-command control over a
+list and a batch that reported only "the batch failed" would be a
+downgrade. `attach_existing`'s four adopt-time options batch the same way,
+behind `ensure_pipe_pane` rather than in front of it. Measured on tmux
+3.6a at load average 14: the eight decorations cost **p50 206.41 ms apart
+and p50 9.35 ms together**.
+
+**TMUX ABORTS A COMMAND LIST AT ITS FIRST ERROR, WHICH IS WHY THE RUNNER
+FALLS BACK.** Measured, not assumed: a list whose first command is invalid
+exits 1 and the second never runs. So a naive batch turns "one option this
+socket will not take" into "and every option after it was silently
+skipped", which is strictly WORSE than the per-command loop it replaces.
+`run_optional_batch` re-runs the commands individually on any non-zero
+exit - every one of them is idempotent, so that restores exactly the
+pre-batch behaviour, and it is also the only thing that can name WHICH
+command failed, since tmux's stderr carries the error text but not its
+position in the list. It costs nothing in steady state. A token that IS
+`;` or ENDS in one is REFUSED rather than batched, because it would split
+the list somewhere the caller did not intend; a semicolon in the MIDDLE
+of a token is fine, which the wheel bindings depend on.
+
+**AND `set-option` DOES NOT START A TMUX SERVER ON tmux 3.6a, WHICH THE
+COMMENT IN `start()` USED TO CLAIM.** Measured on a cold throwaway
+socket: both pre-spawn `set-option` calls exit 1 with "error connecting",
+batched or separate, and after `new-session` the socket reports
+`history-limit 2000` (tmux's default, not our 50000) and
+`remain-on-exit off`. It was silent because both calls pass `check=False`,
+and it reaches the FIRST session created after a reboot, after a tmux
+server restart, or any time the socket's last session closes and the
+server exits under `exit-empty`. The pre-spawn pair still runs and still
+must: it is the ONLY thing that can make a pane be BORN at
+`HISTORY_LIMIT`, and on a warm socket - every session after the first - it
+lands.
+
+**THE TWO OPTIONS ARE RE-APPLIED AT THE HEAD OF THE POST-PROBE DECORATION
+BATCH, WHICH FIXES THE SOCKET AND CANNOT FIX THE FIRST PANE.** Measured
+through a real `TmuxBackend.start()` on a cold socket, before and after:
+the socket's global `history-limit` **2000 to 50000** and its global
+`remain-on-exit` **off to on**. It costs no extra tmux process, because
+that batch is issued either way, and both commands are pure assignments of
+a constant, so they are idempotent and safe under the runner's
+individual-rerun fallback.
+
+**THE RE-APPLICATION CANNOT REACH THE FIRST PANE, BECAUSE A PANE'S DEPTH
+IS FIXED INTO ITS GRID AT CREATION.** Measured three ways on tmux 3.6a, a
+pane born under the stock limit still reports `#{history_limit} 2000`
+after a global `set-option`, after a session-scoped one, and after
+`respawn-pane -k`. So the re-application fixes the socket for every LATER
+session and cannot hand the first one its 48000 missing lines.
+`tests/test_cold_socket_options_real_tmux.py` pins that as a measured
+fact. What the first session always DID keep is its corpse: the
+belt-and-braces `set-option -t <session> remain-on-exit on` after
+`new-session` resolves to that session's WINDOW, so the dead-on-arrival
+probe always had a pane to read - the GLOBAL window table was the half
+that was wrong.
+
+**SO THE FIRST PANE IS NOW BORN AT THE FULL DEPTH, FROM A `-f` CONFIG THE
+SERVER READS BEFORE IT MAKES THE PANE.** tmux reads a `-f` file when it
+STARTS THE SERVER, which on a cold socket happens inside the
+`new-session` invocation itself and strictly before the session is
+created. That is the only window there is. Measured through a real
+`TmuxBackend.start()` on a cold socket, the first pane's own
+`#{history_limit}` goes **2000 to 50000**.
+`src/core/tmux_server_config.py` renders and atomically writes it,
+`TmuxBackend._server_config_argv` places it, and
+`tests/test_cold_socket_born_at_depth_real_tmux.py` measures the PANE
+rather than the option table, because #87 already proved those two can
+disagree.
+
+**IT COSTS ZERO EXTRA TMUX PROCESSES, WHICH IS THE WHOLE REASON IT WON.**
+`-f` is two more argv elements on a call that was being made anyway.
+Counted at base and at head: a COLD launch spends **8 at both**, a warm
+one **6 at both**. Cold is two above the six quoted higher up because the
+pre-spawn batch cannot reach a server that is not running, so
+`run_optional_batch` re-runs its two commands individually - #87's
+fallback, not this. The spawn is still its own invocation and still
+carries its own return code; nothing is batched into it, and the env
+injection ordering is untouched.
+
+**EVERY FAILURE PATH DEGRADES TO THE PRE-FIX LAUNCH, AND tmux's OWN
+BEHAVIOUR WAS MEASURED RATHER THAN ASSUMED.** A missing `-f` file, an
+unreadable one (mode 000) and a MALFORMED one all give `rc=0` and a
+working session; on a warm socket `-f` is ignored outright. The malformed
+case is the one to know: tmux DISCARDS THE WHOLE CONFIG SILENTLY, so a
+valid line placed before the bad one does not apply either and nothing is
+printed. That is why `render_config` refuses a token it cannot express
+instead of quoting it hopefully, and why the test measures the pane
+afterwards. If the file cannot be written at all, `_server_config_argv`
+returns `[]` and the launch is byte-identical to what it was: losing
+scrollback depth is survivable, refusing a session is not.
+
+**THE FILE IS RE-DERIVED ON EVERY LAUNCH, SO A STALE ONE IS IMPOSSIBLE.**
+It lives at `<state_dir>/cloude-tmux.conf` and its body is rendered from
+the same argv fragments the pre-spawn and post-spawn batches send, so all
+three places that state these two options read one definition. Nothing
+migrates it on upgrade and nothing cleans it up; the next launch
+overwrites it with what the running build believes.
+
+**AND `-f` REPLACES tmux's OWN DEFAULT CONFIG LOAD, WHICH IS DESIRED AND
+IS ALSO A REAL CHANGE.** Per tmux(1), given a config on the command line
+tmux does not read `/etc/tmux.conf` or `~/.tmux.conf`. This file already
+states the intent - CloudeCode carries its own explicit tmux settings and
+deliberately does not source a personal config, because one references
+plugins that do not exist on another machine - so until now a COLD
+CloudeCode socket was quietly doing the opposite. Measured on the
+developer's box: none of the three default paths exists, so nothing there
+was being inherited and nothing is lost. On a box that HAS one, that
+config stops reaching our socket.
+
+**THE REJECTED ALTERNATIVE, KEPT SO IT IS NOT RE-PROPOSED.**
+`start-server` ALONE does not work - the batch exits 0 and the server,
+having no sessions, is gone before the next tmux process connects. Adding
+`set-option -s exit-empty off` to that list DOES work, measured, and
+leaves a tmux server with zero sessions alive on our socket for the life
+of the box. Adam rejected that on 2026-09-10 for exactly that reason.
+
 **BOOT HOLDS EVERY SURVIVING SESSION, not just the last one.** It used to
 rehydrate the ONE session in `session_metadata.json`; measured 2026-09-08, 21 live
 sessions and zero held. `src/core/session_boot_readopt{,_plan}.py` now re-adopts
@@ -986,6 +1215,165 @@ on a hash mismatch). Do not add a host to the CSP, do not weaken
 `frame-ancestors 'none'`, do not introduce inline script or `eval`, and do not
 read `style-src 'unsafe-inline'` as license to widen anything further.
 
+**A THEME CAN SHIP A SCRIPT, AND THE CSP IS NOT WHAT GATES IT.** A theme's
+optional `effects.js` is served same-origin, from `/static/css/themes/<id>/`
+for a bundled theme and from the `/themes/<id>/` mount for a user-authored
+one, and is loaded by dynamic `import()`. `script-src 'self'` therefore
+PERMITS it, correctly and unchanged - the policy's job is to stop code
+arriving from somewhere else, not to decide which of our own origin's files
+the user wants running. The gate is the app's own, it lives in
+`client/js/theme-consent.js` (the ladder and the record) and
+`src/core/theme_script_consent.py` (the same ladder, server side), and
+`client/js/themes/registry.js` keeps only the modal and the execution.
+**Nothing in #45 changed the CSP, and nothing in it may.**
+
+**SIX OUTCOMES, ONE OF WHICH RUNS, AND THE ORDER IS THE CLAIM.** No script
+declared; a recorded `never`; a record that could not be READ; a bundled
+theme; a script whose bytes could not be digested; a grant naming DIFFERENT
+bytes; a grant naming THESE bytes; nothing on record. Only the last-but-two
+executes. **DENY WINS OVER EVERYTHING**, including the bundled bypass and
+including a newer grant, whichever was written last - that is the property
+that makes sharing a restriction safe. An UNREADABLE record refuses a cached
+grant rather than honouring it, because a client that cannot read the record
+cannot show that no newer `never` exists, which is exactly the "a cached
+approval cannot outrank a newer global Never" this was asked for. The cost of
+that refusal is an animation that does not play.
+
+**CONSENT IS SHARED, AND WHAT MAKES A SHARED GRANT SAFE IS A DIGEST.** The
+record moved out of this browser's `cloude.themeJsAllowlist` and into the
+server-owned `ui_preferences.theme_script_consent`, so a `never` set anywhere
+binds everywhere. `docs/ui-preferences-inventory.md` had recommended against
+sharing it, and it was right about the shape it was describing: a grant keyed
+on a theme ID alone is a standing yes for whatever that file later becomes,
+and a theme directory is a folder anything with write access can edit. So an
+`always` stores the sha256 of the exact `effects.js` it was granted for. The
+server stamps that onto the manifest as `effectsDigest` from the bytes it is
+about to serve, a manifest cannot declare its own, and editing the file makes
+the grant stop matching so the user is asked again about the script that now
+exists. **THE USER APPROVES AN ARTIFACT, NOT A NAME.**
+`ui_preferences.validate_changes` REFUSES an `always` carrying no digest and
+refuses the word `once` outright, so an unbounded grant and a persisted
+temporary allowance are both unexpressible rather than merely unwritten.
+
+**`ALLOW ONCE` IS NEVER STORED AND NEVER SENT**, and the legacy local key is
+read for its REFUSALS ONLY. A `false` in `cloude.themeJsAllowlist` still
+refuses, for free, because honouring an existing restriction can only reduce
+what runs. Every `true` in it is IGNORED: it names no digest, so there is
+nothing to bind a grant to, and those users are asked exactly once more. That
+same reasoning is why the #46 settings import refuses that key by name.
+
+**THE GATE IS A SEPARATE FILE SO ITS REFUSALS CAN BE MEASURED.**
+`ThemeConsent.gateEffects` takes the injector as a CALLBACK and calls it on
+exactly one path, so `tests/test_theme_script_consent.node.mjs` hands it a spy
+and proves an unconsented theme never executes - against the real callback
+registry.js passes in, not against an internal flag that correlates with it
+today. Sixteen of its twenty-five cases are refusals. **A suite that only drove
+the consented path would pass against a gate that never refuses**, which is
+this project's own "a matcher that always finds something is worse than
+useless" one layer up. A revocation arriving from another device runs the
+module's `destroy()`, drops the loader cache, cancels an on-screen prompt and
+is re-checked mid-`import()` before `init()` runs - and it SAYS that anything
+the script already did to the page stands until a reload, because claiming
+otherwise would be the false green this project keeps paying to remove.
+
+**AND ONE OF THOSE REFUSALS WAS DECORATIVE, WHICH ONLY A MUTATION TEST
+COULD SHOW.** Driven against a `decide()` mutated to always RUN, thirteen
+of the twenty-one cases failed and `allow once is never written anywhere`
+was the ONLY negative control still passing - because under an
+always-allow gate the script runs and nothing is persisted either, so
+every assertion it made was satisfied for the wrong reason. The fact it
+never checked is the one that separates the two worlds: whether the user
+was ASKED. Its `prompt` is a recording spy now, asserted to have been
+called exactly once and about THIS manifest, and the same mutation now
+fails it on `the script ran without the user ever being asked`. **A GREEN
+NEGATIVE CONTROL PROVES NOTHING UNTIL YOU HAVE WATCHED IT GO RED**; if
+you add one here, mutate `decide()` to always return `run` and watch.
+
+**A "NEVER" THAT COULD NOT BE WRITTEN DOWN IS `skip_denied_unsaved`, NOT
+`skip_denied`.** `gateEffects` ignored `remember()`'s return value for a
+refusal, so it reported every one as recorded. Reproduced end to end
+2026-09-10: `GET /themes` serves a folder called `Neon Rain` intact,
+digest and all, and `validate_consent_map` then 422s the refusal, so the
+user clicked "never", watched it take effect, and it was gone on reload
+and never reached another device. It FAILED CLOSED every time, so it was
+never an execution hole - it was a durability lie, which on a consent
+control is its own defect, because it teaches the user the control does
+not work. The gate now checks the status (`committed` or `unchanged` are
+the only two that mean the record took it) and reports through an
+optional `notify` callback that registry.js routes to `FabMenu.notify`.
+**THE COPY LIVES WITH THE DECISION** (`UNSAVED_REFUSAL_COPY`) and the
+caller supplies only the channel, so the sentence and the fact cannot
+drift. A missing `notify` still logs; a message nobody could deliver is
+not a reason to go back to saying nothing. `stale_revision` on a refusal
+is reported the same way and deliberately NOT retried - it fails closed,
+the user is told, and the next attempt succeeds.
+
+**A THEME ID IS ONE RULE WITH FIVE CONSUMERS, AND `ThemeManifest.id` HAS
+NO PATTERN AT ALL.** The only rule on the manifest is that the id equals
+the directory name, so the keyspace is whatever the filesystem allows,
+while `THEME_ID_RE` decided what a consent key and the selected-theme
+preference could be. Those disagreed. The id has to survive as: a
+directory name, a filesystem path segment, a URL path segment (safe
+already - `effectsUrlFor` passes it through `encodeURIComponent`), a JSON
+object key in the shared `theme_script_consent` map, and the `theme`
+preference. `THEME_ID_RE` now covers the names people really have -
+letters, digits, `.`, `_`, `-` AND THE SPACE, up to 128 characters, first
+character not `.`, `-` or a space and last not a space - and
+`src/core/theme_script_consent.py` names a reason beside every exclusion
+rather than listing them.
+
+**IT WAS DECLARED IN TWO FILES, AND `ui_preferences` NOW IMPORTS IT.**
+Its own copy answered the same question about the same string, so a
+folder name one accepted and the other refused was a theme you could
+select and could not record a decision about.
+`tests/test_theme_id_charset.py` asserts the two are the SAME OBJECT, not
+two equal patterns, so a future widening cannot reach one and miss the
+other.
+
+**THE BROWSER KEEPS NO COPY OF IT, UNLIKE `DIGEST_RE`, AND THAT IS A
+CHOICE.** A client-side mirror would only be good for pre-empting a
+write, which means a mirror that drifted would refuse a write the server
+would have taken - and the drift test guarding it would be guarding a
+problem it created. The gate handles it REACTIVELY through `persisted()`
+instead, which is correct whatever the write failed for: a rejected key,
+a network outage, a stale revision. `DIGEST_RE` is mirrored because the
+ladder BRANCHES on it; this would have branched on nothing.
+
+**`\Z`, NOT `$`, AND THAT IS NOT COSMETIC.** Python's `$` also matches
+immediately before a trailing newline, so the pattern this replaced
+accepted `"matrix\n"` - a legal POSIX filename, and a second spelling of
+one theme. JS `$` without the `m` flag does not, which is why the mirror
+is the python pattern with `\Z` swapped back.
+
+**NON-ASCII IS STILL REFUSED, DELIBERATELY, AND IT IS THE ONE REFUSAL
+THAT COSTS A REAL USER SOMETHING.** The consent map in `config.json` IS
+the audit record of what the user let execute, and a key carrying a bidi
+override, a zero-width joiner or a homograph is one an operator cannot
+read back and check. Supporting it properly needs a normalisation and
+confusables policy, which is a bigger change and a worse one to make
+hastily on a consent surface. A theme named `über` still renders, still
+prompts and still fails CLOSED - what it cannot do is REMEMBER the
+answer, and the user is now told that instead of being shown a refusal
+that evaporates. Note what was NOT done: dropping such a theme from
+`GET /themes` entirely was considered and rejected as over-broad, because
+a theme that declares no script has no consent problem at all and would
+have vanished for nothing.
+
+**KNOWN DESIGN LIMIT: THE DIGEST IS TAKEN ONCE PER PAGE LOAD, THE
+`import()` HAPPENS WHENEVER THE THEME IS APPLIED.** `loadManifests()` has exactly
+one caller (`client/js/themes/registry.js:1179`), so the
+`effectsDigest` a grant is matched against is the bytes as they were at
+load. Edit `effects.js` after that and, WITHIN THAT ONE OPEN PAGE, the
+grant still matches and the edited file runs. **This is recorded rather
+than fixed, on purpose.** Exploiting it requires a process already
+writing the themes directory while the page is open, which is an actor
+who already has code execution as the user - so it does not lower the bar
+for the threat this gate exists to raise, which is a theme the user
+installed turning out to do something they did not agree to. A reload
+re-measures. Do not restructure the load path to chase it; that is a
+bigger change than it is worth, and re-digesting per apply would put a
+filesystem read on every theme switch.
+
 **THE ATTACH CAPTURE CARRIES THE CURSOR, BECAUSE `capture-pane`
 SERIALISES CELLS AND NEVER CURSOR STATE.** `capture_visible_screen()`
 (`src/core/tmux_backend.py`) appends an explicit `ESC[row;colH` read from
@@ -1048,6 +1436,7 @@ beside it. `tests/test_capture_cursor_real_tmux.py` proves the claim with
 a real second pane rather than a substring assertion, because asserting
 the bytes end in `ESC[3;6H` proves only that the string was formatted.
 
+<<<<<<< HEAD
 **Config writes are atomic and backed up, and there is now ONE of them.**
 `src/config/config_file.py::write_config_atomic` is the pattern: write the
 `.bak` of the pre-write bytes first, then temp file, `fsync`, `os.replace`. A
@@ -1061,6 +1450,348 @@ every outcome assertion stays green; the two differ only when the write does not
 finish. `tests/test_config_settings.py` therefore stages a failure part way
 through and asserts the destination is untouched, and separately asserts the
 destination is never opened for writing at all.
+=======
+**AND THE 150 ms ATTACH SETTLE IS NOW PAID ONLY WHEN A RESIZE ACTUALLY
+WENT OUT.** The handshake slept 150 ms on every attach so a `SIGWINCH`
+raised by the handshake resize could reach the pane's foreground process
+before the capture stomped its buffer. That is the right thing to wait
+for when a resize happened, and pure latency when the browser comes back
+at the geometry the pane is already at, which is the common reconnect.
+`src/api/attach_settle.py` is the rule and it has THREE outcomes, not
+two: the pane's own `#{pane_width}`/`#{pane_height}` measured EQUAL to
+the negotiated grid skips both the resize and the pause; measured
+DIFFERENT resizes and settles as before; and anything else - the probe
+refused, the backend cannot be asked, the client sent no dims, the resize
+raised - settles as before. **A READING THAT DID NOT HAPPEN IS NOT A
+READING OF NOTHING**: treating unknown as unchanged would leave the
+pane's grid disagreeing with the browser, invisibly, until the user
+typed. Both sleep sites go through the one function; the degraded branch
+that never got client dims can never take the fast path, by construction.
+
+**COMPARE AGAINST THE PANE, NEVER AGAINST THE NEGOTIATOR'S CACHE, and
+that is why this costs a probe at all.** `TerminalSizeNegotiator` forgets
+a session the moment its last client disconnects, so on the very common
+close-tab-reopen-tab attach it has NO record and reports the size as
+changed - keying the settle on its return alone would never once take the
+fast path. Worse, a value it did remember says nothing about a pane an
+adopt, a restart or an external `resize-window` has since moved.
+Measured on tmux 3.6a at load average 14: the probe costs p50 9.85 ms,
+the `resize-window` plus `refresh-client` pair it also skips costs p50
+22.81 ms of BLOCKING event-loop time, and the whole resize-and-settle
+segment on an identical-geometry attach went **p50 152.2 ms to 12.5 ms**.
+A changed geometry still measures p50 186.7 ms, which is the point.
+`tests/test_attach_settle_skip.py` proves the refusal against a REAL
+backend whose tmux session has been killed, because a double asked to
+return None proves only that someone wrote `return None`; its timing
+claims are made by RECORDING the sleeps rather than by a wall clock,
+which on a loaded box would either flake or be too loose to prove
+anything.
+
+**Config writes are atomic and backed up, and they go through ONE
+boundary.** The sequence is unchanged and is not open to tidying: the `.bak` of
+the pre-write bytes FIRST, then a temp file, `fsync`, `os.replace`. A
+half-written `config.json` costs the user their whole setup, so there is no
+"just dump the JSON" shortcut anywhere in this codebase. What changed is WHERE
+it lives: `src/core/config_writer.py` is the only module that may perform it,
+and `tests/test_one_config_writer.py` fails the build if a second one appears.
+
+**ATOMIC AND SERIALIZED ARE DIFFERENT PROPERTIES, AND THIS ONLY HAD THE
+FIRST.** Five functions wrote `config.json` - `Settings.update_settings_config`,
+`Settings._write_wrappers`, `slash_favorites.write`,
+`terminal_commands.replace_terminal_commands` and
+`config_migration.migrate_config_file`. Every one was atomic, so a crash could
+never truncate the file, and every one read the document, merged its own block,
+and replaced. Two arriving together each merged into the SAME base and the
+second replace threw the first writer's block away: the file was never corrupt
+and the update was still lost. They also all used the same temp filename,
+`config.json.tmp`, which a lock hides and a second process does not.
+
+**THE FRESH READ INSIDE THE LOCK IS THE FIX, and it is enforced by the shape of
+the API rather than by remembering.** `config_writer.commit(path, mutate)` takes
+a MUTATOR, not a document: it acquires the path's lock, reads the file itself,
+and hands that dict over. A caller cannot supply a stale base because it never
+supplies a base. The temp file carries the pid plus a random suffix, a nested
+`commit` raises rather than deadlocking, and `on_commit` listeners see the
+committed document while the lock is still held. Four named outcomes, no silent
+ones: `committed` / `unchanged` / `stale_revision` / `backup_unavailable`.
+`unchanged` (the mutator returned `None`) touches NEITHER the config nor the
+backup, which is the no-op behaviour the migration has always had, and
+`backup_required=True` is what preserves that writer's FAIL-SAFE posture -
+alone among the five, it refuses to run at all rather than write without a
+rollback path.
+
+**`ui_preferences` IS THE TYPED, VERSIONED HOME FOR PREFERENCES WITH NO SERVER
+OWNER.** `src/core/ui_preferences.py` is the pure rules (the pydantic model, the
+validation, the merge), `src/core/ui_preferences_store.py` the seam that puts
+them on the lock and caches the read, and `src/api/preferences_routes.py` is
+`GET`/`PATCH /api/v1/preferences`. The field set comes from
+`docs/ui-preferences-inventory.md`, which classified all 24 durable
+browser-stored keys; the ten in its PER-VIEWER column are NOT here and
+`tests/test_ui_preferences.py` names every one of them, because a sync set that
+quietly grew would pass every positive test and push one device's layout onto
+every other device the user owns.
+
+Four things about it are load-bearing. **A READ TOUCHES NO DISK**: the
+projection is loaded once and refreshed by the `on_commit` listener, so a
+wrapper edit or a boot migration keeps it in step - a cache invalidated only by
+its own writer is wrong the moment anybody else writes. **AN UNRECOGNISED FIELD
+IS PRESERVED**, so a newer client's preference survives an older server and a
+downgrade destroys nothing; it is bounded rather than trusted, and a name that
+reads like a credential is refused outright, which is what stops the passthrough
+becoming a place to park a token. **ABSENT IS NOT A DEFAULT**: every field
+defaults to `None` and the server never fabricates a value, so hydrating from an
+empty or unreadable block cannot overwrite a real local setting - the client
+keeps its own default and, until a read SUCCEEDS, refuses to write at all.
+**THE REVISION MOVES ONLY ON A REAL CHANGE**, so a no-op `PATCH` does not make
+every other client refresh for something that did not happen.
+
+**A STALE WRITE IS A 409 THAT SAYS WHAT IS CURRENT, NEVER A SILENT
+OVERWRITE AND NEVER A BARE REFUSAL.** The check is evaluated INSIDE the lock
+against the document the write is about to merge into; checking it outside
+compares against a read another writer can invalidate first, which is the lost
+update wearing a check. The refusal carries the current revision AND the current
+values, because a client cannot reconcile against a number it was not told, and
+a bare 409 is how a retry loop against an unchanged conflict gets written. Same
+shape as `if_version` on the respawn path. `tests/test_ui_preferences_api.py`
+carries the NEGATIVE CONTROL: the identical request with the check declined,
+asserted to overwrite, so the 409 test cannot quietly stop proving anything.
+
+**`preferences.changed` IS AN OPTIMISATION AND THE REVISION IS THE ONLY
+ORDERING IT NEEDS.** `client/js/preferences.js` applies a frame ONLY when its
+revision is strictly HIGHER than the one it holds. That single rule survives
+everything hook events already taught this project: the same frame twice is an
+equal revision and ignored, a reordered pair has the older one lower and
+ignored, a dropped frame is closed by the next higher one or by the next
+refresh. It is a fold over a number, not an increment, so the socket promises
+nothing. **APPLYING A RECEIVED CHANGE MUST NEVER GENERATE A SAVE** or two
+browsers ping-pong forever, so `set()` refuses for the duration of the
+fan-out - the guard is at this layer rather than in every control. **A
+RECONNECT PERFORMS AN AUTHORITATIVE REFRESH, NOT AN EVENT REPLAY**
+(`terminal.js`'s `ws.onopen`), and it never uploads this browser's snapshot.
+That limit is CLOSED as of 2026-09-10 and the sentence that used to sit here
+is history: the terminal WebSocket is still SESSION-SCOPED and still exists
+only while a terminal is open, but `/ws/events` now carries the frame to a
+browser sitting on the launchpad as well. The preferences route publishes to
+BOTH, deliberately, and a browser holding both sockets receives the frame
+twice - which is safe by construction rather than by luck, because
+`applyRemote` applies a frame only when its revision is strictly HIGHER than
+the one held. Dropping the terminal half would break every already-loaded
+client that has no event socket yet, for no gain. The hydration on entering a
+screen is untouched and is still what covers a client with neither.
+
+## The application event channel, `/ws/events`
+
+ONE AUTHENTICATED SOCKET PER BROWSER, carrying compact change notices about
+every session, so a client on the home screen or looking at session A hears
+about session B without waiting for its next poll. It closes the gap the
+preferences work recorded above.
+
+| Piece | File |
+|---|---|
+| The per-consumer bounded queue, and the named overflow | `src/core/bounded_stream.py` |
+| The fan-out registry and the one publish path | `src/core/event_hub.py` |
+| What a notice may claim, and the hook seam | `src/core/session_change_notice.py` |
+| The endpoint | `src/api/events_routes.py` |
+| The client | `client/js/app-events.js` |
+
+**IT AUTHENTICATES EXACTLY AS THE TERMINAL SOCKET DOES, AND THERE IS NO
+SECOND SCHEME.** The JWT rides `Sec-WebSocket-Protocol` and is checked by the
+same `verify_jwt_from_subprotocol`, with the same `cloude.jwt.v1` marker
+echoed on accept and the same 4401 / 4400 split. The client opens it through
+`API.openWebSocket(null, '/ws/events')`, the function the terminal already
+uses. A token in the URL is what that avoids: query strings are routinely
+written to proxy and access logs and the header is not, and
+`tests/test_ws_events.py` asserts a `?token=` handshake is still refused.
+
+**COMPACT IS THE DESIGN, NOT AN OPTIMISATION.** A status notice carries the
+session instance plus the handful of fields a row paints; the structural
+notice carries only its own name and means RE-READ. A notice carrying a full
+`SessionInfo` would become a second serialization of `/sessions/list` with its
+own bugs and would drift from it; a notice that says re-read cannot. The
+client honours that: it pokes `SessionSidebar.refreshNow()` and
+`Launchpad.loadRunningSessions()` rather than patching a row in place, so an
+event can only make the SAME refresh happen sooner.
+
+**ABSENT IS NOT A DEFAULT.** `build_status_notice` OMITS any field the caller
+could not measure rather than sending null, because a null says "this is now
+false" and a fabricated `idle` or `ready` is exactly the false-green failure
+this project keeps paying for.
+
+**THE QUEUE IS BOUNDED AT 256 EVENTS OR 1 MiB PER CLIENT, AND AN OVERFLOW IS A
+NAMED OUTCOME.** `BoundedStream.offer` is SYNCHRONOUS - a bounded
+`asyncio.Queue` would have been the obvious change and would have been wrong,
+because `await queue.put` on a full queue is precisely the backpressure into
+the producer that the bound exists to prevent. Crossing the bound LATCHES,
+closes that client's stream, drops it from the registry and closes its socket
+with **4429**, an application code rather than 1013 so the client can tell
+"you fell behind" apart from "the server went away" and skip its reconnect
+banner. That client reconnects at once, with no backoff, and performs an
+AUTHORITATIVE REFRESH: nothing replays and nothing is buffered for a browser
+that is not there. No other client is touched.
+
+**THE MUTE GATES THE TOAST AND NOT THE STATUS, AND THAT IS DELIBERATE.** The
+toast notice is published from the one place in `claude_event_hook` a
+suppressed toast never reaches - past the notification-policy gate and the
+sub-agent gate, beside the existing per-session broadcast - so the policy is
+enforced BY CONSTRUCTION and not by a second copy of the rule. The status
+notice is published BEFORE those gates, because muting suppresses the
+INTERRUPTION and changes nothing about what a row is allowed to say: a muted
+session's light updates on the poll today, and a channel that refused to
+report it would make that row visibly staler than before the channel existed.
+
+**IT IS AN OPTIMISATION AND MAY NEVER BECOME A DEPENDENCY.** The five second
+reconciliation poll is untouched. A tmux session started by hand on the
+`cloude` socket produces no event here at all, and adopting an external
+session is a first-class case in this app, so the poll is the only thing that
+can see it. Every publish site is fail-soft: an app with no hub publishes
+nothing, and a client whose socket never connects converges on exactly the
+schedule it did before.
+
+**PENDING IS NOT COMMITTED, AND A CONFLICT DROPS NEITHER SIDE.** A deliberate
+choice applies locally at once and reports `pending`; a failure keeps the user's
+value on screen as `failed` with the committed one still readable beside it, so
+a retry knows both; a stale refusal or a remote change landing on an unsaved
+edit becomes `conflict`, holding both values for the user to resolve. Silently
+dropping either is how somebody loses a setting they watched themselves change.
+Hydration runs BEFORE any preference-dependent control initialises, through
+`App._initAuthenticatedState()` - ONE function called by both post-auth paths,
+because two copies of that sequence is how one of them acquires a step the other
+never gets (gotcha 7's shape).
+
+**THE EIGHT EXISTING CONTROLS ARE MIGRATED ONE AT A TIME, THROUGH ONE SEAM,
+AND ONLY WITH THE USER'S PRESS.** #43 and #44 built the block and the client
+layer and deliberately rewired NOTHING, because moving each control is a
+behaviour change with its own question about the value already sitting in that
+browser. #46 answers that question in two halves.
+`client/js/preference-bridge.js` is the seam: `read` prefers the shared value
+and falls through to the control's own local reader, `write` MIRRORS to
+localStorage AND the server. So a control becomes shared by changing its read
+and its write, not by growing a preference layer inside itself. FOUR of the
+eight are on it - the global theme (`themes/registry.js`), the sidebar density,
+the global audio toggle and the last model chosen (`providers.js`) - each
+having exactly one read function and one write function to move. The other four
+(the sidebar arrangement, the two dock pins, the two fold maps) are collected
+and importable but their controls still read local only; that is a known gap,
+not an oversight, and the bridge is what closes it when somebody picks it up.
+
+**MIRRORED, NEVER MOVED, AND THE LOCAL COPY IS NEVER CLEARED.** Three reasons
+and the third is the one that matters: the local value is what answers when the
+server is unreachable, it is what the pre-hydration paint reads (which is how
+`applyStoredThemeIdSync` still kills the flash of the default), and #46's own
+rule is that the local source is RETAINED until the server confirms. There is
+no tidy-up step, because the tidying is what loses a user's settings on exactly
+the request that failed. **ABSENT IS NOT A DEFAULT** here either: a field the
+server does not hold falls THROUGH to local rather than reading as the
+control's default, or every control would snap to its default the first time a
+browser hydrated against a fresh install and the next change would save that
+default over every other device. **AND THE BRIDGE NEVER SAVES ON ITS OWN** - no
+read-then-write, no write-back-on-hydrate, no upload of a value the server has
+not got.
+
+**THE IMPORT IS EXPLICIT, PREVIEWED, AND ONE-TIME PER INSTALL.**
+`src/core/settings_import.py` is the pure rules, `settings_import_store.py` the
+one commit, `src/api/settings_routes.py` the three endpoints
+(`GET /settings/import/state`, `POST /settings/import/preview`,
+`POST /settings/import`), `client/js/settings-import-collect.js` the reader and
+`client/js/settings-import.js` the panel, mounted as a slot on the settings
+screen's general tab. **NOTHING IS UPLOADED WITHOUT A PRESS, ON ANY PATH** -
+there is no import-on-load, no import-on-reconnect and none inside hydration.
+The failure that buys: an automatic migration means the LAST browser to connect
+wins, so a machine nobody has opened in three months uploads its stale snapshot
+and silently reverts every setting changed since.
+
+**THE PREVIEW AND THE IMPORT ARE THE SAME PLAN, BY CONSTRUCTION.**
+`build_plan` is called by both endpoints and `changes_from` derives the write
+from its output, so the preview cannot describe one thing and the commit
+perform another. A preview that lies is worse than no preview: it is a safety
+control telling the user they are safe. `tests/test_settings_import.py` proves
+it by previewing, committing and comparing what landed, rather than by reading
+two code paths and agreeing they look similar. The plan is REBUILT INSIDE THE
+WRITE LOCK against the document the write will merge into, and a changed
+selection re-fetches the preview from the server rather than being adjusted in
+the browser - a second implementation of the plan is the one thing that could
+make the two differ. Six per-field outcomes, and **SERVER VALUES WIN BY
+DEFAULT**: a conflict is `conflict_kept` unless the user ticked that specific
+field, which makes it `conflict_overridden`. There is no import-everything.
+
+**THE MARKER AND THE VALUES LAND IN ONE COMMIT.** `ui_preferences_import` is a
+sibling key in config.json, written by `apply_import` in the same
+`config_writer.commit` as the preference merge, because both half-failures are
+bad and both are silent: settings without the marker leave the install
+re-offering the import to the next stale browser, and the marker without the
+settings closes the offer having changed nothing. An import that writes NO
+values still writes the marker - "everything here already matched" is a
+completed import.
+
+**THE ALLOWLIST IS A PROJECTION AND THE COLLECTOR NEVER ITERATES STORAGE.**
+`importable_fields()` is `ui_preferences.known_fields()` minus
+`REFUSED_FIELDS`, so a field added to the block is importable the day it lands.
+The client reads only literal keys from its own table - there is no
+`for (i = 0; i < localStorage.length; i++)` and there may never be one - which
+is what keeps `claude_tunnel_token` and `claude_refresh_token` out of the
+payload BY CONSTRUCTION rather than by a denylist one forgotten entry away from
+uploading a credential. `tests/test_settings_import_collect.node.mjs` measures
+that two ways: a recording storage proving neither token was ever READ, and the
+serialised payload searched for the token VALUE.
+
+**AND `theme_script_consent` IS REFUSED DESPITE BEING A PREFERENCE**, which is
+the interesting half. #45 made it a known field, which would otherwise make it
+importable. A browser's local record of "I allowed this theme's script" is the
+pre-#45 `cloude.themeJsAllowlist` shape: a theme id and no digest, so importing
+it would mint exactly the unbounded standing grant #45 exists to make
+unexpressible. The issue's rule is "never infer theme-script approval from a
+theme selection"; this is that rule one step further - never carry an approval
+at all. Refused by NAME on the server and absent from the client's table, so
+neither end depends on the other remembering.
+
+**THE LOCAL SERVER DETECTOR IS FULLY WIRED, HAS NO CLIENT, AND IS KEPT ON
+PURPOSE.** `LocalServersTracker` (`src/core/local_servers.py`) scrapes a port
+number out of pane output, validates it with `is_valid_dev_port`, probes it
+with `port_is_listening`, and broadcasts `local_server_detected` /
+`local_server_lost` over the WebSocket. It is constructed, attached and started
+at boot (`src/main.py:537-539`), stopped on shutdown (`:776-777`), read by
+`GET /sessions/{session_name}/local-servers` (`src/api/routes.py:2614`) and
+cleared when a session is destroyed (`:963`). **The owner ruled it STAYS.** Do
+not remove the tracker, the route, the two WebSocket message models
+(`src/models.py:1818, 1826`) or the model fields, and do not disable the
+janitor. It is dead code retained deliberately, which is not the same thing as
+dead code nobody noticed, and this paragraph exists so a dead-code sweep can
+tell the two apart.
+
+Nothing in `client/` has consumed it since `4ee2f44` removed the panel.
+Grepping `client/` for `local_server`, `localServer` or `local-servers` finds
+only comments: three in `terminal-resize-settle.js`, `terminal-away-bar.js` and
+`terminal-away-bar.css` citing `#localServersContainer` as the worked example
+of why a panel must never sit IN FLOW beside `.terminal-container` (it was
+toggled on every fetch, so it reflowed the terminal under the user), plus one
+unrelated CSS accent comment. So the route and both WebSocket messages are live
+and unread. **Do not put any panel back in flow beside the terminal container.**
+
+**AND THE `local_servers` FIELD ON THE API IS HARDCODED EMPTY, SO IT DOES NOT
+REFLECT WHAT THE TRACKER KNOWS.** `SessionInfo.local_servers` and
+`SessionStats.local_servers` (`src/models.py:229, 236`) are assigned an empty
+value at all four assignment sites: `session_manager.py:4845` (`0`),
+`session_manager.py:5167` (`[]`), `routes.py:1459` (`[]`) and `:1461` (`0`).
+Those literals PREDATE the panel removal, so this is not a consequence of it.
+A client reading that field today is told, wrongly, that the session has no
+local servers while the tracker sitting beside it is detecting them. **Anyone
+reviving this feature must wire those four sites, not assume they work** - the
+tracker is the part that is correct, and an afternoon spent debugging it would
+be an afternoon spent on the wrong file. They are deliberately NOT wired here:
+reporting real detections to a client that does not read them is a behaviour
+change nobody asked for.
+
+The standing cost, measured rather than assumed, so it can be judged later: the
+janitor (`_janitor_loop`) wakes every `JANITOR_INTERVAL_SECONDS` (30.0) and
+re-probes only the ports it is ALREADY TRACKING, in a worker thread so a slow
+`connect_ex` cannot stall the event loop. State is in-memory and starts empty
+on every boot, and a port is tracked only after a pane actually prints one. So
+on a box where no session has printed a port the loop costs one wakeup every 30
+seconds and ZERO probes, not a sweep per session. That is small, and it is not
+nothing; the open question of whether it is worth paying while nothing reads
+the result is the owner's to answer, and it is written down here so he can
+answer it with the real number in front of him.
+>>>>>>> 6012467
 
 ## The `/sessions/list` shape
 
@@ -1158,20 +1889,122 @@ remembered verdict would flap the row between a measured answer and `unknown`
 on alternating polls, which is worse than the cost it saves. Do not move that
 capture up into the unconditional path.
 
-**THE LISTING PASS RUNS ON THE EVENT LOOP, SO ITS COST IS TERMINAL LATENCY.**
-This is the rule the two paragraphs above and the section below all serve.
-`list_session_infos` is `async def` whose body is entirely SYNCHRONOUS, so for
-as long as it runs the server does nothing else at all: it cannot read the tmux
-pipe carrying terminal output, cannot spawn the `send-keys` that delivers a
-keystroke, and cannot answer another request. Measured 2026-09-09, 13 live
-sessions: **27 tmux subprocesses and 1008 ms per pass** (one bulk
-`list-panes -a` at 282 ms, then `has-session` x13 at 377 ms and `capture-pane`
-x13 at 349 ms), polled every 5s by the sidebar and again by the launchpad. The
-user reported it as typing lag and as a sidebar click taking two seconds; the
-click's own endpoint measured **45-64 ms**, so essentially all of that two
-seconds was queueing. The control that proves the mechanism is
+**THE LISTING PASS USED TO RUN ENTIRELY ON THE EVENT LOOP, SO ITS COST WAS
+TERMINAL LATENCY. ITS EXPENSIVE READS NOW RUN IN A WORKER THREAD.** This is
+the rule the two paragraphs above and the section below all serve, and the
+history is kept because every cost-reduction round in this section was aimed
+at it. `list_session_infos` was `async def` whose body was entirely
+SYNCHRONOUS, so for as long as it ran the server did nothing else at all: it
+could not read the tmux pipe carrying terminal output, could not spawn the
+`send-keys` that delivers a keystroke, and could not answer another request.
+Measured 2026-09-09, 13 live sessions: **27 tmux subprocesses and 1008 ms per
+pass** (one bulk `list-panes -a` at 282 ms, then `has-session` x13 at 377 ms
+and `capture-pane` x13 at 349 ms), polled every 5s by the sidebar and again by
+the launchpad. The user reported it as typing lag and as a sidebar click taking
+two seconds; the click's own endpoint measured **45-64 ms**, so essentially all
+of that two seconds was queueing. The control that proved the mechanism is
 `GET /sessions/records`, which does its work in a threadpool: its own cost is
 5.8 ms and its p99 was 161 ms, all of it spent waiting to be served.
+
+**THE PASS IS THREE STAGES NOW, AND THE ORDER IS THE CLAIM.** SNAPSHOT on the
+loop (`_listing_snapshot`, copying the names and the socket out of the live
+dictionaries into tuples), GATHER in `asyncio.to_thread`, then the per-row loop
+back on the loop, UNCHANGED. `src/core/listing_gather.py` is the thread body
+and `src/core/listing_prefetch.py` the name-keyed decorations. Measured with 4
+live sessions, **13 of the pass's 17 SQLite connections** now open off the
+loop, along with the one bulk `tmux list-panes -a`. The file drawer's shallow
+read, in the paragraph below, is the worked example this copies.
+
+**EVERY WRITE DELIBERATELY STAYED ON THE LOOP, AND THE REASON IS NOT
+TIDINESS.** Twelve of them - the activity tracker's signals, the unread epoch
+memo, the permission-verify and startup-gate ledgers with their once-per-instance
+toast claims, the status seed's cache and the durable
+`_persist_settled_activity_state` write - are each a READ-MODIFY-WRITE against
+in-memory state the hook route mutates on the loop at the same time. The
+permission pair is the one that makes a torn read SILENT rather than loud:
+`permission_open` and `permission_opened_at` are SET in one order and CLEARED
+in the opposite one, so a thread reading them mid-transition sees a coherent
+looking half-state and no exception is raised anywhere. Moving those needs an
+APPLY stage that re-validates at write time, in the manner of
+`config_writer.commit`'s fresh read inside the lock. That is a real refactor of
+a 400-line function and **A PARTIAL, CORRECT IMPROVEMENT BEATS A COMPLETE,
+RACY ONE.**
+
+**AND THE SINGLE-FLIGHT COALESCER IS WHY TWO GATHERS CANNOT OVERLAP.**
+`src/core/single_flight.py` makes a caller asking for a listing while one is
+in flight AWAIT that pass rather than start its own, which it was built for a
+different reason (15 polling clients were each paying for an identical answer,
+giving the endpoint a measured period of about 0.85 s rather than 5 s). It
+matters here too: with the loop free during a gather, without it a second
+request would start a SECOND thread reading the same rows.
+
+**THE SAFETY PROPERTY IS A TEST, NOT AN AUDIT, BECAUSE A BOUND METHOD CARRIES
+`self`.** `ListingReaders` hands the thread bound methods and nothing else,
+which narrows what `listing_gather` itself can reach and narrows NOTHING about
+what a reader's own body may grow into: a `self.sessions` read added inside
+`_label_for_tmux_name` would put a live container back in the thread and no
+signature would say so. So `tests/test_listing_off_the_loop.py` wraps the six
+live containers (`sessions`, `backends`, `_instance_epochs`, `pinned_themes`,
+`_hook_tmux_names`, `_activity_tracker`) in thread recorders, drives the REAL
+`_listing_readers()` bundle through `asyncio.to_thread`, and fails naming the
+container and the thread. It carries its own negative control, and that control
+was WATCHED GOING RED against a live read injected into a real reader before it
+shipped.
+
+**THE FILE DRAWER'S TREE SCAN WAS THE SAME DEFECT ON A SECOND PATH, AND IT
+WAS NOT A SUBPROCESS OR A SQLITE PROBLEM.** `GET /config-files/tree` was an
+`async def` calling `config_files.list_tree` directly, a recursive filesystem
+walk, so opening the file drawer stalled every terminal in the app for the
+length of the walk. The cost is `stat` SYSCALLS and nothing else: measured
+2026-09-10 against this repository's own working directory, **1621 nodes,
+6501 `stat` calls against 93 directory reads** - about four `stat`s per node,
+because `_build_node` asked `is_dir()` three times and the sort key asked
+`is_file()` once. Against `~/.claude`: 1112 nodes, 4551 `stat`s. Warm wall
+time 264 to 477 ms per open. **A subprocess count or a connection count would
+have passed before the fix and proved nothing**, which is the sibling
+listing's lesson applied in the other direction.
+
+The fix is two halves and the ORDER matters. First
+`await asyncio.to_thread(config_files.list_subtree, ...)`, which is what
+actually stops the stall; second an optional `depth`, so the levels nobody
+expands are never walked. Interleaved A/B in one process, so the same load
+hit both arms: the walk ON the loop stalled a concurrent coroutine for
+**372.8 ms p50, tracking its own 374.1 ms wall time almost exactly** - the
+handler's duration IS the stall - while in a thread the same walk's wall time
+was unchanged and the stall fell to **101.5 ms p50 against a 50.0 ms idle
+control on a box at load average 33**, no longer tracking the wall time at
+all. THE RESIDUAL IS NOT SETTLED: that box was heavily contended and the
+control's own noise floor is half the post-fix figure, so re-measure on a
+quiet machine before quoting 101.5 ms as this path's cost.
+
+The second half is measured in SYSCALLS, which do not care what else the box
+is doing. One open of the drawer, both roots: **8363 `stat` calls and 365
+directory reads before, 245 and 2 after**, a 34x reduction, because a client
+sending `depth=1` never asks for a level nobody expanded. Expanding five
+directories by hand still costs only **1667**, 20 percent of what a single
+open used to cost unconditionally. The offload removed the STALL and the
+shallow read removed the WORK: shipping only the second would still block the
+loop for whatever the shallow read costs, which is why that order is the one
+the issue specified.
+
+**`children_loaded` IS THE THREE-OUTCOME RULE REACHING `children`.** An empty
+`children` list used to mean BOTH "read, genuinely empty" AND "stopped at the
+depth cap" - a conflation that predates shallow reads and that shallow reads
+would have made routine. `TreeNode.children_loaded` is True only when the
+directory was actually enumerated, and a client tests `=== false`, never
+falsiness, so a server that omits the field reads as loaded and an old client
+sending no `depth` still gets the whole tree. **CONTAINMENT IS RE-CHECKED ON
+EVERY EXPANSION**, through the same `resolve_safe_path` that `read_file` uses:
+component-wise `Path.relative_to` after `resolve()`, never a string prefix,
+so `/Users/jsugamelevil` is not inside `/Users/jsugamele`. That makes a
+per-level read STRICTER than the recursive walk, which descends through a
+symlink without re-resolving it. See `src/core/config_files_tree_request.py`
+(the pure request rules), `client/js/config-editor-lazy.js` (the expansion and
+its three outcomes) and `tests/test_config_files_shallow.py`, whose
+loop-blocking test is STRUCTURAL rather than timed - a stand-in walk parks
+until a coroutine beside it releases it, so it can only pass off the loop and
+cannot flake on load - and which carries the negative control proving that
+harness detects a walk that IS on the loop.
 
 **A SECOND SUBPROCESS MUST NEVER ASK WHAT THE BULK ROW ALREADY SAYS, BUT ONLY
 THE POSITIVE HALF OF THAT ROW IS EVIDENCE.** `backend.is_alive()` is
@@ -1250,18 +2083,44 @@ hook would pay one connection to answer nobody. `hooks_seen` is a
 NECESSARY condition and not a sufficient one, so that gate may over-include
 and must never under-include.
 
-**FOUR PER-ROW READERS REMAIN ON THIS PASS AND ARE DELIBERATELY NOT
-FOLDED IN.** Measured and attributed by caller, 19 sessions:
-`_restored_activity_state` 19, `_identity_for_live_name` 19,
-`_label_for_tmux_name` 19, `_owned_instances_from_db` 19. Every one is
-NAME-KEYED with a recency rule ("the newest instance of this name") while
-the index is keyed on the full instance triple, so answering them from it
-would be a silent behaviour change in the duplicate-name case nobody
-looks at. Closing them means giving them the epoch the pass already holds,
-or a second name-keyed bulk read; that is real work and was not done here.
-`tests/test_listing_pass_datastore_cost.py` pins the ceiling at `4N + 2`
-and its failure message names WHICH reader grew - **raising that bound is
-re-introducing the defect with the alarm switched off.**
+**FOUR PER-ROW READERS REMAIN ON THIS PASS AND ARE STILL DELIBERATELY NOT
+FOLDED IN; THREE OF THEM MOVED OFF THE LOOP INSTEAD.** Measured and
+attributed by caller, 19 sessions: `_restored_activity_state` 19,
+`_identity_for_live_name` 19, `_label_for_tmux_name` 19,
+`_owned_instances_from_db` 19. Every one is NAME-KEYED with a recency rule
+("the newest instance of this name") while the index is keyed on the full
+instance triple, so answering them from it would be a silent behaviour
+change in the duplicate-name case nobody looks at. THAT IS STILL TRUE and
+nothing was folded in. What changed is WHERE the first three run: they are
+the body of `build_listing_prefetch`, called once per name in the gather
+thread, with the same queries and the same selection rules, so it is a
+change of where the work happens and never of what it answers.
+
+**THE FOURTH, OWNERSHIP, STAYS ON THE LOOP, AND AN ADOPTION IS THE REASON.**
+`is_owned_tmux_name` is a two-rung ladder, the in-memory
+`owned_tmux_sessions` set then the datastore, and an ADOPTION MOVES ONLY THE
+DATASTORE - `adopt_external_session` says so in its own docstring, and the
+only three `.add` sites are the boot backfill, create and rename. So the
+datastore is exactly the rung an adoption lands on, and it is the rung a
+prefetch would freeze. Freeing the loop is what makes an adoption able to
+land WHILE the gather runs at all, so prefetching this one would drop
+`created_by_cloude` off a freshly adopted row for a whole poll cycle - the
+threading change would have INTRODUCED that race. It cost 4 of the pass's 17
+datastore opens at 4 sessions, so the other three carry the clear majority of
+the saving, and leaving it on the loop makes the staleness question GONE
+rather than documented. A test that faked the adoption by calling
+`owned_tmux_sessions.add` was green while vouching for nothing, and is
+replaced by one driving the DATASTORE rung through a real pass.
+
+`tests/test_listing_pass_datastore_cost.py` pins the ceiling at the EXACT
+measured `4N + 1` with NO headroom, re-measured 2026-09-11 over three
+consecutive runs, and its failure message names WHICH reader grew. The spare
+open it used to carry meant the alarm was simply off while the pass sat under
+the bound. **Raising that bound is re-introducing the defect with the alarm
+switched off.** Note what it does and does not measure: it counts
+CONNECTIONS, which stopped being the same thing as STALLS the moment 13 of
+the 17 moved into a thread. `tests/test_listing_off_the_loop.py` is the file
+that proves WHERE they run.
 
 **THE PERMISSION VERIFY WAS CHECKED AND ITS GATE WAS ALREADY RIGHT, WHICH
 IS WORTH KEEPING BECAUSE THE OBVIOUS READ WAS WRONG.**
@@ -1305,6 +2164,93 @@ reproduces the PRE-FIX rule inline so the file fails if the old behaviour
 returns rather than only checking that a keyword argument exists. Its
 positive control is load-bearing: a backend on the listing's own socket
 must still skip its probe, or a fix that refused everything would pass.
+
+**AND THE FAN-OUT UNDER THAT READER IS BOUNDED PER VIEWER, WITH ONE WRITER
+EACH.** This sits DOWNSTREAM of the kqueue reader and changes nothing about
+it: the backstop, the `_pending_data` latch and the one-Future-plus-one-timer
+wait are untouched. What changed is what happens to a chunk once the reader
+has it. `_make_output_handler` did `await queue.put(encoded)` into an
+`asyncio.Queue()` with NO maxsize, once per subscriber - and a queue with no
+maxsize never blocks on put, so the defect never announced itself. It simply
+GREW: this process held every byte a stopped browser had not read, for as long
+as it did not read them, and the failure landed on the whole server rather
+than on the one client that caused it. Measured on this tree, 5000 chunks of
+8192 bytes fanned to three stalled viewers: **156.3 MiB held and still
+climbing, against 8.0 MiB after**, with the overflow declared at chunk 256.
+
+| Piece | File |
+|---|---|
+| The bounded queue and the named overflow, shared with `/ws/events` | `src/core/bounded_stream.py` |
+| The viewer's bound, its frame kinds and the offer helpers | `src/core/viewer_fanout.py` |
+| The one writer, the feeders, and the broadcast seam | `src/api/websocket.py` |
+
+**THE HANDLER IS SYNCHRONOUS NOW, AND THAT IS THE CLAIM.**
+`TmuxBackend._emit_output` awaits whatever `on_output` returns, so a coroutine
+there puts the tail loop one await away from a browser's queue. `offer` is a
+plain call that admits or refuses; a bounded `asyncio.Queue` would have been
+the obvious change and would have been exactly wrong, because `await
+queue.put` on a full queue IS the backpressure into the source that the bound
+exists to prevent. The accounting costs **p50 0.83 us to 1.46 us per chunk for
+three viewers**, next to the **9.58 us** the base64 encode of that same chunk
+already costs once - so it is real, it is stated, and it is noise at this
+scale.
+
+**THE BOUND IS 4 MiB OR 256 CHUNKS, AND THE CHUNK COUNT IS WHAT FIRES.** The
+tail loop reads at most 8192 bytes per `os.read`, which base64 inflates to
+10,924 characters, so 256 chunks is about 2.8 MiB - inside the byte budget,
+which is therefore the BACKSTOP for a future larger read rather than the
+operative bound. 4 MiB is the same number `client/js/terminal-write-queue.js`
+uses, deliberately: one number in the system beats two separately tuned ones.
+
+**AN OVERFLOW DISCONNECTS; IT NEVER TRUNCATES.** You cannot fix a slow viewer
+by dropping bytes. Escape sequences span chunk boundaries, so a terminal handed
+half a sequence does not lose one cell - it leaves the VT parser wrong for
+everything after it, until something resets. So the only safe response is to
+stop that viewer and have it recapture, which the client already knows how to
+do: a reconnect re-runs `paint_on_attach`. The close code is **4429**, an
+APPLICATION code rather than 1013 so the client can tell "you fell behind"
+apart from "the server went away"; it is declared once in `bounded_stream.py`
+and the event channel imports the same number. It lands on the reconnect
+policy's existing `retry_same_id` branch and spends no retry budget, because
+the socket had opened. **STILL OPEN**: that branch shows the reconnect notice
+and waits one backoff step, so the recovery is correct but not yet invisible.
+Giving 4429 a silent branch means a new branch in `_scheduleRecovery`, and
+`client/js/terminal.js` is at 2761 lines against a 2765 guard that must not be
+raised for convenience.
+
+**ONE WRITER PER VIEWER IS A CORRECTNESS CLAIM, NOT TIDINESS.** Two coroutines
+awaiting `send` on one websocket interleave frames, and the result is a
+corrupted stream rather than an exception - nothing in the system reports it.
+This endpoint had FOUR concurrent senders (the pty stream, the log stream, the
+local-server stream, and the receive loop's own pong and error replies) plus
+`ConnectionManager.broadcast_to_session` reaching in from a toast, a rename or
+a resize. `_drain_viewer` is now the only thing that touches a live socket;
+`_pump_text` takes a stream rather than a websocket so a new message source
+cannot add a sender by copying it, the read loop answers a ping THROUGH the
+stream, and both broadcast methods `_offer` instead of sending. A socket
+registered with no stream is reported UNDELIVERABLE rather than sent to
+directly - that fallback is the second writer coming back through the door
+this closes. The handshake's own sends (the welcome, the dimension request,
+`paint_on_attach`) are sequential in one coroutine ABOVE the `create_task`
+block and are pinned there by `tests/test_viewer_fanout.py`.
+
+**AND THE "IS THIS A VIEWER OUTBOX" TEST IS STRUCTURAL, NOT `isinstance`.**
+Measured rather than theorised: it shipped as
+`isinstance(candidate, BoundedStream)`, which is an identity test against a
+class imported BY VALUE, and it answered False inside a full suite run the
+moment the process held two class objects for one module name - a stream
+built from one binding measured against the other, both reporting
+`__module__ == 'src.core.bounded_stream'`. It fails SILENTLY and in the
+worst direction: `_close_viewer_stream` stops closing, so every writer task
+stays parked in `get()` until its socket dies, and every broadcast reports
+its viewer undeliverable. `is_viewer_stream` now asks for the three
+attributes the callers actually use, which no `asyncio.Queue` has and which
+depend on no module identity.
+
+**TEXT AND BYTES SHARE THE VIEWER'S ONE BUDGET.** A second unbounded lane for
+log and toast frames beside the bounded byte lane would leave the bound saying
+nothing about the memory actually held, and a viewer that is not reading is
+not reading any of it.
 
 **THE PIPE READER WAKES ON THE APPEND NOW, AND THE 20ms IS A BACKSTOP.**
 `TmuxBackend._tail_loop` used to `asyncio.sleep(0.02)` on every empty read, which
@@ -1559,21 +2505,47 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-10 on `release/1.2.1` with `-p no:randomly`, is
-  **5656 passed / 2 failed / 19 skipped**. The same worktree read
+  2026-09-10 on `docs/6-meta-cluster` off `51f3489` with `-p no:randomly`,
+  is **5758 passed / 0 failed / 18 skipped**, and ZERO FAILED IS THE NEW
+  NUMBER TO HOLD: the two this file used to call permanently environmental
+  were diagnosed and fixed on that branch (see below), so a failure here is
+  now a real signal rather than one you are meant to recognise and ignore.
+  The reading before it was
+  **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`. The same worktree read
   **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
   **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
   this round added 15, with no new failures at either step. Note the SKIP COUNT MOVES BY ONE between
   runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
   22 is not a test that stopped being measured; the skip REASONS are what
-  to read, and `-p no:randomly` pins it at 21. Two failures remain, both environmental
-  and pre-existing:
+  to read, and `-p no:randomly` pins it at 21. Two failures this file used to name as
+  permanently environmental are FIXED as of 2026-09-10, by diagnosis rather
+  than by a skip, and the precondition behind each is written down because
+  nobody had ever recorded it:
+  `test_version_probe.py::test_current_version_empty_when_unresolvable`
+  asserts a directory with no version source resolves to `""`, and
+  `CLOUDE_APP_VERSION` is rung 1 of `resolve_version` and IGNORES the
+  directory entirely. It is exported in the developer's own shell, so the
+  test failed locally with `assert '0.8.1' == ''` and passed in CI, where
+  nothing exports it. It now clears the variable for that one test, and a
+  new test asserts the override outranks the directory so the rung has
+  coverage instead of being a trap.
+  `test_nuke_sandbox.py::test_dry_run_deletes_nothing` asserts a `--dry-run`
+  leaves the sandbox manifest bit-identical; `nuke.sh` falls through to the
+  `python3` on PATH, and when THAT interpreter lives inside a read-only
+  bundle CPython redirects bytecode caching to
+  `$HOME/Library/Caches/com.apple.python/...`, where HOME is the sandbox. The
+  dry run deleted nothing and still grew the manifest by 49 directories. On
+  this box `/usr/bin/python3` is the Xcode-bundled Python 3.9, which is
+  exactly that case; CI uses `actions/setup-python`, which writes
+  `__pycache__` beside the source. The fixture sets
+  `PYTHONDONTWRITEBYTECODE=1`, suppressing only `.pyc` writing, so anything
+  `nuke.sh` itself creates in HOME is still measured.
   `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
-  and `test_version_probe.py::test_current_version_empty_when_unresolvable`.
-  The third this file used to name,
+  and
   `test_state_dir_resolution.py::test_get_state_dir_default_is_never_under_the_system_temp_dir`,
-  now PASSES; it was never fixed on purpose, so treat it as environmental
-  in both directions rather than as a guarantee.
+  which this file also used to name, both PASS. Neither was fixed on
+  purpose, so treat them as environmental in both directions rather than as
+  a guarantee.
   A CHECKOUT WITH NO `config.json` MANUFACTURES A FAKE FAILURE SET, and it
   is a big one: 19 failed plus 26 errored in a fresh `git worktree`, every
   one of them an app that could not start (401s from the test client,
@@ -1599,14 +2571,58 @@ per server process and no subprocess at all.
   minutes apart) - it drives the real `cloude` tmux socket, which is the
   same class of flakiness INFRA-49 already names. A lone failure there
   without a code change behind it is not a new regression; re-run before
-  chasing it. Node: **197 tracked suites, all 197 passing** (re-counted
+  chasing it. **THAT GROUP HAS A NAME NOW: the `real_tmux` marker**, 115 of
+  the 5776 collected tests, so `-m "not real_tmux"` gives a fast local loop
+  and `-m real_tmux` runs the contended group on its own, more than once,
+  because one pass proves nothing about a flake. It is applied
+  AUTOMATICALLY by `tests/conftest.py`, derived from the module importing
+  `tests/socket_guard.py` or the test requesting the `tmux_test_socket`
+  fixture, never hand-written on a test - a hand-kept list is wrong the
+  first time somebody adds a test without knowing the list exists. It
+  deliberately OVER-includes: marking a fast test costs a little coverage
+  in a loop that was never a full verification anyway, while missing a
+  real-tmux test puts a load-sensitive flake back into the fast loop. It
+  adds no skip, changes no timeout and touches no assertion, so a plain
+  `pytest` run collects and runs exactly what it did before, and
+  `-m "not real_tmux"` IS NOT A VERIFICATION RUN. No timeout was raised to
+  fix a flake: a timeout long enough never to flake is also long enough to
+  hide a real hang. See `docs/ci.md`. Node: **197 tracked suites, all 197 passing** (re-counted
   2026-09-09 at the 1.2 merge; v1.1 alone had 193, of which 2 failed).
   `test_archive_full_page_mode.node.mjs`, the one long-standing node
-  failure this file used to name, is FIXED and now passes. The piped-stdin CLI helper for
+  failure this file used to name, is FIXED and now passes. Re-measured
+  2026-09-10 on the navigation-token branch: **206 tracked suites, all
+  206 passing**, against 202 on its base commit in the same worktree -
+  four added, no new failures. Note `test_terminal_layout.node.mjs`
+  flaked ONCE in that base run and passed in isolation seconds later on
+  the same tree, so a lone failure there without a code change is not a
+  regression; re-run before chasing it. The piped-stdin CLI helper for
   the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
   exits non-zero when run with no input - which is what it used to be
   reported as, from `tests/led_state_for.node.mjs`, before the move.
+- **CI IS SWITCHED OFF, ON PURPOSE, AND YOUR LOCAL RUN IS THE ONLY EVIDENCE
+  THERE IS.** The owner's ruling, 2026-09-10, verbatim: "P25 - kill the CI".
+  Three workflows on `Adoom666/CloudeCodeDev` are `disabled_manually` -
+  `tests`, `secret scan` and `release`. `Claude Code Review` and `Claude Code`
+  are still active, because they are the review bot rather than CI.
+  **NO TEST WAS FAILING AND NO TEST WAS REMOVED.** Every run from
+  2026-09-10T13:47Z was refused BEFORE STARTING with "recent account payments
+  have failed or your spending limit needs to be increased": twelve
+  consecutive red runs, two workflows, four jobs each, none of which ever
+  executed, which is why `gh run view --log-failed` answers `log not found`.
+  **A check that could not run is not a check that failed**, the same
+  distinction as `StatusMap.complete`, the recreate gate's `gone` versus
+  `unknown`, and `db_integrity`'s `cannot_determine` versus `failed`. GitHub
+  renders both as a red X and emails both, so a human has to draw it.
+  The consequence, said plainly: `2b1fcb98` is the last commit CI ever tested,
+  everything after it including the v1.2.1 merge has never been through it,
+  and **nothing you write today will be checked by anything but you.** Run the
+  python suite and the node suites yourself, and say in the PR which ones you
+  actually ran. The workflow FILES are untouched, so reversing this is
+  `gh workflow enable <name> -R Adoom666/CloudeCodeDev` per workflow once the
+  billing is settled. Do not delete, `continue-on-error` or otherwise green a
+  workflow to quiet the board; that replaces a true "unknown" with a false
+  "passed". Details and the re-enable commands are in `docs/ci.md`.
 - **`CLOUDE_REAL_HOOK_TESTS=1` opts in to `tests/test_led_real_hooks.py`**, which
   launches a REAL `claude` in a throwaway tmux socket and asserts the status LED
   against hooks it actually fired. It is off by default because it spends real
@@ -2024,6 +3040,65 @@ directory is fine; a non-empty one refuses.
 directory since it shipped (`web/src/lib/launchpad/CloneModal.svelte`,
 `modal-clone-parent`; it was `launchpad.js` until slice 6).
 
+## A session's theme, and the two stores that hold one
+
+There are TWO durable theme stores and they are keyed on different
+things. `pinned_themes.json` (`Settings.get_pinned_themes_path`) is keyed
+on the bare tmux NAME and records a theme the user pinned to ONE session.
+`<working_dir>/.cc.theme` is keyed on the DIRECTORY and records the
+default a PROJECT carries, which is what gives a checkout its colours
+before any session exists and the only one of the two a user can commit.
+Both are wanted; neither may silently override the other.
+
+| Piece | File |
+|---|---|
+| The ladder, pure | `src/core/session_theme_resolution.py` |
+| Both stores, and the ladder's one caller | `src/core/session_manager.py` (`resolve_project_theme`) |
+| `PATCH /sessions/{name}/theme` | `src/api/routes.py` (`_apply_session_theme`) |
+| Painting it, client side | `client/js/theme-navigation.js` (`applyForTarget`) |
+
+**THE PIN WINS, AND IT SHIPPED THE OTHER WAY ROUND UNTIL 2026-09-10.**
+`resolve_project_theme` read the dotfile FIRST, so the three paths that
+seed `Session.pinned_theme` - create, adopt and the boot re-adopt - each
+threw away a pin that was sitting on disk the whole time. A pinned theme
+did not survive a server restart, and two sessions running out of one
+repo folder (routine on this box) could never hold two different themes.
+The rule is the one `session_agent_evidence` already states: a value
+written ABOUT this session outranks a value written about the place it
+happens to live. A default that beats an explicit choice is not a
+default, it is an override.
+
+**AND THE READ ORDER IS ONLY HALF OF IT. THE PATCH USED TO WRITE BOTH
+STORES.** That is the mechanism by which pinning session B rethemed
+session A: the dotfile is folder-wide, so a per-session control was
+writing a shared value. The theme PATCH now writes the pin alone, and
+`migrate_pinned_theme_to_dotfile` is GONE for the same reason - it
+ferried one session's pin into the folder-wide file, and its original
+job (carrying a v0.6.x pin forward) is moot once the pin store is read
+first. Setting a project default is a separate, deliberate act through
+`set_project_theme`, and it has no UI control yet, which is a known gap
+rather than an oversight.
+
+**A PIN NOW OUTLIVES ITS TMUX SESSION, which is a policy change that came
+with the read order.** The `_lifespan_tmux_reconcile` pass used to drop
+every `pinned_themes` entry absent from the live listing. That was free
+while the map was a decaying fallback and is DATA LOSS now it is the
+durable record: this app re-mints tmux names from project slugs, so the
+name is coming back, and the entry only ever exists because a human
+picked a colour. `discard_pinned_theme` on the explicit close is the one
+removal path. Note the asymmetry with the OWNERSHIP prune in the same
+pass, which stays: an ownership record claims a session is running, so a
+measured zero contradicts it; a pin claims only what to paint if the name
+returns, which a measured zero does not contradict at all.
+
+`_save_pinned_themes` takes a `.bak` of the pre-write bytes first, like
+`Settings.update_settings_config`. `_load_pinned_themes` starts from an
+EMPTY map when it cannot parse the file, so without that backup one
+corrupt read plus one pin would write the empty map over every pin the
+user has. No migration was needed for the inversion and nobody's screen
+changed colour on upgrade: an existing dotfile was written by a PATCH
+that wrote both stores, so the pin map already held the same value.
+
 ## The status lights, and what they are allowed to claim
 
 Full model in `docs/session-status.md`. The eight states are `working`,
@@ -2300,11 +3375,23 @@ vocabulary but is GALLERY-ONLY - no live endpoint is meant to carry a
 dead row to the client. A round that read the same measurement as a bug
 and made a husk KEEP its row, painted dead, was overruled and reverted
 (`ba2aa5d`), and `tests/test_led_real_hooks.py` holds the line against a
-real killed pane. STILL OPEN: `remain-on-exit` keeps the husk's tmux
-session in the listing, and `session_lifecycle` reaps on ABSENCE from
-that listing, so the row leaves the live list without yet arriving in
-Recent. Closing that needs a reaper rung keyed on a MEASURED
-`#{pane_dead}`, which is a new durable writer and its own change.
+real killed pane. CLOSED 2026-09-10: `remain-on-exit` keeps the husk's
+tmux session in the listing, and `session_lifecycle` reaps on ABSENCE
+from that listing, so the row used to leave the live list without ever
+arriving in Recent. `src/core/session_pane_death.py` is the second reaper
+rung, keyed on a MEASURED `#{pane_dead}` of exactly `"1"` read out of the
+COMPLETE `list-panes -a` the launcher pass already pays for, on the
+socket the reconcile is about, for a row whose creation epoch matches -
+no listing, a partial one, a socket mismatch, an unreadable field or a
+re-minted name all answer `unknown` and reap nothing, because refusing is
+free and one wrong reap costs a live session. It ADDS NO TMUX CALL: the
+pane probe was already being taken a few lines below and is simply taken
+before the reaper instead. It writes the SAME FOUR COLUMNS as the absence
+rung and differs only in `lifecycle_source`, which is `pane_dead` rather
+than `tmux_missing`. STILL OPEN: the tmux HUSK is deliberately NOT
+killed, so the dead session keeps its name and the next session for that
+project is still uniquified to `<name>-2`; freeing the name means killing
+a tmux session, which needs the owner's explicit yes.
 
 **A VIEW CLEARS AN OPEN `permission`, AND AN OPEN ONE IS VERIFIED
 AGAINST THE PANE AFTER 20 SECONDS.** Measured 2026-09-09,
@@ -2321,6 +3408,27 @@ keeps, marker absent clears and logs `permission_flag_cleared_no_dialog`,
 an UNREADABLE tail keeps, and the markers were read off two real dialogs
 (`Do you want to ...?`, `❯ 1. Yes`, `Esc to cancel · Tab to amend`)
 rather than guessed. See `src/core/session_permission_verify{,_apply}.py`.
+
+**AND A PANE THAT IS GONE CLEARS IT TOO, BUT ONLY ON A READING THAT
+ACTUALLY HAPPENED.** A claim left open at the instant its pane died could
+never be retired - no `capture-pane` can run against a corpse - so
+`_session_info_for`'s `LIVENESS_GONE` arm clears it with no capture at
+all, on the way to dropping the row. The trap is that
+`resolve_listing_liveness` answers `gone` by TWO roads and only one is a
+measurement: a COMPLETE listing from the backend's OWN socket naming the
+session and reporting `#{pane_dead}` dead, or a falsy `exists`, which for
+tmux came from `is_alive()` and therefore returns the same False for "no
+such session" as for "tmux is missing, timed out, or errored". Only the
+first passes `pane_alive=False`; the second passes `None`, which the seam
+treats as no reading and which KEEPS the flag. The asymmetry is not
+fussiness: the dropped row beside it self-heals on the very next poll,
+while a cleared flag is reopened by nothing short of a brand new
+`PermissionRequest`, so one timed-out probe would silently retire a
+dialog the user never answered. `session_pane_death.pane_death` states
+the same discipline for the REAPER and is deliberately not reused here,
+because it requires the STORED row's `tmux_created_epoch` and this pass
+holds no trustworthy one; `listing_proves_alive`, already computed on the
+line above for `exists`, is the rule that IS reused.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an
@@ -2405,9 +3513,12 @@ a browser never runs for an unpainted tab, suspending
 `onclose`, so no reconnect rung fires either: the terminal sat on
 "Connecting to terminal..." for 35 minutes and resumed the instant the
 tab was painted. THERE WERE THREE such waits, not one - the sidebar
-rejoin and the adopt path each carry their own, ABOVE the
-`setTimeout(..., 500)` that schedules the connect, so fixing only the
-first changed nothing and only a live re-check found that.
+rejoin and the adopt path each carry their own, ABOVE what was then a
+`setTimeout(..., 500)` scheduling the connect (that delay is gone; see
+"The connect is measured, not slept" below), so fixing only the first
+changed nothing and only a live re-check found that. A FOURTH was found
+in `launchpad.js`'s `_returnToActiveRunningSession` and closed the same
+way; the session fetch and the terminal entry both sit below it.
 `client/js/terminal-layout-wait.js` races every wait against a timer - a
 layout wait may DELAY a connect, never CANCEL one - and
 `tests/test_terminal_layout_wait.node.mjs` fails the build if a bare rAF
@@ -2693,6 +3804,57 @@ cannot verify a migration without a record of what the data was, and that is
 the step everyone skips. `./scripts/upgrade-verify.sh` exits 2 when a check
 could not be evaluated; 2 is not 0.
 
+## Refreshing the local install on a new version
+
+Adam's rule: every time there is a new version, his local copy gets
+refreshed to it, so he is always running the latest code. Write down the
+mechanics, because every one of them is a way the refresh silently does
+not happen, and each has already cost time on this machine.
+
+**There are two launch modes and they rsync from different places.** The
+packaged app (`/Applications/Cloude Code.app`) rsyncs from the bundle's own
+`Contents/Resources`, so launching it REVERTS any unreleased repo change.
+Dev mode (`npm start` / `electron .` from `macOS/`) rsyncs from the REPO
+ROOT instead. Both write into the same derived copy, at
+`~/Library/Application Support/cloude-code-menubar/server/`, which is what
+the server actually executes - so the launch mode is what decides which
+code Adam ends up running, and the two can drift apart for a long time
+with nothing on screen saying so. Measured 2026-09-10: the installed
+bundle read version 1.0.33 while `macOS/package.json` already said 1.2.1,
+and the gap was invisible because Adam was running dev mode off the repo.
+
+**The version lives in exactly one place, `macOS/package.json`.** There is
+no root `package.json` and no second version literal to grep for. The web
+client's own version comes from a `{{VERSION}}` token that `src/main.py`
+substitutes at serve time, via `src/core/version.py::resolve_version()`.
+
+**A refresh is kill, relaunch, verify, in that order, or it only looks like
+one.**
+- macOS has no `setsid`. `setsid nohup npm start &` fails with "command not
+  found" and starts nothing while reading as success. Use
+  `nohup npm start > /tmp/cloude-menubar.log 2>&1 & disown` instead.
+- Killing Electron does not kill its Python child. The old server keeps its
+  port and keeps serving the OLD code, a health check on that port still
+  answers 200, and it reads as a successful deploy of nothing. Kill both
+  processes and confirm the port is free before relaunching.
+- Verify against the DERIVED copy, never the repo, and never trust a
+  matching timestamp as proof: rsync PRESERVES MTIME, so the file dates
+  lining up proves nothing about whether a fresh sync happened. Grep the
+  derived file for the actual code change instead.
+
+**Sessions survive this by design**, because they live on the dedicated
+`tmux -L cloude` socket, not inside the Electron/Python process being
+restarted. A refresh is safe to do with live work in progress, and
+`tmux -L cloude list-sessions` reporting the same session count before and
+after is one of the checks that proves the restart did not touch them.
+
+A refresh is not done until all four of these are true: the port answers,
+the derived copy at
+`~/Library/Application Support/cloude-code-menubar/server/` contains the
+new code (grepped, not timestamp-checked), `tmux -L cloude list-sessions`
+reports an unchanged session count, and the reported version matches
+`macOS/package.json`.
+
 ## Imported conversations
 
 `scripts/import_transcript_sessions.py` gives every real Claude Code
@@ -2857,6 +4019,7 @@ tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
 
+<<<<<<< HEAD
 ## The string layer, and the one catalog rule
 
 Every user-visible string comes from ONE catalog that BOTH clients read. Full
@@ -2942,6 +4105,392 @@ checks, but **a literal interpolated INTO another message passes the span check*
 because the outer message wraps it, and is caught only by the count assertion
 and the source scan. `PORTED_FILES` in that test is the list a slice APPENDS TO;
 a file not on it is not covered.
+=======
+## One navigation generation, and what a completion is allowed to write
+
+**A COMPLETION MAY ONLY WRITE TO SHARED UI STATE WHILE ITS NAVIGATION IS
+CURRENT.** `client/js/navigation-generation.js` is the whole mechanism: a
+monotonic counter, `begin(target)` / `current()` / `isCurrent(token)` /
+`keep(token, what)`, no dependencies, loaded first in `index.html`. Every
+entry path captures a token SYNCHRONOUSLY at the user gesture, before its
+first await, and checks it immediately before the write it cannot take
+back. A stale token DISCARDS, silently, with a debug log - never a retry,
+never an error, and never `Router.rejectTarget()`'s banner, which means
+"this URL names nothing" and not "you went somewhere else".
+
+**A COUNTER, NOT A TARGET IDENTITY.** Click a session, click away, click
+back: comparing session ids lets the FIRST click's in-flight work satisfy
+the third, and the screen it would paint into was torn down in between.
+`tests/test_navigation_generation.node.mjs` drives that exact sequence
+against the shipped sidebar module.
+
+**THE ENTRY PATHS ARE PROVABLY ALL OF THEM, because two functions are the
+choke point.** `TerminalController.connectToSession` and
+`reconnectToExistingSession` have EXACTLY ONE caller each -
+`App.showTerminal` and `App.returnToExistingTerminal` - so the complete
+set of ways into a session is the callers of those two plus the screen
+changes that leave one. Six declare an intent: the conversation sidebar's
+`activateRow`, the launcher's `_returnToActiveRunningSession`, the five
+launchpad gestures that dispatch `session-created`
+(`_handleAttachRunningSession`, `createConsoleSession`,
+`_createNewSessionInner`, `connectToExistingSession`, `selectProject`),
+`SessionRestartReturn.reopen`, `ToastNavigate.go`, and the router's
+`deliverTargetToLaunchpad`. `App.showLaunchpad` and `App.showAuth` begin
+one too, because LEAVING a session is a navigation and is the half that
+is easy to forget - but ONLY when `currentScreen` is already set. A BOOT
+PAINT IS NOT A NAVIGATION: `Router.init()` runs while `App.init()` is
+still awaiting `verifyToken()`, so on a cold load of `/session/<name>`
+the router has already declared the deep link's intent and
+`openProjectByName` is already resolving it by the time App paints the
+launcher, and an unconditional bump there would supersede the very target
+the user typed.
+
+**THE TWO `App` ENTRIES READ THE GENERATION AND NEVER BEGIN ONE, and the
+asymmetry is the design.** Bumping the counter inside `showTerminal`
+would let a caller that ALREADY lost the race mint itself a fresh win a
+few awaits later. The five `session-created` dispatchers carry their
+token in `detail.nav` and `app.js`'s ONE listener is the only thing that
+checks it, so a seventh dispatcher cannot invent a different rule; a
+dispatcher carrying no token falls through to `showTerminal`'s own read,
+which is exactly the pre-existing behaviour.
+
+**NOT ON A SYNCHRONOUS PATH.** A check between a gesture and a write with
+no await between them costs a comparison, buys nothing, and tells the next
+reader there was a race where there was none. That is why
+`ThemeNavigation.applyForTarget()` takes no token: it is synchronous, and
+the staleness it could suffer is its CALLER's, guarded at the top of
+`showTerminal` / `returnToExistingTerminal`. The themes registry's own
+replay gate (`6f79e90`) is untouched and deliberately re-resolves on drain
+rather than replaying a captured id.
+
+**THE TERMINAL RECORDS THE TOKEN IT BOUND UNDER**, as `_navToken`, and
+`_navCurrent(what)` is the one predicate every deferred action in that
+file asks. It gates the connect on both entry paths through
+`_connectWhenReady` - a session switch landing before the socket opens
+must not let the older connect open one the newer then has to abandon
+mid-handshake - and it is the definition of "old" for the write queue and
+the reconnect scheduler below. A missing module answers TRUE: the token is
+a correctness guard, never a dependency, and a load-order accident must
+not stop the terminal working.
+
+**AND THE INPUT DIRECTION IS THE SAME RULE, ONE LAYER DOWN.**
+`bd9a2b2` and `terminal-frame-guard.js` keep one session's OUTPUT out of
+another's terminal. `client/js/terminal-input-ownership.js` is the INPUT
+half, which is worse: output in the wrong pane is confusing, input in the
+wrong pane RUNS A COMMAND. The unambiguous case was the file paste -
+`terminal.js` intercepts it, uploads the blob and inserts the returned
+absolute path, and nothing between those two checked the user was still
+where they started, so an upload finishing after a switch inserted a path
+into a DIFFERENT agent's prompt.
+
+**CLAIM AT THE GESTURE, CHECK AT THE WRITE**, and that is the half that
+is easy to get backwards. `claim()` taken at COMPLETION time reads
+exactly like a check and is a no-op, because by then the session HAS
+changed and the value compared is itself - the same shape as the
+`ensure_pipe_pane` guard whose only exercised caller set the flag it
+checked. Five paths take a ticket, and every one has an await, a network
+round trip, or an open panel between the gesture and the write: the
+desktop paste interceptor, the attach-file picker's `change` handler,
+`pasteFromClipboard`, the paste fallback SHEET (it stands on screen while
+the user finds their clipboard) and the slash commands MODAL (nothing
+closes it on a session switch, so a pick made after one used to run in the
+pane the user left).
+
+**THE KEYBOARD, THE SHIFT+ENTER CHORD, THE D-PAD AND `_writeSynthetic`
+TAKE NONE, deliberately.** There is no await between the key and
+`ws.send`, and the socket is swapped synchronously by the session entry
+paths, so the socket held at the write IS the session's. The copy sheet
+takes none either and that was MEASURED rather than assumed: `CopyOutput`
+reads the xterm buffer and writes the SYSTEM clipboard, and never writes
+into the terminal at all. `tests/test_input_ownership.node.mjs` pins both
+absences, so a later decorative check has to argue with a test.
+
+**A STALE TICKET DROPS AND SAYS SO.** It never queues and never replays -
+the user meant that paste for the session they were in, and delivering it
+later out of context is not better than dropping it. The report goes
+through `Terminal#_showStatusPill`, which routes to `FabMenu.notify`, the
+app's single status-pill path; a seventh toast shape would be the bug.
+`Terminal#insertText(text, ticket)` is the ONE write point for every
+text-shaped path and is the last line of defence, and `injectText` checks
+the ticket BEFORE its "clipboard is empty" and "terminal not connected"
+reports, because those would be misleading answers to "why did my paste
+vanish". A dropped upload also raises no attachment card.
+
+**AND THE WRITE QUEUE IS BOUNDED AND IS RELEASED ON A SWITCH.**
+`Terminal#enqueue` pushed every incoming chunk with no size or count
+limit, and `flush()` re-scheduled itself while the queue had anything in
+it - so bytes that arrived for the OLD session were still being written
+after navigation began, and the `term.reset()` that followed raced a write
+xterm had already accepted. That is the half-cleared screen showing the
+previous session's tail. `client/js/terminal-write-queue.js` is the
+policy; terminal.js keeps the queue.
+
+**THE TWO HALVES OF THE QUEUE ARE DIFFERENT THINGS, and the teardown turns
+on that.** Bytes still in `this.queue` are OURS - nobody has seen them and
+they belong to the outgoing session - so they are discardable. Bytes
+already handed to `term.write()` belong to XTERM, and resetting under an
+accepted write is undefined. So `_releaseQueueForSwitch()` is two steps in
+one order: discard what is ours, then AWAIT the in-flight write's own
+callback, and only then reset. NO TIMER - guessing when a write finished
+is how you reset under one anyway, and if the callback never arrives the
+terminal is being torn down regardless. It runs only when the reconnect
+buffer's plan is not `keep`, because a `keep` is the SAME session and its
+bytes are still its own. `_writeInFlight` is cleared in exactly ONE place,
+inside that callback, and a test counts it: a second clear would let a
+switch wait forever on a resolver nobody calls.
+
+**A BYTE BUDGET, NOT A CHUNK COUNT**, because chunk sizes vary by four
+orders of magnitude between a keystroke echo and a `cat` of a large file.
+`MAX_QUEUED_BYTES` is 4 MiB, the SAME number the server-side viewer queues
+use - one number in the system beats two separately tuned ones - and the
+point of the bound is to make the worst case FINITE, not fast.
+`MARKER_RESERVE` (128 bytes) is held back so the drop marker itself fits
+INSIDE the ceiling; without it the queue lands a marker's worth over on
+every shed, and a bound that does not hold is a number nobody can reason
+from.
+
+**DROP FROM THE FRONT, WHOLE CHUNKS, AND SAY SO.** The newest output is
+what the user is looking at, so shedding the tail would throw away the
+very thing the pressure is producing. Whole chunks because slicing to hit
+the budget exactly would cut an escape sequence in half, which does not
+corrupt one cell - it puts the VT parser into a state that garbles
+everything after. Whole chunks are not a guarantee of alignment either
+(one sequence can straddle two frames), which is exactly why the drop is
+ANNOUNCED: a terminal that silently loses ANSI bytes lies, and that is
+worse than a slow one. `_queuedBytes` is a running total rather than a
+re-sum, so admission is O(1) per chunk instead of growing precisely when
+the queue is longest. The scrollback follow decision is still sampled
+BEFORE the write, where `terminal-scroll.js` put it, and a test pins that
+it did not move.
+
+**AND THE AUTO-RECONNECT LADDER NEVER RECONNECTED, WHICH WAS MEASURED
+BEFORE ANYTHING WAS CHANGED.** `attemptReconnect()` set
+`isReconnecting = true`, charged the budget and scheduled
+`connectWebSocket()`, whose first line was
+`if (this.isReconnecting) { this.stopReconnecting(); return; }` - so the
+retry it had just fired hit that guard, RETURNED without opening a socket,
+and `stopReconnecting()` put the budget back to zero on its way out.
+Driven against the shipped class: one timer, ZERO sockets, budget 0, and
+the user saw `reconnecting, attempt 1 of 5` then silence, not even the
+failure message, because `attemptReconnect()` was never re-entered.
+Present since the initial commit (`a82cb57`). It is why the 4404 and
+outage recoveries were bolted on beside the general mechanism: they call
+`reconnectToExistingSession` directly and never went through it. Full
+model in `docs/reconnect.md`; the rules are in
+`client/js/terminal-reconnect-policy.js`.
+
+**TWO QUESTIONS, TWO COUNTERS, ONE WRITER EACH.** `reconnectAttempts` was
+zeroed in five places and compared in one, and any reset on a path that
+also schedules a retry makes the ceiling unreachable - `stopReconnecting()`
+is called from the exhaustion branch ITSELF, so five failures printed the
+message and handed out five more attempts, forever. It is the BUDGET now
+and `_resetRetryBudget()` is the only thing that zeroes it, for two named
+reasons: initialization success, and a different session being bound
+(which is not a reset of one counter but the start of another's - a fresh
+session must not inherit an exhausted budget). `_attemptsSinceProgress` is
+the BACKOFF and every attempt moves it; one counter for both forced a
+choice between a budget that never fills and a delay that never grows.
+
+**THE BUDGET IS SPENT ONLY BY A MEASURED FAILURE**, the socket never
+opening. An UNKNOWN outcome costs nothing and neither does a pane measured
+`awaiting_startup_prompt`: not having measured a success is not evidence
+of failure, and charging for one gets a healthy session on a slow machine
+declared unreachable. Same asymmetry as `resolve_startup_gate` rung 5
+versus rung 7. The cost, stated rather than hidden: a server that accepts
+and immediately closes is retried forever - but the backoff still reaches
+its 16s ceiling, so it is a slow poll and not a spin, and declaring a
+healthy session dead is the worse failure.
+
+**INITIALIZATION SUCCESS IS THE FIRST BYTES.** The socket opening, the
+dimension handshake completing and the pane sending something are three
+different facts and only the third proves the session is talking - a pane
+on its folder-trust dialog opens a perfectly good socket and says nothing.
+The outcome reuses the server's `ready` / `awaiting_startup_prompt` /
+`unknown` vocabulary rather than inventing a fourth spelling, and `ready`
+still claims only "not blocked on a startup prompt", never "healthy". The
+unreachable message is said ONCE and stays said; `_unreachableReported`
+clears on the same evidence that refills the budget.
+
+**FOUR NAMED BRANCHES, ONE SCHEDULER.** `_scheduleRecovery(closeCode)`
+replaces three guard clauses that sat in front of a mechanism none of them
+ever reached: `refresh_auth` (4401), `re_resolve_by_name` (4404, once per
+episode), `wait_for_server` (an abnormal close `ServerRestartWatch`
+recognises) and `retry_same_id`. And a reconnect carries the navigation
+token: sixteen seconds is ample time to move to another session, so a
+retry stands down rather than opening a socket nobody is looking at.
+`terminal-reconnect-policy.js` is a REAL DEPENDENCY of terminal.js - a
+sandbox without it takes the plain retry for every close, which is how
+`tests/test_restart_reconnect.node.mjs` started failing on a harness gap
+rather than a code change.
+
+## The connect is measured, not slept, and the pane says when it can hear
+
+Four things sat between a click and a usable terminal, and every one of
+them was a guess about time rather than a reading of a condition.
+
+**THE 500 ms BEFORE THE CONNECT WAS WAITING FOR A CSS TRANSITION THAT
+DOES NOT EXIST.** Two unconditional half-second timers scheduled
+`connectWebSocket()`, one on each entry path, and the comment above one
+of them justified it verbatim as giving "the terminal screen transition
+time to settle". There is no such transition. `.screen` swaps on
+`display: none` / `display: flex` (`client/css/styles.css`), and
+`display` is not an animatable property, so the class toggle fires no
+`transitionend` on `#terminal-screen`, on any ancestor or on any
+descendant. Every rule in all 49 stylesheets whose selector can match
+`.screen`, `#terminal-screen`, `.terminal-container` or `#terminal` was
+resolved before this was changed and NONE declares a `transition` or an
+`animation`; the two `body.session-sidebar-pinned .screen` /
+`body.config-drawer-docked .screen` padding rules carry comments saying
+their transitions were deliberately removed so the geometry lands in the
+same frame the class toggles. **A `transitionend`-based readiness gate
+would therefore have waited forever on an event that cannot fire**, which
+is gotcha 9 wearing a different hat, and it was the obvious design.
+
+Nothing server-side needed the delay either: `_register_session` writes
+`sessions[id]` before both the create and the adopt responses are built,
+so a client can never hold an id the WebSocket route's 4404 check cannot
+find, and `pipe-pane` is started inside `TmuxBackend.start()` before that
+same response returns, so an earlier attach cannot miss pane output.
+
+**WHAT IS REAL IS THE MEASUREMENT, AND IT IS NOW ASKED FOR.** The fit
+sequence was `guardedFit`, sleep 50 ms, `guardedFit` again - the second
+attempt existing because the first might have been taken before layout
+settled, which is a real concern answered with a guess.
+`client/js/terminal-readiness.js` retries on `guardedFit`'s own verdict
+instead: stop the instant it is satisfied, give up on a bound, warn and
+connect anyway. Measured deterministically (no server, no browser, so no
+contention): **0.157 ms when the guard is satisfied first try**, against
+the 50 ms that was spent unconditionally; **125 ms when the condition
+clears at 120 ms**, which the old code could not react to at all; and
+**511 ms in the worst case**, because `BOUND_MS` is deliberately the
+500 ms it replaces, so the degraded path costs exactly what shipped. The
+xterm load wait moved into the same module and answers in **0.388 ms**
+when the bundle is already there.
+
+**DO NOT REMOVE THE BOUND.** An unbounded wait for a measurement turns a
+stylesheet that never arrives into a session that never opens, and the
+server's dimension handshake reshapes the pane on the first real paint
+regardless - the same path a rotation already takes. Every wait in that
+module is polled on a TIMER and never on a frame, for gotcha 9's reason.
+
+**`terminal.ready` IS THE ONE POSITIVE STATEMENT THAT THE PANE CAN TAKE
+INPUT, AND THE WINDOW BEFORE IT IS DEAF RATHER THAN SLOW.** The attach
+handshake in `src/api/websocket.py` opens the socket, asks the client for
+its dims, and sits in a receive loop that DISCARDS every binary frame
+arriving before that reply. So "the socket is open" and "the pane can
+hear" have never been the same fact, and nothing on the wire said which
+one you had: a keystroke typed during a connect was destroyed by the
+server with no trace, and one typed before the socket existed was
+destroyed by the client's own `readyState === OPEN` check.
+
+The message is sent ONCE, after the dims handshake, after the settle,
+after `paint_on_attach` and after any configured startup command. Sent
+earlier it would be exactly as useless as no message, and it would look
+like it worked. It is **NEVER WITHHELD** - a startup command that failed
+does not make the pane unable to receive input - so it carries
+`startup_command` (`issued` / `none` / `failed` / `unknown`) rather than
+gating on it, and `flush_pending_terminal_command` returns that word
+instead of `None` because it swallows its own write failures by design.
+`failed` and `none` must never collapse: one means the prompt is bare
+because nothing was asked for, the other because what was asked for did
+not happen.
+
+**IT IS ADDITIVE, AND THAT PROTECTS ONLY ONE DIRECTION.** Nothing waits
+for a reply and nothing is gated on the client having read it, so an old
+client behaves exactly as it did before the message existed. A NEW CLIENT
+AGAINST AN OLD SERVER is the other direction and is the worse failure:
+without a bound it would hold every keystroke forever, a terminal that
+silently accepts no input with nothing on screen saying why. So
+`READY_TIMEOUT_MS` (4 s, armed from the socket OPENING) delivers the held
+batch and falls through to passing input straight on. DELIVERED, not
+dropped - the socket is open and the user typed those bytes for this pane.
+
+**THE PRE-READY BUFFER IS KEYED BY CONNECTION GENERATION, NOT BY SESSION
+ID** (`client/js/terminal-input-buffer.js`). A reconnect to the SAME
+session is a NEW connection, and input typed before a socket dropped must
+not be replayed into the one that replaces it; a session id cannot
+express that and a monotonic counter can. It is deliberately NOT the
+navigation generation, which does not move on a reconnect. No local echo,
+ever: painting held input would show the user text the pane has not
+received, and if the batch is later rejected the terminal is lying about
+a command that never ran.
+
+**64 KiB, AND OVERFLOW REJECTS THE WHOLE UNSENT BATCH**, announced
+exactly once - not the newest, not the oldest, because half a command
+line is a DIFFERENT command the shell will happily run. That is the
+opposite rule from `terminal-write-queue.js`, which sheds its oldest
+chunks and carries on, and the asymmetry is the point: output is a record
+of what already happened, so a gap in it is a gap in a transcript; input
+is an instruction that has not happened yet, so a gap in it is a
+different instruction and no marker makes that safe. An ambiguous
+disconnect DISCARDS and never replays, because re-sending what we cannot
+prove was delivered risks running a command twice.
+
+**THE RESIDUAL COST, SAID OUT LOUD:** a keystroke typed after the dims
+handshake but before `terminal.ready` is now held until the paint, where
+it used to sit in the socket and be processed when `receive_messages`
+started. That is bounded by the attach settle plus one `capture-pane`,
+and it buys back everything typed DURING the handshake, which the server
+was destroying outright.
+
+**AN ISOLATED CHUNK NO LONGER WAITS A FRAME.** `enqueue` scheduled every
+chunk on `requestAnimationFrame`. That frame coalesces a BURST, which is
+real and worth keeping; paying it for a single chunk with nothing to
+coalesce with costs up to a whole frame on the keystroke echo. It now
+writes straight through when no write is outstanding and falls back to
+the frame when one is, so the second chunk of a burst waits and the
+re-schedule merges everything into one `term.write` per frame exactly as
+before. `flush` re-raises `flushing` when it re-schedules, so that flag
+means "scheduled OR in flight" and a chunk arriving in the gap between
+the write callback and its frame cannot write UNDER a flush already on
+its way. `flush` also refuses on a null terminal now: that window existed
+before and was one frame further away.
+
+**ONE OWNER FOR THE MEASUREMENT, ONE FOR THE SHIP.** There were nine
+`fitAddon.fit()` call sites across five files. Every measurement now goes
+through `TerminalMetrics.guardedFit` - including `currentGrid`, whose raw
+fit fed the pane's BIRTH geometry, and the `request_dims` handshake - and
+every ship goes through `TerminalLayout`'s coalescer or one of two
+explicitly named handshake sites. Four raw fits remain and all four are
+named in `tests/test_fit_ownership.node.mjs`: the two inside `guardedFit`,
+which ARE the measurement, and three module-missing fallbacks where an
+unfitted terminal is worse than an unguarded one. That test COUNTS rather
+than times, because a duplicate fit that happens to be fast is still a
+duplicate.
+
+**THE SLASH PALETTE IS NOT A PROPERTY OF THE SOCKET.** Both entry paths
+did `await SlashCommandsModal.init(...)` on the line above the connect,
+and `init` makes two server round trips. `client/js/slash-commands-boot.js`
+starts it and is never awaited; it carries the navigation token, because
+a palette fetched for session A landing after the user is in B would
+populate B's menu with A's agent's commands, and a slash command run in
+the wrong pane RUNS A COMMAND. One fetch per working directory; a failure
+is NOT cached as an answer.
+
+**AND TWO MORE 500 ms TIMERS WERE WAITING FOR SOMETHING THAT HAD ALREADY
+HAPPENED.** `detachAndOpenProject` and `detachAndCreateNew` both slept
+after `await window.API.detachSession()` to "let the server finish
+clearing its backend handles". It already has: `detach_session` awaits
+`detach_current_session`, which awaits the idle watcher's stop and the
+reader task's cancellation before the handler returns, so the response the
+client had already awaited IS the completion signal. Both copies went;
+fixing one of a pair is how the other survives. Each re-open now has its
+own `try`/`catch`, because the timer used to ESCAPE the surrounding block
+and an error in the re-open was an unhandled rejection.
+
+**THE WALL-CLOCK END-TO-END NUMBERS ARE NOT SETTLED.**
+`scripts/perf/run_baseline.py --sessions 1 --quick` was run four times
+either side of this change on a box at load average 11 to 27 with 45
+concurrent agent processes, and `session entry`, `session switch` and
+`launch` are single samples per run there: they spanned 763 ms to
+10,480 ms for one arm of one metric, a 13x spread, so nothing in that
+group supports a conclusion in either direction. Typing echo has n=4 and
+moved the right way (p50 warm 22.1 / 21.3 ms before against 19.0 /
+11.2 ms after) but on that box that is corroboration, not proof.
+RE-MEASURE ON A QUIET MACHINE before quoting any figure from this
+paragraph, and prefer the deterministic numbers above, which no amount of
+load can move.
+>>>>>>> 6012467
 
 ## Gotchas that have cost real time
 
