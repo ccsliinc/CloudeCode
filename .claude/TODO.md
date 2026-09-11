@@ -6818,3 +6818,52 @@ Incidental, from the same round: an unrelated v1 worker re-ran its own two
 suites against current HEAD and got 58/58, independently confirming its
 invariants survived v2's forwarder deletion. A worker cross-checking a LATER
 worker's change is better evidence than either checking itself, and it was free.
+
+## 2026-09-11 - RELEASE PLAN: 1.3.0 is ours, 1.3.1 is Adam integrated
+
+Owner's direction, verbatim: "ok, update git and lets get this finished and
+then make a 1.3.1", and earlier on testing: "if shit isnt working we can only
+test by working."
+
+**1.3.0 = our two rewrites, deployed and used.**
+- [ ] `integration/1.3.0` merges `feat/svelte-slice-7` (client, 7 slices,
+      `launchpad.js` deleted, i18n, plugin registry) with
+      `feat/backend-decomposition` (13 slices, `session_manager.py` 8,340 to
+      7,294, `routes.py` 4,397 to 106, `config.py` and `models.py` into
+      packages). IN FLIGHT.
+- [ ] Validate the combined tree, both suites, against measured per-chain
+      controls so any regression is attributable.
+- [ ] Deploy to live and run THE TWO GATES recorded 2026-09-10, which no suite
+      can substitute for: `boot_readopt_complete` held plus skipped against
+      `tmux -L cloude list-sessions | wc -l`, and the `/sessions/list` row count
+      checked SEPARATELY from that log line. The backend slices touch the boot
+      re-adopt path and have never run against a live server.
+- [ ] OWNER USES IT on real sessions. This is a release step, not an optional
+      one: the fixture preview could not find the broken group control until he
+      clicked it, and it cannot find anything that needs a real pane.
+- [ ] Fix what real usage exposes, then tag `v1.3.0` and publish with an
+      installer, a sha256 and the downgrade block, on `origin` (public).
+
+**1.3.1 = Adam integrated.**
+- [ ] His `master` is 153+ commits past our 1.2.1 base. Most of it lands in
+      client code we deleted or rewrote, so this is a DESIGN merge, not a
+      textual one. Run the same comparison round that 1.2 got: per-subsystem
+      verdicts, an approach-level check, not just `git merge-tree`.
+- [ ] Deliberately AFTER the owner has used 1.3.0. Doing it before means two
+      unknowns at once, and the 1.2 round already showed the expensive failure
+      is a silently stale port that conflicts with nothing.
+- [ ] Backend v2 S8 is still blocked on his open issue #32 (`_session_info_for`);
+      it belongs in this round, not 1.3.0.
+
+### Git state, synced 2026-09-11
+- 9 branches that existed only on `adamdev` are now mirrored to `origin` too,
+  so every branch we have is on both remotes.
+- `coord`: both remotes at `94e1429`; the LOCAL ref is stale at `6e09b1c`
+  because that branch is checked out in a worktree and cannot be fetched into.
+  Remotes are the truth; no work is missing.
+- `main`: `origin/main` is `ecd0669` (the v1.2.0 tag commit) and the LOCAL
+  `main` at `fd9e0a8` has diverged from it. Local main is not used by anything
+  and was left alone rather than force-moved. Do not treat local `main` as
+  current.
+- The untracked `web/` in the main checkout is 104 MB of node_modules left from
+  when the tree sat on `feat/svelte-web`. Nothing in it is trackable. Harmless.
