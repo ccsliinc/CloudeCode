@@ -7732,9 +7732,12 @@ can keep the voice rule.
 
 ## 2026-09-10 - svelte slice 6: the modals and the create flows (#98, PR #99)
 
-`client/js/launchpad.js` 3,023 -> 1,866 lines. Seventeen methods gone (1,210
-lines of legacy removed), plus `client/js/project-create-folder.js` (312)
-deleted outright. Two survive as one-line forwards because their callers are
+`client/js/launchpad.js` 3,023 -> 1,875 lines: 1,219 lines removed and 71
+added back as the two forwards and the comments explaining them. Plus
+`client/js/project-create-folder.js` (312) deleted outright, so 1,531 lines of
+legacy are gone. NOTE the commit message for `1f98e2d` says "3,023 to 1,866" -
+that figure was measured before the last two shim comments landed and
+understates the file by nine lines. The number here is the measured one. Two survive as one-line forwards because their callers are
 slice 7's: `showConfirmModal` (providers.js:476) and `createConsoleSession`
 (terminal-commands-panel.js:256). `_escapeHtml` stays for providers.js:83 and
 now has NO caller in its own file; the three modal-local copies and the one
