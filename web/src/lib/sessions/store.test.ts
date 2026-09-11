@@ -449,3 +449,93 @@ describe('reset puts every latch back to NEVER ASKED, not to empty', () => {
         expect(sessionStore.workStampByName.size).toBe(0);
     });
 });
+
+describe('the ui-flags probe, which is issue 110', () => {
+    /**
+     * THE DEFECT THIS COVERS, and why a source-text check was not enough.
+     *
+     * `ui.show_mark_unread_control` defaults true in client/js/ui-flags.js
+     * and answers that default until something calls `UIFlags.ensure()` to
+     * fetch `GET /features`. Nothing else ever calls it. So if the surface
+     * that renders the control never probes, the flag answers `true`
+     * forever, the control always renders, and turning the setting OFF
+     * does nothing at all - the control ships with a dead off-switch.
+     *
+     * `client/js/session-sidebar-fetch.js` probes for the sidebar. The
+     * home screen is a svelte component now, and `loadRunningSessions` is
+     * its equivalent entry point. tests/test_ui_flags_setting.py asserts
+     * the caller exists by GREPPING THE SOURCE, which is the right shape
+     * for "some live path calls this" - but it greps `client/js`, and the
+     * home screen's copy no longer lives there. This drives the real
+     * method instead, so it cannot be satisfied by a string that happens
+     * to be present in a comment.
+     *
+     * NODE ENVIRONMENT, SO THERE IS NO `window` UNTIL ONE IS INSTALLED.
+     * That is also the first control below: the production code reads
+     * through `hostWindow()`, and a realm with no window must not throw.
+     */
+    const realWindow = (globalThis as { window?: unknown }).window;
+
+    afterEach(() => {
+        if (realWindow === undefined) delete (globalThis as { window?: unknown }).window;
+        else (globalThis as { window?: unknown }).window = realWindow;
+    });
+
+    /** Install a window carrying `UIFlags`. Inputs: flags. Output: void. */
+    function withWindow(flags: unknown): void {
+        (globalThis as { window?: unknown }).window = { UIFlags: flags };
+    }
+
+    test('a running-sessions tick probes the flags', async () => {
+        let calls = 0;
+        withWindow({ ensure: () => { calls += 1; } });
+        sessionStore.useHost(host({ attachable: [attachable()], live: [] }));
+        await sessionStore.loadRunningSessions(t);
+        expect(calls).toBe(1);
+    });
+
+    test('NEGATIVE CONTROL: the assertion can fail, with no UIFlags present', async () => {
+        // Without this, the test above would pass just as happily against
+        // a store that never probed, as long as something else did.
+        let calls = 0;
+        withWindow(undefined);
+        sessionStore.useHost(host({ attachable: [attachable()], live: [] }));
+        await sessionStore.loadRunningSessions(t);
+        expect(calls).toBe(0);
+    });
+
+    test('the probe is NOT awaited, so a hanging fetch cannot empty the list', async () => {
+        // The rule client/js/session-sidebar-fetch.js states: a flag that
+        // could delay the session list would make a network hiccup look
+        // like an empty sidebar. `ensure()` memoises onto one promise, so
+        // a pending one must not be waited on.
+        let settled = false;
+        withWindow({ ensure: () => new Promise(() => { settled = true; }) });
+        sessionStore.useHost(host({ attachable: [attachable()], live: [] }));
+        await sessionStore.loadRunningSessions(t);
+        // The tick completed and produced its rows while the probe's
+        // promise is still pending forever.
+        expect(sessionStore.runningSessions.length).toBeGreaterThan(0);
+        expect(settled).toBe(true);
+    });
+
+    test('a module that is absent or malformed is skipped, never thrown on', async () => {
+        // ui-flags.js's own rule: a probe that could not run must never be
+        // the reason a control disappears - and must never be the reason a
+        // session list fails to render either.
+        for (const flags of [undefined, null, {}, { ensure: 'not a function' }]) {
+            withWindow(flags);
+            sessionStore.reset();
+            sessionStore.useHost(host({ attachable: [attachable()], live: [] }));
+            await sessionStore.loadRunningSessions(t);
+            expect(sessionStore.runningSessions.length).toBeGreaterThan(0);
+        }
+    });
+
+    test('and no window at all is tolerated, which is this suite default', async () => {
+        delete (globalThis as { window?: unknown }).window;
+        sessionStore.useHost(host({ attachable: [attachable()], live: [] }));
+        await sessionStore.loadRunningSessions(t);
+        expect(sessionStore.runningSessions.length).toBeGreaterThan(0);
+    });
+});
