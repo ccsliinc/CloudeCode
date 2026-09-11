@@ -132,7 +132,6 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
         // _navToken: a reconnect to the SAME session is a new connection
         // but not a new navigation, and input typed before a socket
         // dropped must not be replayed into the one that replaces it.
-        // See client/js/terminal-input-buffer.js.
         this._connGen = null;
     }
 
@@ -157,9 +156,9 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
     /**
      * Description: a connection to the pane is starting, so input typed
      *   from here until `terminal.ready` is HELD rather than thrown away.
-     *   The window is deaf, not merely slow - the server's handshake loop
-     *   discards binary frames until it has the client's dims. All the
-     *   rules are in client/js/terminal-input-buffer.js.
+     *   That window is deaf, not merely slow: the server's handshake loop
+     *   discards binary frames until it has the client's dims. Every rule
+     *   is in client/js/terminal-input-buffer.js.
      * Inputs: what (string) - a label for the log line.
      * Output: void. Records the generation as `_connGen`.
      */
@@ -1073,29 +1072,23 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
 
     /**
      * Description: open the socket, once this navigation is still the one
-     *   on screen. The MEASURED readiness this waits on lives inside
-     *   connectWebSocket() and is documented below.
+     *   on screen. The measured readiness is inside connectWebSocket().
      * Inputs: what (string) - for the superseded-navigation log line.
      * Output: Promise<void>.
      */
     async _connectWhenReady(what) {
         // THE 500 ms THAT USED TO BE HERE WAS WAITING FOR A CSS
-        // TRANSITION THAT DOES NOT EXIST. `.screen` swaps on `display`,
-        // which is not animatable and fires no `transitionend`, and the
-        // two padding rules that also match `.screen` say in their own
-        // comments that their transitions were removed on purpose. The
-        // measured readiness that IS real is below this line, inside
-        // connectWebSocket: the bounded container measurement, then the
-        // bounded guardedFit retry. See CLAUDE.md, "the connect is
-        // measured, not slept".
+        // TRANSITION THAT DOES NOT EXIST: `.screen` swaps on `display`,
+        // which is not animatable and fires no `transitionend`. What IS
+        // measured is below this line, inside connectWebSocket. See
+        // CLAUDE.md, "the connect is measured, not slept".
         if (!this._navCurrent(what)) return;
         await this.connectWebSocket();
     }
 
     /**
-     * Description: the pre-connect screen paint, delegated. One line here
-     *   and the ordered sequence next door, so a fix cannot land on one
-     *   entry path and miss the other.
+     * Description: the pre-connect screen paint, delegated, so a fix
+     *   cannot land on one entry path and miss the other.
      * Inputs: b64 (string) - the captured screen.
      *   what (string) - 'adopt' or 'rejoin', for the log line.
      * Output: Promise<string> - 'painted' | 'nothing' | 'decode_failed'.
@@ -1119,7 +1112,7 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
      *
      * Contract parity with connectToSession(): stashes the session on
      * the controller, marks it active, wires the destroy button, then
-     * opens the WS on the same delay so the UI transition settles first.
+     * opens the WS through the same measured gate.
      *
      * Safe to call multiple times. If a live WS is already open, we
      * do nothing beyond re-painting the status (the server stream is
@@ -1650,6 +1643,12 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
                 clearTimeout(this.reconnectTimeout);
                 this.reconnectTimeout = null;
             }
+
+            // A SERVER THAT NEVER SAYS `terminal.ready` MUST NOT LEAVE
+            // THE PANE DEAF. On expiry the held batch is DELIVERED and
+            // input passes straight through, as it did before the message
+            // existed. See client/js/terminal-input-buffer.js.
+            if (window.TerminalInputBuffer) window.TerminalInputBuffer.armReadyBackstop(this);
 
             this.updateStatus('Connected', 'connected');
             // NOT a term.writeln. Client-authored status is UI: writing it

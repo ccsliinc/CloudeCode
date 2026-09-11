@@ -71,6 +71,33 @@ console.log('[TerminalInputBuffer Module] Loading...');
     var MAX_BUFFERED_BYTES = 64 * 1024;
 
     /**
+     * How long the hold may last with no `terminal.ready` in sight,
+     * measured from the socket OPENING.
+     *
+     * WHY A BOUND EXISTS AT ALL, and it is not about slowness. A server
+     * that does not send `terminal.ready` - one predating the message -
+     * would leave a new client holding every keystroke FOREVER, a
+     * terminal that silently accepts no input at all. The additive
+     * contract protects an old CLIENT against a new server; this is the
+     * other direction, and it is the worse failure of the two because
+     * nothing on screen would say what was wrong.
+     *
+     * So the same rule this codebase already applies to layout waits: a
+     * wait may DELAY the work, never CANCEL it. On expiry the batch is
+     * DELIVERED, not dropped - the user typed it for this pane and the
+     * socket is open - and the connection falls through to passing input
+     * straight on, which is exactly how every client behaved before the
+     * message existed.
+     *
+     * 4 seconds because the server's own handshake budget is 2 seconds
+     * and the attach settle is 150 ms, so a healthy connect reaches ready
+     * with an order of magnitude to spare. It is a backstop, not a
+     * deadline.
+     * @type {number}
+     */
+    var READY_TIMEOUT_MS = 4000;
+
+    /**
      * Monotonic connection counter. Starts at 0, which is never handed
      * out: `arm()` increments before returning, so 0 means "no
      * connection has ever been armed" and can never match a caller's
@@ -308,6 +335,7 @@ console.log('[TerminalInputBuffer Module] Loading...');
      * Output: number|null - the generation.
      */
     function begin(controller, what) {
+        cancelBackstop();
         discard('a new connection to the pane is starting');
         var gen = arm(what);
         if (controller) controller._connGen = gen;
@@ -346,6 +374,7 @@ console.log('[TerminalInputBuffer Module] Loading...');
      * Output: string - the release outcome, for the caller's log line.
      */
     function flushOnReady(controller, message) {
+        cancelBackstop();
         var r = release(controller ? controller._connGen : null);
         console.log('[input-buffer] pane ready', {
             startup_command: message && message.startup_command,
@@ -377,14 +406,62 @@ console.log('[TerminalInputBuffer Module] Loading...');
      * Output: string - 'discarded' | 'nothing_held'.
      */
     function abandon(controller, reason) {
+        cancelBackstop();
         var r = discard(reason);
         if (r.outcome === 'discarded') report(controller, RETYPE_MESSAGE);
         return r.outcome;
     }
 
+    /** @type {*} The backstop timer, so a ready can cancel it. */
+    var backstop = null;
+
+    /**
+     * Description: stop waiting for a `terminal.ready` that is never
+     *   coming. Armed when the socket OPENS, because that is the moment
+     *   from which the server owes us the message; armed earlier it would
+     *   be counting time the connect legitimately spends before there is
+     *   a server in the conversation at all.
+     * Inputs: controller (object). ms (number) - override, for tests.
+     * Output: void.
+     * Example: TerminalInputBuffer.armReadyBackstop(this);
+     */
+    function armReadyBackstop(controller, ms) {
+        cancelBackstop();
+        var wait = typeof ms === 'number' ? ms : READY_TIMEOUT_MS;
+        var forGeneration = generation;
+        backstop = setTimeout(function () {
+            backstop = null;
+            if (phase !== 'buffering' || generation !== forGeneration) return;
+            // DELIVER, DO NOT DROP. The socket is open and these bytes
+            // were typed for this pane; the only thing we did not get was
+            // permission to send them. Dropping here would punish the
+            // user for a server that is older than this client.
+            console.warn('[input-buffer] no terminal.ready after ' + wait
+                + 'ms, sending anyway and passing input straight through');
+            flushOnReady(controller, { startup_command: 'unknown',
+                via: 'ready_backstop' });
+        }, wait);
+    }
+
+    /**
+     * Description: cancel the backstop. Called by every path that ends a
+     *   connection's hold, so a timer cannot fire against a generation
+     *   that is already finished.
+     * Inputs: none.
+     * Output: void.
+     */
+    function cancelBackstop() {
+        if (backstop !== null) {
+            clearTimeout(backstop);
+            backstop = null;
+        }
+    }
+
     global.TerminalInputBuffer = {
         MAX_BUFFERED_BYTES: MAX_BUFFERED_BYTES,
+        READY_TIMEOUT_MS: READY_TIMEOUT_MS,
         RETYPE_MESSAGE: RETYPE_MESSAGE,
+        armReadyBackstop: armReadyBackstop,
         arm: arm,
         offer: offer,
         release: release,

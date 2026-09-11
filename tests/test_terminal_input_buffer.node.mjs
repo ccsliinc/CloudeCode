@@ -47,7 +47,7 @@ const TERM_SINGLETON = 'window.TerminalController = new Terminal();';
 function makeBuffer() {
     const sandbox = {
         console: { log() {}, warn() {}, debug() {}, error() {} },
-        Uint8Array, TextEncoder, TextDecoder, Promise, setTimeout,
+        Uint8Array, TextEncoder, TextDecoder, Promise, setTimeout, clearTimeout,
     };
     sandbox.window = sandbox;
     vm.createContext(sandbox);
@@ -268,6 +268,89 @@ test('the socket going between ready and the flush drops the batch rather than r
     assert.equal(Buf.flushOnReady(c, {}), 'socket_gone');
     assert.equal(c.told.length, 1, 'and the user is told rather than left waiting');
     assert.equal(Buf.heldByteCount(), 0, 'nothing is carried into the next connection');
+});
+
+// ------------------------------------------------ the ready backstop
+
+test('THE OTHER COMPATIBILITY DIRECTION: a server that never says ready must not leave the pane deaf', async () => {
+    // The additive contract protects an OLD CLIENT against a new server.
+    // This is a NEW CLIENT against an old one, and it is the worse
+    // failure of the two: without a bound, every keystroke would be held
+    // forever and the terminal would silently accept no input at all,
+    // with nothing on screen saying why.
+    const { Buf } = makeBuffer();
+    const c = fakeController();
+    Buf.begin(c, 'connect');
+    Buf.armReadyBackstop(c, 5);          // the server's message never comes
+    Buf.send(c, bytes(3, 1));
+    Buf.send(c, bytes(4, 2));
+    assert.equal(c.ws.sent.length, 0, 'held while the backstop is still running');
+
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(c.ws.sent.length, 2,
+        'DELIVERED, not dropped - the socket is open and the user typed '
+        + 'these for this pane; the only thing missing was permission');
+    assert.equal(c.told.length, 0, 'and nothing is reported, because nothing was lost');
+    assert.equal(Buf.state(), 'ready',
+        'and input passes straight through from here, exactly as every '
+        + 'client behaved before the message existed');
+    assert.equal(Buf.send(c, bytes(1, 3)), true);
+});
+
+test('a ready that DOES arrive cancels the backstop', async () => {
+    // Otherwise the timer fires later against a generation that has
+    // already flushed, and a second flush would re-send nothing but would
+    // still move a phase nobody asked it to move.
+    const { Buf } = makeBuffer();
+    const c = fakeController();
+    Buf.begin(c, 'connect');
+    Buf.armReadyBackstop(c, 5);
+    Buf.send(c, bytes(3, 1));
+    Buf.flushOnReady(c, { startup_command: 'none' });
+    assert.equal(c.ws.sent.length, 1);
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(c.ws.sent.length, 1, 'the timer must not fire a second flush');
+});
+
+test('a backstop cannot fire against a connection that has been superseded', async () => {
+    // Arming is per connection. A timer from session A firing after the
+    // user is in B would flush B's buffer on A's schedule.
+    const { Buf } = makeBuffer();
+    const c = fakeController();
+    Buf.begin(c, 'session A');
+    Buf.armReadyBackstop(c, 5);
+    Buf.begin(c, 'session B');           // supersedes A
+    Buf.send(c, bytes(4, 2));            // B's input
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(c.ws.sent.length, 0, "A's timer must not flush B");
+    assert.equal(Buf.state(), 'buffering');
+});
+
+test('a close cancels the backstop, so a dead socket is not written to', async () => {
+    const { Buf } = makeBuffer();
+    const c = fakeController();
+    Buf.begin(c, 'connect');
+    Buf.armReadyBackstop(c, 5);
+    Buf.send(c, bytes(3));
+    Buf.abandon(c, 'the socket closed');
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(c.ws.sent.length, 0);
+});
+
+test('the backstop is generous against the handshake it is backing up', () => {
+    // The server's own handshake budget is 2s and the attach settle is
+    // 150ms, so a healthy connect reaches ready with an order of
+    // magnitude to spare. It is a backstop, not a deadline.
+    const { Buf } = makeBuffer();
+    assert.ok(Buf.READY_TIMEOUT_MS >= 4000,
+        'tightening this turns a slow but healthy connect into lost keystrokes');
+});
+
+test('terminal.js arms the backstop when the socket OPENS', () => {
+    const onopen = TERM_SRC.slice(TERM_SRC.indexOf('this.ws.onopen = '));
+    assert.match(onopen.slice(0, 2500), /TerminalInputBuffer\.armReadyBackstop\(this\)/,
+        'armed from the socket opening, which is when the server owes us '
+        + 'the message');
 });
 
 // --------------------------------------------------- the seam itself
