@@ -1647,12 +1647,14 @@ per server process and no subprocess at all.
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-10 on `docs/6-meta-cluster` off `51f3489` with `-p no:randomly`,
-  is **5758 passed / 0 failed / 18 skipped**, and ZERO FAILED IS THE NEW
+  2026-09-11 on `master` at `ea2cbc9` with `-p no:randomly`,
+  is **6423 passed / 0 failed / 18 skipped**, and ZERO FAILED IS STILL THE
   NUMBER TO HOLD: the two this file used to call permanently environmental
-  were diagnosed and fixed on that branch (see below), so a failure here is
-  now a real signal rather than one you are meant to recognise and ignore.
-  The reading before it was
+  were diagnosed and fixed on `docs/6-meta-cluster` (see below), so a
+  failure here is a real signal rather than one you are meant to recognise
+  and ignore. The reading before it was
+  **5758 passed / 0 failed / 18 skipped**, re-measured 2026-09-10 on
+  `docs/6-meta-cluster` off `51f3489`. Before that it was
   **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`. The same worktree read
   **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
   **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
@@ -1737,7 +1739,9 @@ per server process and no subprocess at all.
   four added, no new failures. Note `test_terminal_layout.node.mjs`
   flaked ONCE in that base run and passed in isolation seconds later on
   the same tree, so a lone failure there without a code change is not a
-  regression; re-run before chasing it. The piped-stdin CLI helper for
+  regression; re-run before chasing it. Re-measured 2026-09-11 on `master`
+  at `ea2cbc9`: **223 tracked suites, all 223 passing**, against 206 at the
+  prior reading - seventeen added, no new failures. The piped-stdin CLI helper for
   the real-hook harness lives at `tests/helpers/led_state_for.mjs`, outside
   the `tests/*.node.mjs` glob the CI loop runs, because it is not a suite and
   exits non-zero when run with no input - which is what it used to be

@@ -1,8 +1,10 @@
 # TODO — closing out the open issue board
 
-Repo: Adoom666/CloudeCodeDev. 53 open at start, 48 now.
+Repo: Adoom666/CloudeCodeDev. 53 open at start, 30 now (re-derived 2026-09-11
+via `gh issue list --state open --json number --jq 'length'`).
 - 11 are ccsliinc's (their draft PRs) — not ours
-- 8 carry `blocked` (waiting on ccsliinc PR #19, Adam's ruling): #31 #32 #35 #36 #37 #50 #51 #58
+- 9 carry `blocked` (waiting on ccsliinc PR #19, Adam's ruling): #31 #32 #35
+  #36 #37 #50 #51 #58 #66 (re-verified 2026-09-11 by label)
 - the rest are ours
 
 ## Done and merged to master
@@ -12,6 +14,15 @@ Repo: Adoom666/CloudeCodeDev. 53 open at start, 48 now.
 - [x] #56 perf harness can now measure settings open (53ed219)
 - [x] #57 local server subsystem documented as retained dead code (53ed219)
 - [x] #59 both stale test failures FIXED at root cause. Suite 5656/2 -> 5758/0 (53ed219)
+- [x] #39 closed as ALREADY SHIPPED. The render batching work landed in
+  f0e07de and the version arbitration work in fa34690, both before the
+  claim branch feat/39-toast-render-batch was even created, so the branch
+  rebased to an empty diff against master. PR #104 closed with no merge.
+- [x] #106 remove the connect-time "websocket connected, pty terminal
+  ready" status pill. PR #112 merged as ea2cbc9. Verified on the wire: a
+  direct WebSocket capture of the attach handshake, on both a fresh
+  connect and a reconnect, returned request_dims, binary, terminal.ready,
+  binary - zero frames of type log.
 
 ## In flight
 
