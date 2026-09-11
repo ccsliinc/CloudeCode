@@ -6783,3 +6783,38 @@ separate slices (v1 S3 and v2 S3), both times recovered by re-running the
 worker's own script. When reverting a deliberate mutation, revert only the
 mutated hunk, or stash first, or work in a copy. A revert that also discards
 real edits is indistinguishable from a successful revert until the tests move.
+
+## 2026-09-10 - NOTE: the backend slice numbers collide across two plans
+
+A stale worker read `feat/backend-decomposition` and concluded another session
+had appeared on its branch. It had not. The confusion is real and will repeat,
+so it is written down.
+
+TWO PLANS, BOTH NUMBERING FROM ZERO:
+- Plan v1 (`.claude/notes/backend-decomposition-plan.md` as first written, 12
+  slices) produced: `4e911b6` probe health, `c170eb6` themes, `bb7abb0` toast
+  inbox, `09284df` session registry, `209947d` attachment sidecars.
+- Plan v2 (the SAME file, rewritten on `docs/backend-plan-v2`, commit `d70bb98`,
+  9 slices) produced: `8f77fa4` S0 composition root and four ports, `1cc7046`
+  S1 the facade forwarder deletion, `c4db6c2` S2 `src/models.py` into a package,
+  `2c24423` S3 owned-tmux ledger.
+
+So "s3" means the toast inbox in one plan and the owned-tmux ledger in the
+other, and a commit message saying S2 could mean the theme cluster or the
+models repackage. When reading a slice commit, check its DATE against which
+plan was current, or read the commit body, which names what actually moved.
+
+WHY v2 EXISTS, since a reader of v1 will not know: v1 preserved a facade keeping
+74 public names and a no-argument constructor, so five slices moved 101 net
+lines and two of the last three GREW the file, because a 20-line body out cost
+about 70 lines of documented delegating property back in. v2 deletes the facade
+instead, which is what made the file finally move (8,340 to 7,725 so far).
+
+- [ ] When the backend line is next touched, consider renumbering v2's remaining
+  slices to continue from v1 rather than restarting, or drop numbers entirely
+  and name them. The collision has already cost one worker a false alarm.
+
+Incidental, from the same round: an unrelated v1 worker re-ran its own two
+suites against current HEAD and got 58/58, independently confirming its
+invariants survived v2's forwarder deletion. A worker cross-checking a LATER
+worker's change is better evidence than either checking itself, and it was free.
