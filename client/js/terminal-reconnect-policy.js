@@ -163,6 +163,27 @@ console.log('[TerminalReconnectPolicy Module] Loading...');
      *     missing script must degrade to the plain retry rather than
      *     throwing inside onclose.
      * Output: string - one of RECOVERY.
+     *
+     * 4429, THE VIEWER-QUEUE OVERFLOW, LANDS ON RETRY ON PURPOSE (issue
+     * 38). The server closes a viewer that has fallen far enough behind
+     * to cross its 4 MiB / 256 chunk bound, because ANSI bytes cannot be
+     * dropped selectively - half an escape sequence does not corrupt one
+     * cell, it leaves the VT parser wrong for everything after it - so a
+     * disconnect and a fresh capture is the only complete recovery. RETRY
+     * already performs exactly that: reconnecting re-runs the server's
+     * `paint_on_attach`, which is the existing recapture path, and no
+     * second recovery mechanism is needed or wanted. It also spends no
+     * retry budget, because the socket had opened, so an overflow can
+     * never make a healthy session look unreachable.
+     *
+     * WHAT IT DOES NOT DO YET, said plainly: the recovery is supposed to
+     * be INVISIBLE, and RETRY still shows the reconnect notice and waits
+     * out one backoff step. Making 4429 its own silent branch means a new
+     * branch in `Terminal#_scheduleRecovery`, and client/js/terminal.js
+     * is held to a hard line budget by tests/test_terminal_layout.node.mjs
+     * that this project forbids raising for convenience. The application
+     * close code is what makes that branch possible later; the banner is
+     * a known gap, not an oversight.
      */
     function recoveryFor(signals) {
         var s = signals || {};

@@ -1048,6 +1048,93 @@ returns rather than only checking that a keyword argument exists. Its
 positive control is load-bearing: a backend on the listing's own socket
 must still skip its probe, or a fix that refused everything would pass.
 
+**AND THE FAN-OUT UNDER THAT READER IS BOUNDED PER VIEWER, WITH ONE WRITER
+EACH.** This sits DOWNSTREAM of the kqueue reader and changes nothing about
+it: the backstop, the `_pending_data` latch and the one-Future-plus-one-timer
+wait are untouched. What changed is what happens to a chunk once the reader
+has it. `_make_output_handler` did `await queue.put(encoded)` into an
+`asyncio.Queue()` with NO maxsize, once per subscriber - and a queue with no
+maxsize never blocks on put, so the defect never announced itself. It simply
+GREW: this process held every byte a stopped browser had not read, for as long
+as it did not read them, and the failure landed on the whole server rather
+than on the one client that caused it. Measured on this tree, 5000 chunks of
+8192 bytes fanned to three stalled viewers: **156.3 MiB held and still
+climbing, against 8.0 MiB after**, with the overflow declared at chunk 256.
+
+| Piece | File |
+|---|---|
+| The bounded queue and the named overflow, shared with `/ws/events` | `src/core/bounded_stream.py` |
+| The viewer's bound, its frame kinds and the offer helpers | `src/core/viewer_fanout.py` |
+| The one writer, the feeders, and the broadcast seam | `src/api/websocket.py` |
+
+**THE HANDLER IS SYNCHRONOUS NOW, AND THAT IS THE CLAIM.**
+`TmuxBackend._emit_output` awaits whatever `on_output` returns, so a coroutine
+there puts the tail loop one await away from a browser's queue. `offer` is a
+plain call that admits or refuses; a bounded `asyncio.Queue` would have been
+the obvious change and would have been exactly wrong, because `await
+queue.put` on a full queue IS the backpressure into the source that the bound
+exists to prevent. The accounting costs **p50 0.83 us to 1.46 us per chunk for
+three viewers**, next to the **9.58 us** the base64 encode of that same chunk
+already costs once - so it is real, it is stated, and it is noise at this
+scale.
+
+**THE BOUND IS 4 MiB OR 256 CHUNKS, AND THE CHUNK COUNT IS WHAT FIRES.** The
+tail loop reads at most 8192 bytes per `os.read`, which base64 inflates to
+10,924 characters, so 256 chunks is about 2.8 MiB - inside the byte budget,
+which is therefore the BACKSTOP for a future larger read rather than the
+operative bound. 4 MiB is the same number `client/js/terminal-write-queue.js`
+uses, deliberately: one number in the system beats two separately tuned ones.
+
+**AN OVERFLOW DISCONNECTS; IT NEVER TRUNCATES.** You cannot fix a slow viewer
+by dropping bytes. Escape sequences span chunk boundaries, so a terminal handed
+half a sequence does not lose one cell - it leaves the VT parser wrong for
+everything after it, until something resets. So the only safe response is to
+stop that viewer and have it recapture, which the client already knows how to
+do: a reconnect re-runs `paint_on_attach`. The close code is **4429**, an
+APPLICATION code rather than 1013 so the client can tell "you fell behind"
+apart from "the server went away"; it is declared once in `bounded_stream.py`
+and the event channel imports the same number. It lands on the reconnect
+policy's existing `retry_same_id` branch and spends no retry budget, because
+the socket had opened. **STILL OPEN**: that branch shows the reconnect notice
+and waits one backoff step, so the recovery is correct but not yet invisible.
+Giving 4429 a silent branch means a new branch in `_scheduleRecovery`, and
+`client/js/terminal.js` is at 2761 lines against a 2765 guard that must not be
+raised for convenience.
+
+**ONE WRITER PER VIEWER IS A CORRECTNESS CLAIM, NOT TIDINESS.** Two coroutines
+awaiting `send` on one websocket interleave frames, and the result is a
+corrupted stream rather than an exception - nothing in the system reports it.
+This endpoint had FOUR concurrent senders (the pty stream, the log stream, the
+local-server stream, and the receive loop's own pong and error replies) plus
+`ConnectionManager.broadcast_to_session` reaching in from a toast, a rename or
+a resize. `_drain_viewer` is now the only thing that touches a live socket;
+`_pump_text` takes a stream rather than a websocket so a new message source
+cannot add a sender by copying it, the read loop answers a ping THROUGH the
+stream, and both broadcast methods `_offer` instead of sending. A socket
+registered with no stream is reported UNDELIVERABLE rather than sent to
+directly - that fallback is the second writer coming back through the door
+this closes. The handshake's own sends (the welcome, the dimension request,
+`paint_on_attach`) are sequential in one coroutine ABOVE the `create_task`
+block and are pinned there by `tests/test_viewer_fanout.py`.
+
+**AND THE "IS THIS A VIEWER OUTBOX" TEST IS STRUCTURAL, NOT `isinstance`.**
+Measured rather than theorised: it shipped as
+`isinstance(candidate, BoundedStream)`, which is an identity test against a
+class imported BY VALUE, and it answered False inside a full suite run the
+moment the process held two class objects for one module name - a stream
+built from one binding measured against the other, both reporting
+`__module__ == 'src.core.bounded_stream'`. It fails SILENTLY and in the
+worst direction: `_close_viewer_stream` stops closing, so every writer task
+stays parked in `get()` until its socket dies, and every broadcast reports
+its viewer undeliverable. `is_viewer_stream` now asks for the three
+attributes the callers actually use, which no `asyncio.Queue` has and which
+depend on no module identity.
+
+**TEXT AND BYTES SHARE THE VIEWER'S ONE BUDGET.** A second unbounded lane for
+log and toast frames beside the bounded byte lane would leave the bound saying
+nothing about the memory actually held, and a viewer that is not reading is
+not reading any of it.
+
 **THE PIPE READER WAKES ON THE APPEND NOW, AND THE 20ms IS A BACKSTOP.**
 `TmuxBackend._tail_loop` used to `asyncio.sleep(0.02)` on every empty read, which
 made that interval a FLOOR ON KEYSTROKE LATENCY - the echo lands at a uniformly

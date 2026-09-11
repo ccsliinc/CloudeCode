@@ -402,3 +402,20 @@ test('index.html serves the policy module before terminal.js', () => {
     assert.ok(order.indexOf('terminal-reconnect-policy.js') >= 0);
     assert.ok(order.indexOf('terminal-reconnect-policy.js') < order.indexOf('terminal.js'));
 });
+
+test('a viewer-queue overflow reconnects and recaptures, and costs no budget', () => {
+    // Issue 38. The server closes a viewer that crossed its bound with
+    // 4429, because ANSI bytes cannot be dropped selectively and a fresh
+    // capture is the only complete recovery. RETRY already performs
+    // exactly that - reconnecting re-runs the server's paint_on_attach -
+    // so this must NOT acquire a second recovery mechanism.
+    const { self, timers, sandbox } = makeController();
+    const P = sandbox.window.TerminalReconnectPolicy;
+    assert.equal(P.recoveryFor({ code: 4429 }), P.RECOVERY.RETRY);
+    self._scheduleRecovery(4429);
+    assert.equal(timers.length, 1, 'an overflow close schedules a reconnect');
+    // And it spends no retry budget: the socket HAD opened, so this is
+    // not a measured failure and an overflow can never make a healthy
+    // session look unreachable.
+    assert.equal(P.consumesBudget({ socketOpened: true, outcome: 'unknown' }), false);
+});

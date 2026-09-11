@@ -1338,21 +1338,28 @@ async def test_concurrent_sessions_output_isolation():
     qa = sm.subscribe_output("ses_a")
     qb = sm.subscribe_output("ses_b")
 
+    # THE HANDLER IS SYNCHRONOUS, and that is the claim rather than a
+    # style choice (issue 38): `TmuxBackend._emit_output` awaits whatever
+    # it returns, so a coroutine here would put the tail loop - the thing
+    # reading the pipe that carries every keystroke echo for every
+    # session - one await away from a viewer's queue.
+    assert not asyncio.iscoroutinefunction(sm._make_output_handler("ses_a"))
+
     # Push output through session A's bound handler.
     handler_a = sm._make_output_handler("ses_a")
-    await handler_a(b"hello-A")
+    handler_a(b"hello-A")
 
-    assert not qa.empty(), "session A's subscriber must receive A's bytes"
-    got = base64.b64decode(await qa.get())
+    assert qa.queued_items == 1, "session A's subscriber must receive A's bytes"
+    got = base64.b64decode((await qa.get()).payload)
     assert got == b"hello-A"
-    assert qb.empty(), "session B's subscriber must NOT receive A's bytes"
+    assert qb.queued_items == 0, "session B's subscriber must NOT receive A's bytes"
 
     # Symmetric check for B.
     handler_b = sm._make_output_handler("ses_b")
-    await handler_b(b"hello-B")
-    assert not qb.empty()
-    assert base64.b64decode(await qb.get()) == b"hello-B"
-    assert qa.empty()
+    handler_b(b"hello-B")
+    assert qb.queued_items == 1
+    assert base64.b64decode((await qb.get()).payload) == b"hello-B"
+    assert qa.queued_items == 0
 
     # Destroy A. B's subscriber list must be untouched.
     metadata_path = sm.__class__.__module__  # noqa: F841 (sanity, unused)
@@ -1370,8 +1377,8 @@ async def test_concurrent_sessions_output_isolation():
     )
     # B's queue still functions after A's teardown.
     handler_b2 = sm._make_output_handler("ses_b")
-    await handler_b2(b"still-alive-B")
-    assert base64.b64decode(await qb.get()) == b"still-alive-B"
+    handler_b2(b"still-alive-B")
+    assert base64.b64decode((await qb.get()).payload) == b"still-alive-B"
 
 
 # ---- Test 5: adopt_external_session propagates pane-dead error ----------
