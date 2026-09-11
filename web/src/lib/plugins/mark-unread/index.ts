@@ -10,13 +10,18 @@
  * four of those were deleted in the same commit that added this file:
  * the menu now asks the registry, and this is what answers.
  *
- * THE LABELS ARE THE SHIPPED ONES, BYTE FOR BYTE - "clear unread flag"
- * and "mark unread for followup", the same two strings the deleted table
- * entry returned and the same two `markUnreadHtml` still puts in a
+ * THE LABELS ARE THE SHIPPED ONES, BYTE FOR BYTE - "clear unread" and
+ * "mark unread", the same two strings `markUnreadHtml` puts in a
  * control's `title`. Slice 5 moved them into the string catalog;
  * `session-card-actions.test.ts` loads that real builder and compares, so
  * the catalog and the legacy module cannot come to say different words
  * for one action.
+ *
+ * THEY WERE SHORTENED IN THE 1.4.0 MERGE, from "clear unread flag" and
+ * "mark unread for followup", taking the other line's wording from the
+ * round that gave every row-menu item an icon and a shorter label. The
+ * shortening had to land in the catalog and in `session-status-ui.js`
+ * together, because the equivalence test above compares them.
  *
  * THE SHORTCUT IS `U` AND THE ORDER PUTS IT SECOND, which is where the
  * owner's 2026-09-10 superset ruling placed it: rename, mark unread,

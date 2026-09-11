@@ -522,7 +522,7 @@ describe('the mark-unread control comes from the plugin surface', () => {
         const control = rowFor(list, 'cloude_api')
             .querySelector('[data-mark-unread]') as HTMLElement;
         expect(control.getAttribute('data-row-menu-item')).toBe('mark-unread');
-        expect(control.getAttribute('title')).toBe('mark unread for followup');
+        expect(control.getAttribute('title')).toBe('mark unread');
     });
 
     test('NO CONTRIBUTIONS MEANS NO CONTROL, which is what the flag off looks like', () => {

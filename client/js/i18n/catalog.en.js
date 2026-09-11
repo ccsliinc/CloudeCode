@@ -438,8 +438,22 @@ export default {
     // ---- the manual unread control ---------------------------------------
     // The LED says whether a session is unread; this is what SETS it. Both
     // labels name the RESULT of activating the control, not its state.
-    'session.unread.clear': 'clear unread flag',
-    'session.unread.set': 'mark unread for followup',
+    //
+    // SHORTENED IN THE 1.4.0 MERGE, taking the other line's wording. The
+    // row menu shortened every label alongside adding a per-item icon,
+    // and these two read long beside the rest; the two-word shape also
+    // matches the toggle counterparts they sit next to. The RESULT-not-
+    // STATE rule above is unchanged, which is the half that matters.
+    //
+    // THESE TWO MOVE WITH `markUnreadHtml` IN client/js/session-status-ui.js
+    // OR NEITHER MOVES. web/src/lib/plugins/session-card-actions.test.ts
+    // loads that real builder and compares its title against the label
+    // the plugin resolves through these keys, so the catalog and the
+    // legacy module cannot be allowed to say different words for one
+    // action - and a change to one alone fails there rather than
+    // shipping two vocabularies.
+    'session.unread.clear': 'clear unread',
+    'session.unread.set': 'mark unread',
 
     // ---- the startup gate ------------------------------------------------
     // Painted only on a MEASURED `awaiting_startup_prompt`. `ready` and

@@ -130,7 +130,7 @@ export function recordingHost(answers: HostAnswers = {}): RecordingHost {
             note('cardActions', name, unread);
             return answers.cardActions === undefined
                 ? [{ id: 'mark-unread', order: 200,
-                    label: unread ? 'clear unread flag' : 'mark unread for followup' }]
+                    label: unread ? 'clear unread' : 'mark unread' }]
                 : answers.cardActions;
         },
         async runCardAction(id: string, name: string, unread: boolean) {

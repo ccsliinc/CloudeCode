@@ -202,8 +202,8 @@ test('escaping does not disturb the rest of the toggle markup', () => {
     assert.ok(on.includes('aria-pressed="true"') && on.includes('data-unread-current="true"'));
     assert.ok(on.includes('mark-unread-toggle--active'));
     assert.ok(!off.includes('mark-unread-toggle--active'));
-    assert.ok(off.includes('mark unread for followup'));
-    assert.ok(on.includes('clear unread flag'));
+    assert.ok(off.includes('mark unread'));
+    assert.ok(on.includes('clear unread'));
     assert.ok(off.includes('<svg') && on.includes('<svg'), 'envelope glyph still rendered');
 });
 
