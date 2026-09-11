@@ -26,6 +26,23 @@ A grep cannot tell whether the attribute exists; importing and poking
 cannot tell whether anything reaches for it. Both halves are here: the AST
 says what is referenced, the import says what resolves.
 
+**THE THIRD RULE IS ARGUMENT REACHABILITY, AND IT IS HERE BECAUSE THE
+FIRST TWO MISSED A LIVE ONE.** 1.4.0 shipped
+`_resolve_backend(session_manager, target_sid)` in `src/api/websocket.py`
+while the two call sites below it passed `registry`. That is neither a
+package import nor a `self.<attr>` read - it is the WRONG OBJECT passed as
+an argument, where the callee then reaches for a member the passed object
+does not carry. The symbol resolved, the file imported, 388 imports and
+384 attributes checked green, and every terminal open silently lost its
+attach paint because the `AttributeError` landed in the handshake's one
+`except Exception`.
+
+So the rule below reads the CALLEE to learn which members it uses on a
+parameter, then resolves each call site's argument THROUGH ITS ASSIGNMENT
+rather than by its name. Following the assignment is what makes it more
+than a spelling check: renaming the local variable cannot hide a
+reintroduction, and neither can aliasing it.
+
 SCOPED TO `src/` ON PURPOSE. Under `tests/` a name like `manager` is
 routinely a local double with attributes the real class has never had, so
 including them would produce false failures and, worse, would train the
@@ -65,6 +82,32 @@ PACKAGES = ("src.config", "src.models")
 #: miss.
 MANAGER_MODULE = "src.core.session_manager"
 MANAGER_CLASS = "SessionManager"
+
+#: Functions taking a COLLABORATOR as a positional argument, as
+#: (module, function, argument index). The rule reads the callee to learn
+#: which members it uses on that parameter, then checks that every call
+#: site passes something carrying them.
+#:
+#: `_resolve_backend` is here because it is the one this rule was written
+#: for. Adding an entry costs one line and buys the same guard for another
+#: seam; a function whose parameter is a plain value rather than a
+#: collaborator does not belong here, because it has no member contract to
+#: derive.
+ARGUMENT_CONTRACTS = (
+    ("src.api.ws_connections", "_resolve_backend", 0),
+)
+
+#: How a binding expression maps to the class it produces, keyed on the
+#: TAIL of the dotted expression so `websocket.app.state.services.registry`
+#: and `request.app.state.services.registry` both resolve to one entry.
+#: An argument whose binding matches nothing here is REPORTED AS
+#: UNRESOLVED and never guessed at - a wrong guess would fail a call site
+#: that is perfectly correct, which is how a guard gets widened until it
+#: means nothing.
+COLLABORATOR_BINDINGS = {
+    "services.registry": ("src.core.sessions.registry", "SessionRegistry"),
+    "state.session_manager": (MANAGER_MODULE, MANAGER_CLASS),
+}
 
 
 def _python_files():
@@ -168,6 +211,169 @@ def test_every_manager_self_attribute_resolves():
     )
 
 
+def _dotted_name(node):
+    """Render an attribute chain as a dotted string.
+
+    Description: `websocket.app.state.services.registry` comes back as that
+      exact string. Anything not rooted in a bare name - a call, a
+      subscript - comes back None, which the caller treats as unresolved
+      rather than guessing.
+    Inputs: node (ast.AST).
+    Output: str | None.
+    Example: _dotted_name(tree.body[0].value) -> 'a.b.c'
+    """
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _contract_members(module_path, function_name, arg_index):
+    """Which members the callee uses on one of its parameters.
+
+    Description: DERIVED FROM THE CALLEE, never declared here. A contract
+      written down in this file would be a second copy of the function's
+      body and would go stale the first time the function changed, which
+      is the precise failure this whole module exists to catch.
+    Inputs: module_path (Path); function_name (str); arg_index (int).
+    Output: tuple[str | None, set[str]] - the parameter name and the
+      members read off it.
+    Example: _contract_members(p, '_resolve_backend', 0)
+    """
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != function_name:
+            continue
+        params = node.args.args
+        if arg_index >= len(params):
+            return None, set()
+        param = params[arg_index].arg
+        members = {
+            child.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Name)
+            and child.value.id == param
+        }
+        return param, members
+    return None, set()
+
+
+def _argument_call_sites(function_name, arg_index):
+    """Every call to `function_name` in `src/`, with its argument's binding.
+
+    Description: resolves the argument NAME to the expression it was
+      assigned from, within the enclosing function, so the check below can
+      ask what TYPE was passed rather than what the variable was called.
+    Inputs: function_name (str); arg_index (int).
+    Output: list[tuple[str, int, str, str | None]] - file, line, argument
+      name, and the dotted binding (None when it could not be resolved).
+    """
+    sites = []
+    for path in _python_files():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - a broken tree fails elsewhere
+            continue
+        for scope in ast.walk(tree):
+            if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            bindings = {}
+            for node in ast.walk(scope):
+                if not isinstance(node, ast.Assign):
+                    continue
+                dotted = _dotted_name(node.value)
+                if not dotted:
+                    continue
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        bindings[target.id] = dotted
+            for node in ast.walk(scope):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == function_name
+                    and len(node.args) > arg_index
+                    and isinstance(node.args[arg_index], ast.Name)
+                ):
+                    name = node.args[arg_index].id
+                    sites.append(
+                        (str(path), node.lineno, name, bindings.get(name))
+                    )
+    return sites
+
+
+def _resolved_class(binding):
+    """The class a dotted binding produces, or None when unmapped.
+
+    Inputs: binding (str) - a dotted expression.
+    Output: type | None.
+    Example: _resolved_class('ws.app.state.services.registry')
+    """
+    for tail, (module_name, class_name) in COLLABORATOR_BINDINGS.items():
+        if binding == tail or binding.endswith("." + tail):
+            return getattr(importlib.import_module(module_name), class_name)
+    return None
+
+
+def test_every_collaborator_argument_carries_the_members_its_callee_uses():
+    """A function handed the wrong object is caught before it ships.
+
+    Description: THE DEFECT THIS CATCHES DOES NOT RAISE WHERE IT IS
+      WRITTEN. It raises inside the callee, at attribute-access time, which
+      on the path that produced this rule was inside a broad `except` that
+      logged and carried on. So the call site looks fine, the import
+      resolves, the suite stays green, and the feature is simply gone.
+    """
+    unresolved = []
+    wrong = []
+    checked = 0
+
+    for module_name, function_name, arg_index in ARGUMENT_CONTRACTS:
+        module_path = SRC.parent / (module_name.replace(".", "/") + ".py")
+        param, members = _contract_members(module_path, function_name, arg_index)
+        assert members, (
+            f"derived no members for {function_name}'s argument {arg_index} "
+            f"({param!r}), so this rule would pass without measuring anything"
+        )
+
+        for path, line, arg_name, binding in _argument_call_sites(
+            function_name, arg_index
+        ):
+            rel = pathlib.Path(path).relative_to(SRC.parent)
+            if binding is None:
+                unresolved.append(f"{rel}:{line}: {arg_name} (no binding found)")
+                continue
+            cls = _resolved_class(binding)
+            if cls is None:
+                unresolved.append(f"{rel}:{line}: {arg_name} = {binding}")
+                continue
+            checked += 1
+            missing = sorted(m for m in members if not hasattr(cls, m))
+            if missing:
+                wrong.append(
+                    f"{rel}:{line}: {function_name}({arg_name}) gets "
+                    f"{cls.__name__} (from {binding}), which has no "
+                    + ", ".join(missing)
+                )
+
+    assert checked, (
+        "no call site resolved to a known collaborator, so this rule "
+        "measured nothing. Either COLLABORATOR_BINDINGS is stale or the "
+        "call sites moved:\n  " + "\n  ".join(unresolved)
+    )
+    assert not wrong, (
+        "these call sites pass an object that does not carry the members "
+        "the callee reads off it:\n  " + "\n  ".join(wrong)
+    )
+
+
 def test_the_collectors_can_actually_fail():
     """THE NEGATIVE CONTROL, and it is not optional here.
 
@@ -188,3 +394,23 @@ def test_the_collectors_can_actually_fail():
 
     config_module = importlib.import_module("src.config")
     assert not hasattr(config_module, "_a_symbol_this_package_never_exported")
+
+    # AND THE ARGUMENT RULE, which needs its own control for the same
+    # reason: it asserts "nothing wrong was found". The pairing that
+    # actually shipped broken is the proof that it can find something -
+    # `SessionManager` really does fail `_resolve_backend`'s contract, so a
+    # call site resolving to it WOULD be reported. If this list ever comes
+    # back empty the rule has stopped being able to fail and is decoration.
+    param, members = _contract_members(
+        SRC / "api" / "ws_connections.py", "_resolve_backend", 0
+    )
+    assert members, "the contract collector derived nothing to check"
+    manager_class = getattr(
+        importlib.import_module(MANAGER_MODULE), MANAGER_CLASS
+    )
+    assert [m for m in members if not hasattr(manager_class, m)], (
+        f"{MANAGER_CLASS} now carries every member _resolve_backend reads "
+        f"off its argument ({sorted(members)}), so passing the manager "
+        "there would no longer be detectable and the rule above proves "
+        "nothing about which object is passed"
+    )
