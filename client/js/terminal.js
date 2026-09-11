@@ -1983,12 +1983,14 @@ class Terminal { // translucent bg: see client/js/terminal-background-opacity.js
             // a bounded timeout window (2s). Any debounce here would eat
             // into that budget and risk the server proceeding with stale
             // birth dims.
+            // THROUGH THE GUARD, and it ships either way: a refused
+            // measurement leaves the last known good grid standing, and
+            // replying with nothing makes the server proceed on the
+            // pane's birth dims, which is worse than a stale grid.
             if (this.fitAddon && this.term) {
-                try {
-                    this.fitAddon.fit();
-                } catch (e) {
-                    console.warn('[TERM-RESIZE] handshake fit failed', e);
-                }
+                const r = window.TerminalMetrics?.guardedFit
+                    ? window.TerminalMetrics.guardedFit(this) : { fitted: false, reason: 'no-metrics' };
+                if (!r.fitted) console.warn(`[TERM-RESIZE] handshake fit skipped, reason=${r.reason}`);
                 this.sendResize('handshake', true /* force: always ship on handshake */);
             }
         } else if (type === 'terminal.ready') {

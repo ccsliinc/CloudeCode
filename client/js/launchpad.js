@@ -2681,42 +2681,30 @@ class Launchpad {
             if (window.TerminalController && !window.TerminalController.term) {
                 await window.TerminalController.init();
             }
-            // 3. Yield two animation frames so the layout actually
-            //    flushes before fitAddon measures the container.
-            await new Promise((r) =>
-                requestAnimationFrame(() => requestAnimationFrame(r))
-            );
-            // 4. Fit + read measured geometry. Wrap in try/catch -
-            //    fit can throw if the container isn't laid out yet;
-            //    we tolerate and fall back to 0 (server treats 0 as
-            //    "skip pre-resize").
-            let cols = 0;
-            let rows = 0;
-            try {
-                if (
-                    window.TerminalController &&
-                    window.TerminalController.fitAddon &&
-                    typeof window.TerminalController.fitAddon.fit === 'function'
-                ) {
-                    window.TerminalController.fitAddon.fit();
-                }
-                cols =
-                    (window.TerminalController &&
-                        window.TerminalController.term &&
-                        window.TerminalController.term.cols) ||
-                    0;
-                rows =
-                    (window.TerminalController &&
-                        window.TerminalController.term &&
-                        window.TerminalController.term.rows) ||
-                    0;
-            } catch (fitErr) {
-                // Tolerated - fall through with 0/0; server skips
-                // the pre-resize and behavior is identical to the
-                // pre-fix path for THIS request (same-width clients
-                // are unaffected anyway).
-                console.warn('rejoin pre-fit failed', fitErr);
-            }
+            // 3. Let layout flush before anything is measured. BOUNDED:
+            //    a bare double-rAF await never resolves in a tab the
+            //    browser is not painting, and the session fetch and the
+            //    terminal entry are both below it, so that wait does not
+            //    delay this path - it cancels it. Gotcha 9.
+            await (window.TerminalLayoutWait
+                ? window.TerminalLayoutWait.settleFrames(2)
+                : Promise.resolve());
+            // 4. Read the measured geometry through TerminalMetrics,
+            //    which owns both the fit and the guard in front of it.
+            //    Reaching into TerminalController.fitAddon from the
+            //    launchpad was a layering violation AND an unguarded fit:
+            //    these numbers become the pane's BIRTH geometry, so a
+            //    grid derived from a cell measured before xterm.css
+            //    applied would birth a real tmux pane at a size matching
+            //    nothing on screen. currentGrid answers {} when it cannot
+            //    be trusted, and the server treats 0 as "skip the
+            //    pre-resize", which is the pre-fix behaviour for this
+            //    request.
+            const grid = window.TerminalMetrics
+                ? window.TerminalMetrics.currentGrid()
+                : {};
+            const cols = grid.cols || 0;
+            const rows = grid.rows || 0;
 
             const info = await window.API.getSession(rowSessionId, {
                 includeScrollback: true,
