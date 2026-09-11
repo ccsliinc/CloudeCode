@@ -252,11 +252,20 @@ test('the panel reads its root table and plan from this module', () => {
         'the silent continue that dropped both project roots must stay gone');
 });
 
-test('index.html loads the roots module before the panel', () => {
-    const html = fs.readFileSync(path.join(__dirname, '..', 'client', 'index.html'), 'utf8');
-    const roots = html.indexOf('<script src="/static/js/config-editor-roots.js">');
-    const panel = html.indexOf('<script src="/static/js/config-editor-panel.js">');
-    assert.ok(roots !== -1, 'config-editor-roots.js must be served');
+test('module-families.js loads the roots module before the panel', () => {
+    // Issue #48: both files moved out of index.html's eager <script>
+    // list and into window.ModuleFamilies.CONFIG_EDITOR, which
+    // module-loader.js downloads concurrently but executes in the
+    // array's own order (async=false on every injected <script>). So the
+    // load-bearing order now lives in that array, not in index.html.
+    const families = fs.readFileSync(
+        path.join(__dirname, '..', 'client', 'js', 'module-families.js'),
+        'utf8',
+    );
+    const roots = families.indexOf("'/static/js/config-editor-roots.js'");
+    const panel = families.indexOf("'/static/js/config-editor-panel.js'");
+    assert.ok(roots !== -1, 'config-editor-roots.js must be listed in the CONFIG_EDITOR family');
+    assert.ok(panel !== -1, 'config-editor-panel.js must be listed in the CONFIG_EDITOR family');
     assert.ok(roots < panel, 'the panel reads ConfigEditorRoots.ROOTS at definition time');
 });
 

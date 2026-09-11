@@ -219,7 +219,21 @@ function loadApp(opts) {
         syncForSession() { calls.audioSync++; },
     };
     sandbox.ArchiveScreen = { show(p) { calls.archiveShown.push(p); } };
-    sandbox.Router = { resetToLauncher() {} };
+    // Issue #48: the real client/js/archive-loader.js loads the archive
+    // family through window.ModuleLoader before calling
+    // ArchiveScreen.show(), which is asynchronous by construction (a real
+    // network fetch). This suite's test() harness runs its assertions
+    // synchronously right after calling showArchive(), so the stub here
+    // calls through to ArchiveScreen.show() IN THE SAME TICK rather than
+    // via a real Promise - it stands in for "the family was already
+    // loaded", which is the state every assertion in this file cares
+    // about (whether ArchiveScreen.show() was reached with the right
+    // params), not the loading mechanics themselves - those are covered
+    // by tests/test_module_loader.node.mjs.
+    sandbox.ArchiveLoader = {
+        showWhenReady(params) { sandbox.ArchiveScreen.show(params); },
+    };
+    sandbox.Router = { resetToLauncher() {}, showError() {} };
 
     // Instance handles showArchive() strips `hidden` from. Real code
     // guards the last two but not logoutBtn, matching index.html.

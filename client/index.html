@@ -804,6 +804,15 @@
          drifting copies of it before. -->
     <script src="/static/js/kebab-icon.js"></script>
     <script src="/static/js/api.js"></script>
+    <!-- Issue #48: the same-origin lazy script loader, and the ordered
+         URL lists for the two families it loads on demand (the message
+         archive and the config/project file editor). Both are
+         self-contained IIFEs with no dependency of their own, so they
+         load here, early, once - client/js/archive-loader.js and
+         client/js/config-editor-loader.js (further down, beside each
+         family's eager remnant) are what actually call them. -->
+    <script src="/static/js/module-loader.js"></script>
+    <script src="/static/js/module-families.js"></script>
     <!-- The two CROSS-SESSION toast reads, extending API.prototype the
          way api-archive.js does. MUST load after api.js: `class API` is
          not hoisted across scripts and this file refuses loudly rather
@@ -1338,42 +1347,22 @@
     <script src="/static/js/toast-history-panel.js"></script>
     <script src="/static/js/settings-panel.js"></script>
 
-    <!-- Vendored CodeMirror 6 (see client/vendor/codemirror/VERSION.md) -
-         served from this app's own origin so it satisfies the CSP's
-         script-src 'self' with no CDN and no policy change. Exposes
-         window.CodeMirrorBundle. Must load BEFORE config-editor-modal.js. -->
-    <script src="/static/vendor/codemirror/codemirror-bundle.js"></script>
-
-    <!-- Config/project file tree + editor. Must load AFTER api.js
-         (window.API) and BEFORE app.js so App.init() can wire
-         #configEditorBtn's click handler to window.ConfigEditorPanel.open(). -->
+    <!-- Config/project file tree + editor (issue #48). CodeMirror
+         (client/vendor/codemirror/, see its VERSION.md) and every
+         config-editor-*.js file, plus its config-drawer-pin.js companion,
+         now load LAZILY on first click of #configEditorBtn rather than on
+         every page load - see client/js/module-families.js
+         (window.ModuleFamilies.CONFIG_EDITOR, the ordered URL list) and
+         client/js/config-editor-loader.js (the click-time glue,
+         App.init() wires the button to it). Only markdown-lite.js and
+         modal-stack.js stay eager: both are shared with modules that are
+         NOT part of this lazy family (copy-output.js and
+         server-status-panel.js respectively), so moving them would
+         either load them twice or make an unrelated eager feature depend
+         on a lazy one. -->
     <script src="/static/js/markdown-lite.js"></script>
-    <!-- Escape routing / scroll lock / focus restore for the picker+editor
-         pair. Must load BEFORE both of them. -->
     <script src="/static/js/modal-stack.js"></script>
-    <script src="/static/js/config-editor-modal.js"></script>
-    <!-- "new file" prompt. Must load BEFORE config-editor-panel.js, whose
-         header button calls window.ConfigEditorNewFile.open(). -->
-    <script src="/static/js/config-editor-new-file.js"></script>
-    <!-- Root table + working-directory resolver + the "why is this root
-         absent" sentences. Must load BEFORE config-editor-panel.js, which
-         reads window.ConfigEditorRoots.ROOTS at class-definition time. -->
-    <script src="/static/js/config-editor-roots.js"></script>
-    <!-- Which tree nodes start collapsed, and the localStorage map behind
-         it. Must load BEFORE config-editor-panel.js, which renders against
-         window.ConfigEditorTreeState. -->
-    <script src="/static/js/config-editor-tree-state.js"></script>
-    <!-- Fetching one directory's children on expand, so the server never
-         walks a level nobody opened. Must load AFTER api.js and
-         config-editor-roots.js, and BEFORE config-editor-panel.js, which
-         reads window.ConfigEditorLazy while building every directory row. -->
-    <script src="/static/js/config-editor-lazy.js"></script>
-    <script src="/static/js/config-editor-panel.js"></script>
-    <!-- Docking the file drawer open. Must load AFTER
-         config-editor-panel.js (reads window.ConfigEditorPanel.isOpen) and
-         it is the panel's _wire() that calls init(). Same split, same
-         reasons, as session-sidebar-pin.js beside session-sidebar.js. -->
-    <script src="/static/js/config-drawer-pin.js"></script>
+    <script src="/static/js/config-editor-loader.js"></script>
 
     <!-- Mobile header dropdown. Must load AFTER dismiss-guard.js
          (window.DismissGuard). It re-parents the existing header control
@@ -1422,120 +1411,31 @@
     <script src="/static/js/server-controls-menu.js"></script>
 
     <!-- App Controller (extracted for CSP compliance) -->
-    <!-- Archive (message browser). Order is DEPENDENCY order: the API
-         half first (api-archive.js extends API.prototype and throws if
-         api.js has not run), then pure helpers, then state, then views,
-         then the composition root. app.js MUST stay last - it is the
-         controller and reaches for these globals at parse time. -->
-    <script src="/static/js/api-archive.js"></script>
-    <!-- THE WAY IN. Both the launchpad row and the header overflow item
-         call ArchiveEntry.open(), so there is ONE navigation into the
-         archive rather than two that can drift apart. Before this the
-         only control in the whole DOM matching /archive/ was the archive
-         screen's own Back button - you had to type the URL. -->
-    <script src="/static/js/archive-entry.js"></script>
-    <script src="/static/js/archive-outcome.js"></script>
-    <script src="/static/js/archive-mask.js"></script>
-    <script src="/static/js/archive-format.js"></script>
-    <!-- Subsequence matching for the transcript list's per-column
-         filters. Pure; no DOM. -->
-    <script src="/static/js/archive-fuzzy.js"></script>
+    <!-- Archive (message browser), issue #48. The 51 files that used to
+         load here unconditionally - the API extension, every pure
+         helper, nav, transcript list, reader, chat view and the screen
+         shell itself - now load LAZILY, on first entry into /archive, in
+         their same DEPENDENCY order. See client/js/module-families.js
+         (window.ModuleFamilies.ARCHIVE, the ordered URL list),
+         client/js/module-loader.js (the same-origin script loader) and
+         client/js/archive-loader.js (App.showArchive()'s glue).
+
+         Two files stay eager. archive-deeplink.js is route PARSING:
+         router.js must be able to resolve a deep link to
+         /archive/t/<id> before anything is lazily loaded, or the app
+         cannot tell what to load - see router.js's own
+         parseArchivePath(), which already has a named "did not load"
+         refusal for exactly this reason. archive-entry.js is THE WAY IN:
+         both the launchpad row and the header overflow item call
+         ArchiveEntry.open(), so there is ONE navigation into the archive
+         rather than two that can drift apart, and it has to be present
+         before the user has clicked anything to decide whether either
+         entry point should even be shown. app.js MUST stay last - it is
+         the controller and reaches for archive-loader.js's and every
+         other eager module's globals at parse time. -->
     <script src="/static/js/archive-deeplink.js"></script>
-    <script src="/static/js/archive-virtual-list.js"></script>
-    <script src="/static/js/archive-state.js"></script>
-    <script src="/static/js/archive-outcome-view.js"></script>
-    <script src="/static/js/archive-body-gate.js"></script>
-    <script src="/static/js/archive-body-cache.js"></script>
-    <script src="/static/js/archive-line-render.js"></script>
-    <!-- archive-nav-fuzzy.js defines no dependency of its own; it must
-         simply precede archive-nav-merged.js, which calls it. -->
-    <script src="/static/js/archive-nav-fuzzy.js"></script>
-    <script src="/static/js/archive-nav-row.js"></script>
-    <!-- The next three all read window.ArchiveNavRow at IIFE time, so they
-         load AFTER archive-nav-row.js and BEFORE archive-nav.js.
-         archive-nav-card.js renders a project as a card; archive-nav-row.js
-         delegates to it at CALL time, so the order between those two is not
-         load-bearing, but archive-nav-tree.js IS a hard dependency of
-         archive-nav.js, which reads window.ArchiveNavTree at create() time.
-         archive-nav-info.js is the card's info modal and registers with
-         modal-stack.js, which is already loaded far above. -->
-    <script src="/static/js/archive-nav-card.js"></script>
-    <script src="/static/js/archive-nav-info.js"></script>
-    <script src="/static/js/archive-nav-tree.js"></script>
-    <!-- The rail's ORDER: comparators, the persisted choice, and how a
-         project's date renders. Both readers reach for it at PAINT
-         time, not at load time (archive-nav-row.js calls activityCell
-         inside renderRow, archive-nav-merged.js calls sortNodes inside
-         paint), so any position before the first paint is correct - and
-         both guard on its absence rather than throwing. -->
-    <script src="/static/js/archive-nav-order.js"></script>
-    <!-- The by-machine drill-down, split out of archive-nav.js when the
-         order control took that file over the 500-line cap. Read at
-         create() time, so it must load BEFORE archive-nav.js. -->
-    <script src="/static/js/archive-nav-drill.js"></script>
-    <script src="/static/js/archive-nav-merged.js"></script>
-    <script src="/static/js/archive-nav.js"></script>
-    <script src="/static/js/archive-tlist-row.js"></script>
-    <!-- The compact scheme chooser and the three fuzzy inputs. MUST load
-         before archive-transcript-list.js, which builds one. -->
-    <script src="/static/js/archive-tlist-filter.js"></script>
-    <script src="/static/js/archive-transcript-list.js"></script>
-    <script src="/static/js/archive-keys.js"></script>
-    <!-- The keyboard help MODAL, split out of archive-keys.js when the
-         `v` binding took that file over the 500-line cap. It reads
-         ArchiveKeys.bindings() at OPEN time, so it MUST load after it. -->
-    <script src="/static/js/archive-keys-help.js"></script>
-    <script src="/static/js/archive-reader-dom.js"></script>
-    <script src="/static/js/archive-reader-paging.js"></script>
-    <script src="/static/js/archive-reader-select.js"></script>
-    <script src="/static/js/archive-reader-body.js"></script>
-    <!-- The reused-row node cache. Must load before archive-reader.js,
-         which asks window.ArchiveRowCache for one per reader instance. -->
-    <script src="/static/js/archive-row-cache.js"></script>
-    <script src="/static/js/archive-reader.js"></script>
-    <script src="/static/js/archive-search-render.js"></script>
-    <script src="/static/js/archive-search.js"></script>
-    <script src="/static/js/archive-export.js"></script>
-    <script src="/static/js/archive-screen-reader.js"></script>
-    <!-- THE CONVERSATION VIEW, which is the reader's DEFAULT. Six files,
-         loaded innermost first because each one reads the globals of the
-         ones above it AT CALL TIME, not at load: block -> estimate,
-         block/info/subagents -> turn, turn/estimate/stack -> view,
-         view -> screen. archive-mask.js, archive-outcome*.js and
-         archive-virtual-list.js are all already loaded above; the chat
-         view reuses them rather than growing its own masking, its own
-         outcome vocabulary or its own windowing engine. -->
-    <script src="/static/js/archive-chat-block.js"></script>
-    <script src="/static/js/archive-chat-info.js"></script>
-    <script src="/static/js/archive-chat-subagents.js"></script>
-    <script src="/static/js/archive-chat-turn.js"></script>
-    <script src="/static/js/archive-chat-estimate.js"></script>
-    <script src="/static/js/archive-chat-stack.js"></script>
-    <script src="/static/js/archive-chat-clicks.js"></script>
-    <script src="/static/js/archive-chat-view.js"></script>
-    <script src="/static/js/archive-chat-screen.js"></script>
-    <!-- Draggable, remembered pane widths. MUST load before
-         archive-screen-shell.js, which attaches the two handles to the
-         grid it creates, at script load. -->
-    <script src="/static/js/archive-pane-resize.js"></script>
-    <!-- What a breadcrumb segment SAYS, so no database id reaches one.
-         Pure; no DOM. -->
-    <script src="/static/js/archive-crumb.js"></script>
-    <!-- Names a project reached by URL rather than by a rail click. Reads
-         window.ArchiveCrumb.indexNodes, so it loads AFTER archive-crumb.js
-         and before archive-screen.js, which builds the resolver. -->
-    <script src="/static/js/archive-crumb-resolve.js"></script>
-    <!-- The screen's DOM, and the cross-pane reader toolbar. Both split
-         out of archive-screen.js for the 500-line cap; both MUST load
-         before it, because it builds its shell at ITS script load. -->
-    <script src="/static/js/archive-screen-shell.js"></script>
-    <script src="/static/js/archive-screen-tools.js"></script>
-    <!-- Both reader-pane views and the switch between them. Reads
-         ArchiveReader, ArchiveChatScreen and ArchiveScreenTools at CALL
-         time, so it only has to load before archive-screen.js, which
-         builds it at wire(). -->
-    <script src="/static/js/archive-screen-views.js"></script>
-    <script src="/static/js/archive-screen.js"></script>
+    <script src="/static/js/archive-entry.js"></script>
+    <script src="/static/js/archive-loader.js"></script>
 
     <script src="/static/js/app.js"></script>
 
