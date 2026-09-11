@@ -16,6 +16,8 @@ import pytest
 
 from src.core import update_check
 from src.core.update_check import (
+    DEFAULT_UPGRADE_COMMAND,
+    FALLBACK_REMOTE,
     STATUS_CURRENT,
     STATUS_UNKNOWN,
     STATUS_UPDATE_AVAILABLE,
@@ -412,3 +414,43 @@ def test_malformed_cache_is_not_a_passing_check(tmp_path: Path) -> None:
 
 def test_configured_remote_overrides_origin(tmp_path: Path) -> None:
     assert _checker(tmp_path).resolve_remote() == "https://example.test/x.git"
+
+
+# --- which repository this checker names -----------------------------------
+#
+# THE NEGATIVE CONTROL: the owner's ruling (2026-09-08, "use adams main
+# repo") is Adoom666/CloudeCode. ccsliinc/CloudeCode is the OTHER repo
+# named in this project (see CLAUDE.md's push-target rule), so asserting
+# against the exact string is what makes this fail if the fallback is ever
+# pointed at the wrong one, rather than only checking it is "a URL".
+
+
+def test_fallback_remote_is_the_ruled_on_repo_not_the_other_one() -> None:
+    assert FALLBACK_REMOTE == "https://github.com/Adoom666/CloudeCode.git"
+    assert "ccsliinc" not in FALLBACK_REMOTE
+
+
+def test_default_upgrade_command_points_at_the_ruled_on_repo() -> None:
+    assert DEFAULT_UPGRADE_COMMAND == (
+        "open https://github.com/Adoom666/CloudeCode/releases/latest"
+    )
+    assert "ccsliinc" not in DEFAULT_UPGRADE_COMMAND
+
+
+def test_real_repo_numbers_never_offer_a_downgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the exact scenario the update-checker-repo issue measured.
+
+    Adoom666/CloudeCode published v1.0.36 as its latest tag while this line
+    ships 1.2.1 (measured 2026-09-11, unchanged since the issue was filed).
+    A 1.2.1 install consulting that feed must read CURRENT, never
+    UPDATE_AVAILABLE - offering an older release as an upgrade is the exact
+    defect class this checker exists to prevent.
+    """
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
+    write_version_file("1.2.1", root=tmp_path)
+    monkeypatch.setattr(update_check, "fetch_remote_tags", lambda remote: ["1.0.36"])
+    status = _checker(tmp_path).refresh()
+    assert status.status == STATUS_CURRENT
+    assert status.status != STATUS_UPDATE_AVAILABLE

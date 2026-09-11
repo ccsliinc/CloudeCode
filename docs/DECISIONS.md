@@ -124,3 +124,61 @@ closes, and `gh issue list --json` has no parent field in gh 2.90, so the
 grouping it promised was never queryable from the command line anyway.
 `.claude/skills/work/` carries this under "Filing an issue", so it binds both
 parties and both sides need to pull it.
+
+## Both update checkers point at Adam's main repo
+**2026-09-08, scope: all repos, ruled by Adam as code owner and sole
+tie-breaker**
+
+Verbatim: "1. use adams main repo."
+
+Before this ruling the server-side checker (`src/core/update_check.py`,
+`FALLBACK_REMOTE` / `DEFAULT_UPGRADE_COMMAND`) and the macOS menu bar
+checker (`macOS/update-check.js`, `UPDATE_FEED_URL`) disagreed about which
+repository publishes this app: the server side already named
+`Adoom666/CloudeCode`, the menu bar side named `ccsliinc/CloudeCode`. Two
+checkers on one machine could answer "is this current" two different ways.
+They now agree, on `Adoom666/CloudeCode`.
+
+**Consequence, measured rather than assumed, and not yet resolved by this
+change.** As of 2026-09-11, `Adoom666/CloudeCode` publishes `v1.0.36` as its
+newest tag; this line ships `1.2.1` (`macOS/package.json`). A 1.2.1 install
+is therefore told the latest release is OLDER than the one it is running.
+It does not offer a downgrade - `UpdateChecker.refresh`'s
+`parsed_latest > parsed_current` and `update-check.js`'s
+`compareVersions(current, latest)` both resolve that comparison to
+"current", and `tests/test_version_and_update_check.py::
+test_real_repo_numbers_never_offer_a_downgrade` and
+`tests/test_update_check.node.mjs`'s matching case now pin the real
+1.2.1-vs-1.0.36 numbers so a future change that WOULD offer an older
+release fails a build instead of shipping.
+
+**What this change adds beyond the one-line pointer fix.** The menu bar
+checker gained `DEFAULT_RELEASE_REPO` as its single named constant for the
+repo identity (mirrored by the About window's "View on GitHub" link,
+which previously hardcoded the same string a second time), and an
+`updates.remote` override read from config.json - the SAME key
+`src/core/update_check.py` already reads for its own origin-vs-fallback
+ladder - so a developer running a personal fork can point their own menu
+bar checker at their own fork's releases without a second setting to
+learn. `Adoom666/CloudeCode` is the safe default because it is the literal
+repo this ruling names, and because a packaged build has no git checkout
+and nobody is expected to hand-edit config.json for one. The menu bar
+checker still does NOT replicate the server side's second rung (falling
+back to the checkout's own `git remote get-url origin` before the public
+fallback) - that would mean shelling out to git from the Electron main
+process for a rung only a developer's own fork would ever exercise, and
+the config override above already covers that developer.
+
+**What remains open - these are NOT answered by this change and are
+Adam's to decide, per the issue that raised them:**
+
+1. Should `Adoom666/CloudeCode` be the canonical release feed for BOTH
+   the `CloudeCodeDev` line and the public `ccsliinc/CloudeCode` line, or
+   only one of them?
+2. How do the two version schemes reconcile, given the feed is 1.0.36
+   while this line is 1.2.1?
+3. Does the 1.2.1 line's public distribution stay on `ccsliinc/CloudeCode`
+   (the `origin` remote this project's CLAUDE.md documents downloads
+   coming from) while the update FEED is `Adoom666/CloudeCode`? If so,
+   that split is deliberate and should be written down here once decided,
+   rather than left implicit.

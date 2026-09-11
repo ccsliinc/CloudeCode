@@ -16,10 +16,39 @@
  * must never render the same. A notifier that silently reports
  * up-to-date whenever the network is down is worse than no notifier: it
  * actively tells the user a falsehood they will act on.
+ *
+ * WHICH REPOSITORY THIS ASKS. Owner's ruling, 2026-09-08, verbatim: "use
+ * adams main repo." DEFAULT_RELEASE_REPO below is the single named
+ * constant for that repo - the ONE place this file's identity of "the
+ * release feed" is spelled out - and every site that needs to say the
+ * same repo (this module's default feed, the About window's "View on
+ * GitHub" link in main.js) reads it rather than re-typing the string.
+ *
+ * A packaged build has no git checkout to read and nobody is expected to
+ * hand-edit config.json for one, so a packaged install always resolves to
+ * DEFAULT_RELEASE_REPO - that is the safe default the ruling names. A
+ * developer running their own fork who wants to be told about THAT fork's
+ * own tags sets `updates.remote` in config.json: the exact key
+ * src/core/update_check.py already reads for the identical reason, reused
+ * here rather than inventing a second setting, so one config value governs
+ * both checkers on a machine instead of two separately-taught ones.
+ *
+ * NOT REPLICATED HERE: the Python checker's second rung, which falls back
+ * to the checkout's own `git remote get-url origin` before the public
+ * fallback. That rung exists there because the Python server always runs
+ * from an actual git working tree. Reproducing it would mean shelling out
+ * to git from the Electron main process for a rung only a developer
+ * running a personal fork of the menu bar app would ever exercise. Left as
+ * a known gap rather than built speculatively; the config override above
+ * covers that same developer today.
  */
 
-const UPDATE_FEED_URL =
-  'https://api.github.com/repos/ccsliinc/CloudeCode/releases/latest';
+const fs = require('node:fs');
+
+// The canonical release repo per the owner's ruling. Matches
+// src/core/update_check.py's FALLBACK_REMOTE / DEFAULT_UPGRADE_COMMAND, so
+// the two checkers name one project by default, never two.
+const DEFAULT_RELEASE_REPO = 'Adoom666/CloudeCode';
 
 const CHECK_TIMEOUT_MS = 6000;
 
@@ -58,6 +87,85 @@ function compareVersions(a, b) {
 }
 
 /**
+ * Parse an "owner/repo" pair out of a git remote URL.
+ *
+ * Description: accepts the HTTPS form (`https://github.com/OWNER/REPO.git`
+ *   or without the `.git` suffix) and the SSH form (`git@github.com:OWNER/
+ *   REPO.git`). Anything else - a non-GitHub host, a malformed string, a
+ *   non-string - returns null rather than guessing, because a wrong guess
+ *   here silently points the update feed at whatever it happens to parse
+ *   to.
+ * Inputs: url (unknown) - a candidate git remote URL.
+ * Output: string ("owner/repo") | null
+ */
+function ownerRepoFromRemoteUrl(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  const match = trimmed.match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  if (!match) return null;
+  return `${match[1]}/${match[2]}`;
+}
+
+/**
+ * Read `updates.remote` from config.json.
+ *
+ * Description: same key ``src.core.update_check.read_configured_remote``
+ *   reads, so one setting governs both checkers. NEVER THROWS: a missing
+ *   file, unparseable JSON, or an absent/malformed `updates` block are all
+ *   "no override configured" rather than an error, matching the Python
+ *   function's contract exactly so this optional key cannot break a menu
+ *   bar launch for an install that does not set it.
+ * Inputs: configPath (string | null | undefined) - path to config.json.
+ * Output: string - the configured remote URL, or "" when absent/unreadable.
+ */
+function readConfiguredRemote(configPath) {
+  if (!configPath) return '';
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  } catch {
+    // Missing file or malformed JSON: treated as "no override", not a
+    // failure - see the doc comment above.
+    return '';
+  }
+  const updates = data && data.updates;
+  if (!updates || typeof updates !== 'object') return '';
+  return typeof updates.remote === 'string' ? updates.remote.trim() : '';
+}
+
+/**
+ * Decide which "owner/repo" this checker asks the GitHub Releases API about.
+ *
+ * Description: an explicit `updates.remote` in config.json, parsed to an
+ *   owner/repo pair, if one is configured and parses; otherwise
+ *   DEFAULT_RELEASE_REPO. See this module's header comment for the full
+ *   rationale and why the default is safe.
+ * Inputs: configPath (string | null | undefined) - path to config.json.
+ * Output: string - "owner/repo".
+ */
+function resolveReleaseRepo(configPath) {
+  const configured = ownerRepoFromRemoteUrl(readConfiguredRemote(configPath));
+  return configured || DEFAULT_RELEASE_REPO;
+}
+
+/**
+ * Build the GitHub "latest release" API URL for a repo.
+ *
+ * Inputs: repo (string) - "owner/repo".
+ * Output: string - the full api.github.com URL.
+ */
+function feedUrlFor(repo) {
+  return `https://api.github.com/repos/${repo}/releases/latest`;
+}
+
+// The default feed: DEFAULT_RELEASE_REPO with no config override applied.
+// Exported for backward compatibility and for the module-level "what would
+// this check right now" read (`node -e "console.log(require('./update-
+// check.js').UPDATE_FEED_URL)"`). `checkForUpdate` itself re-resolves per
+// call so a configured override still takes effect.
+const UPDATE_FEED_URL = feedUrlFor(DEFAULT_RELEASE_REPO);
+
+/**
  * Ask the feed what the latest published version is.
  *
  * Description: NEVER THROWS. Every failure - offline, timeout, rate
@@ -66,9 +174,11 @@ function compareVersions(a, b) {
  *   check", never as "up to date".
  * Inputs: currentVersion (string) - typically app.getVersion().
  *   fetchImpl (function, optional) - injected for tests.
+ *   configPath (string, optional) - path to config.json, consulted for an
+ *     `updates.remote` override; absent means DEFAULT_RELEASE_REPO.
  * Output: Promise<{result, current, latest, url, detail}>
  */
-async function checkForUpdate(currentVersion, fetchImpl) {
+async function checkForUpdate(currentVersion, fetchImpl, configPath) {
   const doFetch = fetchImpl || globalThis.fetch;
   if (typeof doFetch !== 'function') {
     return {
@@ -76,13 +186,14 @@ async function checkForUpdate(currentVersion, fetchImpl) {
       url: null, detail: 'no fetch implementation available'
     };
   }
+  const feedUrl = feedUrlFor(resolveReleaseRepo(configPath));
   let body;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
     let response;
     try {
-      response = await doFetch(UPDATE_FEED_URL, {
+      response = await doFetch(feedUrl, {
         signal: controller.signal,
         headers: { Accept: 'application/vnd.github+json' }
       });
@@ -123,10 +234,15 @@ async function checkForUpdate(currentVersion, fetchImpl) {
 }
 
 module.exports = {
+  DEFAULT_RELEASE_REPO,
   UPDATE_FEED_URL,
   RESULT_CURRENT,
   RESULT_AVAILABLE,
   RESULT_UNKNOWN,
   compareVersions,
+  ownerRepoFromRemoteUrl,
+  readConfiguredRemote,
+  resolveReleaseRepo,
+  feedUrlFor,
   checkForUpdate
 };
