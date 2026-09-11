@@ -47,6 +47,48 @@ if (typeof ToastManager !== 'function') {
 
 Object.assign(ToastManager.prototype, {
     /**
+     * Coalesce many model changes into ONE render pass.
+     *
+     * WHY. `_render()` below rebuilds the WHOLE visible set on every call,
+     * so calling it once per arriving or dismissed record buys nothing
+     * over calling it once per BURST - issue #39 measured a 500-record
+     * backfill costing 500 renders and about 173ms of synchronous work.
+     * Every lifecycle method that used to call `this._render()` directly
+     * (client/js/toast-lifecycle.js: `add`, `dismiss`, `updateLocal`) now
+     * calls this instead.
+     *
+     * ONE PENDING FLUSH, NOT A QUEUE. `_renderPending` is the whole
+     * coalescing mechanism: the FIRST call in a burst schedules a flush
+     * and every call after it, while that flush is still pending, is a
+     * no-op here - the model mutation the caller already made is enough,
+     * because the eventual flush reads the CURRENT model, not a snapshot
+     * taken when it was scheduled.
+     *
+     * GOTCHA 9 (CLAUDE.md): a bare `await requestAnimationFrame` never
+     * resolves in a hidden tab. `client/js/toast-render-batch.js` races
+     * the frame against a `setTimeout` fallback for exactly that reason,
+     * so a backgrounded tab still flushes - delayed, never cancelled. Its
+     * absence degrades to rendering immediately, never to silently not
+     * rendering, matching how this codebase already degrades a missing
+     * optional module elsewhere (e.g. the xterm load wait).
+     *
+     * Output: None.
+     */
+    _scheduleRender() {
+      if (this._renderPending) return;
+      this._renderPending = true;
+      const flush = () => {
+        this._renderPending = false;
+        this._render();
+      };
+      if (window.ToastRenderBatch && typeof window.ToastRenderBatch.schedule === 'function') {
+        window.ToastRenderBatch.schedule(flush);
+      } else {
+        flush();
+      }
+    },
+
+    /**
      * Rebuild the visible card set from the live toast model.
      *
      * Rebuild-from-model rather than imperative append: the cap, the
@@ -410,7 +452,7 @@ Object.assign(ToastManager.prototype, {
         row.className = 'toast-overflow';
         row.addEventListener('click', () => {
           this._expanded = !this._expanded;
-          this._render();
+          this._scheduleRender();
         });
       }
 

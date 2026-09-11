@@ -187,7 +187,68 @@ SUBAGENT_WAIT_LATCH_SECONDS: int = 180
 
 _SUBAGENT_WAIT_LATCH = timedelta(seconds=SUBAGENT_WAIT_LATCH_SECONDS)
 
+#: The ``toast_suppressed`` reason string the hook endpoint returns when
+#: ``idle_notification_should_suppress`` is why a ``Notification`` was
+#: withheld. A named constant rather than a literal at both call sites -
+#: the route and the tests that assert on it - so the two cannot drift.
+IDLE_NOTIFICATION_SUPPRESSION_REASON: str = "turn_closed"
+
 logger = structlog.get_logger(__name__)
+
+
+def idle_notification_should_suppress(
+    *, permission_open: bool, turn_open: bool, stop_seen: bool
+) -> bool:
+    """Whether an idle ``Notification`` toast should stay quiet.
+
+    Description: claude fires an idle nudge ``Notification`` about 60s
+        after a turn that already ended cleanly, even with no sub-agent
+        involved - measured live 2026-09-10 on ``ses_63beb976``: twelve
+        consecutive Stop-then-Notification pairs, each at plus 60.1s,
+        each summoning the user to a session that had nothing to ask. The
+        sub-agent gate above (``subagent_depth`` / ``subagent_wait_active``)
+        only covers the case where the trailing wait was for a sub-agent;
+        this is the same false-urgency shape one layer broader.
+
+        Suppress ONLY when all three hold: a ``Stop`` was POSITIVELY seen
+        (``stop_seen``), nothing has reopened the turn since (``turn_open``
+        is False - the same flag ``record_event`` already keeps so a late
+        ``PostToolUse`` can be told from one belonging to the turn running
+        right now), and no permission is currently open. Any single False
+        means "do not suppress": this fails toward notifying, never toward
+        silence.
+    Inputs:
+        permission_open: the session's CURRENT ``permission_open`` flag. A
+            permission prompt is a hard block on the agent, so its
+            presence alone forces the answer False regardless of the
+            other two - ``PermissionRequest`` must never be silenced by
+            this rule (it is also never routed through it - see the
+            caller - but the pure function refuses it too, defensively).
+        turn_open: the session's CURRENT ``turn_open`` flag. True means an
+            opening event (``UserPromptSubmit`` / ``PreToolUse`` /
+            ``SubagentStart``) landed since the last ``Stop`` - the turn is
+            live again and the notification may describe real work.
+        stop_seen: whether a ``Stop`` has EVER been positively observed for
+            this session. False means "not having looked is not evidence
+            the turn ended" - a fresh session, or one whose ``Stop`` was
+            dropped, must still notify.
+    Output: bool. True only when a Stop was seen, nothing has reopened the
+        turn since, and no permission is open.
+    Example:
+        >>> idle_notification_should_suppress(
+        ...     permission_open=False, turn_open=False, stop_seen=True
+        ... )
+        True
+        >>> idle_notification_should_suppress(
+        ...     permission_open=False, turn_open=False, stop_seen=False
+        ... )
+        False
+        >>> idle_notification_should_suppress(
+        ...     permission_open=True, turn_open=False, stop_seen=True
+        ... )
+        False
+    """
+    return stop_seen and not turn_open and not permission_open
 
 
 def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
@@ -780,6 +841,36 @@ class SessionActivityTracker:
             return False
         now = now or datetime.utcnow()
         return (now - state.subagent_wait_since) < _SUBAGENT_WAIT_LATCH
+
+    def should_suppress_idle_notification(self, session_id: str) -> bool:
+        """Whether ``session_id``'s idle ``Notification`` toast should stay quiet.
+
+        Description: Thin read of the session's current signal state,
+            handed to the pure ``idle_notification_should_suppress`` so the
+            rule itself stays independently testable with plain booleans -
+            matching the split ``resolve()`` already uses between state and
+            logic. An unknown session answers False, in the same posture as
+            ``subagent_depth`` / ``subagent_wait_active`` above: not having
+            a record is not evidence a turn ended, and the one caller uses
+            a True only to STAY SILENT.
+        Inputs:
+            session_id: cloudecode session id.
+        Output: bool.
+        Example:
+            >>> tracker = SessionActivityTracker()
+            >>> tracker.record_event("s1", EVENT_USER_PROMPT_SUBMIT)
+            >>> tracker.record_event("s1", EVENT_STOP)
+            >>> tracker.should_suppress_idle_notification("s1")
+            True
+        """
+        state = self._signals.get(session_id)
+        if state is None:
+            return False
+        return idle_notification_should_suppress(
+            permission_open=state.permission_open,
+            turn_open=state.turn_open,
+            stop_seen=state.last_stop_ts is not None,
+        )
 
     def forget(self, session_id: str) -> None:
         """Drop all ephemeral state for ``session_id``. Idempotent.

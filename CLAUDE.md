@@ -2442,11 +2442,23 @@ vocabulary but is GALLERY-ONLY - no live endpoint is meant to carry a
 dead row to the client. A round that read the same measurement as a bug
 and made a husk KEEP its row, painted dead, was overruled and reverted
 (`ba2aa5d`), and `tests/test_led_real_hooks.py` holds the line against a
-real killed pane. STILL OPEN: `remain-on-exit` keeps the husk's tmux
-session in the listing, and `session_lifecycle` reaps on ABSENCE from
-that listing, so the row leaves the live list without yet arriving in
-Recent. Closing that needs a reaper rung keyed on a MEASURED
-`#{pane_dead}`, which is a new durable writer and its own change.
+real killed pane. CLOSED 2026-09-10: `remain-on-exit` keeps the husk's
+tmux session in the listing, and `session_lifecycle` reaps on ABSENCE
+from that listing, so the row used to leave the live list without ever
+arriving in Recent. `src/core/session_pane_death.py` is the second reaper
+rung, keyed on a MEASURED `#{pane_dead}` of exactly `"1"` read out of the
+COMPLETE `list-panes -a` the launcher pass already pays for, on the
+socket the reconcile is about, for a row whose creation epoch matches -
+no listing, a partial one, a socket mismatch, an unreadable field or a
+re-minted name all answer `unknown` and reap nothing, because refusing is
+free and one wrong reap costs a live session. It ADDS NO TMUX CALL: the
+pane probe was already being taken a few lines below and is simply taken
+before the reaper instead. It writes the SAME FOUR COLUMNS as the absence
+rung and differs only in `lifecycle_source`, which is `pane_dead` rather
+than `tmux_missing`. STILL OPEN: the tmux HUSK is deliberately NOT
+killed, so the dead session keeps its name and the next session for that
+project is still uniquified to `<name>-2`; freeing the name means killing
+a tmux session, which needs the owner's explicit yes.
 
 **A VIEW CLEARS AN OPEN `permission`, AND AN OPEN ONE IS VERIFIED
 AGAINST THE PANE AFTER 20 SECONDS.** Measured 2026-09-09,
@@ -2463,6 +2475,27 @@ keeps, marker absent clears and logs `permission_flag_cleared_no_dialog`,
 an UNREADABLE tail keeps, and the markers were read off two real dialogs
 (`Do you want to ...?`, `❯ 1. Yes`, `Esc to cancel · Tab to amend`)
 rather than guessed. See `src/core/session_permission_verify{,_apply}.py`.
+
+**AND A PANE THAT IS GONE CLEARS IT TOO, BUT ONLY ON A READING THAT
+ACTUALLY HAPPENED.** A claim left open at the instant its pane died could
+never be retired - no `capture-pane` can run against a corpse - so
+`_session_info_for`'s `LIVENESS_GONE` arm clears it with no capture at
+all, on the way to dropping the row. The trap is that
+`resolve_listing_liveness` answers `gone` by TWO roads and only one is a
+measurement: a COMPLETE listing from the backend's OWN socket naming the
+session and reporting `#{pane_dead}` dead, or a falsy `exists`, which for
+tmux came from `is_alive()` and therefore returns the same False for "no
+such session" as for "tmux is missing, timed out, or errored". Only the
+first passes `pane_alive=False`; the second passes `None`, which the seam
+treats as no reading and which KEEPS the flag. The asymmetry is not
+fussiness: the dropped row beside it self-heals on the very next poll,
+while a cleared flag is reopened by nothing short of a brand new
+`PermissionRequest`, so one timed-out probe would silently retire a
+dialog the user never answered. `session_pane_death.pane_death` states
+the same discipline for the REAPER and is deliberately not reused here,
+because it requires the STORED row's `tmux_created_epoch` and this pass
+holds no trustworthy one; `listing_proves_alive`, already computed on the
+line above for `exists`, is the rule that IS reused.
 
 **A tmux `running` pane maps to `unknown`, NOT `working`.** It means only
 "the foreground command is not a bare shell", which is equally true of an

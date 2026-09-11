@@ -510,6 +510,14 @@ def test_the_latch_expires_and_the_notification_is_raised(
 
     _age_the_latch(mgr, SUBAGENT_WAIT_LATCH_SECONDS + 1)
 
+    # The separate, unbounded idle-nudge gate (see
+    # tests/test_hook_toast_idle_nudge_suppression.py) would ALSO suppress
+    # this Notification on its own evidence (a clean Stop, nothing reopened
+    # since) - correctly, but that is not what THIS test is about. Neutralize
+    # it so this file keeps testing the sub-agent latch's own boundedness in
+    # isolation.
+    monkeypatch.setattr(mgr, "should_suppress_idle_notification", lambda sid: False)
+
     resp, mock_bcast = _post_event(app, mgr, "Notification")
 
     assert "toast_id" in resp.json()
@@ -566,8 +574,14 @@ def test_an_opening_event_clears_the_latch(monkeypatch, tmp_path, opening):
 def test_a_session_that_never_had_subagents_is_unaffected(
     monkeypatch, tmp_path
 ):
-    """No sub-agent, no latch, no behaviour change of any kind."""
+    """No sub-agent, no latch, no behaviour change of any kind - OF THIS
+    GATE. The separate idle-nudge gate (see
+    tests/test_hook_toast_idle_nudge_suppression.py) does now suppress a
+    plain Notification following a clean Stop with nothing reopened since,
+    which is the whole point of that gate - so it is neutralized here to
+    keep this file testing the sub-agent-specific mechanism alone."""
     app, mgr = _build_hook_app(monkeypatch, tmp_path)
+    monkeypatch.setattr(mgr, "should_suppress_idle_notification", lambda sid: False)
 
     first, _ = _post_event(app, mgr, "Stop")
     assert "toast_id" in first.json()
@@ -630,6 +644,10 @@ def test_an_unreadable_latch_still_notifies(monkeypatch, tmp_path):
         raise RuntimeError("tracker unavailable")
 
     monkeypatch.setattr(mgr, "subagent_wait_active", _boom)
+    # Neutralize the separate idle-nudge gate, which would otherwise
+    # suppress this same Notification on its own (unrelated) evidence - see
+    # tests/test_hook_toast_idle_nudge_suppression.py for its own coverage.
+    monkeypatch.setattr(mgr, "should_suppress_idle_notification", lambda sid: False)
 
     resp, _ = _post_event(app, mgr, "Notification")
 

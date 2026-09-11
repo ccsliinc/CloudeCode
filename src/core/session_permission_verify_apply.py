@@ -34,6 +34,7 @@ import structlog
 
 from src.core.session_permission_verify import (
     PERMISSION_CLEARED_NO_DIALOG,
+    PERMISSION_CLEARED_PANE_DEAD,
     PERMISSION_NOT_CHECKED,
     PERMISSION_TAIL_LINES,
     resolve_permission_check,
@@ -73,6 +74,19 @@ def verify_open_permission(
       episode without any extra bookkeeping, because clearing the flag
       also drops the stamp, and the cost gate then refuses every later
       poll until a NEW ``PermissionRequest`` opens a new claim.
+
+      A PANE MEASURED DEAD (``pane_alive is False``, a real reading that
+      says dead - never ``None``, which means no reading happened) is
+      cleared directly, with no tail capture, because a dead pane cannot
+      show a dialog and there is nothing left to read a tail from. Before
+      this branch a permission flag left open at the instant its pane
+      died could never be retired: no capture-pane could run against it,
+      so it stayed ``question`` forever with no reachable event able to
+      clear it - the same stuck-bit shape GOTCHA 10 names for an id
+      split, here for a pane that is simply gone. ``None`` still falls
+      through to the cost gate below and KEEPS the flag exactly as
+      before: not having measured liveness is not evidence the dialog is
+      gone.
     Inputs:
       manager: the SessionManager (read for its activity tracker).
       session_id: the id the tracker keys this signal under.
@@ -95,6 +109,24 @@ def verify_open_permission(
 
     try:
         opened_at = tracker.permission_open_since(session_id)
+
+        if pane_alive is False:
+            # MEASURED DEAD, not unmeasured. No capture is possible or
+            # needed - a dead pane has no dialog, so the flag (if any is
+            # even open) clears on this measurement alone. See the
+            # docstring above; ``None`` never reaches this branch.
+            if opened_at is not None and tracker.clear_permission(session_id):
+                logger.info(
+                    "permission_flag_cleared_pane_dead",
+                    session_id=session_id,
+                    tmux_name=tmux_name,
+                    open_seconds=round(
+                        (now - opened_at).total_seconds(), 1
+                    ),
+                )
+                return PERMISSION_CLEARED_PANE_DEAD
+            return PERMISSION_NOT_CHECKED
+
         # THE THROTTLE IS ON THE RE-LOOK ONLY, and it is keyed on the
         # CLAIM rather than on the session, so a new PermissionRequest
         # always gets an immediate first look. See the ledger's module

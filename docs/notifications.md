@@ -342,7 +342,8 @@ dispatcher returns and not on the entry as a whole.
 | Per-session list/create/ack routes | `src/api/routes.py` |
 | The registry (severity, coalesce keys) and the constructor | `client/js/toast.js` |
 | Coalesce, cap, severity | `client/js/toast-grouping.js` |
-| Render the stack | `client/js/toast-render.js` |
+| Render the stack, and schedule a coalesced render pass | `client/js/toast-render.js` |
+| The frame-or-timer race a scheduled render runs on | `client/js/toast-render-batch.js` |
 | Add, dismiss, reconcile, backfill | `client/js/toast-lifecycle.js` |
 | The two cross-session API calls | `client/js/api-toasts.js` |
 | The cross-session poll | `client/js/toast-global-poll.js` |
@@ -353,7 +354,29 @@ dispatcher returns and not on the entry as a whole.
 | What a history row CLAIMS (PURE) | `client/js/toast-history-render.js` |
 | The settings-panel slot | `client/js/toast-history-panel.js` |
 | Styling | `client/css/toast.css`, `client/css/toast-history.css` |
-| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs`, `tests/test_notification_channel_dispatch.py` |
+| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs`, `tests/test_toast_render_batch.node.mjs`, `tests/test_notification_channel_dispatch.py` |
+
+## Rendering many toasts at once (issue #39)
+
+`_render()` rebuilds the whole visible card set from the model on every
+call - the cap, the coalesce counts and the overflow row are all
+functions of the whole set - so calling it once per arriving or dismissed
+record buys nothing over calling it once per BURST. A 500-record backfill
+measured 500 renders and about 173ms of synchronous work, freezing the
+tab; a bulk "dismiss all" has the identical shape from the other
+direction, because each dismissed card's own 220ms fade-out timer used to
+call `_render()` again on its own.
+
+`ToastManager._scheduleRender()` (`client/js/toast-render.js`) coalesces
+any number of model changes in one burst into ONE call to `_render()`.
+Every lifecycle method that used to render directly - `add`, `dismiss`,
+`updateLocal` - now schedules instead. The scheduling itself is
+`client/js/toast-render-batch.js`: it races the next animation frame
+against a short `setTimeout` fallback, because a bare `await
+requestAnimationFrame` never resolves in a hidden tab (CLAUDE.md gotcha
+9) and a scheduler built only on rAF would leave a whole backfill
+unrendered for as long as the tab stays backgrounded. A wait may DELAY
+the flush, never CANCEL it.
 
 ## Open items
 

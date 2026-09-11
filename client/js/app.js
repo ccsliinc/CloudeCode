@@ -975,6 +975,11 @@ class AppController {
      */
     showLaunchpad() {
         console.log('App: Showing launchpad screen');
+        // PRE-begin() snapshot, for clearError() further down: a stale
+        // notice must clear on a real navigation, never on this call's
+        // OWN bounce - see that call site's comment.
+        var navGenBeforeEntry = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
         // LEAVING A SESSION IS A NAVIGATION TOO, and it is the half that
         // is easy to forget. A session entry still resolving its fetch
         // when the user goes home must not paint that session over the
@@ -991,6 +996,11 @@ class AppController {
         // screen paints, which is exactly that moment and no other.
         if (this.currentScreen && window.NavigationGeneration) {
             window.NavigationGeneration.begin('launchpad');
+        }
+        // Tidy up a stale notice on this navigation; guarded so it can
+        // never silence a rejection its own bounce just raised.
+        if (window.Router && typeof window.Router.clearError === 'function') {
+            window.Router.clearError(navGenBeforeEntry);
         }
         // Archive deep link: consumed FIRST, and it RETURNS. See
         // _showArchiveIfDeepLinked() for why the position matters.
@@ -1098,6 +1108,14 @@ class AppController {
         // See client/js/navigation-generation.js.
         const nav = window.NavigationGeneration
             ? window.NavigationGeneration.current() : null;
+        // Tidy up a stale deep-link/toast notice - this call only happens
+        // once a session has actually resolved, so it IS a successful
+        // navigation. Guarded on `nav`: a message raised by the gesture
+        // that led here (same generation) is refused, same rule as
+        // showLaunchpad() above. See client/js/router.js clearError().
+        if (window.Router && typeof window.Router.clearError === 'function') {
+            window.Router.clearError(nav);
+        }
         // Outbound URL sync: capture whether we were ALREADY viewing a
         // session before this call flips currentScreen below. Deciding
         // push-vs-replace off the PREVIOUS screen is what tells "entering
@@ -1258,6 +1276,11 @@ class AppController {
         // the first. See client/js/navigation-generation.js.
         const nav = window.NavigationGeneration
             ? window.NavigationGeneration.current() : null;
+        // Tidy up a stale deep-link/toast notice - same call, same guard,
+        // as showTerminal() above. See client/js/router.js clearError().
+        if (window.Router && typeof window.Router.clearError === 'function') {
+            window.Router.clearError(nav);
+        }
         // Outbound URL sync: see showTerminal()'s identical comment -
         // same push-vs-replace rule, off the screen we were on BEFORE
         // this call. Callers: the launchpad's active-session banner

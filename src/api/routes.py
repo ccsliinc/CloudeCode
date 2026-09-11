@@ -82,6 +82,7 @@ from src.core import claude_title_sync_apply
 from src.core import session_change_notice
 from src.core import toast_auto_ack
 from src.core import debug_trace
+from src.core import single_flight
 from src.core import theme_script_digest
 from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 
@@ -95,7 +96,11 @@ from src.core.session_label import sanitize_tmux_name, set_label_for_instance
 from fastapi.concurrency import run_in_threadpool
 from src.core.session_manager import _configured_wrappers
 from src.core.session_lineage import LINEAGE_UNRESOLVED
-from src.core.session_activity import EVENT_NOTIFICATION, EVENT_STOP
+from src.core.session_activity import (
+    EVENT_NOTIFICATION,
+    EVENT_STOP,
+    IDLE_NOTIFICATION_SUPPRESSION_REASON,
+)
 from src.core.agent_wrappers import AgentWrapper, EXAMPLE_WRAPPERS
 
 logger = structlog.get_logger()
@@ -883,7 +888,18 @@ async def list_sessions(request: Request):
     """
     session_manager = request.app.state.session_manager
     if hasattr(session_manager, "list_session_infos"):
-        return await session_manager.list_session_infos()
+        # COALESCED, because fifteen pollers were each paying for a full
+        # synchronous pass to receive an identical answer and the passes
+        # overlapped almost continuously. A caller arriving while a pass
+        # is in flight awaits THAT pass; a caller arriving after one
+        # finishes gets a fresh one, because a cached list would paint a
+        # dead session alive. See src/core/single_flight.py.
+        flight = single_flight.flight_on(
+            session_manager,
+            single_flight.SESSION_LIST_FLIGHT_ATTR,
+            single_flight.SESSION_LIST_FLIGHT_NAME,
+        )
+        return await flight.run(session_manager.list_session_infos)
     # Defensive: a single-session manager shim.
     one = await session_manager.get_session_info()
     return [one] if one else []
@@ -2295,6 +2311,38 @@ async def claude_event_hook(request: Request):
         subagent_depth_at_event = 0
         subagent_wait_at_event = False
 
+    # THE IDLE NUDGE, A SEPARATE GATE FROM THE SUB-AGENT ONE ABOVE. claude
+    # fires an idle ``Notification`` about 60s after a turn that already
+    # ended cleanly, with NO sub-agent involved at all - measured live
+    # 2026-09-10 on ``ses_63beb976``, twelve consecutive Stop-then-
+    # Notification pairs at plus 60.1s, each rendered as a toast summoning
+    # the user to a session that had nothing to ask. Same false-urgency
+    # shape as the sub-agent gate, one layer broader: read here, BEFORE
+    # ``record_hook_event`` runs, for the same reason as the depth above -
+    # even though a ``Notification`` event does not itself mutate
+    # ``turn_open`` or ``permission_open`` (so this particular read would
+    # answer identically either side of that call today), reading before
+    # keeps this event free to change what it inspects later without this
+    # gate silently starting to judge its own effect. See
+    # ``session_activity.idle_notification_should_suppress`` for the rule
+    # and ``docs/notifications.md`` / CLAUDE.md for the measured incident.
+    #
+    # FAIL TOWARD NOTIFYING. An unreadable session, one that never saw a
+    # Stop, or a read that threw all leave this False and the toast is
+    # raised exactly as before.
+    try:
+        idle_notification_suppressed_at_event = (
+            session_manager.should_suppress_idle_notification(session_id)
+        )
+    except Exception as exc:  # pragma: no cover - defensive, see above
+        logger.warning(
+            "hook_idle_notification_signal_unreadable",
+            session_id=session_id,
+            event_kind=event_kind,
+            error=str(exc),
+        )
+        idle_notification_suppressed_at_event = False
+
     # feat/hook-driven-status - EVERY valid event kind updates the
     # activity-status state machine, not just the toast-worthy ones.
     # Best-effort: record_hook_event never raises (see its docstring), so
@@ -2571,6 +2619,26 @@ async def claude_event_hook(request: Request):
             subagent_wait_latched=subagent_wait_at_event,
         )
         return {"ok": True, "toast_suppressed": "subagents_running"}
+
+    # A CLEAN, UNANSWERED-FOR NUDGE - not a sub-agent wait. ``PermissionRequest``
+    # is deliberately absent from this check: it is never routed through
+    # it, at any depth, for the same hard-block reason the sub-agent gate
+    # above states. The activity state machine is untouched - the session
+    # still recorded this Notification above and still resolves to
+    # ``notice``; only the interruption is skipped.
+    if (
+        event_kind == EVENT_NOTIFICATION
+        and idle_notification_suppressed_at_event
+    ):
+        logger.info(
+            "hook_toast_suppressed_turn_closed",
+            session_id=session_id,
+            event_kind=event_kind,
+        )
+        return {
+            "ok": True,
+            "toast_suppressed": IDLE_NOTIFICATION_SUPPRESSION_REASON,
+        }
 
     title, body = _hook_event_presentation(event_kind, payload)
 

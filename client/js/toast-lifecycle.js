@@ -23,9 +23,10 @@
  * `dismissBySession`, `dismissForSessionEntry`,
  * `dismissForSessionActivity`, `dismissAll`, `clearAll`), `_ack`,
  * `_cardFor`, and `backfill`. All of them read and write `this._byId` /
- * `this._addedAt` and call `this._render()` to reflect a change; none of
- * them build markup, which is why rendering is its own file. Moved here
- * verbatim: no line of logic changed.
+ * `this._addedAt` and call `this._scheduleRender()` (issue #39, in
+ * client/js/toast-render.js) to reflect a change; none of them build
+ * markup, which is why rendering is its own file. Moved here verbatim: no
+ * line of logic changed beyond that batching.
  *
  * This split is issue #55: toast.js had grown past the repo's 1000-line
  * guideline. Reading the file, this was one of the three seams that
@@ -122,7 +123,7 @@ Object.assign(ToastManager.prototype, {
       // card, because re-storing identical content renders identically.
       if (this._byId.has(toast.id)) {
         this._byId.set(toast.id, toast);
-        this._render();
+        this._scheduleRender();
         return;
       }
       this._byId.set(toast.id, toast);
@@ -133,7 +134,7 @@ Object.assign(ToastManager.prototype, {
       // stamp is set only on first sight, so a supersession refreshing the
       // record in place above does not reset a card's age.
       this._addedAt.set(toast.id, this._now());
-      this._render();
+      this._scheduleRender();
     },
 
     /**
@@ -221,10 +222,10 @@ Object.assign(ToastManager.prototype, {
         el.classList.add('toast--dismissing');
         setTimeout(() => {
           if (el && el.parentNode) el.parentNode.removeChild(el);
-          this._render();
+          this._scheduleRender();
         }, 220); // slightly longer than the CSS transition (200ms)
       } else {
-        this._render();
+        this._scheduleRender();
       }
 
       // A LOCAL TOAST HAS NOTHING TO ACK. Acking is how a dismissal is
@@ -284,7 +285,7 @@ Object.assign(ToastManager.prototype, {
       const toast = this._byId.get(toastId);
       if (!toast || !toast.local || !patch) return false;
       this._byId.set(toastId, Object.assign({}, toast, patch));
-      this._render();
+      this._scheduleRender();
       return true;
     },
 

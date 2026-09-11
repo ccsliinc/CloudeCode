@@ -31,6 +31,7 @@ from src.core.session_activity import (
 )
 from src.core.session_permission_verify import (
     PERMISSION_CLEARED_NO_DIALOG,
+    PERMISSION_CLEARED_PANE_DEAD,
     PERMISSION_KEPT_DIALOG,
     PERMISSION_KEPT_UNREADABLE,
     PERMISSION_NOT_CHECKED,
@@ -557,7 +558,17 @@ def test_the_seam_never_invents_a_permission(monkeypatch) -> None:
     assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_IDLE
 
 
-def test_the_seam_refuses_a_dead_or_unmeasured_pane(monkeypatch) -> None:
+def test_the_seam_refuses_an_unmeasured_pane(monkeypatch) -> None:
+    """``pane_alive=None`` (liveness could not be established) must never
+    capture a tail and must never clear the flag. Not having measured is
+    not evidence the dialog is gone.
+
+    NOTE: this used to cover ``pane_alive=False`` in the same loop too,
+    asserting the flag stayed open on a MEASURED-dead pane forever - that
+    was the exact stuck-bit defect closed below. ``False`` now has its own
+    test asserting the opposite, deliberately, since keeping both cases
+    silently the same is what caused the regression this test file exists
+    to prevent."""
     from src.core import session_permission_verify_apply as apply_mod
     from src.core import session_startup_gate_ledger as ledger
 
@@ -568,17 +579,44 @@ def test_the_seam_refuses_a_dead_or_unmeasured_pane(monkeypatch) -> None:
     )
     tracker = SessionActivityTracker()
     tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
-    for alive in (None, False):
-        assert apply_mod.verify_open_permission(
-            _seam_manager(tracker),
-            session_id="ses_1",
-            backend=_CountingBackend("cloude_Media_Compression"),
-            tmux_name="cloude_Media_Compression",
-            pane_alive=alive,
-            now=PAST_GRACE,
-        ) == PERMISSION_NOT_CHECKED
+    assert apply_mod.verify_open_permission(
+        _seam_manager(tracker),
+        session_id="ses_1",
+        backend=_CountingBackend("cloude_Media_Compression"),
+        tmux_name="cloude_Media_Compression",
+        pane_alive=None,
+        now=PAST_GRACE,
+    ) == PERMISSION_NOT_CHECKED
     assert calls == []
     assert tracker.permission_open_since("ses_1") == T0
+
+
+def test_the_seam_clears_a_measured_dead_pane_with_no_capture(monkeypatch) -> None:
+    """A pane MEASURED dead (as opposed to unmeasured) has no dialog
+    anyone can answer, so the flag clears on that measurement alone - no
+    ``capture-pane`` at all, since there is nothing left to capture a tail
+    from. Before this, a permission flag left open at the instant its
+    pane died could never be retired by any reachable event."""
+    from src.core import session_permission_verify_apply as apply_mod
+    from src.core import session_startup_gate_ledger as ledger
+
+    calls: list = []
+    monkeypatch.setattr(
+        ledger, "capture_pane_tail",
+        lambda **kw: calls.append(kw) or IDLE_PANE,
+    )
+    tracker = SessionActivityTracker()
+    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    assert apply_mod.verify_open_permission(
+        _seam_manager(tracker),
+        session_id="ses_1",
+        backend=_CountingBackend("cloude_Media_Compression"),
+        tmux_name="cloude_Media_Compression",
+        pane_alive=False,
+        now=PAST_GRACE,
+    ) == PERMISSION_CLEARED_PANE_DEAD
+    assert calls == [], "a dead pane must never be captured - there is nothing to read"
+    assert tracker.permission_open_since("ses_1") is None
 
 
 def test_the_seam_never_raises_when_the_capture_blows_up(monkeypatch) -> None:

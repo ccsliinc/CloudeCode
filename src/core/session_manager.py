@@ -64,6 +64,7 @@ from src.core.session_status import (
     LIVENESS_GONE,
     LIVENESS_LIVE,
     LIVENESS_UNKNOWN,
+    STATUS_DEAD,
     STATUS_UNKNOWN,
     derive_read_state,
     resolve_listing_liveness,
@@ -76,6 +77,7 @@ from src.core.session_activity import (
 from src.core.session_status_map import (
     StatusMap,
     listing_proves_alive,
+    status_map_from_listing,
 )
 from src.core.session_startup_gate import (
     GATE_AWAITING,
@@ -2504,6 +2506,17 @@ class SessionManager:
           it. That is a genuine "no such session", distinct from "an id I
           have not seen since the restart", and the caller keeps its
           existing behaviour for it.
+
+          A MATCH ONTO THE CALLER'S OWN ID IS NOT A REMAP. Both current
+          callers already guard on the incoming id being absent from
+          ``self.sessions``, so this cannot fire from them today - but the
+          guard lives here too, defensively, so the resolver itself
+          cannot mislabel a self-match as a remap for any caller, present
+          or future. A found id equal to the one presented logs nothing
+          and is treated exactly like no match: the loop keeps scanning,
+          since tmux names are expected to be unique among live sessions
+          and a genuine different remap target should still be found if
+          one exists.
         Inputs: session_id (str) - the id the hook presented.
         Output: str | None - a live session id, or None.
         """
@@ -2511,14 +2524,19 @@ class SessionManager:
         if not tmux_name:
             return None
         for live_id, sess in self.sessions.items():
-            if getattr(sess, "tmux_session", None) == tmux_name:
-                logger.info(
-                    "toast_session_id_remapped",
-                    stale_id=session_id,
-                    live_id=live_id,
-                    tmux_name=tmux_name,
-                )
-                return live_id
+            if getattr(sess, "tmux_session", None) != tmux_name:
+                continue
+            if live_id == session_id:
+                # Resolved to itself: not a remap, so no log and no
+                # early return. See the docstring note above.
+                continue
+            logger.info(
+                "toast_session_id_remapped",
+                stale_id=session_id,
+                live_id=live_id,
+                tmux_name=tmux_name,
+            )
+            return live_id
         return None
 
     def record_toast(
@@ -2754,6 +2772,25 @@ class SessionManager:
             False
         """
         return self._activity_tracker.subagent_wait_active(session_id)
+
+    def should_suppress_idle_notification(self, session_id: str) -> bool:
+        """Whether this session's idle ``Notification`` toast should stay quiet.
+
+        Description: Thin read-only passthrough to
+            ``SessionActivityTracker.should_suppress_idle_notification``,
+            matching the ``subagent_depth`` / ``subagent_wait_active``
+            passthroughs above so the hook endpoint can read this signal
+            without reaching into a private attribute. An unknown session
+            answers False - not having a record is not evidence a turn
+            ended, and the one caller uses a True only to STAY SILENT.
+        Inputs:
+            session_id: cloudecode session id.
+        Output: bool.
+        Example:
+            >>> mgr.should_suppress_idle_notification("ses_1")
+            False
+        """
+        return self._activity_tracker.should_suppress_idle_notification(session_id)
 
     def record_hook_event(
         self, session_id: str, kind: str, payload: Optional[dict] = None
@@ -3228,6 +3265,31 @@ class SessionManager:
             not), which is worse than not having the feature: the user
             would type and watch the card stay.
 
+            THE GUARD IS ``self.sessions``, NOT ``self._pending_toasts``.
+            It used to be the toast bucket, which answers "does this
+            session have any toasts recorded" - a question with nothing
+            to do with whether the remap is needed. A live, perfectly
+            registered session with an empty bucket (the common case:
+            most hook events fire on a session that has never raised a
+            toast) fell into the remap path anyway, looked its own tmux
+            name up in ``_hook_tmux_names``, and found itself. Measured
+            over 8 hours on live: 339 ``toast_session_id_remapped`` log
+            lines, every one with ``stale_id == live_id`` - the real
+            remap has never once fired. The guard now asks the question
+            the recovery exists to answer: is this id unknown to the
+            manager at all.
+
+            THE LATENT HAZARD THIS ALSO CLOSES: the old guard's
+            self-remap was harmless only because today's tmux names
+            happen to be distinct. Once a dead session's tmux name is
+            reaped and reused by a NEW session, a stale
+            ``_hook_tmux_names`` entry for the OLD session id would
+            resolve onto the NEW live session and auto-ack the wrong
+            session's toasts on a foreign hook event - silent
+            cross-session notification loss. Guarding on ``self.sessions``
+            means a session that already knows its own id never enters
+            the lookup at all.
+
             NEVER RAISES. It is called from the hook critical path of a
             live working session, and clearing a notification is not
             worth a 500 to the hook subprocess. An unknown session yields
@@ -3245,7 +3307,7 @@ class SessionManager:
         """
         if not toast_auto_ack.kinds_answered_by(event_kind):
             return []
-        if session_id not in self._pending_toasts:
+        if session_id not in self.sessions:
             remapped = self._live_session_id_for_stale_id(session_id)
             if remapped is not None:
                 session_id = remapped
@@ -4710,14 +4772,10 @@ class SessionManager:
             # THE SOCKET TRAVELS WITH THE LISTING, and it is read off
             # the probe rather than re-derived, so the map can never
             # claim a socket the listing was not actually taken from.
-            return StatusMap(
-                {
-                    row["name"]: row
-                    for row in listing.sessions
-                    if row.get("name")
-                },
-                complete=True,
-                socket=getattr(probe, "socket_name", None),
+            # One shared builder with list_attachable_sessions, so that
+            # rule is stated once rather than at each construction site.
+            return status_map_from_listing(
+                listing, socket=getattr(probe, "socket_name", None)
             )
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             logger.warning("tmux_status_map_build_failed", error=str(exc))
@@ -4979,18 +5037,76 @@ class SessionManager:
         # falls through to the probe. Refusing costs the pre-fix
         # behaviour; answering across sockets would paint a dead session
         # alive.
+        # THE LISTING'S OWN ANSWER IS KEPT, not recomputed, because the
+        # two ways of reaching LIVENESS_GONE below are not the same
+        # evidence and only one of them may clear a permission flag.
+        listing_says_present = listing_proves_alive(
+            status_map,
+            tmux_session_name,
+            backend_socket=getattr(backend, "socket_name", None),
+        )
         liveness = resolve_listing_liveness(
-            exists=(
-                listing_proves_alive(
-                    status_map,
-                    tmux_session_name,
-                    backend_socket=getattr(backend, "socket_name", None),
-                )
-                or backend.is_alive()
-            ),
+            exists=(listing_says_present or backend.is_alive()),
             pane_status=raw_tmux_status if tmux_session_name else None,
         )
         if liveness == LIVENESS_GONE:
+            # THE ROW IS ABOUT TO DROP OFF THE LIST FOR GOOD (see "A DEAD
+            # PANE DROPS OFF THE LIVE LIST" - this is not a reaper rung,
+            # nothing here keeps the row or writes anything durable), so
+            # this is also the last chance to retire an in-memory
+            # ``permission_open`` flag against a pane that has just been
+            # MEASURED to have no dialog on it at all. Skipped here, the
+            # flag is a stuck bit sitting on a dead session_id forever; if
+            # that same id is ever revived (a recreate rebinds the same
+            # row) it would paint "needs your input" on a brand new pane
+            # with nothing to answer. Costs no extra subprocess:
+            # ``pane_alive=False`` clears without a capture.
+            #
+            # BUT ONLY ONE OF THE TWO ROADS TO ``gone`` IS A MEASUREMENT,
+            # AND THE OTHER ONE MUST NOT CLEAR ANYTHING.
+            # ``resolve_listing_liveness`` answers ``gone`` either because
+            # a COMPLETE listing taken from THIS BACKEND'S OWN SOCKET
+            # named this session and reported its ``#{pane_dead}`` as
+            # dead, or because ``exists`` was falsy - and for tmux that
+            # falsy came from ``has-session``, which returns the same
+            # False for "no such session" as for "tmux is missing, timed
+            # out, or errored". A READING THAT DID NOT HAPPEN IS NOT A
+            # READING OF NOTHING. One timed-out probe against a session
+            # sitting on a genuine permission dialog would otherwise clear
+            # the flag, and nothing short of a brand new
+            # ``PermissionRequest`` reopens it - so unlike the dropped row
+            # beside it, which self-heals on the very next poll, that
+            # clear is permanent and silent.
+            #
+            # So the dead reading is required explicitly.
+            # ``listing_says_present`` is the SAME rule the ``exists``
+            # argument above is built on, reused rather than restated: it
+            # is True only for a complete, socket-matched listing that
+            # carries this name, which is precisely the case in which
+            # ``raw_tmux_status`` is a real ``#{pane_dead}`` reading about
+            # THIS pane. Anything else passes ``None``, which
+            # ``verify_open_permission`` treats as "no liveness was
+            # measured" and which keeps the flag.
+            #
+            # ``session_pane_death.pane_death`` states this same
+            # discipline for the REAPER and is deliberately not called
+            # here: it requires the STORED row's ``tmux_created_epoch`` as
+            # a second half of the instance identity, and this pass holds
+            # no trustworthy one. The only epoch in scope is the listing
+            # row's own, which would be a tautology, and
+            # ``self._instance_epochs`` is a session_id-keyed value seeded
+            # from the database that the unread key a few lines below
+            # deliberately stopped trusting for exactly this reason.
+            pane_measured_dead = (
+                listing_says_present and raw_tmux_status == STATUS_DEAD
+            )
+            session_permission_verify_apply.verify_open_permission(
+                self,
+                session_id=session_id,
+                backend=backend,
+                tmux_name=tmux_session_name,
+                pane_alive=False if pane_measured_dead else None,
+            )
             return None
         if liveness == LIVENESS_UNKNOWN:
             # THE THIRD OUTCOME. Dropping the row would assert the
@@ -6616,7 +6732,11 @@ class SessionManager:
                 except Exception:
                     pass
 
-    def reconcile_lifecycle(self, listing: TmuxListing) -> "ReconcileOutcome":
+    def reconcile_lifecycle(
+        self,
+        listing: TmuxListing,
+        pane_status: Optional[StatusMap] = None,
+    ) -> "ReconcileOutcome":
         """Fold one tmux listing into the stored ``lifecycle`` column.
 
         Description: the bridge between the live probe and the datastore,
@@ -6645,7 +6765,12 @@ class SessionManager:
           runs one SELECT and writes nothing at all.
         Inputs: listing (TmuxListing) - the probe result; its ``ok`` and
           ``complete`` are re-read inside the reconciler, which is where
-          the gate lives.
+          the gate lives. pane_status (StatusMap | None) - the bulk
+          ``list-panes -a`` map from the SAME probe backend, which lets
+          the reconciler also reap a session tmux still lists but whose
+          pane it measured dead. None disables that rung; its own
+          completeness and its own socket are gated inside
+          ``session_pane_death``, not here.
         Output: ReconcileOutcome - ``evaluated=False`` whenever the probe
           could not answer, the listing was partial, or the datastore
           could not be opened. Those are three different reasons and none
@@ -6670,6 +6795,7 @@ class SessionManager:
                 conn,
                 listing=listing,
                 socket=self._last_probe_socket or self._tmux_socket_name(),
+                pane_status=pane_status,
             )
             if outcome.changed:
                 # PROVABLY REDUNDANT TODAY, KEPT ANYWAY. src.core.db.connect
@@ -6684,6 +6810,7 @@ class SessionManager:
                 logger.info(
                     "session_lifecycle_reconciled",
                     stopped=len(outcome.stopped_uuids),
+                    pane_dead_stopped=outcome.pane_dead_stopped,
                     examined=outcome.examined,
                     session_uuids=list(outcome.stopped_uuids),
                 )
@@ -6792,15 +6919,6 @@ class SessionManager:
         self._last_probe_ok = True
         self._last_probe_reason = None
         self._last_probe_detail = None
-        # THE REAPER. This listing is a complete enumeration of the
-        # socket, so it is the one moment the app can tell that a stored
-        # 'running' row's tmux instance is gone. Runs here rather than on
-        # a timer because the home screen already pays for this probe;
-        # writes only when something actually died. The ok / complete
-        # gate lives inside reconcile_from_listing, not here, so no
-        # caller can bypass it. Never raises.
-        self.reconcile_lifecycle(listing)
-        rows = listing.sessions
         # Status lights: one extra bulk tmux call (list-panes -a), reused
         # via the same probe backend / socket. This is the ONLY place a
         # dead-but-still-in-tmux session (remain-on-exit) gets its state
@@ -6810,6 +6928,15 @@ class SessionManager:
         # already have; it only means each row's activity light falls
         # back to ``STATUS_UNKNOWN`` below, which is the honest third
         # outcome for that one field rather than for the whole listing.
+        #
+        # IT IS TAKEN BEFORE THE REAPER, NOT AFTER, AND THAT IS THE WHOLE
+        # WIRING OF THE DEAD-PANE RUNG. It is the same subprocess that was
+        # already being run a few lines further down, simply moved above
+        # the call that needs it - NO NEW TMUX CALL IS ADDED. Its
+        # ``#{pane_dead}`` field is the only evidence that can tell a
+        # session whose process exited from one that is merely idle, and
+        # under ``remain-on-exit on`` tmux keeps listing both, so the
+        # absence-based reaper below can never see the difference.
         status_listing = (
             coerce_listing(probe.list_pane_status_all())
             if hasattr(probe, "list_pane_status_all")
@@ -6821,11 +6948,23 @@ class SessionManager:
                 reason=status_listing.reason,
                 note="attachable rows fall back to unknown activity status",
             )
-        status_map = {
-            row2["name"]: row2
-            for row2 in status_listing.sessions
-            if row2.get("name")
-        }
+        # THE SOCKET TRAVELS WITH THE LISTING, read off the probe that
+        # produced it rather than re-derived, so the map can never vouch
+        # for a socket it did not come from. A listing that did not answer
+        # yields an empty map stating neither completeness nor socket,
+        # which every consumer already reads as "cannot vouch".
+        status_map = status_map_from_listing(
+            status_listing, socket=self._last_probe_socket
+        )
+        # THE REAPER. This listing is a complete enumeration of the
+        # socket, so it is the one moment the app can tell that a stored
+        # 'running' row's tmux instance is gone. Runs here rather than on
+        # a timer because the home screen already pays for this probe;
+        # writes only when something actually died. The ok / complete
+        # gate lives inside reconcile_from_listing, not here, so no
+        # caller can bypass it. Never raises.
+        self.reconcile_lifecycle(listing, status_map)
+        rows = listing.sessions
         # SESSION-IDENTITY-V2 - decorate each row with its persisted
         # pinned theme (if any). The launchpad's active-session banner
         # uses this so re-entering a session paints the right theme on

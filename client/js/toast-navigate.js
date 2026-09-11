@@ -136,6 +136,29 @@
     function go(toast) {
         var sessionId = toast && toast.session_id;
         if (!sessionId || !window.API || !window.App) return Promise.resolve(false);
+
+        // POSITIVE PROOF OF LIFE, CONSULTED BEFORE ANYTHING ELSE - and
+        // before this browser has to fetch a listing to find out what it
+        // may already know. If we are attached to the exact pane this
+        // toast names, that pane cannot be dead: the terminal socket is
+        // open and receiving its output right now.
+        //
+        // SAFE AGAINST TWO SESSIONS SHARING A SIMILAR NAME.
+        // `toast.session_name` is the LITERAL tmux session name recorded
+        // when the toast was raised (the same field toast-lifecycle.js
+        // compares by exact string equality elsewhere), and this app
+        // uniquifies a colliding tmux name at create time
+        // (`session_create_name_uniquified` - see CLAUDE.md), so a dead
+        // session and whatever was created after it never share one tmux
+        // name string. A toast naming `cloude_foo` cannot be satisfied by
+        // a browser attached to `cloude_foo-2` - alreadyAttachedTo() does
+        // exact equality, not a prefix or fuzzy match, so the two are
+        // never conflated. A genuinely dead session still falls through
+        // to the listing fetch below and is still reported.
+        if (alreadyAttachedTo(toast && toast.session_name)) {
+            return Promise.resolve(true);
+        }
+
         // THE INTENT, DECLARED BEFORE THE LISTING. A toast card is a
         // navigation control, and the listing it waits on is exactly the
         // window in which the user can click a conversation row instead.
@@ -144,6 +167,18 @@
             ? window.NavigationGeneration.begin('toast:' + sessionId) : null;
         return window.API.listSessions()
             .then(function (sessions) {
+                // A READING THAT DID NOT HAPPEN IS NOT A READING OF
+                // NOTHING. A malformed or degraded listing is evidence we
+                // could not check, never evidence the session is gone -
+                // collapsing the two into one "no longer running" claim
+                // is exactly the false death report this guard exists to
+                // refuse. A genuinely well-formed listing that simply does
+                // not contain the session still falls through and is
+                // still reported below - that IS a measurement.
+                if (!Array.isArray(sessions)) {
+                    console.warn('[ToastNavigate] session listing was malformed, cannot confirm status');
+                    return false;
+                }
                 var info = findSession(sessions, sessionId);
                 if (!info) {
                     announceMissing(toast);

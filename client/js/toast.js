@@ -210,6 +210,13 @@ class ToastManager {
     this._now = () => Date.now();
     /** User expanded the overflow row; the cap is suspended until reset. */
     this._expanded = false;
+    /**
+     * True while a render pass is scheduled but has not run yet. The
+     * whole coalescing mechanism for `_scheduleRender()`
+     * (client/js/toast-render.js): every call while this is true folds
+     * into the flush already pending rather than scheduling a second one.
+     */
+    this._renderPending = false;
     /** Set true once the container has had its live-region attrs applied. */
     this._containerPrepared = false;
     this._narrowQuery = null;
@@ -226,7 +233,7 @@ class ToastManager {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     try {
       this._narrowQuery = window.matchMedia(NARROW_QUERY);
-      const onChange = () => this._render();
+      const onChange = () => this._scheduleRender();
       if (typeof this._narrowQuery.addEventListener === 'function') {
         this._narrowQuery.addEventListener('change', onChange);
       } else if (typeof this._narrowQuery.addListener === 'function') {

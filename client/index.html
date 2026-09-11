@@ -258,11 +258,26 @@
          an ESC[2J that erases the alternate screen. See
          client/css/terminal-away-bar.css. -->
     <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
+    <!-- Item 9's notice banner - calm info tokens, not the alarm-red
+         inline style it shipped with. See client/css/deep-link-notice.css. -->
+    <link rel="stylesheet" href="/static/css/deep-link-notice.css" />
 </head>
 <body>
-    <!-- Item 9: deep-link error banner. Populated by router.js when the
-         URL contains `/session/<invalid>`. Hidden by default. -->
-    <div id="deep-link-error" style="display:none; background:#c00; color:#fff; padding:8px; text-align:center"></div>
+    <!-- Item 9: deep-link / navigation notice banner. Populated by
+         router.js (a deep link or session URL that named nothing) and by
+         toast-navigate.js (a toast pointing at a session that is no
+         longer running). Hidden by default, transient, dismissible - see
+         client/css/deep-link-notice.css and the showError/clearError
+         pair in client/js/router.js. Stays a normal in-flow block at the
+         top of <body>, above `.header` - exactly where it has always
+         been. It must never move inside `.terminal-container`: an
+         in-flow panel toggled there reflows the terminal grid under the
+         user (see CLAUDE.md's `#localServersContainer` precedent). -->
+    <div id="deep-link-error" role="status" aria-live="polite">
+        <span id="deep-link-error-text" class="deep-link-error__text"></span>
+        <button type="button" id="deep-link-error-dismiss"
+                class="deep-link-error__dismiss" aria-label="dismiss notice">&times;</button>
+    </div>
 
     <div class="header">
         <!-- HOME-HEADER-CONSOLIDATION: `.header-row` wraps the original
@@ -863,6 +878,14 @@
          window.SessionLabel.resolve() to decide what that name is. It has
          no dependencies of its own, so it goes first. -->
     <script src="/static/js/session-label.js"></script>
+    <!-- issue #39 - coalesces many toast-model changes into one render
+         pass (a 500-record backfill measured 500 renders and ~173ms of
+         synchronous work otherwise). Pure and dependency-free, so it has
+         no order requirement relative to toast.js or anything else here;
+         it sits beside it because toast-render.js's `_scheduleRender`
+         reads `window.ToastRenderBatch` at CALL time, well after every
+         script on the page has loaded. -->
+    <script src="/static/js/toast-render-batch.js"></script>
     <script src="/static/js/toast.js"></script>
     <!-- issue #55 - toast.js had grown past the 1000-line guideline, so
          its class body is split across three files along the seams the

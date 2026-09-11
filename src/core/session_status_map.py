@@ -188,3 +188,48 @@ def listing_proves_alive(
     if listing_socket != backend_socket:
         return False
     return tmux_name in status_map
+
+
+def status_map_from_listing(
+    listing: Any, *, socket: Optional[str]
+) -> "StatusMap":
+    """Index one ``list-panes -a`` result by session name, with provenance.
+
+    Description: the single place a pane listing becomes a
+      :class:`StatusMap`, so the two facts that make the map usable as
+      EVIDENCE - whether the enumeration is whole, and which socket it
+      came from - are attached by one rule rather than restated at every
+      construction site. A listing that did not answer yields an EMPTY map
+      stating neither, which every consumer already reads as "cannot
+      vouch" and falls back from.
+    Inputs:
+        listing: a ``TmuxListing`` from ``list_pane_status_all``. Typed
+            loosely on purpose so this module keeps no import edge to
+            ``tmux_listing``; only ``.ok``, ``.complete`` and ``.sessions``
+            are read.
+        socket: the socket the probe that produced the listing was
+            ACTUALLY bound to, read off the probe rather than re-derived
+            from settings, so the map can never claim a socket the listing
+            did not come from. None means "not stated", which makes the
+            map unable to prove anything.
+    Output:
+        StatusMap - rows keyed by tmux session name.
+    Example:
+        >>> class L:
+        ...     ok = True
+        ...     complete = True
+        ...     sessions = [{"name": "cloude_a", "pane_dead": "0"}]
+        >>> status_map_from_listing(L(), socket="cloude").complete
+        True
+    """
+    if not getattr(listing, "ok", False):
+        return StatusMap()
+    return StatusMap(
+        {
+            row["name"]: row
+            for row in getattr(listing, "sessions", None) or []
+            if isinstance(row, dict) and row.get("name")
+        },
+        complete=bool(getattr(listing, "complete", False)),
+        socket=socket,
+    )

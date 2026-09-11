@@ -101,6 +101,10 @@ from src.core.db_models import (
     SESSION_LIFECYCLE_SOURCE_TMUX_MISSING,
     SESSION_LIFECYCLE_STOPPED,
 )
+from src.core.session_pane_death import (
+    LIFECYCLE_SOURCE_PANE_DEAD,
+    pane_death,
+)
 from src.core.session_store import sessions_table_ready
 from src.core.tmux_listing import TmuxListing
 from src.core.trail_entry import utc_now
@@ -151,6 +155,11 @@ class ReconcileOutcome:
             ``evaluated`` to tell those apart.
         examined: how many candidate rows were compared. 0 when not
             evaluated.
+        pane_dead_stopped: how many of ``stopped_uuids`` were reaped by
+            the MEASURED-DEAD-PANE rung rather than by absence. Purely
+            for the summary log line: the two rungs write the same four
+            columns and differ only in ``lifecycle_source``, so a reader
+            that does not care can ignore this entirely.
         reason: the listing's own reason token, when there is one.
         detail: human-readable text for the log line.
     """
@@ -159,6 +168,7 @@ class ReconcileOutcome:
     evaluated: bool
     stopped_uuids: Tuple[str, ...] = field(default_factory=tuple)
     examined: int = 0
+    pane_dead_stopped: int = 0
     reason: Optional[str] = None
     detail: Optional[str] = None
 
@@ -332,6 +342,7 @@ def _reap_absent_instances(
     *,
     listing: TmuxListing,
     socket: str,
+    pane_status: Optional[Dict[str, Any]] = None,
     now: Optional[str] = None,
 ) -> ReconcileOutcome:
     """Compare a COMPLETE listing to the table and stop what is gone.
@@ -355,8 +366,20 @@ def _reap_absent_instances(
       identity and history, ``archived_at`` is a user decision, and
       ``last_seen_running_at`` is the record of when this session WAS
       alive, which is the most useful thing a stopped row can carry.
+      TWO RUNGS REAP AND THEY WRITE THE SAME FOUR COLUMNS. Absence from
+      the listing is the original one. The second is a MEASURED DEAD PANE
+      on a session tmux still lists, which ``remain-on-exit`` makes a
+      permanent state and which the absence rung therefore can never see
+      (see ``src/core/session_pane_death.py``). They are deliberately not
+      two behaviours: one reap, one set of columns, one thing that happens
+      to a row, distinguished only by ``lifecycle_source`` so an audit can
+      still tell which measurement produced the verdict.
     Inputs: conn (sqlite3.Connection). listing (TmuxListing) - already
-      proven ok AND complete by the caller. socket (str). now (str |
+      proven ok AND complete by the caller. socket (str). pane_status
+      (dict | None) - the bulk pane listing indexed by tmux name,
+      normally a ``StatusMap`` carrying its own ``complete`` and
+      ``socket``. None disables the dead-pane rung entirely, which is
+      exactly the behaviour that shipped before it existed. now (str |
       None) - ISO stamp, defaults to ``utc_now()``; injected by tests.
     Output: ReconcileOutcome - ``evaluated=True``, naming every row
       moved to ``stopped``.
@@ -385,6 +408,7 @@ def _reap_absent_instances(
     stamp = now or utc_now()
     stopped: List[str] = []
     renamed = 0
+    pane_dead_stopped = 0
 
     # THE RENAME PASS, WHICH RUNS BEFORE ANY REAPING. A session absent
     # from the listing under its STORED name is not necessarily gone: it
@@ -473,6 +497,63 @@ def _reap_absent_instances(
     for row in candidates:
         key = (str(row["tmux_name"]), int(row["tmux_created_epoch"]))
         if key in live:
+            # THE SECOND RUNG. tmux still lists this session, so the
+            # absence argument above says nothing about it - and under
+            # ``remain-on-exit on`` that is the PERMANENT state of a
+            # session whose process exited, not a transient one. The only
+            # thing that can tell the two apart is ``#{pane_dead}``, read
+            # out of the bulk pane listing the caller already paid for.
+            #
+            # THE ASYMMETRY IS DELIBERATE. ``pane_death`` answers dead
+            # ONLY on a positively measured "1", from a COMPLETE listing,
+            # taken from THIS socket, for a row whose creation epoch
+            # matches this one's. Everything else - no listing, a partial
+            # one, a socket mismatch, a missing name, an unreadable epoch
+            # or field - is unknown and leaves the row exactly as it was.
+            # That refusal costs nothing, because it IS the behaviour that
+            # shipped before this rung; a wrong reap costs the user a
+            # session they are working in. Refusing too often is free.
+            death = pane_death(
+                pane_status,
+                str(row["tmux_name"]),
+                int(row["tmux_created_epoch"]),
+                backend_socket=socket,
+            )
+            if not death.dead:
+                continue
+            conn.execute(
+                "UPDATE sessions SET lifecycle = ?, lifecycle_source = ?, "
+                "lifecycle_checked_at = ?, updated_at = ? "
+                "WHERE id = ? AND lifecycle = ?",
+                (
+                    SESSION_LIFECYCLE_STOPPED,
+                    LIFECYCLE_SOURCE_PANE_DEAD,
+                    stamp,
+                    stamp,
+                    int(row["id"]),
+                    SESSION_LIFECYCLE_RUNNING,
+                ),
+            )
+            stopped.append(str(row["session_uuid"]))
+            pane_dead_stopped += 1
+            logger.info(
+                "session_lifecycle_reaped_pane_dead",
+                session_id=int(row["id"]),
+                session_uuid=row["session_uuid"],
+                tmux_socket=socket,
+                tmux_name=row["tmux_name"],
+                tmux_created_epoch=int(row["tmux_created_epoch"]),
+                archived=row.get("archived_at") is not None,
+                lifecycle_source=LIFECYCLE_SOURCE_PANE_DEAD,
+                pane_dead=death.pane_dead_raw,
+                evidence=death.detail,
+                note=(
+                    "tmux still lists this session (remain-on-exit) but "
+                    "measured its pane dead; the row moves to RECENT. The "
+                    "tmux session itself is NOT killed - the husk holds "
+                    "the pane's final screen. archived_at not written"
+                ),
+            )
             continue
         conn.execute(
             "UPDATE sessions SET lifecycle = ?, lifecycle_source = ?, "
@@ -508,6 +589,7 @@ def _reap_absent_instances(
         evaluated=True,
         stopped_uuids=tuple(stopped),
         examined=len(candidates),
+        pane_dead_stopped=pane_dead_stopped,
         reason=listing.reason,
         detail=(f"renamed {renamed} row(s) in place" if renamed else None),
     )
@@ -518,6 +600,7 @@ def reconcile_from_listing(
     *,
     listing: TmuxListing,
     socket: str,
+    pane_status: Optional[Dict[str, Any]] = None,
     now: Optional[str] = None,
 ) -> ReconcileOutcome:
     """Move rows whose tmux instance is gone to ``stopped``, or refuse to.
@@ -536,6 +619,13 @@ def reconcile_from_listing(
       Only past all three does :func:`_reap_absent_instances` - the only
       writer here - get called.
 
+      ``pane_status`` is OPTIONAL and its absence is not a failure: with
+      no pane listing the dead-pane rung simply never answers, and this
+      function behaves exactly as it did before that rung existed. It is
+      gated INSIDE ``pane_death`` rather than here, on its own
+      completeness and its own socket, because the two listings are
+      different probes and one being whole says nothing about the other.
+
       This does NOT commit. It matches ``session_identity.record_instance``:
       the caller owns the transaction, so a reconcile can be batched with
       whatever else that caller is doing and rolled back as one unit.
@@ -544,7 +634,10 @@ def reconcile_from_listing(
       ``ok`` and ``complete`` are read before anything else. socket (str)
       - the socket the listing was ACTUALLY taken from
       (``SessionManager._last_probe_socket``), never the configured value,
-      which can differ. now (str | None) - ISO stamp for tests.
+      which can differ. pane_status (dict | None) - the bulk
+      ``list-panes -a`` result indexed by tmux name, normally a
+      ``StatusMap``; None disables the dead-pane rung. now (str | None) -
+      ISO stamp for tests.
     Output: ReconcileOutcome - read ``evaluated`` before ``stopped_uuids``.
     Example:
         reconcile_from_listing(conn, listing=live, socket='cloude')
@@ -561,4 +654,10 @@ def reconcile_from_listing(
         )
     if not sessions_table_ready(conn):
         return _not_evaluated(RECONCILE_NO_TABLE, listing.reason, None)
-    return _reap_absent_instances(conn, listing=listing, socket=socket, now=now)
+    return _reap_absent_instances(
+        conn,
+        listing=listing,
+        socket=socket,
+        pane_status=pane_status,
+        now=now,
+    )
