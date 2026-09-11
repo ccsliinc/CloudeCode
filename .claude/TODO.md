@@ -7937,3 +7937,33 @@ behind it both create nothing, show ONE `#deep-link-error` banner naming the
 target, and return to `/` with the launchpad active; mounting the shell issues
 ZERO `applyTheme` calls and each hop issues exactly one, through
 `ThemeNavigation`, returning home to the theme it started on.
+
+### OPEN, and named rather than left silent: the seven manual pixel harnesses
+
+`tests/manual/*.html` are hand-run geometry harnesses that mount the shipped
+markup so a real headless Chromium can MEASURE it - real pixels, which no node
+or vitest assertion can produce. Seven of them carry
+`<script src="../../client/js/launchpad.js">` and that file is gone, so each
+now 404s on that tag:
+
+    attribution-prompt-harness.html        attribution-adopt-harness.html
+    ended-sessions-harness.html            home-mechanics-geometry-harness.html
+    header-icons-and-menu-harness.html     project-tree-geometry-harness.html
+    project-authority-geometry-harness.html
+
+They already load `client/dist/app.js` beside it, so the fix is mechanical and
+small per file: drop the dead tag and call
+`window.CloudeWeb.launchpad.mountHomeScreen({})` where the harness currently
+waits for the legacy shell to render. Their drivers -
+`scripts/verify_home_mechanics.py`, `scripts/verify_header_icons_and_menu.py`
+and the ones under `scripts/archive/verify/` - then need re-running to confirm
+the numbers did not move. NOT done in this slice because it is a second,
+independent verification surface and doing it badly would leave a green pixel
+check measuring nothing, which is worse than a red one. None of the seven is in
+`.github/workflows`, so CI is unaffected.
+
+**And `scripts/ci/mutate_message_archive_flag.py` carries two DEAD mutations**,
+C1 and C2, both keyed on markup (`id="archive-section"`, the `ArchiveEntry.ensure()`
+call) that left the home screen well before slice 7 - they were already
+unfindable, and now the file they name does not exist either. They should be
+retired or re-pointed at whatever still carries that gate. Not in CI either.
