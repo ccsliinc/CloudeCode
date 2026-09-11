@@ -45,8 +45,22 @@ export const DEEP_LINK_ATTEMPTS = 5;
 /** How long it waits between those attempts. */
 export const DEEP_LINK_BACKOFF_MS = 300;
 
-/** How long a detach is given to finish before the re-create lands. */
-export const DETACH_SETTLE_MS = 500;
+/**
+ * How long a detach is given to finish before the re-create lands.
+ *
+ * ZERO, AND THE AWAIT ABOVE IT IS WHY. This was 500 ms, described as
+ * letting the server finish clearing its backend handles before the
+ * create lands. It already has: `POST /sessions/detach` runs
+ * `detach_current_session`, which AWAITS the idle watcher's `stop()` and
+ * awaits the cancelled reader task before the handler returns, so the
+ * response the caller just awaited IS the completion signal. The timer
+ * was waiting for something that had already happened.
+ *
+ * Kept as a named constant rather than deleted with its call sites, so
+ * the wait is one edit away if a future teardown stops being awaited, and
+ * so `host.wait` keeps its seam for a test that wants to drive the gap.
+ */
+export const DETACH_SETTLE_MS = 0;
 
 /**
  * The guard flag, and the ONLY writer of it.

@@ -34,7 +34,15 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const BOOT_SRC = read('client/js/slash-commands-boot.js');
 const NAVGEN_SRC = read('client/js/navigation-generation.js');
 const APP_SRC = read('client/js/app.js');
-const LAUNCHPAD_SRC = read('client/js/launchpad.js');
+// THE 1.4.0 MERGE MOVED THESE RULES, IT DID NOT RETIRE THEM.
+// `client/js/launchpad.js` is deleted; the home screen's create and
+// detach paths are `web/src/lib/launchpad/create-flow.ts` and
+// `web/src/lib/launchpad/navigation.ts`. The assertions below are the
+// other line's, re-aimed at the code that now has to satisfy them - a
+// guard left pointing at a deleted file does not fail, it throws ENOENT,
+// and a guard that cannot run is not a guard.
+const CREATE_FLOW_SRC = read('web/src/lib/launchpad/create-flow.ts');
+const NAVIGATION_SRC = read('web/src/lib/launchpad/navigation.ts');
 const INDEX_HTML = read('client/index.html');
 
 /**
@@ -257,10 +265,10 @@ test('THE CREATE PATH ENTERS THE SESSION BEFORE IT REPAINTS THE LIST', () => {
     // bookkeeping they did not ask for, and nothing in its result is
     // needed to render the terminal. Reading the ORDER in the source,
     // because driving the whole create path needs a server.
-    const fn = LAUNCHPAD_SRC.slice(LAUNCHPAD_SRC.indexOf('_createNewSessionInner('));
-    const body = fn.slice(0, fn.indexOf("this.detachAndCreateNew(agentType)"));
-    const enter = body.indexOf("new CustomEvent('session-created'");
-    const decorate = body.lastIndexOf('await this.loadProjects()');
+    const fn = CREATE_FLOW_SRC.slice(CREATE_FLOW_SRC.indexOf('export async function createProjectFlow('));
+    const body = fn.slice(0, fn.indexOf('isAlreadyRunning(error)'));
+    const enter = body.indexOf('host.announceSessionCreated(session, nav)');
+    const decorate = body.lastIndexOf('await refreshProjects(host)');
     assert.ok(enter > 0 && decorate > 0, 'both steps must still happen');
     assert.ok(enter < decorate,
         'the user watches a list repaint before their new session appears');
@@ -269,19 +277,25 @@ test('THE CREATE PATH ENTERS THE SESSION BEFORE IT REPAINTS THE LIST', () => {
 test('the decoration still happens, and is still guarded on its own', () => {
     // Moving it after entry is a REORDERING, not a removal: a created
     // session that never gets decorated shows up under the wrong project.
-    const fn = LAUNCHPAD_SRC.slice(LAUNCHPAD_SRC.indexOf('_createNewSessionInner('));
-    const body = fn.slice(0, fn.indexOf('this.detachAndCreateNew(agentType)'));
-    assert.ok(body.includes('await this.loadProjects()'));
-    assert.ok(/catch \(error\) \{\s*console\.error\('Launchpad: Failed to refresh projects/
-        .test(body), 'a failed repaint must not read as a failed create');
+    const fn = CREATE_FLOW_SRC.slice(CREATE_FLOW_SRC.indexOf('export async function createProjectFlow('));
+    const body = fn.slice(0, fn.indexOf('isAlreadyRunning(error)'));
+    assert.ok(body.includes('await refreshProjects(host)'));
+    // The guard moved into `refreshProjects`, which is the one helper both
+    // create flows call, so it is asserted where it now lives rather than
+    // inline in each caller.
+    const helper = CREATE_FLOW_SRC.slice(CREATE_FLOW_SRC.indexOf('async function refreshProjects('));
+    assert.ok(/catch/.test(helper.slice(0, helper.indexOf('\n}'))),
+        'a failed repaint must not read as a failed create');
 });
 
 test('CreateSessionRequest.label is still sent', () => {
     // claude_title_sync depends on the session being launched with a
     // --name, and the plain create endpoint was the one creator that
     // used to pass none.
-    const fn = LAUNCHPAD_SRC.slice(LAUNCHPAD_SRC.indexOf('_createNewSessionInner('));
-    const body = fn.slice(0, fn.indexOf('this.detachAndCreateNew(agentType)'));
+    // The payload is built by `buildCreatePayload`, so the label is
+    // asserted there - that is the one place every create path composes it.
+    const fn = CREATE_FLOW_SRC.slice(CREATE_FLOW_SRC.indexOf('export function buildCreatePayload('));
+    const body = fn.slice(0, fn.indexOf('\n}'));
     assert.ok(/label:/.test(body), 'the launch must still name the session');
 });
 
@@ -293,12 +307,19 @@ test('NEITHER detach path sleeps before it acts', () => {
     // detach_current_session, which awaits the idle watcher's stop and
     // the reader task's cancellation before the handler returns, so the
     // response the client already awaited IS the completion signal.
+    // The constant is the assertion now: both paths call
+    // `host.wait(DETACH_SETTLE_MS)`, and the seam is kept deliberately so
+    // a future teardown that stops being awaited is one edit away. What
+    // must not come back is a NON-ZERO wait.
+    assert.match(NAVIGATION_SRC, /export const DETACH_SETTLE_MS = 0;/,
+        'a detach settle delay is back; the awaited detach response is the '
+        + 'completion signal, so a sleep here waits for what already happened');
     for (const name of ['detachAndOpenProject', 'detachAndCreateNew']) {
-        const fn = LAUNCHPAD_SRC.slice(LAUNCHPAD_SRC.indexOf(`async ${name}(`));
-        const body = fn.slice(0, fn.indexOf('\n    }'));
+        const fn = NAVIGATION_SRC.slice(NAVIGATION_SRC.indexOf(`export async function ${name}(`));
+        const body = fn.slice(0, fn.indexOf('\n}'));
         assert.ok(!/setTimeout/.test(body),
             `${name} still sleeps before re-opening`);
-        assert.ok(/await window\.API\.detachSession\(\)/.test(body),
+        assert.ok(/await host\.detachSession\(\)/.test(body),
             `${name} must still wait for the detach itself`);
     }
 });
@@ -307,16 +328,19 @@ test('and each reports its OWN failure rather than calling it a failed detach', 
     // The timer escaped the try block, so an error in the re-open used to
     // be an unhandled rejection. Folding it into the detach's catch would
     // report a failed OPEN as a failed detach.
-    const fn = LAUNCHPAD_SRC.slice(LAUNCHPAD_SRC.indexOf('async detachAndOpenProject('));
-    const body = fn.slice(0, fn.indexOf('\n    }\n'));
+    const fn = NAVIGATION_SRC.slice(NAVIGATION_SRC.indexOf('export async function detachAndOpenProject('));
+    const body = fn.slice(0, fn.indexOf('\n}'));
     assert.equal((body.match(/catch \(error\)/g) || []).length, 2,
         'the detach and the re-open are two failures and need two messages');
-    assert.ok(body.includes('failed to open'), 'the re-open names itself');
+    // Named through the catalog rather than as a literal, because this
+    // tree's i18n guard refuses a hardcoded sentence in a ported file.
+    assert.ok(body.includes('HOME_KEYS.openFailed'), 'the re-open names itself');
 });
 
 test('no 500ms sleep survives anywhere on the launch or connect paths', () => {
     // Phase 2 exists to remove configured delays, not to relocate them.
-    for (const rel of ['client/js/launchpad.js', 'client/js/terminal.js',
+    for (const rel of ['web/src/lib/launchpad/navigation.ts',
+        'web/src/lib/launchpad/create-flow.ts', 'client/js/terminal.js',
         'client/js/app.js']) {
         const src = read(rel);
         assert.ok(!/setTimeout\([^;]*,\s*500\s*\)/.test(src),
