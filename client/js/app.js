@@ -717,7 +717,14 @@ class AppController {
         // showLaunchpad/showTerminal.
         if (this.configEditorBtn) {
             this.configEditorBtn.addEventListener('click', () => {
-                if (window.ConfigEditorPanel) window.ConfigEditorPanel.open(this.configEditorBtn);
+                // The config-editor family (CodeMirror + config-editor-*.js,
+                // issue #48) loads lazily; see client/js/config-editor-loader.js.
+                if (window.ConfigEditorLoader && typeof window.ConfigEditorLoader.openWhenReady === 'function') {
+                    window.ConfigEditorLoader.openWhenReady(this.configEditorBtn);
+                } else {
+                    console.error('App: ConfigEditorLoader is not loaded - ' +
+                        'the config editor family cannot be fetched.');
+                }
             });
         }
     }
@@ -895,6 +902,18 @@ class AppController {
             && typeof window.TerminalController.pauseForHome === 'function') {
             window.TerminalController.pauseForHome();
         }
+        // Same boot-paint guard as showLaunchpad()/showAuth(): only bump
+        // the generation once a screen has actually been shown, so a cold
+        // load of /archive/t/<id> is not superseded by its own first paint.
+        // Loading the archive family (issue #48) is the first async gap
+        // this entry path has ever had, so this is where a stale
+        // completion could first paint over a navigation the user has
+        // since moved on from - see client/js/navigation-generation.js.
+        if (this.currentScreen && window.NavigationGeneration) {
+            window.NavigationGeneration.begin('archive');
+        }
+        const archiveNav = window.NavigationGeneration
+            ? window.NavigationGeneration.current() : null;
         this.hideAllScreens();
         document.getElementById('archive-screen').classList.add('active');
         // Same one-way opt-in as showLaunchpad(): these ship
@@ -938,14 +957,16 @@ class AppController {
         // The tab title said the session's name for as long as the user
         // browsed the archive. It is not that session any more.
         setPageTitle(null);
-        if (window.ArchiveScreen && typeof window.ArchiveScreen.show === 'function') {
-            window.ArchiveScreen.show(params || {});
+        // The archive script family (issue #48) loads lazily; see
+        // client/js/archive-loader.js. archiveNav is checked there before
+        // ArchiveScreen.show() runs, so a completion that arrives after
+        // the user has navigated elsewhere is discarded rather than
+        // painted over whatever is on screen now.
+        if (window.ArchiveLoader && typeof window.ArchiveLoader.showWhenReady === 'function') {
+            window.ArchiveLoader.showWhenReady(params, archiveNav);
         } else {
-            // A NAMED refusal. The screen div is active and empty at this
-            // point, and a blank screen with no console line is the
-            // hardest defect to trace back to a missing script tag.
-            console.error('App: ArchiveScreen is not loaded - check the ' +
-                'archive script tags in index.html.');
+            console.error('App: ArchiveLoader is not loaded - the archive ' +
+                'family cannot be fetched.');
         }
     }
 
