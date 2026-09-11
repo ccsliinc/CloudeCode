@@ -7891,3 +7891,49 @@ Vitest 1,236 to 1,334.
   never.
 - **`#58` and `#66` remain open and unclaimed** (re-checked 2026-09-10, both
   labelled `blocked`).
+
+### 2026-09-11 - what the browser proof found, and the two fixes it forced
+
+Driven in Brave against a scratch server on 127.0.0.1:5057 that imports
+`src.security_headers`, so the page ran under the real
+`default-src 'self'; script-src 'self'` policy. **Zero CSP violations across
+every phase.** `document.visibilityState` read **`hidden`** with
+`hasFocus: false` in every phase, exactly as slices 5 and 6 measured; no
+foreground window was available, so nothing here is a claim about painted
+pixels - it is a claim about the DOM, the network calls and the CSP.
+
+**FOUND 1: a static placeholder inside a panel container survives forever.**
+`#project-list` shipped `<div class="launchpad-empty">loading projects...</div>`
+in the shell markup, and `mountPanel` APPENDS into its container - it never
+clears what was already there. The legacy `renderProjectList()` cleared it with
+an `innerHTML` write, so the line was on screen above the tree permanently.
+Fixed by emptying the container: `ProjectTree.svelte` renders its own empty
+state, so the placeholder had nothing left to say. The `home.projects.loading`
+key is deleted with it. **The rule this leaves behind: a panel owns its
+container, so no markup goes inside one.**
+
+**FOUND 2: gotcha 9 was ported verbatim and it hung a real tab.** The rejoin's
+pre-fit did `await new Promise(r => requestAnimationFrame(() =>
+requestAnimationFrame(r)))`. A browser does not paint a backgrounded tab, so it
+never runs that tab's rAF callbacks - a deep link resolved in the hidden tab
+froze inside `prepareTerminal` and never returned (the CDP call timed out at
+45s). MOVED, not introduced: `launchpad.js` had the same two lines. Slice 7 is
+the moment it became measurable, because the path is now reachable from a test.
+`nav-host.ts::twoFrames` races the pair against a 250 ms timer, the same number
+and the same rule `client/js/terminal-layout-wait.js` already uses for the
+terminal's own connect: a layout wait may DELAY the work, never cancel it.
+
+**Proven, in order:** a hard reload of `/` publishes the bundle, carries no
+`launchpad.js` script tag, and leaves `window.Launchpad` a PLAIN OBJECT with
+exactly the eight members (so `providers.js`'s earlier write survived the
+merge); `App.showLaunchpad()` renders the whole screen - help disclosure, five
+FAB actions, three sections, four panel containers, both archive filters, the
+home bar; `#statusText` sits inside `#home-bar-status` and `globalAudioBtn` is
+its sibling in `.home-bar`, still true after three navigations away and back;
+a deep link to `slice7demo` resolves to the live row and enters the terminal
+via `getSession` in 1.0s with ZERO `createSession` calls; a deep link to a
+ghost AND a deep link to a name that IS a launcher project with no live session
+behind it both create nothing, show ONE `#deep-link-error` banner naming the
+target, and return to `/` with the launchpad active; mounting the shell issues
+ZERO `applyTheme` calls and each hop issues exactly one, through
+`ThemeNavigation`, returning home to the theme it started on.

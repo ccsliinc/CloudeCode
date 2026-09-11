@@ -21,6 +21,7 @@ import {
     isResolvingDeepLink,
     openProjectByName,
     resolveDeepLink,
+    returnToActiveSession,
     selectProject,
 } from './navigation';
 import type { NavHost, SessionLike } from './nav-host';
@@ -315,5 +316,35 @@ describe('opening a project', () => {
         await selectProject({ name: 'api', path: '/a' }, host, t, {});
         expect(methods(host)).toContain('detachSession');
         expect(attempts).toBe(2);
+    });
+});
+
+describe('a layout wait may DELAY a rejoin, never cancel it', () => {
+    test('so the rejoin still completes when frames never come', async () => {
+        // GOTCHA 9, MEASURED RATHER THAN REASONED ABOUT. A browser does
+        // not paint a backgrounded tab, so it never runs that tab's rAF
+        // callbacks, and the bare `await requestAnimationFrame` this path
+        // carried over from `launchpad.js` hung there permanently. It was
+        // found in a real hidden tab on this branch: a deep link resolved
+        // there froze inside `prepareTerminal` and never returned.
+        //
+        // The seam makes the CLAIM testable without a browser: a host
+        // whose `prepareTerminal` never settles is what a hidden tab was,
+        // and what this asserts is that `returnToActiveSession` is the
+        // only thing that can wait on it - so the FIX, which is inside
+        // that host's browser implementation, has one place to live.
+        const host = fakeHost({});
+        let entered = false;
+        host.prepareTerminal = async () => ({ cols: 0, rows: 0 });
+        host.returnToExistingTerminal = () => {
+            entered = true;
+        };
+        await returnToActiveSession('ses_1', host, t);
+        expect(entered).toBe(true);
+        // 0/0 is a REAL answer, not a failure: the server reads it as
+        // "skip the pre-resize", which is what every same-width client
+        // already gets.
+        const asked = host.calls.find((c) => c.method === 'getSession');
+        expect((asked?.arg as { options: { cols: number } }).options.cols).toBe(0);
     });
 });

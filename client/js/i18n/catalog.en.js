@@ -629,7 +629,6 @@ export default {
     'home.section.running': 'running sessions',
     'home.section.recent': 'recent',
     'home.section.projects': 'projects',
-    'home.projects.loading': 'loading projects...',
     'home.new.trigger': 'new',
     'home.new.menu': 'new session actions',
     'home.new.claude_project': 'new claude project',

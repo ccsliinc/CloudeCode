@@ -248,9 +248,18 @@
                     <span class="launchpad-archived-toggle__label">{t(HOME_KEYS.showArchived)}</span>
                 </button>
             </div>
-            <div id="project-list" class="project-list">
-                <div class="launchpad-empty">{t(HOME_KEYS.projectsLoading)}</div>
-            </div>
+            <!-- EMPTY, AND THAT IS A FIX RATHER THAN AN OMISSION. The
+                 legacy markup put a "loading projects..." line in here
+                 and `renderProjectList()` cleared it with an `innerHTML`
+                 write. `mountPanel` APPENDS into its container and never
+                 clears what was already in it, so a static placeholder
+                 here survives FOREVER, sitting above the tree - measured
+                 in a real browser on this branch before this comment was
+                 written. `ProjectTree.svelte` renders its own empty
+                 state, so the placeholder had nothing left to say
+                 anyway. Do not put markup back into a panel container:
+                 the panel owns it. -->
+            <div id="project-list" class="project-list"></div>
         </div>
     </div>
 </div>

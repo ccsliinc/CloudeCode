@@ -285,6 +285,19 @@ loudly instead of minting `<name>-2`. A listing that did not run is still not
 an empty listing: the ladder re-asks up to five times while the probe CANNOT
 DETERMINE and takes the first answer that did run.
 
+**TWO THINGS THE BROWSER FOUND THAT NO TEST HAD.** First, `mountPanel`
+APPENDS into its container and never clears it, so the
+`<div class="launchpad-empty">loading projects...</div>` the shell used to put
+inside `#project-list` sat on screen above the tree forever - the legacy
+`renderProjectList()` had been clearing it with an `innerHTML` write. A PANEL
+OWNS ITS CONTAINER: no markup goes inside one. Second, the rejoin's pre-fit
+carried gotcha 9 over verbatim from `launchpad.js` - a bare
+`await requestAnimationFrame` pair, which NEVER RESOLVES in a backgrounded tab,
+so a deep link resolved there froze inside `prepareTerminal` and never
+returned. `nav-host.ts::twoFrames` races it against a 250 ms timer, the same
+number and the same rule `client/js/terminal-layout-wait.js` uses: a layout
+wait may DELAY the work, never cancel it.
+
 **THE HELP PROSE KEEPS WHOLE SENTENCES, WHICH IS WHY IT CARRIES MARKERS.** It
 is the longest copy this app owns and nearly every paragraph has an inline
 `<code>` in it. Splitting each into the fragments around those spans fixes the

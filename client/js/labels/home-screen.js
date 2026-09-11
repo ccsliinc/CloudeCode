@@ -28,12 +28,14 @@
 
 /** Every key the home shell asks the catalog for. */
 export const HOME_KEYS = {
-    // The three section headings, and the placeholder under PROJECTS
-    // that is on screen before the first fetch answers.
+    // The three section headings. There is deliberately no "loading
+    // projects" key: that placeholder lived in a panel CONTAINER, which
+    // the panel owns and which `mountPanel` appends into rather than
+    // clearing, so it survived on screen forever. `ProjectTree.svelte`
+    // renders its own empty state.
     sectionRunning: 'home.section.running',
     sectionRecent: 'home.section.recent',
     sectionProjects: 'home.section.projects',
-    projectsLoading: 'home.projects.loading',
     // The "+" speed dial: its trigger, its menu, and its five actions.
     newTrigger: 'home.new.trigger',
     newMenu: 'home.new.menu',

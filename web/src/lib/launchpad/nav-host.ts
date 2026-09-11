@@ -85,6 +85,52 @@ interface LegacyApi {
 }
 
 /**
+ * How long the layout wait may DELAY a rejoin before giving up on frames.
+ *
+ * Matches `client/js/terminal-layout-wait.js`'s own `FRAME_TIMEOUT_MS`,
+ * which is the module that already solved this for the terminal's connect
+ * path. The number is small on purpose: a fit measured a frame early is a
+ * slightly wrong grid, and a rejoin that never happens is a dead screen.
+ */
+const FRAME_TIMEOUT_MS = 250;
+
+/**
+ * Yield two animation frames, RACED AGAINST A TIMER.
+ *
+ * Description: THE BARE `await requestAnimationFrame` THAT USED TO BE
+ *   HERE NEVER RESOLVES IN A HIDDEN TAB, and that is gotcha 9 in
+ *   CLAUDE.md rather than a theory - a browser does not paint a
+ *   backgrounded tab, so it never runs that tab's rAF callbacks and
+ *   anything awaiting one hangs there permanently, not slowly. Measured
+ *   on this branch in a real browser: a deep link resolved in a
+ *   backgrounded tab froze inside `prepareTerminal` and never returned.
+ *   The same shape cost this project a terminal that sat on
+ *   "Connecting to terminal..." for 35 minutes.
+ *
+ *   It was ported verbatim from `launchpad.js`, so the defect is MOVED
+ *   rather than introduced - and slice 7 is the moment it became
+ *   measurable, because the whole path is now reachable from a test.
+ *
+ *   A LAYOUT WAIT MAY DELAY THE WORK, NEVER CANCEL IT. Same rule, and
+ *   the same 250 ms, as `client/js/terminal-layout-wait.js`, which the
+ *   terminal's own connect path already races this way.
+ * Inputs: none. Output: Promise<void>. Always resolves.
+ * Example: await twoFrames();
+ */
+function twoFrames(): Promise<void> {
+    return new Promise<void>((resolve) => {
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            resolve();
+        };
+        setTimeout(finish, FRAME_TIMEOUT_MS);
+        requestAnimationFrame(() => requestAnimationFrame(finish));
+    });
+}
+
+/**
  * Pre-show the terminal screen, then fit and read its true grid.
  *
  * Description: THE ORDER IS THE WHOLE POINT and it is why this is not
@@ -119,9 +165,7 @@ async function browserPrepareTerminal(): Promise<{ cols: number; rows: number }>
     if (controller && !controller.term && typeof controller.init === 'function') {
         await controller.init();
     }
-    await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
+    await twoFrames();
     try {
         if (controller?.fitAddon && typeof controller.fitAddon.fit === 'function') {
             controller.fitAddon.fit();
