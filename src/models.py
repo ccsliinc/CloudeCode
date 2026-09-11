@@ -1683,6 +1683,22 @@ class WSMessageType(str, Enum):
     # so the enum stays the ONE vocabulary rather than acquiring a second
     # one made of loose strings. See src/api/preferences_routes.py.
     PREFERENCES_CHANGED = "preferences.changed"
+    # Server -> client, sent ONCE per socket, after the dimension
+    # handshake, after the attach paint, and after any configured startup
+    # command has been written into the pane. It is the only positive
+    # statement this protocol makes that the pane is able to receive
+    # input, and it exists because the window before it is not merely
+    # slow: the handshake loop in src/api/websocket.py deliberately DROPS
+    # binary frames that arrive before the client's pty_resize, so a
+    # keystroke typed during a connect is discarded with no trace.
+    #
+    # ADDITIVE, AND THAT IS LOAD-BEARING. A client that never reads this
+    # message behaves exactly as it did before the message existed: it
+    # sends input the moment its socket is OPEN, which is what every
+    # client did until now. Nothing on the server waits for an
+    # acknowledgement and nothing is gated on it, so an old client is not
+    # degraded, only unbuffered.
+    TERMINAL_READY = "terminal.ready"
 
 
 class Toast(BaseModel):
@@ -1896,6 +1912,35 @@ class WSPTYResizeMessage(BaseModel):
     type: WSMessageType = WSMessageType.PTY_RESIZE
     cols: int
     rows: int
+
+
+class WSTerminalReadyMessage(BaseModel):
+    """The pane can take input now (server -> client), sent once.
+
+    ``startup_command`` says which ready case this is, in four words that
+    are deliberately not collapsible to two. ``issued`` - a configured
+    terminal command's bytes were written into the pane just before this
+    message, so the first thing the user sees is that command's output.
+    ``none`` - nothing was configured, and the pane is at a bare prompt.
+    ``failed`` - a command WAS configured and every write attempt failed,
+    so the pane is at a prompt the user did not ask for. ``unknown`` - the
+    flush could not be run or raised, so what reached the pane was never
+    established. A reading that did not happen is not a reading of
+    nothing, which is why the last two are separate from ``none``.
+
+    The message is sent in all four cases: readiness is about the pane
+    being able to take input, and a startup command that failed does not
+    make the pane unable to take input. Never withhold it.
+
+    Example:
+        WSTerminalReadyMessage(startup_command="none").model_dump()
+    """
+    type: WSMessageType = WSMessageType.TERMINAL_READY
+    startup_command: str = Field(
+        "unknown",
+        description="'issued' | 'none' | 'failed' | 'unknown' - what the "
+                    "startup command flush did, not what it was",
+    )
 
 
 # Theme system models (Phase 2 - see plan section "Architecture B" / "F").

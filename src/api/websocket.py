@@ -15,7 +15,8 @@ from src.models import (
     WSPTYDataMessage,
     WSPTYInputMessage,
     WSPTYResizeMessage,
-    WSErrorMessage
+    WSErrorMessage,
+    WSTerminalReadyMessage
 )
 from src.api.attach_settle import (
     NO_RESIZE_ATTEMPTED,
@@ -501,11 +502,50 @@ async def websocket_terminal(websocket: WebSocket):
         # the user lands on a blank prompt. Popped on flush, so a reconnect
         # never re-runs it. Only an ID ever crossed the API boundary; the
         # text comes from config.json (src/core/terminal_commands.py).
+        startup_command = "unknown"
         if target_sid and hasattr(session_manager, "flush_pending_terminal_command"):
             try:
-                await session_manager.flush_pending_terminal_command(target_sid)
-            except Exception as exc:
+                startup_command = await session_manager.flush_pending_terminal_command(
+                    target_sid)
+            except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                # The flush swallows its own write failures, so reaching
+                # here means something structural went wrong instead.
+                # That leaves what reached the pane UNESTABLISHED, which
+                # is a different answer from "nothing was configured".
                 logger.warning("ws_pending_terminal_command_failed", error=str(exc))
+                startup_command = "unknown"
+        elif not target_sid:
+            # No session id to resolve a pending command against. Nothing
+            # was looked up, so nothing may be claimed about it.
+            startup_command = "unknown"
+        else:
+            # A session manager without the method cannot have a pending
+            # command, because nothing could ever have recorded one.
+            startup_command = "none"
+
+        # THE PANE CAN TAKE INPUT NOW, AND THIS IS THE ONLY THING THAT
+        # SAYS SO. Everything above it - the dims handshake, the settle,
+        # the attach paint, the startup command - happens with the socket
+        # OPEN and with the handshake loop DISCARDING binary frames, so a
+        # client that treats "socket open" as "ready" loses whatever the
+        # user typed in that window. Sent once, after all of it, and
+        # never withheld: a startup command that failed does not make the
+        # pane unable to receive input, so `startup_command` reports what
+        # happened rather than gating the message.
+        #
+        # ADDITIVE. Nothing waits for a reply and nothing is gated on the
+        # client having read it, so a client that ignores this message
+        # behaves exactly as every client did before it existed.
+        try:
+            await websocket.send_text(json.dumps(
+                WSTerminalReadyMessage(startup_command=startup_command).model_dump()
+            ))
+            logger.debug("ws_terminal_ready_sent", startup_command=startup_command)
+        except (WebSocketDisconnect, RuntimeError) as exc:
+            # The client left between the paint and here. The outer
+            # handler owns the cleanup; say it happened and carry on so
+            # the disconnect is handled in exactly one place.
+            logger.info("ws_terminal_ready_not_delivered", error=str(exc))
     except WebSocketDisconnect:
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
