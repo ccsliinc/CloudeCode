@@ -2449,9 +2449,12 @@ a browser never runs for an unpainted tab, suspending
 `onclose`, so no reconnect rung fires either: the terminal sat on
 "Connecting to terminal..." for 35 minutes and resumed the instant the
 tab was painted. THERE WERE THREE such waits, not one - the sidebar
-rejoin and the adopt path each carry their own, ABOVE the
-`setTimeout(..., 500)` that schedules the connect, so fixing only the
-first changed nothing and only a live re-check found that.
+rejoin and the adopt path each carry their own, ABOVE what was then a
+`setTimeout(..., 500)` scheduling the connect (that delay is gone; see
+"The connect is measured, not slept" below), so fixing only the first
+changed nothing and only a live re-check found that. A FOURTH was found
+in `launchpad.js`'s `_returnToActiveRunningSession` and closed the same
+way; the session fetch and the terminal entry both sit below it.
 `client/js/terminal-layout-wait.js` races every wait against a timer - a
 layout wait may DELAY a connect, never CANCEL one - and
 `tests/test_terminal_layout_wait.node.mjs` fails the build if a bare rAF
@@ -3011,13 +3014,13 @@ rather than replaying a captured id.
 
 **THE TERMINAL RECORDS THE TOKEN IT BOUND UNDER**, as `_navToken`, and
 `_navCurrent(what)` is the one predicate every deferred action in that
-file asks. It gates the 500ms scheduled connect on both entry paths - that
-delay is a window a session switch lands in, and a connect fired inside it
-used to open a socket the next connect had to abandon mid-handshake - and
-it is the definition of "old" for the write queue and the reconnect
-scheduler below. A missing module answers TRUE: the token is a correctness
-guard, never a dependency, and a load-order accident must not stop the
-terminal working.
+file asks. It gates the connect on both entry paths through
+`_connectWhenReady` - a session switch landing before the socket opens
+must not let the older connect open one the newer then has to abandon
+mid-handshake - and it is the definition of "old" for the write queue and
+the reconnect scheduler below. A missing module answers TRUE: the token is
+a correctness guard, never a dependency, and a load-order accident must
+not stop the terminal working.
 
 **AND THE INPUT DIRECTION IS THE SAME RULE, ONE LAYER DOWN.**
 `bd9a2b2` and `terminal-frame-guard.js` keep one session's OUTPUT out of
@@ -3168,6 +3171,174 @@ retry stands down rather than opening a socket nobody is looking at.
 sandbox without it takes the plain retry for every close, which is how
 `tests/test_restart_reconnect.node.mjs` started failing on a harness gap
 rather than a code change.
+
+## The connect is measured, not slept, and the pane says when it can hear
+
+Four things sat between a click and a usable terminal, and every one of
+them was a guess about time rather than a reading of a condition.
+
+**THE 500 ms BEFORE THE CONNECT WAS WAITING FOR A CSS TRANSITION THAT
+DOES NOT EXIST.** Two unconditional half-second timers scheduled
+`connectWebSocket()`, one on each entry path, and the comment above one
+of them justified it verbatim as giving "the terminal screen transition
+time to settle". There is no such transition. `.screen` swaps on
+`display: none` / `display: flex` (`client/css/styles.css`), and
+`display` is not an animatable property, so the class toggle fires no
+`transitionend` on `#terminal-screen`, on any ancestor or on any
+descendant. Every rule in all 49 stylesheets whose selector can match
+`.screen`, `#terminal-screen`, `.terminal-container` or `#terminal` was
+resolved before this was changed and NONE declares a `transition` or an
+`animation`; the two `body.session-sidebar-pinned .screen` /
+`body.config-drawer-docked .screen` padding rules carry comments saying
+their transitions were deliberately removed so the geometry lands in the
+same frame the class toggles. **A `transitionend`-based readiness gate
+would therefore have waited forever on an event that cannot fire**, which
+is gotcha 9 wearing a different hat, and it was the obvious design.
+
+Nothing server-side needed the delay either: `_register_session` writes
+`sessions[id]` before both the create and the adopt responses are built,
+so a client can never hold an id the WebSocket route's 4404 check cannot
+find, and `pipe-pane` is started inside `TmuxBackend.start()` before that
+same response returns, so an earlier attach cannot miss pane output.
+
+**WHAT IS REAL IS THE MEASUREMENT, AND IT IS NOW ASKED FOR.** The fit
+sequence was `guardedFit`, sleep 50 ms, `guardedFit` again - the second
+attempt existing because the first might have been taken before layout
+settled, which is a real concern answered with a guess.
+`client/js/terminal-readiness.js` retries on `guardedFit`'s own verdict
+instead: stop the instant it is satisfied, give up on a bound, warn and
+connect anyway. Measured deterministically (no server, no browser, so no
+contention): **0.157 ms when the guard is satisfied first try**, against
+the 50 ms that was spent unconditionally; **125 ms when the condition
+clears at 120 ms**, which the old code could not react to at all; and
+**511 ms in the worst case**, because `BOUND_MS` is deliberately the
+500 ms it replaces, so the degraded path costs exactly what shipped. The
+xterm load wait moved into the same module and answers in **0.388 ms**
+when the bundle is already there.
+
+**DO NOT REMOVE THE BOUND.** An unbounded wait for a measurement turns a
+stylesheet that never arrives into a session that never opens, and the
+server's dimension handshake reshapes the pane on the first real paint
+regardless - the same path a rotation already takes. Every wait in that
+module is polled on a TIMER and never on a frame, for gotcha 9's reason.
+
+**`terminal.ready` IS THE ONE POSITIVE STATEMENT THAT THE PANE CAN TAKE
+INPUT, AND THE WINDOW BEFORE IT IS DEAF RATHER THAN SLOW.** The attach
+handshake in `src/api/websocket.py` opens the socket, asks the client for
+its dims, and sits in a receive loop that DISCARDS every binary frame
+arriving before that reply. So "the socket is open" and "the pane can
+hear" have never been the same fact, and nothing on the wire said which
+one you had: a keystroke typed during a connect was destroyed by the
+server with no trace, and one typed before the socket existed was
+destroyed by the client's own `readyState === OPEN` check.
+
+The message is sent ONCE, after the dims handshake, after the settle,
+after `paint_on_attach` and after any configured startup command. Sent
+earlier it would be exactly as useless as no message, and it would look
+like it worked. It is **NEVER WITHHELD** - a startup command that failed
+does not make the pane unable to receive input - so it carries
+`startup_command` (`issued` / `none` / `failed` / `unknown`) rather than
+gating on it, and `flush_pending_terminal_command` returns that word
+instead of `None` because it swallows its own write failures by design.
+`failed` and `none` must never collapse: one means the prompt is bare
+because nothing was asked for, the other because what was asked for did
+not happen.
+
+**IT IS ADDITIVE, AND THAT PROTECTS ONLY ONE DIRECTION.** Nothing waits
+for a reply and nothing is gated on the client having read it, so an old
+client behaves exactly as it did before the message existed. A NEW CLIENT
+AGAINST AN OLD SERVER is the other direction and is the worse failure:
+without a bound it would hold every keystroke forever, a terminal that
+silently accepts no input with nothing on screen saying why. So
+`READY_TIMEOUT_MS` (4 s, armed from the socket OPENING) delivers the held
+batch and falls through to passing input straight on. DELIVERED, not
+dropped - the socket is open and the user typed those bytes for this pane.
+
+**THE PRE-READY BUFFER IS KEYED BY CONNECTION GENERATION, NOT BY SESSION
+ID** (`client/js/terminal-input-buffer.js`). A reconnect to the SAME
+session is a NEW connection, and input typed before a socket dropped must
+not be replayed into the one that replaces it; a session id cannot
+express that and a monotonic counter can. It is deliberately NOT the
+navigation generation, which does not move on a reconnect. No local echo,
+ever: painting held input would show the user text the pane has not
+received, and if the batch is later rejected the terminal is lying about
+a command that never ran.
+
+**64 KiB, AND OVERFLOW REJECTS THE WHOLE UNSENT BATCH**, announced
+exactly once - not the newest, not the oldest, because half a command
+line is a DIFFERENT command the shell will happily run. That is the
+opposite rule from `terminal-write-queue.js`, which sheds its oldest
+chunks and carries on, and the asymmetry is the point: output is a record
+of what already happened, so a gap in it is a gap in a transcript; input
+is an instruction that has not happened yet, so a gap in it is a
+different instruction and no marker makes that safe. An ambiguous
+disconnect DISCARDS and never replays, because re-sending what we cannot
+prove was delivered risks running a command twice.
+
+**THE RESIDUAL COST, SAID OUT LOUD:** a keystroke typed after the dims
+handshake but before `terminal.ready` is now held until the paint, where
+it used to sit in the socket and be processed when `receive_messages`
+started. That is bounded by the attach settle plus one `capture-pane`,
+and it buys back everything typed DURING the handshake, which the server
+was destroying outright.
+
+**AN ISOLATED CHUNK NO LONGER WAITS A FRAME.** `enqueue` scheduled every
+chunk on `requestAnimationFrame`. That frame coalesces a BURST, which is
+real and worth keeping; paying it for a single chunk with nothing to
+coalesce with costs up to a whole frame on the keystroke echo. It now
+writes straight through when no write is outstanding and falls back to
+the frame when one is, so the second chunk of a burst waits and the
+re-schedule merges everything into one `term.write` per frame exactly as
+before. `flush` re-raises `flushing` when it re-schedules, so that flag
+means "scheduled OR in flight" and a chunk arriving in the gap between
+the write callback and its frame cannot write UNDER a flush already on
+its way. `flush` also refuses on a null terminal now: that window existed
+before and was one frame further away.
+
+**ONE OWNER FOR THE MEASUREMENT, ONE FOR THE SHIP.** There were nine
+`fitAddon.fit()` call sites across five files. Every measurement now goes
+through `TerminalMetrics.guardedFit` - including `currentGrid`, whose raw
+fit fed the pane's BIRTH geometry, and the `request_dims` handshake - and
+every ship goes through `TerminalLayout`'s coalescer or one of two
+explicitly named handshake sites. Four raw fits remain and all four are
+named in `tests/test_fit_ownership.node.mjs`: the two inside `guardedFit`,
+which ARE the measurement, and three module-missing fallbacks where an
+unfitted terminal is worse than an unguarded one. That test COUNTS rather
+than times, because a duplicate fit that happens to be fast is still a
+duplicate.
+
+**THE SLASH PALETTE IS NOT A PROPERTY OF THE SOCKET.** Both entry paths
+did `await SlashCommandsModal.init(...)` on the line above the connect,
+and `init` makes two server round trips. `client/js/slash-commands-boot.js`
+starts it and is never awaited; it carries the navigation token, because
+a palette fetched for session A landing after the user is in B would
+populate B's menu with A's agent's commands, and a slash command run in
+the wrong pane RUNS A COMMAND. One fetch per working directory; a failure
+is NOT cached as an answer.
+
+**AND TWO MORE 500 ms TIMERS WERE WAITING FOR SOMETHING THAT HAD ALREADY
+HAPPENED.** `detachAndOpenProject` and `detachAndCreateNew` both slept
+after `await window.API.detachSession()` to "let the server finish
+clearing its backend handles". It already has: `detach_session` awaits
+`detach_current_session`, which awaits the idle watcher's stop and the
+reader task's cancellation before the handler returns, so the response the
+client had already awaited IS the completion signal. Both copies went;
+fixing one of a pair is how the other survives. Each re-open now has its
+own `try`/`catch`, because the timer used to ESCAPE the surrounding block
+and an error in the re-open was an unhandled rejection.
+
+**THE WALL-CLOCK END-TO-END NUMBERS ARE NOT SETTLED.**
+`scripts/perf/run_baseline.py --sessions 1 --quick` was run four times
+either side of this change on a box at load average 11 to 27 with 45
+concurrent agent processes, and `session entry`, `session switch` and
+`launch` are single samples per run there: they spanned 763 ms to
+10,480 ms for one arm of one metric, a 13x spread, so nothing in that
+group supports a conclusion in either direction. Typing echo has n=4 and
+moved the right way (p50 warm 22.1 / 21.3 ms before against 19.0 /
+11.2 ms after) but on that box that is corroboration, not proof.
+RE-MEASURE ON A QUIET MACHINE before quoting any figure from this
+paragraph, and prefer the deterministic numbers above, which no amount of
+load can move.
 
 ## Gotchas that have cost real time
 
