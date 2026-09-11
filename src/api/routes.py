@@ -79,6 +79,7 @@ from src.api.uploads import validate_upload, save_upload_to_session_dir
 from src.config import settings
 from src.core import claude_hooks
 from src.core import claude_title_sync_apply
+from src.core import session_change_notice
 from src.core import toast_auto_ack
 from src.core import debug_trace
 from src.core.session_label import sanitize_tmux_name, set_label_for_instance
@@ -727,6 +728,19 @@ async def create_session(request: Request, body: CreateSessionRequest):
                 settings, session.working_dir
             )
 
+        # THE SHAPE OF THE LIST CHANGED, so say re-read. The structural
+        # notice carries NO data on purpose - a notice with a payload
+        # becomes a second source of truth for the session list and
+        # drifts from /sessions/list, while one that says re-read cannot.
+        # It never awaits and never raises, and it is an OPTIMISATION
+        # over the five second reconciliation poll, which is untouched:
+        # a session someone starts by hand on the cloude socket produces
+        # no notice at all and is still picked up on the next pass.
+        session_change_notice.publish(
+            request.app.state,
+            session_change_notice.build_structural_notice("created"),
+        )
+
         return session
 
     except HTTPException:
@@ -979,6 +993,14 @@ async def destroy_session(request: Request, session_id: Optional[str] = None):
         # tell the user a teardown failed that did not. The reconciler
         # still covers the row on its own schedule.
         await _mark_closed_in_datastore(active_socket, active_name)
+
+        # Same structural notice as the create path, same reasoning: the
+        # list lost a row, so every screen holding one re-reads now
+        # rather than on its next poll boundary.
+        session_change_notice.publish(
+            request.app.state,
+            session_change_notice.build_structural_notice("destroyed"),
+        )
 
         return SuccessResponse(message="Session destroyed successfully")
 
@@ -2288,6 +2310,21 @@ async def claude_event_hook(request: Request):
             error=str(exc),
         )
 
+    # THE LIGHT MOVED, SO SAY SO WITHOUT WAITING FOR A POLL. A compact
+    # status notice on /ws/events reaches a browser sitting on the home
+    # screen or looking at a different session, which the per-session
+    # terminal socket cannot. It is published HERE, before the two gates
+    # below, because a mute suppresses the INTERRUPTION and never what a
+    # row is allowed to say: a muted session's light updates on the poll
+    # today and would be visibly stale if this refused to report it. The
+    # TOAST notice is the gated one, and it is published past both gates
+    # beside the existing per-session broadcast. Never awaits, never
+    # raises, and publishes nothing when no browser is connected - see
+    # src/core/session_change_notice.py.
+    session_change_notice.publish_hook_status(
+        request.app.state, session_manager, session_id
+    )
+
     # THE USER TURNED UP, SO THE SESSION'S NOTIFICATIONS ARE ANSWERED.
     # The owner's ask: a toast that is waiting on him should clear when
     # he types into the session, from the browser terminal, a remote
@@ -2563,6 +2600,18 @@ async def claude_event_hook(request: Request):
             session_id=session_id,
             error=str(exc),
         )
+
+    # AND THE SAME TOAST ONTO THE PER-BROWSER CHANNEL, so a client that
+    # holds no terminal socket for this session still sees the card. The
+    # MUTE GATE IS SATISFIED BY CONSTRUCTION rather than by a second copy
+    # of the rule: a suppressed toast returns above and never reaches this
+    # line, so this cannot disagree with the notification policy. The
+    # frame is the SAME ``toast.new`` shape the terminal socket carries,
+    # so the client has one handler and not two.
+    session_change_notice.publish(
+        request.app.state,
+        json.loads(ToastNewMessage(toast=toast).model_dump_json()),
+    )
 
     return {"ok": True, "toast_id": toast.id}
 

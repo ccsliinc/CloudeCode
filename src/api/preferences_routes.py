@@ -51,14 +51,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.auth import require_auth
-from src.core import ui_preferences, ui_preferences_store
+from src.core import session_change_notice, ui_preferences, ui_preferences_store
+from src.models import WSMessageType
 
 logger = structlog.get_logger()
 
 router = APIRouter(tags=["preferences"])
 
-PREFERENCES_CHANGED_EVENT = "preferences.changed"
-"""The WebSocket frame type other clients receive on a commit."""
+PREFERENCES_CHANGED_EVENT = WSMessageType.PREFERENCES_CHANGED.value
+"""The WebSocket frame type other clients receive on a commit.
+
+Read off ``WSMessageType`` rather than spelled again here: that enum is
+the app's ONE message vocabulary, and a literal beside it is how a second
+one starts. The value is unchanged, so nothing on the wire moved.
+"""
 
 
 class PreferencesUpdateRequest(BaseModel):
@@ -200,6 +206,20 @@ async def _broadcast_changed(
         "changed": result.changed,
         "origin_client_id": client_id,
     }
+    # ONTO THE PER-BROWSER CHANNEL FIRST, because that is the one that
+    # reaches a client with no terminal open - the gap this function's
+    # own docstring recorded when it shipped. It never awaits and never
+    # raises.
+    session_change_notice.publish(request.app.state, frame)
+
+    # AND STILL OVER THE TERMINAL SOCKET, which is not a second mechanism
+    # left running by accident. A browser holding both receives the frame
+    # twice, and that is SAFE BY CONSTRUCTION rather than by luck:
+    # ``Preferences.applyRemote`` applies a frame only when its revision
+    # is strictly higher than the one it holds, so the duplicate is the
+    # same no-op a redelivered frame has always been. Dropping this half
+    # would break every already-loaded client that has no event socket
+    # yet, for no gain.
     try:
         await manager.broadcast(json.dumps(frame))
     except (TypeError, ValueError) as exc:

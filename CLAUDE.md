@@ -612,10 +612,84 @@ browsers ping-pong forever, so `set()` refuses for the duration of the
 fan-out - the guard is at this layer rather than in every control. **A
 RECONNECT PERFORMS AN AUTHORITATIVE REFRESH, NOT AN EVENT REPLAY**
 (`terminal.js`'s `ws.onopen`), and it never uploads this browser's snapshot.
-Note the real limit: this app's WebSocket is SESSION-SCOPED, so a browser
-sitting on the launchpad holds no socket and receives no events at all - the
-hydration on entering a screen is what covers it, which is why the refresh is
-the half that has to be right.
+That limit is CLOSED as of 2026-09-10 and the sentence that used to sit here
+is history: the terminal WebSocket is still SESSION-SCOPED and still exists
+only while a terminal is open, but `/ws/events` now carries the frame to a
+browser sitting on the launchpad as well. The preferences route publishes to
+BOTH, deliberately, and a browser holding both sockets receives the frame
+twice - which is safe by construction rather than by luck, because
+`applyRemote` applies a frame only when its revision is strictly HIGHER than
+the one held. Dropping the terminal half would break every already-loaded
+client that has no event socket yet, for no gain. The hydration on entering a
+screen is untouched and is still what covers a client with neither.
+
+## The application event channel, `/ws/events`
+
+ONE AUTHENTICATED SOCKET PER BROWSER, carrying compact change notices about
+every session, so a client on the home screen or looking at session A hears
+about session B without waiting for its next poll. It closes the gap the
+preferences work recorded above.
+
+| Piece | File |
+|---|---|
+| The per-consumer bounded queue, and the named overflow | `src/core/bounded_stream.py` |
+| The fan-out registry and the one publish path | `src/core/event_hub.py` |
+| What a notice may claim, and the hook seam | `src/core/session_change_notice.py` |
+| The endpoint | `src/api/events_routes.py` |
+| The client | `client/js/app-events.js` |
+
+**IT AUTHENTICATES EXACTLY AS THE TERMINAL SOCKET DOES, AND THERE IS NO
+SECOND SCHEME.** The JWT rides `Sec-WebSocket-Protocol` and is checked by the
+same `verify_jwt_from_subprotocol`, with the same `cloude.jwt.v1` marker
+echoed on accept and the same 4401 / 4400 split. The client opens it through
+`API.openWebSocket(null, '/ws/events')`, the function the terminal already
+uses. A token in the URL is what that avoids: query strings are routinely
+written to proxy and access logs and the header is not, and
+`tests/test_ws_events.py` asserts a `?token=` handshake is still refused.
+
+**COMPACT IS THE DESIGN, NOT AN OPTIMISATION.** A status notice carries the
+session instance plus the handful of fields a row paints; the structural
+notice carries only its own name and means RE-READ. A notice carrying a full
+`SessionInfo` would become a second serialization of `/sessions/list` with its
+own bugs and would drift from it; a notice that says re-read cannot. The
+client honours that: it pokes `SessionSidebar.refreshNow()` and
+`Launchpad.loadRunningSessions()` rather than patching a row in place, so an
+event can only make the SAME refresh happen sooner.
+
+**ABSENT IS NOT A DEFAULT.** `build_status_notice` OMITS any field the caller
+could not measure rather than sending null, because a null says "this is now
+false" and a fabricated `idle` or `ready` is exactly the false-green failure
+this project keeps paying for.
+
+**THE QUEUE IS BOUNDED AT 256 EVENTS OR 1 MiB PER CLIENT, AND AN OVERFLOW IS A
+NAMED OUTCOME.** `BoundedStream.offer` is SYNCHRONOUS - a bounded
+`asyncio.Queue` would have been the obvious change and would have been wrong,
+because `await queue.put` on a full queue is precisely the backpressure into
+the producer that the bound exists to prevent. Crossing the bound LATCHES,
+closes that client's stream, drops it from the registry and closes its socket
+with **4429**, an application code rather than 1013 so the client can tell
+"you fell behind" apart from "the server went away" and skip its reconnect
+banner. That client reconnects at once, with no backoff, and performs an
+AUTHORITATIVE REFRESH: nothing replays and nothing is buffered for a browser
+that is not there. No other client is touched.
+
+**THE MUTE GATES THE TOAST AND NOT THE STATUS, AND THAT IS DELIBERATE.** The
+toast notice is published from the one place in `claude_event_hook` a
+suppressed toast never reaches - past the notification-policy gate and the
+sub-agent gate, beside the existing per-session broadcast - so the policy is
+enforced BY CONSTRUCTION and not by a second copy of the rule. The status
+notice is published BEFORE those gates, because muting suppresses the
+INTERRUPTION and changes nothing about what a row is allowed to say: a muted
+session's light updates on the poll today, and a channel that refused to
+report it would make that row visibly staler than before the channel existed.
+
+**IT IS AN OPTIMISATION AND MAY NEVER BECOME A DEPENDENCY.** The five second
+reconciliation poll is untouched. A tmux session started by hand on the
+`cloude` socket produces no event here at all, and adopting an external
+session is a first-class case in this app, so the poll is the only thing that
+can see it. Every publish site is fail-soft: an app with no hub publishes
+nothing, and a client whose socket never connects converges on exactly the
+schedule it did before.
 
 **PENDING IS NOT COMMITTED, AND A CONFLICT DROPS NEITHER SIDE.** A deliberate
 choice applies locally at once and reports `pending`; a failure keeps the user's

@@ -1245,6 +1245,17 @@
          BEFORE it for the same reason: setActiveSession calls into this. -->
     <script src="/static/js/session-entry-toasts.js"></script>
     <script src="/static/js/session-sidebar.js"></script>
+    <!-- The sidebar's one public off-schedule refresh, split out because
+         session-sidebar.js is held to a 500 line budget. Must load AFTER
+         it: it attaches the method to window.SessionSidebar. -->
+    <script src="/static/js/session-sidebar-refresh.js"></script>
+    <!-- The application event channel, /ws/events. Loads AFTER
+         session-sidebar.js and preferences-transport.js because it pokes
+         both by name on a frame, and BEFORE app.js, which calls
+         AppEvents.start() once authentication has succeeded. Everything
+         it does is an optimisation: with this file absent, or its socket
+         down, every list still converges on its own poll. -->
+    <script src="/static/js/app-events.js"></script>
     <!-- Pin-the-bar-open behavior. Must load AFTER session-sidebar.js
          (window.SessionSidebar) — SessionSidebar.init() calls into it. -->
     <script src="/static/js/session-sidebar-pin.js"></script>

@@ -487,6 +487,18 @@ class AppController {
      * Inputs: none. Output: Promise<void>.
      */
     async _initAuthenticatedState() {
+        // OPEN THE APPLICATION EVENT CHANNEL, once we hold a credential.
+        // Started here rather than in either caller because this function
+        // is the ONE thing both post-auth paths run - two copies of the
+        // sequence is how one of them acquires a step the other never
+        // gets (gotcha 7). Idempotent, synchronous and non-throwing: it
+        // is an optimisation over the existing polls and must never be
+        // able to stop authenticated state from finishing.
+        if (globalThis.AppEvents) {
+            try { globalThis.AppEvents.start(); } catch (err) {
+                console.warn('App: event channel failed to start', err);
+            }
+        }
         await this._hydratePreferences();
         // Phase 2: load full theme manifests + mount selector BEFORE
         // launchpad render or any deep-link resolves. Failure here is
