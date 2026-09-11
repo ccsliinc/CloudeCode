@@ -9812,3 +9812,129 @@ the owner choosing the OPPOSITE on 2026-09-09 ("1. his"), and the shipped
 `OUTER_STATES`. The CODE is correct and the merge did not touch it; only the
 prose is describing the branch that lost. Flagged rather than edited, because
 DECISIONS is Adam's to restate.
+
+---
+
+## 2026-09-11 - the six pytest failures on integration/1.3.0, triaged one by one
+
+Raised in review: the project baseline has been TWO all session, so the client
+chain brought FOUR extra and nobody triaged them. Seven slices each measured
+their own control and the number crept. All six, with the actual failure read
+rather than guessed.
+
+**(a) ENVIRONMENTAL, 2 - the documented pair, and now the reason each fails.**
+
+- `tests/test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
+  The guard DOES refuse, correctly. The test asserts the literal string
+  `/Users/jsugamele/.claude/settings.json` appears in the refusal, and the
+  message carries
+  `/Users/.../Sync/Claude/settings.json` instead, because `~/.claude` is a
+  SYMLINK into iCloud on this machine and the guard reports the resolved path.
+  That is gotcha 6 turning up inside a test. Machine-shaped, not code-shaped.
+- `tests/test_version_probe.py::test_current_version_empty_when_unresolvable`
+  Wants `""` for an unresolvable version and gets `1.0.33`, because on a real
+  checkout the probe resolves one. Needs an isolated install dir to mean
+  anything here.
+
+**(b) REAL BUG, 1 - left red deliberately, because a merge commit is the wrong
+place to change behaviour and would make it unbisectable.**
+
+- `tests/test_ui_flags_setting.py::test_the_client_actually_probes_the_flag`
+
+  **What is broken.** `client/js/ui-flags.js` answers every flag's shipped
+  DEFAULT until its probe lands, and `show_mark_unread_control` defaults
+  `true` (`ui-flags.js:43`, and `showMarkUnreadControl()` returns
+  `_flags.show_mark_unread_control !== false`). The ONLY caller of
+  `UIFlags.ensure()` left in the tree is
+  `client/js/session-sidebar-fetch.js:72`. Nothing in `web/src` calls it. So on
+  the SVELTE HOME SCREEN the probe never runs, the flag answers `true`
+  forever, and `ui.show_mark_unread_control: false` in config.json does
+  nothing on that surface. The control is not missing - it renders, via
+  `web/src/lib/plugins/mark-unread/index.ts` - it simply cannot be turned OFF.
+  The setting is dead, which is precisely the failure the test's own docstring
+  names: "a setting nothing reads is not a setting, and the failure is silent".
+
+  **Which commit introduced it.** `97476a1`, svelte slice 3, "the session data
+  layer into one svelte store". `git log -S` over `client/js/launchpad.js` has
+  exactly two commits: `67990f3` (2026-09-09 20:48) ADDED the caller, under the
+  title "fix(ui-flags): give ensure() a caller, or the setting ships dead", and
+  `97476a1` REMOVED it about a day later while moving the poll tick into
+  `web/src/lib/sessions/store.svelte.ts`, without carrying it across. Slice 7
+  (`f28faef`) then deleted `launchpad.js` outright, so no trace is left to
+  notice. The removed block even carried the comment "Same call in
+  session-sidebar-fetch.js, because either surface may be the first one a page
+  load reaches" - the reason it was needed was sitting in the lines deleted.
+
+  **Why it matters more than the rest.** This is a KEPT BEHAVIOUR. It is
+  recorded in `docs/kept-behaviours/ccsliinc.md` under "the manual mark-unread
+  control", whose `paths:` line names `client/js/launchpad.js` explicitly, and
+  it is a standing ruling in `docs/DECISIONS.md` ("The mark-unread CONTROL is
+  not replaced by the unread INDICATOR", 2026-09-08, scope: all repos), which
+  says it "ships behind `ui.show_mark_unread_control`, default on, so turning
+  it off is a setting rather than a deletion". The rewrite silently disabled
+  the switch the owner insisted on keeping. NOTE: `docs/kept-behaviours/` is
+  NOT in `release/1.2.1` or either chain tip - it lives on `feat/work-protocol`
+  and `docs/plugin-policy`. That is its own gap, and it is why slice 3 had no
+  file in its own tree to trip over.
+
+  **The smallest fix**, for whoever takes it, NOT applied here: in
+  `web/src/lib/sessions/store.svelte.ts`, at the top of `loadRunningSessions()`
+  - the same position the deleted block held in the legacy poll tick - call the
+  probe and do NOT await it:
+
+      const ui = (globalThis as any).UIFlags;
+      if (ui && typeof ui.ensure === 'function') ui.ensure();
+
+  Not awaited because a flag must never be able to delay the session list;
+  memoised onto one promise inside `ui-flags.js`, so a poll costs nothing after
+  the first tick. Then widen the test from two `client/js` files to the svelte
+  call site, so it guards where the code now is.
+
+**(c) STALE, TARGET MOVED, 3 - fixed in `882073e`.**
+
+- `tests/test_docs_operations_chart_drift.py::test_every_cited_file_exists`
+- `tests/test_docs_operations_chart_drift.py::test_every_cited_symbol_is_defined_in_the_file_it_is_cited_from`
+  `docs/session-project-operations.md` cited `client/js/launchpad.js` nine
+  times. Repointed to where each action went: fork and the record delete to
+  `web/src/lib/launchpad/recent-actions.ts`, create and adopt to
+  `navigation.ts`, respawn and rename to `running-host.ts`. **The citation
+  grammar could not express those targets** - both regexes accepted only
+  `src|client|tests|macOS` roots and `.py|.js`, so a repointed citation would
+  have become invisible prose and the guard would have passed holding nothing.
+  Widened to the `web` root and `.ts`/`.svelte`. Proven both ways: a planted
+  bogus web symbol and a planted bogus web module each turn it red.
+- `tests/test_recent_deleted_sessions_runs.py::test_deleted_session_records_reach_the_recent_list`
+  A wrapper that only shelled out to a node file the client chain deleted.
+  DELETED, because the assertion was ported, not dropped:
+  `web/src/lib/launchpad/recent-actions.test.ts` carries the 2026-09-07 lesson
+  in its header and asserts `expect(r.fetched).toEqual([true])`. Same treatment
+  the client chain already gave `test_project_list_render_guard_runs.py`. Swept
+  for other wrappers pointing at deleted node files: none.
+
+**Suite after: 3 failed / 6530 passed / 54 skipped**, collection unchanged at
+6587 (one wrapper out, one negative control in). node 171/171, vitest 1335,
+svelte-check 0 errors, bundle CURRENT, secret scan exit 0.
+
+**DEPLOY VERDICT.** Nothing here blocks the deploy on test grounds: the two
+environmental failures are machine-shaped and the third is a dead SETTING, not
+a broken session. The mark-unread control still renders and still works; only
+the switch that hides it is inert, and its default is the state the owner
+wants. So 1.3.0 can ship with `test_ui_flags_setting` known-red PROVIDED it is
+filed and fixed in 1.3.1 - what must not happen is it being normalised into
+the baseline the way these four just were. The real gates before live remain
+the two recorded 2026-09-10 (boot re-adopt held-plus-skipped against
+`tmux -L cloude list-sessions | wc -l`, and the `/sessions/list` row count
+checked separately) plus the database backup gate, none of which a suite can
+substitute for.
+
+**Also corrected here.** `src/api/routes.py` off CLAUDE.md's do-not-grow list
+(106 lines after S6, an aggregator now); the other four on that list
+re-measured and all still over 500. `test_client_called_routes_exist.py`
+extended to read `web/src` `.ts` and `.svelte`, with
+`test_the_web_src_arm_actually_fires` as a permanent negative control - that
+arm reports ZERO paths on a clean tree today, which is exactly when a broken
+scanner is invisible. **CLAUDE.md's LED paragraph needed NO correction**: the
+merged tree already carries the ring model and cites the ruling (`6768dcc`,
+"state the shipped led model on first encounter"). The stale text was in the
+1.2.1 base, one of the chains had already fixed it, and re-editing would have
+collided with `docs/handoff-1.3` for nothing.
