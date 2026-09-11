@@ -20,6 +20,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
 )
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -48,6 +49,11 @@ from src.core.message_archive_flag import (
     resolve as resolve_message_archive,
 )
 from src.core.version import resolve_version
+from src.core.static_serving import (
+    maybe_gzip_file_response,
+    warm_static_gzip_cache,
+    render_compressible_html_response,
+)
 from src.core.update_check import UpdateChecker
 from src.core.setup_state import (
     current_bind_report,
@@ -941,6 +947,14 @@ class NoCacheStaticFiles(StaticFiles):
     runs on static hits, (b) it can't accidentally leak Cache-Control
     onto API JSON responses, and (c) it sidesteps any ordering tangles
     with the existing CSP middleware.
+
+    ISSUE #49 ADDED PRECOMPRESSED SERVING FOR THE SAME SUFFIX SET. The
+    cache lives in ``src/core/static_cache.py``; this class only decides
+    WHETHER to use it for a given request and builds the swapped response.
+    Every URL served here keeps the EXACT ``Cache-Control`` above -
+    compression changes the bytes on the wire, never how long they may be
+    kept, which is the whole point of not touching this class's original
+    job.
     """
 
     _NO_CACHE_SUFFIXES = (".js", ".html", ".json", ".css")
@@ -949,6 +963,7 @@ class NoCacheStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         if path.lower().endswith(self._NO_CACHE_SUFFIXES):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response = await maybe_gzip_file_response(response, scope)
         return response
 
 
@@ -972,6 +987,12 @@ class NoCacheStaticFiles(StaticFiles):
 mimetypes.add_type("audio/mp4", ".m4a")
 
 app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static")
+
+# Issue #49: precompress every static text file once, before the app
+# accepts its first request, so no request pays a cold-compress cost in
+# steady state. See src/core/static_serving.py and static_cache.py.
+_warmed_count = warm_static_gzip_cache(client_dir, NoCacheStaticFiles._NO_CACHE_SUFFIXES)
+logger.info("static_gzip_cache_warmed", files=_warmed_count)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,6 +1027,28 @@ def _render_index_html() -> str:
     html = (client_dir / "index.html").read_text(encoding="utf-8")
     chip = f"v{APP_VERSION}" if APP_VERSION else ""
     return html.replace(_VERSION_PLACEHOLDER, chip)
+
+
+#: Cache key for the rendered shell's compression (issue #49). A fixed
+#: literal, not a file path: the compressed bytes are addressed by the
+#: TEMPLATE file's fingerprint (see render_compressible_html_response),
+#: not by their own content, because nothing else shares this cache key.
+_INDEX_HTML_GZIP_CACHE_KEY = "index.html:rendered"
+
+
+def _render_index_html_response(request: Request) -> Response:
+    """Build the SPA shell response, precompressed when the client
+    accepts gzip - shared by root(), session_deep_link(), archive_root()
+    and archive_deep_link() so the four routes cannot drift apart on
+    either the version chip or the compression decision. See
+    src/core/static_serving.py::render_compressible_html_response for why
+    the index.html template's own mtime/size stand in for the rendered
+    output's freshness.
+    """
+    return render_compressible_html_response(
+        request, _render_index_html, client_dir / "index.html",
+        _INDEX_HTML_GZIP_CACHE_KEY,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1052,16 +1095,15 @@ else:
 
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """Serve the web interface."""
     # See NoCacheStaticFiles docstring - the HTML shell served from "/"
     # bypasses StaticFiles, so stamp the no-cache header here too or the
     # phone will keep booting a stale shell that references old JS URLs.
-    # _render_index_html() also stamps the live app version into the chip.
-    return HTMLResponse(
-        content=_render_index_html(),
-        headers={"Cache-Control": "no-cache, must-revalidate"},
-    )
+    # _render_index_html_response() also stamps the live app version into
+    # the chip and serves it precompressed when the client accepts gzip
+    # (issue #49).
+    return _render_index_html_response(request)
 
 
 # Item 9: deep-link route. `/session/<project>` serves the SAME SPA shell
@@ -1080,7 +1122,7 @@ async def root():
 #   error banner - not a 404 from the server. Security posture is
 #   unchanged because no server-side state is touched by this route.
 @app.get("/session/{project}")
-async def session_deep_link(project: str):
+async def session_deep_link(project: str, request: Request):
     """Serve the SPA shell for deep-link URLs.
 
     The ``project`` path parameter is consumed by the client-side router
@@ -1088,12 +1130,10 @@ async def session_deep_link(project: str):
     """
     # Same no-cache rationale as root(): force the HTML shell to
     # revalidate on every load so a stale cached shell doesn't pin
-    # the phone to an old JS bundle. Shares _render_index_html() with
-    # root() so the version chip is stamped identically on both routes.
-    return HTMLResponse(
-        content=_render_index_html(),
-        headers={"Cache-Control": "no-cache, must-revalidate"},
-    )
+    # the phone to an old JS bundle. Shares _render_index_html_response()
+    # with root() so the version chip and the compression decision are
+    # identical on both routes.
+    return _render_index_html_response(request)
 
 
 # Archive (message browser) SPA routes.
@@ -1132,33 +1172,30 @@ async def session_deep_link(project: str):
 if MESSAGE_ARCHIVE.enabled:
 
     @app.get("/archive")
-    async def archive_root() -> HTMLResponse:
+    async def archive_root(request: Request) -> Response:
         """Serve the SPA shell for the archive screen root.
 
-        Inputs: none.
-        Output: HTMLResponse - the stamped SPA shell.
+        Inputs: request (Request) - read for Accept-Encoding (issue #49).
+        Output: Response - the stamped SPA shell, precompressed when the
+          client accepts gzip.
         Example: GET /archive -> 200 text/html
         """
-        return HTMLResponse(
-            content=_render_index_html(),
-            headers={"Cache-Control": "no-cache, must-revalidate"},
-        )
+        return _render_index_html_response(request)
 
     @app.get("/archive/{rest:path}")
-    async def archive_deep_link(rest: str) -> HTMLResponse:
+    async def archive_deep_link(rest: str, request: Request) -> Response:
         """Serve the SPA shell for any archive deep link.
 
         The ``rest`` path parameter is consumed by the client-side router
         after the SPA boots; this handler does not inspect or validate it.
 
         Inputs: rest (str) - the remainder of the archive path.
-        Output: HTMLResponse - the stamped SPA shell.
+          request (Request) - read for Accept-Encoding (issue #49).
+        Output: Response - the stamped SPA shell, precompressed when the
+          client accepts gzip.
         Example: GET /archive/t/5767/l/7111 -> 200 text/html
         """
-        return HTMLResponse(
-            content=_render_index_html(),
-            headers={"Cache-Control": "no-cache, must-revalidate"},
-        )
+        return _render_index_html_response(request)
 
 else:
 
