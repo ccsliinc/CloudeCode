@@ -104,6 +104,34 @@ def working_dir(configured: str) -> Path:
     return path
 
 
+def state_dir_is_explicit(override: Optional[str]) -> bool:
+    """Did the operator NAME a state directory, or is this the default?
+
+    Description: the one authority for that fact, and the reason it is a
+      free function here rather than a method on ``Settings`` is that
+      both consumers live in this module's rules. :func:`state_dir`
+      branches on it to pick the override over the macOS-native default,
+      and :func:`state_file_pin` is HANDED it to decide whether the
+      legacy ``log_directory`` rung may fire at all. Deriving it a second
+      time is how the two come to disagree.
+
+      It matters because ``LOG_DIRECTORY`` is populated from the
+      install's own ``.env`` and is therefore set for an operator who
+      never chose it, while ``CLOUDE_STATE_DIR`` is only ever set
+      deliberately. A stated location outranks an inferred one, so an
+      explicit state directory suppresses a legacy pin derived from a
+      variable nobody chose - which is what makes ``CLOUDE_STATE_DIR``
+      alone enough to isolate a dev or test instance. Without it a
+      throwaway server resolves, holds open, and in one measured case
+      WRITES the real user's state files.
+    Inputs: override (str | None) - the ``CLOUDE_STATE_DIR`` value.
+    Output: bool - True when it was supplied non-empty, False when the
+      default location is in force.
+    Example: state_dir_is_explicit(None) -> False
+    """
+    return bool(override)
+
+
 def state_dir(override: Optional[str]) -> Path:
     """Resolve and ensure the application's durable state directory.
 
@@ -133,7 +161,7 @@ def state_dir(override: Optional[str]) -> Path:
             fatal and surface it, which is what ``src/main.py`` does.
     Example: state_dir(None)
     """
-    if override:
+    if state_dir_is_explicit(override):
         path = Path(override).expanduser()
     else:
         path = Path.home() / "Library" / "Application Support" / "CloudeCode"
@@ -151,6 +179,7 @@ def state_file_pin(
     resolved_state_dir: Path,
     state_dir_override: Optional[str],
     log_directory: Optional[str],
+    state_dir_explicit: bool,
 ) -> StateFilePin:
     """Decide ONCE where one name-keyed state file lives, then keep it.
 
@@ -158,7 +187,18 @@ def state_file_pin(
       and :func:`state_file_location`. Everything either of those returns
       comes from here, so no call site ever re-derives it.
 
-      On the first resolution of a filename: present in BOTH locations is
+      RUNG 0, and it outranks every rung below: ``CLOUDE_STATE_DIR`` was
+      set, so the operator NAMED where state lives and the old location
+      is not consulted at all. A stated location outranks one inferred
+      from ``LOG_DIRECTORY``, which the install's own ``.env`` supplies
+      whether or not anyone chose it. See :func:`state_dir_is_explicit`.
+      The legacy copy is never read, never moved and never deleted; it is
+      logged once at info level so an operator who pointed
+      ``CLOUDE_STATE_DIR`` at a fresh directory on an install whose real
+      state sits at the legacy location gets a diagnostic instead of
+      silence.
+
+      Otherwise, on the first resolution of a filename: present in BOTH locations is
       ambiguous, logged as a warning naming both, and the NEW path wins
       with the old file left on disk and NEVER deleted - the new path
       wins because it is the one this version WRITES to, and preferring
@@ -175,14 +215,18 @@ def state_file_pin(
       pins (dict) - the caller's cache, MUTATED here; resolved_state_dir
       (Path) - the answer from :func:`state_dir`; state_dir_override
       (str | None) and log_directory (str | None) - the two configured
-      spellings the pin is keyed on.
+      spellings the pin is keyed on; state_dir_explicit (bool) - from
+      :func:`state_dir_is_explicit`, PASSED IN rather than re-derived
+      here so the legacy rung can be driven both ways by a test. A guard
+      that asks for its own condition is one whose refusing branch nobody
+      has ever watched run.
     Output: tuple[Path, str] - the resolved path and its location, one of
       ``"state_dir"`` or ``"log_directory"``.
     Example: state_file_pin("unread_state.json", pins={}, ...)
     """
     state_key = state_dir_override or ""
     log_key = log_directory or ""
-    key = (filename, state_key, log_key)
+    key = (filename, state_key, log_key, state_dir_explicit)
 
     pinned = pins.get(key)
     if pinned is not None:
@@ -190,7 +234,7 @@ def state_file_pin(
 
     new_path = resolved_state_dir / filename
     decision: StateFilePin = (new_path, LOCATION_STATE_DIR)
-    if log_key:
+    if log_key and not state_dir_explicit:
         old_path = Path(log_key).expanduser() / filename
         new_exists = new_path.exists()
         old_exists = old_path.exists()
@@ -204,6 +248,18 @@ def state_file_pin(
             )
         elif old_exists:
             decision = (old_path, LOCATION_LOG_DIRECTORY)
+    elif log_key and state_dir_explicit:
+        # Rung 0 fired. The resolved path is unchanged by this branch; it
+        # exists only so a suppressed legacy copy is stated out loud.
+        old_path = Path(log_key).expanduser() / filename
+        if old_path.exists():
+            import structlog
+            structlog.get_logger().info(
+                "state_file_legacy_copy_left_behind",
+                filename=filename,
+                using=str(new_path),
+                legacy_path=str(old_path),
+            )
 
     pins[key] = decision
     return decision

@@ -159,7 +159,8 @@ class Settings(BaseSettings):
     # One decision per name-keyed state file, made ONCE and remembered.
     # See _resolve_state_file() for the full contract and for why a
     # per-call re-derivation was a bug rather than a style choice.
-    # Keyed by (filename, state_dir_override, log_directory) so that
+    # Keyed by (filename, state_dir_override, log_directory,
+    # state_dir_explicit) so that
     # repointing either configured directory legitimately asks a new
     # question, while anything HAPPENING TO THE FILES does not.
     _state_file_pins: Optional[dict] = None
@@ -197,6 +198,19 @@ class Settings(BaseSettings):
         """
         return _state_paths.state_dir(self.state_dir_override)
 
+    def state_dir_is_explicit(self) -> bool:
+        """Did the operator NAME a state directory (``CLOUDE_STATE_DIR``)?
+
+        Description: the rule lives in
+          :func:`src.config.state_paths.state_dir_is_explicit`; this is
+          the seam. An explicit state directory suppresses the legacy
+          ``log_directory`` pin, which is what makes that one variable
+          enough to isolate a dev or test instance (issue #113).
+        Inputs: none (reads ``state_dir_override``).
+        Output: bool.
+        """
+        return _state_paths.state_dir_is_explicit(self.state_dir_override)
+
     def get_log_dir(self) -> Path:
         """LEGACY alias for :meth:`get_state_dir`, kept for its callers.
 
@@ -221,6 +235,7 @@ class Settings(BaseSettings):
             resolved_state_dir=self.get_state_dir(),
             state_dir_override=self.state_dir_override,
             log_directory=self.log_directory,
+            state_dir_explicit=self.state_dir_is_explicit(),
         )
 
     def get_state_file_location(self, filename: str) -> str:
