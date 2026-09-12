@@ -352,7 +352,16 @@ def test_drift_state_file_only_old(tmp_path, monkeypatch, filename):
 @pytest.mark.parametrize("filename", STATE_FILE_CASES)
 def test_drift_state_file_in_both(tmp_path, monkeypatch, filename):
     """Case 1: present in both - ambiguous, the NEW path wins in both
-    resolvers, and the old file is left on disk untouched."""
+    resolvers, and the old file is left on disk untouched.
+
+    ``declare_state_dir=False``, deliberately: an explicitly declared
+    state dir suppresses the legacy rung entirely on the Python side
+    (see ``state_dir_is_explicit()``), so ``_resolve_state_file()`` would
+    return the new path regardless of what sits in the old one and this
+    case would prove nothing about the ambiguity it names. Without a
+    declared state dir both ladders still walk the legacy rung, and the
+    new path winning is the fact this test is actually about.
+    """
     s, install_dir, new_dir, old_dir, env = _file_case_setup(
         tmp_path, monkeypatch, "both" + filename.replace(".", ""),
         declare_state_dir=False,
@@ -378,3 +387,42 @@ def test_refresh_tokens_path_uses_the_fallback(tmp_path, monkeypatch):
     (old_dir / "refresh_tokens.db").write_text("existing tokens")
     assert str(s.get_refresh_tokens_path()) == str(old_dir / "refresh_tokens.db")
     assert str(s.get_refresh_tokens_path()) != str(new_dir / "refresh_tokens.db")
+
+
+@pytest.mark.parametrize("filename", STATE_FILE_CASES)
+def test_an_explicit_state_dir_diverges_and_the_backup_still_finds_the_legacy_file(
+    tmp_path, monkeypatch, filename
+):
+    """The ONE case where the two resolvers legitimately disagree, pinned
+    so the divergence is a measured decision rather than a drift nobody
+    noticed.
+
+    The app and the backup script answer DIFFERENT questions. Python
+    answers "where do I read and write this file", and an operator who
+    named a state directory has said where that is, so the legacy rung is
+    suppressed (issue #113 - without that, CLOUDE_STATE_DIR alone does not
+    isolate an instance). Bash answers "where is this file on disk, so I
+    can preserve it", and a legacy file that EXISTS must still be backed
+    up; a backup that stopped finding real data would be a data-loss
+    defect strictly worse than the one #113 fixes.
+
+    The divergence is safe in one direction only, and that is why this
+    test also asserts the direction: bash preserves MORE than the app
+    uses, never less. Whenever the app writes at the state dir path, bash
+    finds it there too (its rungs 2 and 4 both return the new path), so
+    the dangerous shape - a backup missing the file the app is actually
+    using - cannot occur.
+
+    The bash resolver is deliberately UNCHANGED by #113.
+    """
+    s, install_dir, new_dir, old_dir, env = _file_case_setup(
+        tmp_path, monkeypatch, "explicitdiverge" + filename.replace(".", "")
+    )
+    (old_dir / filename).write_text("real user data")
+
+    assert s.state_dir_is_explicit()
+    assert str(s._resolve_state_file(filename)) == str(new_dir / filename)
+    assert _resolve_state_file_bash(install_dir, filename, env) == str(
+        old_dir / filename
+    )
+    assert (old_dir / filename).read_text() == "real user data"
