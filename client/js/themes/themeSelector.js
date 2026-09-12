@@ -44,15 +44,16 @@
             selectEl.id = 'theme-selector';
             selectEl.className = 'theme-selector';
             selectEl.setAttribute('aria-label', 'Theme');
-            // Insert BEFORE the destroy button so it sits to its left visually,
-            // matching the spec's "right end of the header, near destroy + logout".
-            // Falls back to append if destroy isn't present.
-            var destroyBtn = parentEl.querySelector('#destroySessionBtn');
-            if (destroyBtn) {
-                parentEl.insertBefore(selectEl, destroyBtn);
-            } else {
-                parentEl.appendChild(selectEl);
-            }
+            // APPENDED, full stop. This used to insert before
+            // `#destroySessionBtn` to sit "at the right end of the header,
+            // near destroy + logout" - a header that no longer exists.
+            // Destroy moved to the sidebar row's kebab releases ago and
+            // the element has not been in client/index.html since, so the
+            // branch was dead and the append was always the path taken.
+            // Removed rather than left guarded: a positioning rule that
+            // names a vanished anchor reads like a layout that still
+            // exists. Pinned by tests/test_settings_panels_mount.node.mjs.
+            parentEl.appendChild(selectEl);
             selectEl.addEventListener('change', function (e) {
                 var id = e.target.value;
                 window.Themes.applyGlobal(id);
