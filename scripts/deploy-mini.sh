@@ -20,8 +20,10 @@
 # treats Resources/src inside the bundle as authoritative and copies it
 # over the server dir on every start, so a deploy that lands ONLY in the
 # server dir is reverted by the next restart, including the restart this
-# script issues. Measured 2026-08-29: file correct before kickstart,
-# original hash after it, three times. The bundle is written FIRST, so
+# script issues. Measured 2026-08-29: file correct before the restart,
+# original hash after it, three times. (That restart is NOT
+# `launchctl kickstart -k`, which orphans the server; it is the app
+# noticing its process is gone and starting a new one.) The bundle is written FIRST, so
 # that the one survivable partial state is the one we end up in if the
 # second copy fails.
 #
@@ -73,6 +75,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/deploy-lib.sh
 . "$SCRIPT_DIR/deploy-lib.sh"
+# shellcheck source=scripts/deploy-restart-check.sh
+. "$SCRIPT_DIR/deploy-restart-check.sh"
 cd "$SCRIPT_DIR/.."
 
 # Extension set, ONE definition. json is included on every path: the
@@ -391,33 +395,82 @@ fi
 # ---------------------------------------------------------------- restart
 # The live server is supervised by the Electron app, which restarts it on
 # its own; v1.1 is bare and must be relaunched here.
+#
+# RECORD WHO HOLDS THE PORT FIRST. Everything the check after the restart
+# can prove rests on knowing which pids were there before it, so this
+# reading is taken before anything is killed and a failure to take it
+# aborts the restart rather than proceeding blind. A restart whose
+# starting state is unknown cannot be verified afterwards, and "verified"
+# is the only reason this script exists.
+echo
+echo "reading :$PORT before the restart ..."
+if ! BEFORE=$(dl_capture_listeners "$HOST" "$PORT"); then
+    say_failed
+    echo "CANNOT DETERMINE: could not read who holds :$PORT on $HOST." >&2
+    echo "Nothing was restarted. The files are deployed and the old code is still running." >&2
+    exit 3
+fi
+RESTART_T0="${BEFORE%% *}"
+OLD_PIDS="${BEFORE#* }"
+[ "$OLD_PIDS" = "$BEFORE" ] && OLD_PIDS=""
+echo "  holder(s): ${OLD_PIDS:-none}"
+
 if [ "$TARGET" = "live" ]; then
     # Kill by the pid that OWNS THE PORT, not by a name match. A bare
     # `pgrep -f src.main | head -1` matches the v1.1 server too and picks
     # whichever pid sorts first, so it could stop the wrong install.
+    #
+    # EVERY holder, not `head -1`. A port can be held by more than one
+    # process (a leaked old one, or separate v4 and v6 sockets), and
+    # killing the first one lsof happens to print leaves the others
+    # serving - after which the check below would correctly refuse, but
+    # only after a pointless wait. `head -1` was masking that case.
+    #
+    # The status is NOT swallowed with `|| true`. An ssh that failed means
+    # nothing was killed, and that used to be indistinguishable from a
+    # clean kill.
     # shellcheck disable=SC2029  # $PORT is ours and must expand here
-    ssh "$HOST" "P=\$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -1); [ -n \"\$P\" ] && kill \"\$P\"" || true
+    if ! ssh "$HOST" "P=\$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | sort -u); [ -z \"\$P\" ] || kill \$P"; then
+        say_failed
+        echo "RESTART FAILED: could not signal the process holding :$PORT on $HOST." >&2
+        echo "The files are deployed. The old code is still running." >&2
+        exit 1
+    fi
 else
     # shellcheck disable=SC2029  # $DEST_SERVER is ours and must expand here
-    ssh "$HOST" "pkill -f 'CloudeCode-v1.1.*src.main' || true; sleep 2; cd '$DEST_SERVER' && nohup ./venv/bin/python3 -m src.main > /tmp/v11-server.log 2>&1 & sleep 1" || true
+    if ! ssh "$HOST" "pkill -f 'CloudeCode-v1.1.*src.main' || true; sleep 2; cd '$DEST_SERVER' && nohup ./venv/bin/python3 -m src.main > /tmp/v11-server.log 2>&1 & sleep 1"; then
+        say_failed
+        echo "RESTART FAILED: could not relaunch the v1.1 server on $HOST." >&2
+        echo "check: ssh $HOST 'tail -20 /tmp/v11-server.log'" >&2
+        exit 1
+    fi
 fi
 
-printf "waiting for :%s " "$PORT"
-UP=0
-for _ in $(seq 1 30); do
-    if curl -s -o /dev/null --max-time 2 "http://$HEALTH_HOST:$PORT/" 2>/dev/null; then
-        UP=1; echo "- up"; break
-    fi
-    printf "."
-    sleep 2
-done
-if [ "$UP" -eq 0 ]; then
-    echo
+# THE UP CHECK. See scripts/deploy-restart-check.sh for what each leg
+# measures and why. What matters here is that it can no longer pass
+# against the process this script just killed, it can no longer count a
+# 401 or a proxy's 502 as "up", and an expired budget returns a failure
+# rather than falling out of a loop into the success path below.
+echo
+# NOT `if ! dl_confirm_restart ...`. Inside the body of an `if !`, `$?` is
+# the status of the NEGATION, which is 0, so capturing it there would have
+# made every failure of this check exit 0 - the very defect this change
+# exists to remove. Capture first, branch second.
+set +e
+dl_confirm_restart "$HOST" "$HEALTH_HOST" "$PORT" "$DEST_SERVER" "$RESTART_T0" "$OLD_PIDS"
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
     say_failed
-    echo "TIMED OUT: :$PORT did not answer after the restart." >&2
-    echo "The files are verified on disk but the server is not serving them." >&2
+    if [ "$RC" -eq 3 ]; then
+        echo "CANNOT DETERMINE: the restart could not be verified on :$PORT." >&2
+        echo "That is NOT the same as a failed restart, and NOT a pass. Check by hand." >&2
+    else
+        echo "THE RESTART DID NOT PRODUCE A VERIFIED SERVER on :$PORT." >&2
+        echo "The files are verified on disk but nothing provable is serving them." >&2
+    fi
     [ "$TARGET" = "v11" ] && echo "check: ssh $HOST 'tail -20 /tmp/v11-server.log'" >&2
-    exit 1
+    exit "$RC"
 fi
 
 # DID THE DEPLOY SURVIVE THE RESTART? "The port came back" does not
