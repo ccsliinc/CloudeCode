@@ -145,7 +145,7 @@ under `/static` exactly as it serves everything else.
 | The copy the data layer prints | `client/js/labels/session-listing.js` |
 | Put the REAL bundle in a node test's sandbox | `tests/helpers/cloude-web-sandbox.mjs` |
 | Per-device UI preferences, on the legacy keys | `web/src/lib/ui/prefs.svelte.ts` |
-| Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.test.ts` |
+| Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.parity.test.ts` (the proof), `StatusLed.behaviour.test.ts`, `StatusLed.drift-guard.test.ts`, sharing `led-legacy-fixture.ts` |
 | Slice 1's tests | `web/src/lib/launchpad/attribution.test.ts` |
 | Slice 2's tests | `web/src/lib/launchpad/recent{,-actions,-chrome,-visibility}.test.ts`, `no-delete-wording.test.ts` |
 | The emitted bundle, COMMITTED | `client/dist/app.js`, `client/dist/app.css` |
@@ -224,7 +224,8 @@ name.
 `client/js/session-status-ui.js`; `window.CloudeWeb.ledHtml(status, signals)`
 must return exactly what `SessionStatusUI.dotHtml(status, signals)` returns.
 That is not asserted by hand-written expectations, which would only prove the
-port agrees with what the porter remembered: `web/src/lib/StatusLed.test.ts`
+port agrees with what the porter remembered:
+`web/src/lib/StatusLed.parity.test.ts`
 loads the two REAL legacy files in a `vm` sandbox and compares string against
 string across the whole cross product of status, unread flag, startup gate and
 status source - 1008 comparisons, plus a negative control proving the
@@ -325,7 +326,8 @@ the first question about any client change is which tree owns that screen.
 PURPOSE, AND IT IS NOT A DUPLICATION BUG.** `client/js/status-led.js` is still
 loaded by `client/index.html` and still paints every legacy surface, while
 `web/src/lib/led.ts` paints the compiled rows, and the contract between them
-is BYTE-IDENTICAL OUTPUT proven by `web/src/lib/StatusLed.test.ts` against the
+is BYTE-IDENTICAL OUTPUT proven by `web/src/lib/StatusLed.parity.test.ts`
+against the
 real legacy file in a `vm` sandbox. Delete or edit one of them alone and half
 the app's lights change while the other half does not, which the parity test
 is there to make loud. See "The `web/` build" above.
@@ -453,10 +455,13 @@ they were not left behind as a second copy.** The project tree's ended rows
 archive and restart (slice 4); the running-sessions row forks (slice 5). Both
 still-legacy surfaces now call `window.CloudeWeb.launchpad.archiveSessionRecord`
 / `.restartRecentSession` / `.forkSession` by name. One behaviour, one greppable
-call site per surface, no dual path. Note `tests/test_session_restart_identity.node.mjs`
-stubs that NAMESPACE now rather than `Launchpad._restartRecentSession`: stubbing
-the old method name would assert against a function nothing calls, which is the
-quietest way for a test to stop testing.
+call site per surface, no dual path. `tests/test_session_restart_identity.node.mjs`
+stubbed that NAMESPACE rather than `Launchpad._restartRecentSession`, because
+stubbing the old method name would assert against a function nothing calls,
+which is the quietest way for a test to stop testing. THAT SUITE IS GONE - a
+later slice deleted it along with the surface it drove, and this pass did not
+find a one-to-one successor for it under `web/src`. The lesson is what is
+being kept here, not the file.
 
 **THE RECENT SECTION'S HEADING IS STILL LEGACY MARKUP, AND THAT IS DELIBERATE.**
 `mountPanel` puts the component inside `#recent-sessions-list`, while
@@ -486,7 +491,8 @@ and the mount call is the LAST statement in `loadProjects()` - so an unguarded
 throw there rejects the promise every caller awaits and takes the whole home
 screen down over a card. Measured: it did, and
 `tests/test_project_list_render_guard.node.mjs` went from 11 passed to 9
-failed. The call site tests for the bundle and `console.error`s when it is
+failed. THAT SUITE IS GONE TOO, deleted in `90a9e87` along with the legacy
+render guard it drove; the measurement is kept because the mechanism is. The call site tests for the bundle and `console.error`s when it is
 missing, because a panel that silently never mounts is the same false green
 this project keeps paying for. Any later slice's call site needs the same
 shape.
@@ -562,8 +568,8 @@ methods that moved read `window.Auth`, `window.UIFlags` and
 and are NOT in a node `vm` sandbox, where the harness builds a plain
 object and hangs it on the context. A first draft reached for
 `globalThis`, the poller's auth gate answered false, and the tick silently
-never ran - it surfaced in `tests/test_project_list_render_guard.node.mjs`
-looking exactly like a repaint bug. A BARE `window` reference also THROWS
+never ran - it surfaced in `tests/test_project_list_render_guard.node.mjs`,
+since deleted in `90a9e87`, looking exactly like a repaint bug. A BARE `window` reference also THROWS
 where a property read would not, because vitest runs this tree in the
 `node` environment on purpose. `web/src/lib/sessions/env.ts` is the one
 place both are handled; anything new in this tree reads through it.
@@ -3189,7 +3195,7 @@ poison every downstream reader, and until 2026-09-08 it did.
 | Piece | File |
 |---|---|
 | Compose, validate and create the directory | `src/core/project_directory.py` |
-| The folder step, and the pure rules behind it | `client/js/project-create-folder.js` |
+| The folder step, and the pure rules behind it | `web/src/lib/launchpad/project-folder.ts` and `project-folder.test.ts` (slice 6 moved it out of `client/js/project-create-folder.js`, which is DELETED) |
 | Where it is wired in | `src/api/session_crud_routes.py` (`create_session`), `web/src/lib/launchpad/create-flow.ts` (slice 6 moved it out of `launchpad.js::_createNewSessionInner`) |
 
 **"START EMPTY" HAD NO FOLDER STEP AT ALL.** The chain was "+" > new
@@ -3389,7 +3395,8 @@ overridden by no state, and the glow is a RADIAL GRADIENT rather than a
 spread shadow - a gradient fades out AT the box edge, so the halo's
 painted extent IS its declared box and can be held to a number; a spread
 shadow paints beyond the element by definition and never could.
-`scripts/verify_status_led_geometry.py` measures the whole matrix in a
+`scripts/archive/verify/verify_status_led_geometry.py` measures the whole
+matrix in a
 real Chromium across three themes and two viewports, because the
 divergence was in what the box RESOLVES to once a per-state override and
 a pseudo-element's own shadow are composed, and no CSS read composes
