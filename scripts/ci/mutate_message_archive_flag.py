@@ -38,7 +38,7 @@ PYTEST = [str(ROOT / "venv" / "bin" / "python3"), "-m", "pytest", "-q",
 MUTATIONS: List[Tuple[str, str, str, str, str]] = [
     (
         "M1 pydantic default flipped on",
-        "src/config.py",
+        "src/config/message_archive.py",
         "    Fields:\n        enabled: Whether the message archive subsystem may run at all.\n    \"\"\"\n\n    enabled: bool = False",
         "    Fields:\n        enabled: Whether the message archive subsystem may run at all.\n    \"\"\"\n\n    enabled: bool = True",
         "tests/test_message_archive_flag.py::test_the_default_is_off",
@@ -128,20 +128,22 @@ MUTATIONS: List[Tuple[str, str, str, str, str]] = [
 NODE_TEST = "tests/test_message_archive_client_gate.node.mjs"
 
 NODE_MUTATIONS: List[Tuple[str, str, str, str, str]] = [
-    (
-        "C1 launchpad archive section ships visible",
-        "client/js/launchpad.js",
-        '<div class="launchpad-section" id="archive-section" hidden\n                     style="display:none;">',
-        '<div class="launchpad-section" id="archive-section">',
-        NODE_TEST,
-    ),
-    (
-        "C2 launchpad never measures availability",
-        "client/js/launchpad.js",
-        "            window.ArchiveEntry.ensure().then((state) => {",
-        "            Promise.resolve('enabled').then((state) => {",
-        NODE_TEST,
-    ),
+    # C1 AND C2 ARE GONE BECAUSE THE DOOR THEY GATED IS GONE. Both
+    # mutated ``client/js/launchpad.js``: one re-showed the hidden
+    # ``#archive-section``, the other made the launchpad assume ENABLED
+    # instead of asking ``ArchiveEntry.ensure()``. Slice 7 deleted that
+    # file, and the archive row went with it - there is now exactly ONE
+    # door onto the archive, the header icon, gated by C4 below.
+    #
+    # THAT IS A STRONGER POSITION, NOT A WEAKER ONE, and it is asserted
+    # rather than assumed: ``tests/test_message_archive_client_gate.node.mjs``
+    # carries "the launchpad has no archive door left to gate", which
+    # fails if ``id="archive-section"``, ``id="launchpad-archive-entry"``
+    # or any ``ArchiveEntry`` reference comes back to the home screen -
+    # and it guards itself against vacuity by requiring the source it
+    # reads to be over 1000 characters first. One door, one gate; a
+    # second gate that drifts out of step with the first is how an
+    # install with the archive OFF ends up showing a door onto a 302.
     (
         "C3 a failed probe resolves to enabled",
         "client/js/archive-entry.js",
@@ -200,6 +202,26 @@ def main() -> int:
       restored byte-for-byte, 1 otherwise.
     Example: sys.exit(main())
     """
+    # PRE-FLIGHT: every file this script mutates must exist BEFORE any
+    # of them is touched. The shell harnesses get this from
+    # mutate_arm_trap, which exits 1 on a missing file; this one used to
+    # crash mid-run with a bare FileNotFoundError from read_bytes, having
+    # possibly already mutated and restored earlier files. A missing
+    # target is a mutant that cannot be evaluated, which is a refusal and
+    # never a pass, so it exits 2 - the same "CANNOT EVALUATE, and 2 IS
+    # NOT 0" vocabulary scripts/web-build-check.sh and
+    # scripts/ci/lib/mutate-web.sh use.
+    missing = sorted({
+        rel for _name, rel, _old, _new, _test
+        in list(MUTATIONS) + list(NODE_MUTATIONS)
+        if not (ROOT / rel).is_file()
+    })
+    if missing:
+        for rel in missing:
+            print(f"CANNOT EVALUATE: no such file: {rel}")
+        print("Nothing was mutated and nothing was proven. 2 IS NOT 0.")
+        return 2
+
     failures = 0
     all_mutations = MUTATIONS + NODE_MUTATIONS
     for label, rel, old, new, node_id in all_mutations:
