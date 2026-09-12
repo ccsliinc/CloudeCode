@@ -10195,3 +10195,312 @@ Sixteen conflicts out of 245 files. The conflicts were never the risk.
       passed here. Do NOT widen its budget: a timeout long enough never to
       flake is long enough to hide a real hang.
 - [ ] Not tagged, not deployed, per the brief.
+
+---
+
+## 2026-09-12 - DOCS PASS after the 1.4.0 release and deploy - DONE
+
+Written by the documentation agent working `docs/steward-1.4.0-round` off
+`b5de919`, while three other agents work `src/**`, `client/**` + `web/**` and
+`scripts/**` in parallel. Everything below was verified against git, the
+GitHub API, the code at `b5de919` or a throwaway reproduction. Where a claim
+could not be verified it says so in those words.
+
+### CORRECTION - the fold's commit and file counts, both wrong in this file
+
+The `2026-09-11 RELEASE 1.4.0` entry above says **"89 of his non-merge commits
+were new to this line, 245 files, +50446 / -3761"**, and `CLAUDE.md` carried
+the same pair. Re-measured 2026-09-12:
+
+    git rev-list --no-merges --count 4d8aa76..6012467   -> 89
+    git log --no-merges --format='%an' 4d8aa76..6012467 | sort | uniq -c
+                                                        -> 84 psyance
+                                                           3  Adoom666
+                                                           2  Joseph Sugamele
+    git diff --shortstat 4d8aa76 6012467
+                        -> 244 files changed, 48172 insertions(+), 3761 deletions(-)
+
+- **89 and 87 are both right, about different questions.** 89 is the raw range
+  count; 87 is how many of those are HIS (84 `psyance` + 3 `Adoom666`). The
+  other 2 are ours, carried back in by the two merges of our line he took
+  inside his own. 87 is not a correction of 89 and neither should be quoted
+  without saying which it is. The published release body uses a third frame
+  and it reproduces exactly: **87 of the 171 non-merge commits between `v1.2.1`
+  and `v1.4.0`**, 198 commits over 27 merges, 704 files.
+- **244 files, not 245**, and **+48172, not +50446**. Deletions match at 3761.
+  No spelling of that diff reproduces the old pair. The per-commit sum, the one
+  derivation that runs higher, is +49306 / -4297 over the same 244 files.
+- The lesson the old entry drew is unchanged and still the right one: MEASURE
+  THE MERGE BASE BEFORE QUOTING A COMMIT COUNT. Add to it: say which side of
+  the base you are counting, and whether you are counting commits or authors.
+
+### CORRECTION - `src/api/routes.py` before slice S6 was 4,397, not 4,387
+
+`CLAUDE.md` said **4,387** in "Where the 1.4.0 integration moved things" and
+**4,397** in "How we work here" - the file disagreed with itself about the one
+number that same paragraph tells you to check first on any merge. Measured:
+
+    git show e859106^:src/api/routes.py | wc -l   -> 4397
+    git show e859106:src/api/routes.py   | wc -l  -> 106
+    git show release/1.2.1:src/api/routes.py | wc -l -> 4387
+
+4,387 is the count at `release/1.2.1` and at the merge base `4d8aa76`; the
+file grew ten lines before S6 ran. Corrected in `CLAUDE.md`. The 4,593-line
+merge result is confirmed (`git show d7c81ee:src/api/routes.py | wc -l`), and
+that file carries **51 route decorators**, every one already declared by a
+sibling.
+
+### CORRECTION - the test baseline was stale by two rounds
+
+`CLAUDE.md` read **5758 passed / 0 failed / 18 skipped** from 2026-09-10 and
+said zero failed was the number to hold. Current, at `b5de919`:
+
+- **7303 passed / 4 failed / 57 skipped, out of 7364 collected.** The 7303/4
+  is the figure the `b5de919` commit itself recorded from a full run.
+- Re-measured independently by this pass, clean worktree with a `config.json`
+  copied in, `-p no:randomly -m "not real_tmux"`: **6957 passed / 1 failed /
+  57 skipped / 349 deselected in 193.18 s**, the one failure being
+  `test_home_write_guard`. A bare `--collect-only -q` on the same tree answers
+  **7364 tests collected**.
+- **6957 + 1 + 57 + 349 = 7364.** The arithmetic closing exactly is what makes
+  the partial run evidence about the full one rather than a second unrelated
+  number.
+- The four, all environmental, all failing identically on his parent
+  `6012467`: `test_cold_socket_born_at_depth_real_tmux`,
+  `test_cold_socket_options_real_tmux`, `test_tmux_launch_batching_real_tmux`,
+  and
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`.
+  Three of the four are in the `real_tmux` group.
+- **Node re-measured by this pass** with the CI loop's own
+  `for suite in tests/*.node.mjs`: **195 suites, 195 pass, 0 fail** at
+  `b5de919`. `CLAUDE.md` said 206/206 from 2026-09-10. THE COUNT WENT DOWN
+  BECAUSE OF THE MIGRATION, not because coverage was lost: the svelte slices
+  retired node suites whose subject they deleted and re-asserted them in
+  vitest under `web/src`, which the `tests/*.node.mjs` glob cannot see.
+- **vitest was NOT re-measured by this pass.** `1340/1340` with `svelte-check`
+  at 0 errors is the reading recorded above for the 1.4.0 merge round and is
+  carried as that round's measurement, not this one's.
+
+### DONE - released, published and deployed
+
+- [x] **`v1.4.0` is an annotated tag naming `7da2901`.** `b5de919`, the boot
+      integrity gate, is ONE COMMIT PAST the tag and is the tip of
+      `integration/1.3.0` on both `origin` and `adamdev` (both confirmed at
+      `b5de919b23d8f727185b54f270b4e0d8fc2759cc`). Note the local branch in
+      the owner's main checkout was still at `57d1c32` when this pass started;
+      fetch before you read it.
+- [x] **Published on `origin` (ccsliinc/CloudeCode), marked Latest**,
+      published 2026-09-11T22:29:38Z, one asset
+      `Cloude.Code-1.4.0-arm64.dmg` at 126,619,315 bytes, sha256 printed in
+      the body beside the `shasum -a 256` line that verifies it. `v1.2.0` and
+      `v1.2.1` remain published as the downgrade path.
+- [x] **`adamdev` has no published release ON THIS LINE**, which is not the
+      same as "no published release". Its `v1.2.0`, `v1.0.36` and `v1.0.35`
+      are DRAFTS; `v0.8.1` from 2026-08-04 is published there and still wears
+      the Latest badge. Stated precisely because the loose version was
+      circulating.
+- [ ] **OPEN, small: the published release body carries one wrong number.**
+      It says `src/api/routes.py` "drops from 1160 lines to 303". Measured, it
+      is 4,387 at `v1.2.1` and 106 at `v1.4.0`; neither figure is that file at
+      either tag. Everything else in the body reproduces exactly. The body
+      lives on GitHub, so this is a release edit and not a commit. Not done
+      here because this pass does not edit published releases.
+- [x] **Deployed to the live mini and running.** REPORTED by the owner
+      2026-09-11: mac-mini-m4, 19 sessions intact across four restarts. NOT
+      re-verified here - this pass does not touch the live host.
+      `scripts/deploy-mini.sh --verify-only` is what re-checks it.
+
+### DONE - two defects that merged cleanly, shipped, and were fixed on live
+
+Both in `c725905`, both the same mechanism as the four the merge sweep caught:
+a name that moved, reached through something that answers falsy or gets
+swallowed rather than raising where a test can see it.
+
+- [x] **`src/api/websocket.py:270` passed `session_manager` where lines 307
+      and 325 passed `registry`.** The live session table moved to
+      `SessionRegistry`, so `SessionManager` carries no `get_backend` and
+      `_resolve_backend` raised `AttributeError`. THE RAISE WAS SWALLOWED by
+      the handshake's own `except Exception`, which logs `ws_handshake_error`
+      and falls through to the streaming loop - so the socket lived and bytes
+      streamed while the NEGOTIATED RESIZE and the ATTACH PAINT were skipped
+      on every terminal open. Measured on live: `ws_handshake_resize` 1,
+      `ws_handshake_error` 1, `ws_handshake_painted` 0. This is the mechanism
+      behind this project's historical wrong-grid and "input lag" symptom,
+      arriving again by a new route. `tests/test_ws_handshake_paint.py` is
+      behavioural on purpose: a test asserting line 270 passes a variable
+      NAMED `registry` would pass forever through a rename, and a test that
+      only checked the socket survived would pass WITH the defect, because
+      surviving is what the swallow guarantees.
+- [x] **`src/core/session_change_notice.py` had it twice in one function.**
+      `publish_hook_status` read `get_backend` off the manager through a
+      `getattr` and fell back to `_hook_tmux_names`; both moved, the first to
+      the registry and the second to `HookTokenAuthority.tmux_names`. Both
+      answer falsy on a real `SessionManager`, so `tmux_session` was always
+      None, the `if tmux_session:` block never ran, and every hook status
+      notice on `/ws/events` shipped with neither a tmux name nor an unread
+      flag. The tolerance is KEPT - this is the hook critical path and must
+      never raise - and pointed at the objects that now carry the members.
+
+### DONE - the boot integrity gate, `b5de919`
+
+- [x] `ensure_db_migrated` ran `PRAGMA integrity_check` unconditionally at
+      `db_migration.py:280`, BEFORE the schema-version gate, so it ran whether
+      or not a migration was pending. Measured 2026-09-11 on the owner's
+      5.4 GB `cloude.db`: **51.8 s of a 55 s startup window**, after which the
+      whole rest of the lifespan took 200 ms. Warm-cache floor about 21 s,
+      cold about 54 s. Six hours after the daily checker had walked the same
+      file in 19.767 s and written `ok`.
+- [x] `src/core/db_integrity_gate.py` is the ladder: **ten refusal rungs, one
+      skip rung**, and every refusal runs the check. `checker_disabled`,
+      `never_ran`, `freshness_cannot_determine`, `stale`, `verdict_failed`,
+      `verdict_cannot_determine`, `db_path_mismatch`, `install_id_unrecorded`,
+      `install_id_mismatch`, `db_smaller_than_verified`.
+- [x] A cached FAILURE runs the live pragma rather than short-circuiting, so a
+      stale failure cannot become permanent.
+- [x] The artifact now records `meta.install_id` and `db_size_bytes`. It used
+      to record only `db_path`, which is derived identically on both sides and
+      therefore proved almost nothing.
+- [x] **What it CANNOT detect, written into the module rather than implied
+      away**: an in-place restore of a same-size-or-larger backup of the SAME
+      install; bit rot arising between the check and the boot; an unclean
+      shutdown, which is not cheaply detectable at all because a `-wal` file is
+      present whenever a connection is open and routinely survives a clean
+      exit - and this is a menubar app that is killed constantly, so any crash
+      heuristic built on it would refuse always or never. The freshness window
+      is the only control for all three, as it always was for the daily check.
+- [x] 37 new tests, every refusal rung proven by COUNTING whether the walk
+      happened rather than by reading back a label. Negative control watched
+      go red: forcing an unconditional skip turned 37 passed into 35 failed /
+      2 passed.
+- [x] **Startup 21.4 s to 1.867 s with a logged skip** - REPORTED by the owner
+      from the live restart 2026-09-11, not re-measured by this pass. Note
+      21.4 s is the WARM-CACHE end of the range, not the 51.8 s worst case.
+
+### DONE - the six checks that were green while measuring nothing
+
+Full write-up with the mechanism for each, and the re-measurement of each, in
+`.claude/notes/troubleshooting.md` under
+`## 2026-09-11 / 2026-09-12 - SIX CHECKS THAT WERE GREEN WHILE MEASURING
+NOTHING`. Promoted into `CLAUDE.md` as **gotcha 11**. In brief:
+
+1. A bare `dist/` in `.gitignore` swallowed `client/dist`; the deploy would
+   have shipped no bundle and every hash check would have compared absent
+   against absent and read green. Closed by the `!client/dist/` negation.
+2. The docs drift guard's citation regexes matched only `.py`/`.js` under the
+   old roots, so a citation repointed at `web/src/**.ts` would have become
+   invisible prose and the guard would have passed forever holding nothing.
+   Same commit, same shape: `test_client_called_routes_exist.py` scanned
+   `client/js` only and went silent on the whole svelte client. Both fixed in
+   `882073e`, both with planted-failure controls.
+3. `rsync --no-compress`. **The circulating summary of this one was wrong and
+   the correction matters**: openrsync exits **1** with 1,392 bytes on
+   **stderr** and copies nothing. What made it green was the PIPELINE -
+   `2>&1 | tail -1` exits 0 without `pipefail` and 1 with it, both measured.
+   The fix is `pipefail`, not a different flag.
+4. `deploy-mini.sh`'s up-check passed against the DYING OLD PROCESS: `kill`
+   returns immediately and the `curl` after it has no identity in it, so it
+   proves something answered and never that the new build is what answered.
+5. The same check reported "up" with nothing listening. **RECORDED AS
+   UNRESOLVED.** The script at `b5de919` cannot produce that from a closed
+   port (curl exits 7 and the loop takes the failure branch), so either
+   something else was answering or the observation came from a different
+   check. Not explained here on purpose.
+6. `tmux -L cloude list-sessions` over a non-interactive ssh. Measured against
+   the real mini: `ssh mac-mini-m4 'echo $PATH'` gives
+   `/usr/bin:/bin:/usr/sbin:/sbin`, no tmux on it; `zsh -lc` finds
+   `/opt/homebrew/bin/tmux`. With stderr suppressed, "command not found"
+   renders as "zero sessions".
+
+### Coordination with the other party, state as of 2026-09-12
+
+- [x] **Their 1.3.0 was built ON our release line.** Confirmed:
+      `git merge-base --is-ancestor release/1.2 6012467` answers YES, and the
+      merge base of `release/1.2.1` and `6012467` is `4d8aa76`. They already
+      hold all our released code.
+- [x] **Both proposals accepted**: our 1.4.0 absorbs their 1.3.0, their 1.3.0
+      stays put. Recorded in `docs/DECISIONS.md` under "Two lines declared
+      1.3.0 on the same morning; his stands and ours is 1.4.0".
+- [x] **We adopted their issue grab order** in `2ac476a`, merged as `50cf9dc`:
+      author first then priority, unlabelled sorting after p2 WITHIN its
+      author's group, other authors after both, ties by lowest issue number.
+      **QUEUE ORDER IS NOT OWNERSHIP.** CORRECTION to how this was briefed:
+      it did NOT land in a file called `docs/adopt-adam-grab-order`; there is
+      no such path. It landed in `.claude/skills/work/SKILL.md` and
+      `.claude/skills/work/work.sh`.
+- [ ] **Their tip is `f1732d5`.** Overnight they shipped **#106** (remove the
+      connect pill, `98afd92`, merged `ea2cbc9`) and **#113** (state dir
+      isolation, `5d86205` / `81505bd` / `c860f87`, merged `405e9e8`), plus
+      `a20091e` re-measuring their own stale test baselines.
+- [ ] **#113 MUST BE PORTED, NOT MERGED.** It edits `src/config.py` as a
+      single flat file; on our line that is the 23-module `src/config/`
+      package. Confirmed from the commits: `81505bd` changes 46 lines of
+      `src/config.py` and `c860f87` changes 12 more. A merge would re-inflate the
+      package the same way `src/api/routes.py` was re-inflated.
+      **Owned by the `port/113-state-dir-isolation` branch.**
+- [ ] **PROCESS NOTE, recorded factually and without accusation.** They
+      committed to announcing before re-entering the client, the toast surface
+      or `session_manager.py`. The #106 connect pill work is a client change
+      and no announcement was found on the thread. It may simply be that the
+      commitment was scoped to the contested files. Worth confirming rather
+      than assuming, in either direction.
+
+### OPEN - carried forward, written to survive being closed within the hour
+
+**THREE OF THESE ARE BEING WORKED RIGHT NOW BY PARALLEL AGENTS.** Each entry
+below states what was measured at `b5de919` by this pass, so a later reader
+can tell whether it was closed or whether it drifted. Do not mark one done
+from a branch name; mark it done from a re-measurement.
+
+- [ ] **The sleep/wake AWAY BAR is full width and overlaps when the sidebar is
+      out.** Filed 2026-09-10 above, still open at `b5de919`.
+      `client/js/terminal-away-bar.js` and `terminal-away-gap.js` are the
+      surface. CLIENT AGENT territory.
+- [ ] **A failed write is INVISIBLE to a sighted user.** Filed 2026-09-11
+      above, still open at `b5de919`. CLIENT AGENT territory.
+- [ ] **Three `settings-*-slot` panels never mount, plus two dead-but-guarded
+      buttons.** Re-measured at `b5de919`: `client/js/settings-panel.js`
+      queries `#settings-wrappers-slot` (line 348),
+      `#settings-toast-history-slot` (352), `#settings-settings-import-slot`
+      (359) and `#settings-terminal-commands-slot` (366);
+      `grep -n "settings-.*-slot" client/index.html` returns NOTHING, so no
+      slot is emitted by the document. `destroySessionBtn` /
+      `detachSessionBtn` are referenced by `client/js/session-editor-menu.js`,
+      `terminal.js` and `themes/themeSelector.js`. PRE-EXISTING on both lines
+      and at the merge base, so not merge damage. CLIENT AGENT territory.
+- [ ] **Stale harnesses still citing the deleted `client/js/launchpad.js`.**
+      **CORRECTION to the briefed count: it is not seven.** Measured at
+      `b5de919`, `grep -rln "launchpad\.js" scripts/` returns **17 files**, of
+      which **11 are outside `scripts/archive/`**: nine `scripts/ci/mutate-*`
+      mutation harnesses, plus `scripts/verify_header_icons_and_menu.py` and
+      `scripts/verify_home_mechanics.py`. Only ONE of the eight users of
+      `scripts/lib_pixel_measure.py` cites it
+      (`scripts/verify_home_mechanics.py`), so "seven stale pixel harnesses"
+      does not reproduce under any spelling this pass tried. Re-measure before
+      quoting a number. SCRIPTS AGENT territory.
+- [ ] **`deploy-mini.sh`'s up-check has no identity in it.** See findings 4
+      and 5 above and the troubleshooting section. SCRIPTS AGENT territory,
+      branch `fix/deploy-upcheck-identity`.
+
+### SLOTS LEFT FOR THE PARALLEL AGENTS - fill these in, do not rewrite them
+
+The three other agents' work lands after this pass. Their findings belong
+here, appended under each heading, so that this entry stays a record of what
+was true at `b5de919` and the next entries record what changed.
+
+- **`src/**` agent** - findings and what shipped: _pending, append below._
+- **`client/**` + `web/**` agent** - findings and what shipped: _pending,
+  append below._
+- **`scripts/**` agent** - findings and what shipped: _pending, append below._
+
+### OPERATIONAL HAZARD - two agents, one scratchpad, one deleted worktree
+
+- [ ] **A previous agent's git worktree was deleted mid-task by another
+      agent's sweep of the shared session scratchpad.** Both agents were
+      writing under the same session scratchpad directory and one cleaned up
+      what it took to be its own leftovers. The work in the deleted worktree
+      that had not been committed was gone.
+      **THE RULE: COMMIT EARLY AND OFTEN, AND DO NOT HOLD WORK IN A
+      WORKTREE.** A commit survives the directory; an uncommitted edit does
+      not. Give a worktree a distinctive name that identifies whose it is, and
+      never sweep a path you did not create. This pass committed after every
+      file.
