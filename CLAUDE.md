@@ -1780,6 +1780,36 @@ per server process and no subprocess at all.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
 - **Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).** Owner's rule, 2026-09-08. The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
+- **`gh`'s active account is GLOBAL TO THE MACHINE, and it does not hold
+  still.** Other agents on this box run `gh` under other accounts, so the
+  active one is not a fact you can check once and carry. Measured
+  2026-09-11 in one working session: it moved off the account that can see
+  this repo THREE TIMES, unprompted, including once between two
+  consecutive commands. A check at session start proves nothing about the
+  call forty minutes later. So NEVER RELY ON THE AMBIENT ACCOUNT: assert
+  your own on every single `gh` invocation instead, by passing its token
+  as an env var rather than trusting whatever `gh auth switch` last left
+  active - `GH_TOKEN="$(gh auth token -u <your-account>)" gh <subcommand>
+  ...`. `<your-account>` is whichever account YOUR clone can see this repo
+  under; on Adam's box that is `Adoom666`, given here as the worked
+  example rather than the universal answer, because this file is also
+  read by the other developer, `ccsliinc`, who has their own account.
+  `gh auth token -u <account>` reads that account's token without
+  mutating anything global, which is exactly why it is the right tool and
+  `gh auth switch` is not: a switch changes the account under every OTHER
+  agent on the machine too, which can break their in-flight calls and
+  starts a switch-back fight nobody wins. The token comes from command
+  substitution AT CALL TIME ONLY and must NEVER be written into a file, a
+  settings file, an env file, a commit or a log - this repo carries a
+  pre-commit secret-scanning hook and `docs/secret-scanning.md` because of
+  exactly that mistake once already. `git` is UNAFFECTED by any of this:
+  a push here goes over SSH and never consults the `gh` account, so a
+  failed `gh` call is not evidence a push failed, and treating it as one
+  risks re-pushing or re-claiming work that already landed. The
+  wrong-account failure reads as `GraphQL: Could not resolve to a
+  Repository with the name '...'. (repository)`, which looks exactly like
+  the repo was deleted or renamed and means only that the wrong account is
+  active.
 
 ## Restarting a session, and picking what it comes back as
 

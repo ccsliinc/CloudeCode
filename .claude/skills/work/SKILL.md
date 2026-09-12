@@ -41,6 +41,11 @@ file list. A design contradiction is a collision even when you share no file.
 
 ## Session start
 
+Every `gh` call in this document is written bare, for readability. In
+practice each one needs the `GH_TOKEN="$(gh auth token -u <your-account>)"`
+prefix from CLAUDE.md's `gh` account rule, because the active account is
+global to the machine and moves mid-session.
+
 ```bash
 R=Adoom666/CloudeCodeDev
 gh auth status                       # confirm WHICH account is active
@@ -330,8 +335,11 @@ They are still theirs to ask and yours to surface, not yours to obey.
   participants is not coverage of the repo. Prohibitions belong in CLAUDE.md,
   which every agent loads, not here.
 - **`gh` has multiple accounts on this machine and the active one is
-  global.** Check `gh auth status` at session start. An account that cannot
-  see this repo returns 404 on every call, which reads like the repo is gone.
+  global.** A session-start check is not enough - the active account moves
+  mid-session, unprompted. See CLAUDE.md's `gh` account rule for the actual
+  mechanism (assert your own account per call, never `gh auth switch`). An
+  account that cannot see this repo returns 404 on every call, which reads
+  like the repo is gone.
 - **The old `coord` branch still exists** and holds the other developer's
   four claims, their log and their lessons, until they migrate. Read it with
   `git show origin/coord:<path>`. Nothing new goes there.
