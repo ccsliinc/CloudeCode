@@ -10651,3 +10651,70 @@ APPEND ONLY. Nothing above is deleted.
       `v0.8.1` from August, with 1.2.0 and 1.0.3x sitting as drafts, exactly as
       HANDOFF already recorded. **Only `origin` builds a DMG**, which also
       means origin is the only place a tag push can be verified by a build.
+
+## 2026-09-12 - the two lesson records merged into docs/LESSONS.md, and a skills-sharing capture
+
+### The merge, and the premise that was wrong
+
+- [x] **`docs/LESSONS.md` ALREADY EXISTED on `adamdev/master` and already held
+      four of the six `coord` lesson files.** The brief for this round said the
+      lessons mechanism moved and the knowledge did not. That is half right and
+      the precise version is more useful: four migrated, **two did not**, and
+      they sat on the orphan `coord` branch for two days after
+      `.claude/skills/coord/` was superseded on 2026-09-10. Both are folded in
+      now, attributed, at `7fb2312`.
+      - `ccsliinc-a-dated-record-cannot-overturn-a-later-ruling` - three
+        agreeing sources all older than the ruling they overturned, and the
+        shipped `status-led.js` that would have settled it in one command was
+        never read.
+      - `adoom666-read-the-log-first` - both lines solving the same defect
+        twice in one day. **Rewritten**, because its resolution named
+        `coord.py read` and the `log/` directory, which the work protocol
+        retired. Restated against `gh pr list --state merged`.
+- [x] **Placement decided and justified in the file itself: `docs/LESSONS.md`,
+      extended, not a new file.** `.claude/skills/work/SKILL.md` already sends
+      every session there at start, `docs/` is outside `.gitignore`'s
+      `.claude/*` rule so it needs no `git add -f`, and putting the record back
+      inside a skill would reproduce the exact supersede failure being cleaned
+      up. A new file anywhere would have been a third copy.
+- [x] **Deduplicated by SHAPE. Six of our eight green-but-measuring-nothing
+      findings are existing lessons one level up, not new ones.** 14 inputs
+      (6 coord files plus our 8) resolve to 9 sections, up from 6.
+      - `dist/` swallowing `client/dist`, and tmux over non-interactive ssh,
+        into "unmeasured is not absent" (now ten occurrences). The first is
+        that shape applied to a hash COMPARISON: absent compares equal to
+        absent.
+      - the docs drift guard, the shim scanner's blind spot, and the
+        fixed-width over-match, into "a test that cannot fail" (now five).
+        All three derive what they assert from the tree they guard.
+      - `rsync --no-compress` into "never pipe in a verification step" (now
+        three), with the circulating summary CORRECTED: rsync exited 1 and
+        wrote 1392 bytes to stderr; `2>&1 | tail -1` returned 0. The fix is
+        `pipefail`.
+      - ONE new shape: **"a probe with no identity in it"**, the deploy
+        up-check answered by the process being killed.
+- [x] **The unresolved one is still marked unresolved.** The up-check reporting
+      "up" with nothing listening could not be reproduced against `b5de919`,
+      where curl against a closed port exits 7 and the loop refuses. Recorded
+      as MECHANISM NOT ESTABLISHED, with the two candidate explanations named
+      and neither adopted.
+- [x] **`.claude/skills/coord/SKILL.md` pointer corrected** so it names
+      `docs/LESSONS.md` rather than implying `coord.py lessons` is still the
+      way to read them.
+
+### Filed for later, not started
+
+- [ ] **A place to share skills between the two teams:
+      https://github.com/Adoom666/CloudeCodeDev/issues/120** (`p2`, `question`,
+      `documentation`). Adam's ask, verbatim via the owner: "like plugins he
+      also wanted a skills place to share skills. something for a todo for
+      later on." **CAPTURE, NOT A CLAIM** - no draft PR, so the grab order
+      treats it as free, and the body says so in its first line. It raises the
+      questions rather than answering them: what the shareable unit is, where
+      it lives, how a skill declares its scope (`work.sh` hardcodes
+      `Adoom666/CloudeCodeDev`), versioning and supersede, ownership under the
+      kept-behaviours rule, and whether it is the plugin registry or a second
+      mechanism. Grounded on the measured `.gitignore` force-add obstacle
+      (lines 189 to 191) and on the coord-to-work supersede as the concrete
+      precedent. Checked against every open and closed issue first; nothing
+      covered it, and #63 is linked as the related kept-behaviours thread.
