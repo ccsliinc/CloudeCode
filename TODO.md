@@ -825,3 +825,30 @@ confirmed unnecessary. Did not touch the issue-69 update-checker files
 tests/test_update_check.node.mjs, tests/test_version_and_update_check.py) or
 `docs/webui-performance-and-session-menu-plan.md`, which were already
 modified in the working tree before this task started.
+
+## [P6-AUTH-404] 2026-09-12 - login 404 on 1.4.2, fixed in 1.4.3
+
+- **Root cause.** `src/api/auth_routes.py` (from `e859106`, #108) called
+  `router.include_router(pairing_router)` and `router.include_router(status_router)`
+  ABOVE the `@pairing_router` / `@status_router` handlers. FastAPI below about
+  0.141 copies a sub-router's routes at include time, so `/auth/verify`,
+  `/auth/refresh`, `/auth/logout`, `/auth/qr` and `/auth/status` were never
+  registered and login answered 404. The live menubar venv ran FastAPI 0.121.3.
+- **Fix.** `15d8342`: the include block moved below the last handler, same order;
+  `tests/test_include_router_order.py` walks `src/` with `ast` and fails on any
+  include of a module-local router that gains a route later in the file, on any
+  FastAPI version, with its own negative control; floor raised to
+  `fastapi>=0.141` in `requirements.txt` (the bootstrap reinstalls on a hash
+  change, so existing venvs upgrade on next launch). Negative control: red at
+  `8d63bd7` on 0.141.1 and 0.121.3 (18 auth tests red on 0.121.3), green with
+  the fix on both. No other late include in `src/`.
+- **Release.** `v1.4.3` (`b5de6ef`), published on Adoom666/CloudeCodeDev:
+  https://github.com/Adoom666/CloudeCodeDev/releases/tag/v1.4.3. 1.4.2 bundles no
+  Python packages and floors at `fastapi>=0.115.0`, so it was broken on every
+  install whose venv already held FastAPI below 0.141.
+- **Lesson: version drift between the test venv and the production venv.** The
+  repo venv ran FastAPI 0.141.1, which resolves included routers lazily, so all
+  7323 tests passed against source that production could not serve. A runtime
+  route-table test would have passed too. Guard ordering statically, pin the
+  floor to the version the suite runs, and run the critical paths once under the
+  version production actually has.
