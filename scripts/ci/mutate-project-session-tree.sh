@@ -7,19 +7,51 @@
 # Modelled on scripts/ci/mutate-s9-recent-and-pills.sh - same harness
 # shape, same restore-on-exit discipline, same baseline gate.
 #
-# Client-only change (client/js/launchpad.js), so this mutates and
-# re-runs only the node test, not pytest.
+# Client-only change, so this mutates and re-runs only the client suites,
+# not pytest.
+#
+# SLICE 7 TOOK BOTH HALVES OF THIS SCRIPT AT ONCE: the source it mutated
+# (client/js/launchpad.js) AND the suite it scored against
+# (tests/test_project_session_tree.node.mjs). It armed the missing source
+# first, so it aborted at mutate_arm_trap and never reached the missing
+# suite. Both are repointed here, and the rules survived the port almost
+# line for line:
+#
+#   the attribution ladder and NEEDS ATTENTION  web/src/lib/launchpad/project-groups.ts
+#   presence, the disabled rule, the id ladder  web/src/lib/launchpad/project-node.ts
+#   the MISSING badge's own text                client/js/labels/project-tree.js
+#   the chevron, the children, the fold         web/src/lib/launchpad/ProjectNode.svelte
+#   the collapse set itself                     web/src/lib/launchpad/tree-collapse.svelte.ts
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+source "$ROOT/scripts/ci/lib/mutate-web.sh"
 cd "$ROOT" || exit 1
-NODE_TEST="tests/test_project_session_tree.node.mjs"
+WEB_TESTS=(
+  "web/src/lib/launchpad/project-groups.test.ts"
+  "web/src/lib/launchpad/project-node.test.ts"
+  "web/src/lib/launchpad/tree-collapse.test.ts"
+  "web/src/lib/launchpad/ProjectTree.behaviour.test.ts"
+  # A COVERAGE GAP, RECORDED RATHER THAN PAPERED OVER. Dropping the
+  # MISSING badge's text SURVIVED all four suites above; it is caught
+  # only by entry-flows.test.ts, which covers the PICKER, and by the i18n
+  # coverage test. So the project TREE's own behaviour suite does not
+  # assert that a missing project says so on the row, even though that
+  # badge is the whole point of the presence probe. Measured by applying
+  # the mutation and running each suite alone.
+  "web/src/lib/launchpad/entry-flows.test.ts"
+)
 
 FILES=(
-  "client/js/launchpad.js"
+  "web/src/lib/launchpad/project-groups.ts"
+  "web/src/lib/launchpad/project-node.ts"
+  "web/src/lib/launchpad/ProjectNode.svelte"
+  "client/js/labels/project-tree.js"
 )
 
 mutate_arm_trap "$ROOT" "${FILES[@]}"
+mutate_web_require "$ROOT"
+mutate_web_files_exist "$ROOT" "${WEB_TESTS[@]}"
 
 survived=0
 cannot_determine=0
@@ -28,11 +60,13 @@ killed=0
 # BASELINE GATE. A mutation run measures the DIFFERENCE between a green
 # suite and a mutated one; a red baseline would make every mutant read as
 # killed for free.
-echo "--- baseline: the suite must be GREEN before anything is mutated ---"
-if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
-  echo "BASELINE IS RED. Every mutant would read as killed. Refusing to run."
-  exit 2
-fi
+echo "--- baseline: the suites must be GREEN before anything is mutated ---"
+for wt in "${WEB_TESTS[@]}"; do
+  if ! mutate_web_run "$ROOT" "$wt"; then
+    echo "BASELINE IS RED ($wt). Every mutant would read as killed. Refusing to run."
+    exit 2
+  fi
+done
 echo "baseline green"
 
 restore_all() {
@@ -59,90 +93,79 @@ PYEOF
     cannot_determine=$((cannot_determine + 1))
     return
   fi
-  if ! mutate_run node "$NODE_TEST" >/dev/null 2>&1; then
-    killed=$((killed + 1))
-    echo "killed   $name"
-    return
-  fi
+  local wt
+  for wt in "${WEB_TESTS[@]}"; do
+    if ! mutate_web_run "$ROOT" "$wt"; then
+      killed=$((killed + 1))
+      echo "killed   $name"
+      return
+    fi
+  done
   echo "SURVIVED $name"
   survived=$((survived + 1))
 }
 
-echo "--- BLOCK 1: 'none' and 'unknown' must never collapse into each other ---"
-
 mutate "'none' collapsed into 'unknown' - an actionable answer becomes NEEDS ATTENTION" \
-  "client/js/launchpad.js" \
-  "            if (attribution === 'unknown') {||=>||            if (attribution === 'unknown' || attribution === 'none') {"
+  "web/src/lib/launchpad/project-groups.ts" \
+  '        if (attribution === '"'"'unknown'"'"') {||=>||        if (attribution === '"'"'unknown'"'"' || attribution === '"'"'none'"'"') {'
 
 mutate "'unknown' collapsed into 'none' - an unproven answer renders as measured" \
-  "client/js/launchpad.js" \
-  "            if (attribution === 'unknown') {
-                needsAttention.push({
-                    session: s,
-                    reason: 'working directory could not be read',
-                });
-            } else if (attribution === 'none') {||=>||            if (attribution === '__never_matches__') {
-                needsAttention.push({
-                    session: s,
-                    reason: 'working directory could not be read',
-                });
-            } else if (attribution === 'none' || attribution === 'unknown') {"
-
-echo "--- BLOCK 2: the missing-project guard must survive in the tree ---"
+  "web/src/lib/launchpad/project-groups.ts" \
+  '        if (attribution === '"'"'unknown'"'"') {
+            // REASON 4.
+            needsAttention.push({
+                session: s,
+                reasonKey: ATTENTION_REASON.dirUnreadable,
+            });
+        } else if (attribution === '"'"'none'"'"') {||=>||        if (attribution === '"'"'__never_matches__'"'"') {
+            // REASON 4.
+            needsAttention.push({
+                session: s,
+                reasonKey: ATTENTION_REASON.dirUnreadable,
+            });
+        } else if (attribution === '"'"'none'"'"' || attribution === '"'"'unknown'"'"') {'
 
 mutate "presence-disabled state is never computed, so a missing project's actions are never refused" \
-  "client/js/launchpad.js" \
-  "            const isDisabled = presenceState === 'missing' || presenceState === 'unreachable';||=>||            const isDisabled = false;"
+  "web/src/lib/launchpad/project-node.ts" \
+  '    const isDisabled = presenceState === '"'"'missing'"'"' || presenceState === '"'"'unreachable'"'"';||=>||    const isDisabled = false;'
 
 mutate "the MISSING badge text is silently dropped" \
-  "client/js/launchpad.js" \
-  "                presenceBadge = \`<div class=\"project-presence-badge project-presence-badge-missing\">MISSING - folder not found</div>\`;||=>||                presenceBadge = '';"
-
-echo "--- BLOCK 3: the child-row render must not be skipped ---"
+  "client/js/labels/project-tree.js" \
+  '    if (state === '"'"'missing'"'"') return t(PROJECT_TREE_KEYS.presenceMissing);||=>||    if (state === '"'"'missing'"'"') return null;'
 
 mutate "child session rows are never rendered under their project, even when matched" \
-  "client/js/launchpad.js" \
-  "            const sessionsHtml = hasChildren
-                ? \`<div class=\"project-node__sessions\" id=\"project-node-sessions-\${this._escapeHtml(nodeKey)}\" style=\"\${collapsed ? 'display:none;' : ''}\">\${children.map(s => this._renderTreeSessionRowHtml(s)).join('')}</div>\`
-                : '';||=>||            const sessionsHtml = '';"
+  "web/src/lib/launchpad/ProjectNode.svelte" \
+  '    {#if view.hasChildren}||=>||    {#if false && view.hasChildren}'
 
 mutate "the toggle chevron is never rendered, so a populated project looks like it has no sessions" \
-  "client/js/launchpad.js" \
-  "            const chevronHtml = foldable||=>||            const chevronHtml = false && foldable"
-
-echo "--- BLOCK 4: attribution listing failure must force NEEDS ATTENTION, never a guess ---"
+  "web/src/lib/launchpad/ProjectNode.svelte" \
+  '            {#if view.foldable}||=>||            {#if false && view.foldable}'
 
 mutate "a failed attribution fetch is silently ignored - sessions render as if attribution succeeded" \
-  "client/js/launchpad.js" \
-  "            if (!this.sessionAttributionListingOk) {||=>||            if (false) {"
+  "web/src/lib/launchpad/project-groups.ts" \
+  '        if (!input.sessionAttributionListingOk) {||=>||        if (false) {'
 
 mutate "a session missing from the attribution map is silently skipped instead of flagged" \
-  "client/js/launchpad.js" \
-  "                rec = this.sessionAttribution.get(s.name) || null;
-            }
-            if (!rec) {||=>||                rec = this.sessionAttribution.get(s.name) || {project_attribution: 'none', project_id: null};
-            }
-            if (false) {"
-
-echo "--- BLOCK 5: an attribution row with no id must never be guessed onto a project ---"
+  "web/src/lib/launchpad/project-groups.ts" \
+  '        // REASON 3.
+        if (!rec) {||=>||        // REASON 3.
+        if (false) {'
 
 mutate "a project_id-less row is silently dropped from NEEDS ATTENTION instead of flagged" \
-  "client/js/launchpad.js" \
-  "            } else {
-                // Defensive: an attribution string that isn't 'none' or
-                // 'unknown' but carries no id is not a shape this build
-                // should trust - never guess which project it meant.
-                needsAttention.push({
-                    session: s,
-                    reason: 'project attribution missing an id',
-                });
-            }||=>||            }"
-
-echo "--- BLOCK 6: collapse state must be read on every render ---"
+  "web/src/lib/launchpad/project-groups.ts" \
+  '        } else {
+            // REASON 5.
+            needsAttention.push({
+                session: s,
+                reasonKey: ATTENTION_REASON.noProjectId,
+            });
+        }||=>||        } else {
+            // REASON 5.
+        }'
 
 mutate "a node collapsed by the user renders expanded again on the next render" \
-  "client/js/launchpad.js" \
-  "            const collapsed = this._collapsedProjectNodes.has(nodeKey);||=>||            const collapsed = false;"
+  "web/src/lib/launchpad/ProjectNode.svelte" \
+  '    const collapsed = $derived(treeCollapse.isCollapsed(view.nodeKey));||=>||    const collapsed = $derived(false);'
 
 restore_all
 echo
