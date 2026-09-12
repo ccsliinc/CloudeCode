@@ -45,6 +45,28 @@ via `gh issue list --state open --json number --jq 'length'`).
   names. Suite 6431/0/18, both shell suites pass.
 
 
+- [x] #108 merged into master as v1.4.1, and 1.4.2 cut on top
+  (2026-09-12). Merge commit 3316855 merges integration/1.3.0 at 18ed433,
+  the PR head; v1.4.1 stays the annotated tag on d4f76d4, and the two
+  commits after it are docs only. Six conflicts, per the table in #108:
+  src/config.py git rm (master's #113 logic already lives in the
+  src/config/ package), the two test_state_dir_* files taken from #108,
+  the work skill taken from master, CLAUDE.md kept both. release: 1.4.2
+  is 3d00c46, tag v1.4.2, a version bump only; it ships master's work
+  since 6012467: #106 connect pill removal, #113 state dir isolation, the
+  grab order, the ui inventory and docs. Measured with -p no:randomly
+  and config.json copied in: baseline d4f76d4 7322 passed / 0 failed /
+  57 skipped, merged 7323 / 0 / 56, no new failures; node 198 of 198 at
+  both and at 1.4.2. The four tests #108 named as known red all passed
+  on the baseline. Secret scan clean. Still open: no GitHub release or
+  packaged .app for 1.4.2 from this session. Two tests in
+  test_health_reports_running_version.py fail when run right after
+  test_version_probe.py and the other version files, with
+  CLOUDE_APP_VERSION unset too: the frozen version an earlier file
+  resolved leaks in (assert '1.4.2' == '1.0.2'). They pass alone and in
+  the full suite order, and fail the same way at d4f76d4, so this is a
+  test isolation leak that predates the merge, not a regression.
+
 ## In flight
 
 - [ ] #65 pinned theme overridden by folder .cc.theme
