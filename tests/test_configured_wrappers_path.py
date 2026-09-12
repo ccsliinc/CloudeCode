@@ -165,7 +165,7 @@ def test_no_call_site_uses_the_old_broken_chain():
     import ast
 
     offenders = []
-    for rel in ("src/core/session_manager.py", "src/api/routes.py"):
+    for rel in ("src/core/session_manager.py", "src/api/session_crud_routes.py"):
         tree = ast.parse((ROOT / rel).read_text())
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):

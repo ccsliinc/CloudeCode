@@ -15,7 +15,7 @@ rest of its life, and the hook token it carries is bound to that id.
 Registering the same live session under a second, invented
 ``adopted:<name>`` id does not rename anything - it leaves the agent
 presenting an id the app now has no token for, and
-``validate_hook_token`` answers False. Measured on the owner's box
+``HookTokenAuthority.validate`` answers False. Measured on the owner's box
 2026-09-08: one session re-minted this way produced **94 hook POSTs
 answered 403** in four minutes, none of them retryable from the agent's
 side. Note the status - **403, not 410**. A reader grepping for the
@@ -41,7 +41,7 @@ whole reason :attr:`AdoptIdentity.rekeyed` exists as a field rather than
 being re-derived by the caller from a string prefix. The caller mints a
 hook token for a derived id and MUST NOT mint one for a recovered id -
 minting rotates the token, and rotating the token is precisely the 403
-this module exists to stop. See ``SessionManager._keep_hook_token``.
+this module exists to stop. See ``HookTokenAuthority.keep``.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ def resolve_adopt_identity(
       persistence step; None when the listing could not supply one.
       row_lookup (callable) - ``(name, epoch) -> sessions row | None``.
       hook_names (dict[str, str]) - session_id -> tmux name, as restored
-      by ``SessionManager._load_hook_tokens``.
+      by ``HookTokenAuthority.load``.
     Output: AdoptIdentity.
     Example: resolve_adopt_identity(name='cloude_a', epoch=1000,
                  row_lookup=f, hook_names={'ses_1': 'cloude_a'}).session_id

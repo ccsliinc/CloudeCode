@@ -466,6 +466,6 @@ def _pane_current_command(session_manager: Any, session_id: str) -> Optional[str
     Output: str | None.
     Example: _pane_current_command(mgr, 'ses_1') -> 'claude'
     """
-    backend = getattr(session_manager, "backends", {}).get(session_id)
+    backend = session_manager._registry.get_backend(session_id)
     value = getattr(backend, "pane_current_command", None) if backend else None
     return str(value) if value else None

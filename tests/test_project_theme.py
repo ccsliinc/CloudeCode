@@ -6,6 +6,12 @@ instead. The ladder itself is covered by
 ``tests/test_session_theme_precedence.py``; this file covers the dotfile
 store on its own plus the theme PATCH at the wire level.
 
+RETARGETED AT THE 1.4.0 INTEGRATION onto this line's seams: the theme
+stores live on ``SessionManager._theme_store`` and the live session table
+on ``._registry`` / ``._owned``. The BEHAVIOUR asserted is unchanged from
+the version that arrived, which is the point - it is what pins issue #65's
+inversion and the PATCH writing one store.
+
 Covers:
 - ``SessionManager.get_project_theme`` / ``set_project_theme`` round-trip.
 - ``get_project_theme`` returns None when the dotfile is missing.
@@ -51,6 +57,7 @@ from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
 from src.api.auth import require_auth
+from src.core.composition import build_services
 from src.core.session_manager import SessionManager
 from src.models import Session, SessionStatus
 
@@ -116,12 +123,12 @@ def test_set_and_get_cc_theme_roundtrip(monkeypatch, tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     assert dotfile.is_file()
     assert dotfile.read_text(encoding="utf-8") == "metal\n"
-    assert mgr.get_project_theme(project) == "metal"
+    assert mgr._theme_store.get_project_theme(project) == "metal"
 
 
 def test_set_project_theme_creates_mode_0644(monkeypatch, tmp_path):
@@ -130,7 +137,7 @@ def test_set_project_theme_creates_mode_0644(monkeypatch, tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     mode = dotfile.stat().st_mode & 0o777
@@ -148,7 +155,7 @@ def test_get_cc_theme_returns_none_when_missing(monkeypatch, tmp_path):
     project = tmp_path / "fresh"
     project.mkdir()
 
-    assert mgr.get_project_theme(project) is None
+    assert mgr._theme_store.get_project_theme(project) is None
 
 
 def test_get_cc_theme_strips_whitespace(monkeypatch, tmp_path):
@@ -158,7 +165,7 @@ def test_get_cc_theme_strips_whitespace(monkeypatch, tmp_path):
     project.mkdir()
     (project / ".cc.theme").write_text("  hermes\n\n", encoding="utf-8")
 
-    assert mgr.get_project_theme(project) == "hermes"
+    assert mgr._theme_store.get_project_theme(project) == "hermes"
 
 
 def test_get_cc_theme_returns_none_when_empty(monkeypatch, tmp_path):
@@ -168,7 +175,7 @@ def test_get_cc_theme_returns_none_when_empty(monkeypatch, tmp_path):
     project.mkdir()
     (project / ".cc.theme").write_text("\n", encoding="utf-8")
 
-    assert mgr.get_project_theme(project) is None
+    assert mgr._theme_store.get_project_theme(project) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -183,10 +190,10 @@ def test_resolve_project_theme_reads_the_pin_when_there_is_no_dotfile(
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "pinned_only"
     project.mkdir()
-    mgr.pinned_themes["cloude_pinned_only"] = "lovecraft"
+    mgr._theme_store.pinned_themes["cloude_pinned_only"] = "lovecraft"
 
-    assert mgr.get_project_theme(project) is None
-    assert mgr.resolve_project_theme(project, "cloude_pinned_only") == (
+    assert mgr._theme_store.get_project_theme(project) is None
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_pinned_only") == (
         "lovecraft"
     )
 
@@ -201,10 +208,10 @@ def test_resolve_project_theme_pin_beats_dotfile(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "both"
     project.mkdir()
-    mgr.set_project_theme(project, "metal")
-    mgr.pinned_themes["cloude_both"] = "lovecraft"
+    mgr._theme_store.set_project_theme(project, "metal")
+    mgr._theme_store.pinned_themes["cloude_both"] = "lovecraft"
 
-    assert mgr.resolve_project_theme(project, "cloude_both") == "lovecraft"
+    assert mgr._theme_store.resolve_project_theme(project, "cloude_both") == "lovecraft"
 
 
 # --------------------------------------------------------------------------- #
@@ -218,7 +225,7 @@ def test_set_cc_theme_is_atomic(monkeypatch, tmp_path):
     project = tmp_path / "atomic"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
 
     dotfile = project / ".cc.theme"
     assert dotfile.is_file()
@@ -233,10 +240,10 @@ def test_set_cc_theme_overwrites_existing(monkeypatch, tmp_path):
     project = tmp_path / "overwrite"
     project.mkdir()
 
-    mgr.set_project_theme(project, "metal")
-    mgr.set_project_theme(project, "hermes")
+    mgr._theme_store.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "hermes")
 
-    assert mgr.get_project_theme(project) == "hermes"
+    assert mgr._theme_store.get_project_theme(project) == "hermes"
     assert (project / ".cc.theme").read_text(encoding="utf-8") == "hermes\n"
 
 
@@ -245,13 +252,13 @@ def test_set_cc_theme_clears_dotfile(monkeypatch, tmp_path):
     mgr = _bare_manager(monkeypatch, tmp_path)
     project = tmp_path / "clearme"
     project.mkdir()
-    mgr.set_project_theme(project, "metal")
+    mgr._theme_store.set_project_theme(project, "metal")
     assert (project / ".cc.theme").exists()
 
-    mgr.set_project_theme(project, None)
+    mgr._theme_store.set_project_theme(project, None)
 
     assert not (project / ".cc.theme").exists()
-    assert mgr.get_project_theme(project) is None
+    assert mgr._theme_store.get_project_theme(project) is None
 
 
 def test_set_cc_theme_raises_for_missing_working_dir(monkeypatch, tmp_path):
@@ -260,7 +267,7 @@ def test_set_cc_theme_raises_for_missing_working_dir(monkeypatch, tmp_path):
     bogus = tmp_path / "gone"  # never created
 
     with pytest.raises(FileNotFoundError):
-        mgr.set_project_theme(bogus, "metal")
+        mgr._theme_store.set_project_theme(bogus, "metal")
 
 
 # --------------------------------------------------------------------------- #
@@ -298,15 +305,15 @@ def test_two_sessions_same_cwd_share_the_project_default(
     )
 
     # Machine A records the project's default.
-    mgr.set_project_theme(sess_a.working_dir, "metal")
+    mgr._theme_store.set_project_theme(sess_a.working_dir, "metal")
 
     # Machine B reads the same value, and so does the full ladder for
     # each session, because neither carries a pin of its own.
-    assert mgr.get_project_theme(sess_b.working_dir) == "metal"
-    assert mgr.resolve_project_theme(
+    assert mgr._theme_store.get_project_theme(sess_b.working_dir) == "metal"
+    assert mgr._theme_store.resolve_project_theme(
         sess_a.working_dir, sess_a.tmux_session
     ) == "metal"
-    assert mgr.resolve_project_theme(
+    assert mgr._theme_store.resolve_project_theme(
         sess_b.working_dir, sess_b.tmux_session
     ) == "metal"
 
@@ -315,7 +322,7 @@ def test_two_sessions_same_cwd_share_the_project_default(
 
 def mgr_resolve(sm, working_dir, tmux_name):
     """Shorthand for the full ladder, so a test reads as one assertion."""
-    return sm.resolve_project_theme(working_dir, tmux_name)
+    return sm._theme_store.resolve_project_theme(working_dir, tmux_name)
 
 # --------------------------------------------------------------------------- #
 # 7. FastAPI route - /theme writes the SESSION'S pin, not the folder file
@@ -352,7 +359,7 @@ def _build_route_app(monkeypatch, tmp_path):
     (tmp_path / "logs").mkdir(exist_ok=True)
     monkeypatch.setattr("src.core.session_manager.settings", stub)
     sm = SessionManager()
-    sm.sessions[sess.id] = sess
+    sm._registry.sessions[sess.id] = sess
 
     # Fake backend that just carries the tmux name attribute the route
     # walks through ``backends.items()`` to find.
@@ -360,8 +367,8 @@ def _build_route_app(monkeypatch, tmp_path):
     backend.tmux_session = "cloude_routeproj"
     backend.__class__.__name__ = "TmuxBackend"
     backend.is_alive = lambda: True
-    sm.backends[sess.id] = backend
-    sm.owned_tmux_sessions.add("cloude_routeproj")
+    sm._registry.backends[sess.id] = backend
+    sm._owned.names.add("cloude_routeproj")
 
     # Patch ``list_attachable_sessions`` to return one row matching the
     # session so the known-names probe doesn't 404 us.
@@ -390,6 +397,10 @@ def _build_route_app(monkeypatch, tmp_path):
 
     app = FastAPI()
     app.state.session_manager = sm
+    # THE COMPOSITION ROOT, because the route modules on this line
+    # reach the theme store and the registry through it rather than
+    # through the manager.
+    app.state.services = build_services(session_manager=sm)
     app.include_router(routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
     return app, sm, project, sess
@@ -405,7 +416,7 @@ def test_patch_theme_records_the_pin(monkeypatch, tmp_path):
         json={"theme_id": "metal"},
     )
     assert resp.status_code == 200, resp.text
-    assert sm.pinned_themes["cloude_routeproj"] == "metal"
+    assert sm._theme_store.pinned_themes["cloude_routeproj"] == "metal"
 
 
 def test_patch_theme_does_not_touch_the_folder_default(monkeypatch, tmp_path):
@@ -417,7 +428,7 @@ def test_patch_theme_does_not_touch_the_folder_default(monkeypatch, tmp_path):
     pre-existing default must come back unchanged.
     """
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
-    sm.set_project_theme(project, "hermes")
+    sm._theme_store.set_project_theme(project, "hermes")
 
     client = TestClient(app)
     resp = client.patch(
@@ -426,7 +437,7 @@ def test_patch_theme_does_not_touch_the_folder_default(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200, resp.text
 
-    assert sm.pinned_themes["cloude_routeproj"] == "metal"
+    assert sm._theme_store.pinned_themes["cloude_routeproj"] == "metal"
     assert (project / ".cc.theme").read_text(encoding="utf-8") == "hermes\n"
 
 
@@ -437,8 +448,8 @@ def test_patch_theme_clears_with_null(monkeypatch, tmp_path):
     dotfile must survive and the session must resolve to it again.
     """
     app, sm, project, _ = _build_route_app(monkeypatch, tmp_path)
-    sm.set_project_theme(project, "hermes")
-    sm.pinned_themes["cloude_routeproj"] = "metal"
+    sm._theme_store.set_project_theme(project, "hermes")
+    sm._theme_store.pinned_themes["cloude_routeproj"] = "metal"
 
     client = TestClient(app)
     resp = client.patch(
@@ -447,7 +458,7 @@ def test_patch_theme_clears_with_null(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200, resp.text
 
-    assert "cloude_routeproj" not in sm.pinned_themes
+    assert "cloude_routeproj" not in sm._theme_store.pinned_themes
     assert (project / ".cc.theme").read_text(encoding="utf-8") == "hermes\n"
     assert mgr_resolve(sm, project, "cloude_routeproj") == "hermes"
 
@@ -462,7 +473,7 @@ def test_patch_theme_404_for_unknown_session(monkeypatch, tmp_path):
         json={"theme_id": "metal"},
     )
     assert resp.status_code == 404
-    assert "totally_bogus" not in sm.pinned_themes
+    assert "totally_bogus" not in sm._theme_store.pinned_themes
     assert not (project / ".cc.theme").exists()
 
 
@@ -486,7 +497,7 @@ def test_patch_deprecated_pinned_theme_alias_still_works(monkeypatch, tmp_path):
     )
     assert resp.status_code == 200, resp.text
 
-    assert sm.pinned_themes["cloude_routeproj"] == "hermes"
+    assert sm._theme_store.pinned_themes["cloude_routeproj"] == "hermes"
     assert not (project / ".cc.theme").exists()
 
 

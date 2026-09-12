@@ -111,7 +111,11 @@ function ruleBody(list, selector) {
 
 const stylesCss = read('client', 'css', 'styles.css');
 const indexHtml = read('client', 'index.html');
-const launchpadJs = read('client', 'js', 'launchpad.js');
+// SLICE 7: `client/js/launchpad.js` is gone. The home screen's
+// markup and its wiring are the Svelte shell and the modules
+// beside it; every assertion below is unchanged and simply reads
+// the files that now hold what it is about.
+const { HOME_ALL_SRC: launchpadJs, HOME_SCREEN_SRC } = await import('./lib-home-source.mjs');
 const appJs = read('client', 'js', 'app.js');
 
 const styleRules = rules(stylesCss);
@@ -120,7 +124,7 @@ const styleRules = rules(stylesCss);
 // The standalone block is gone
 // ---------------------------------------------------------------------
 
-test('launchpad.js no longer renders the standalone title/prompt block', () => {
+test('the home screen no longer renders the standalone title/prompt block', () => {
     assert.ok(!launchpadJs.includes('class="launchpad-header"'),
         'the old title block must not be re-added inside launchpad-container - '
         + 'that would restore the vertical cost this change removed');
@@ -151,12 +155,17 @@ test('no title block sneaks back in above the adopt-disclosure help', () => {
     const ZERO_COST_SLOTS = [
         { cls: 'attribution-prompt-slot', css: 'client/css/attribution-prompt.css' },
     ];
+    // SLICE 7: the disclosure is its own component, so what the SHELL
+    // orders is the `<HelpDisclosure />` tag, and the rule is scanned
+    // against the shell alone rather than the concatenated sources. The
+    // rule itself is unchanged: only a declared zero-cost slot may
+    // precede it.
     const containerTag = '<div class="launchpad-container">';
-    const containerIdx = launchpadJs.indexOf(containerTag);
+    const containerIdx = HOME_SCREEN_SRC.indexOf(containerTag);
     assert.ok(containerIdx > -1, '.launchpad-container markup not found');
-    const detailsIdx = launchpadJs.indexOf('<details class="adopt-disclosure">', containerIdx);
+    const detailsIdx = HOME_SCREEN_SRC.indexOf('<HelpDisclosure />', containerIdx);
     assert.ok(detailsIdx > -1, 'the adopt-disclosure must still be rendered');
-    const between = launchpadJs
+    const between = HOME_SCREEN_SRC
         .slice(containerIdx + containerTag.length, detailsIdx)
         .replace(/<!--[\s\S]*?-->/g, '');
     for (const [, tag, attrs] of between.matchAll(/<([a-zA-Z][\w-]*)([^>]*)>/g)) {

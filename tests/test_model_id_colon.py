@@ -40,7 +40,7 @@ import pytest
 from pydantic import ValidationError
 
 # Same bootstrap pattern as tests/test_agent_wrappers_api.py: importing
-# src.api.routes pulls in src.config.settings, whose pydantic-settings
+# src.api.provider_models_routes pulls in src.config.settings, whose
 # Settings model requires these fields from the environment/.env. Without
 # them the import itself raises (and dumps a large formatted error, not a
 # normal traceback) before any test body runs.
@@ -224,7 +224,7 @@ class TestProviderModelsRouteRejectsWithReason:
     @pytest.mark.asyncio
     async def test_invalid_id_raises_400_with_specific_detail(self) -> None:
         from fastapi import HTTPException
-        from src.api.routes import add_provider_model
+        from src.api.provider_models_routes import add_provider_model
 
         body = AddProviderModelRequest(model=":free")
         with pytest.raises(HTTPException) as exc_info:
@@ -235,7 +235,7 @@ class TestProviderModelsRouteRejectsWithReason:
     @pytest.mark.asyncio
     async def test_leading_hyphen_id_raises_400_naming_the_flag_risk(self) -> None:
         from fastapi import HTTPException
-        from src.api.routes import add_provider_model
+        from src.api.provider_models_routes import add_provider_model
 
         body = AddProviderModelRequest(model="--dangerously-skip-permissions")
         with pytest.raises(HTTPException) as exc_info:

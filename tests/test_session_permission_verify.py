@@ -41,6 +41,7 @@ from src.core.session_permission_verify import (
     should_capture_permission_tail,
 )
 from src.core.session_status import STATUS_IDLE, STATUS_QUESTION
+from src.core.sessions.registry import SessionRegistry
 from src.core.session_view_clears import clear_view_state
 
 # ---------------------------------------------------------------------------
@@ -358,10 +359,19 @@ class _FakeUnreadStore:
 
 
 class _FakeManager:
-    """The three attributes ``clear_view_state`` actually touches."""
+    """The three things ``clear_view_state`` actually touches.
+
+    Description: ``backends`` lives on the registry (v2 slice S4), so the
+      double carries a REAL ``SessionRegistry`` rather than a dict of its
+      own. A double that kept the dict would agree with a reader that had
+      not been repointed, which is the whole failure mode being guarded.
+    """
 
     def __init__(self, tracker: SessionActivityTracker) -> None:
-        self.backends = {"ses_1": _FakeBackend("cloude_Media_Compression")}
+        self._registry = SessionRegistry(log_cap=lambda: 1000)
+        self._registry.backends["ses_1"] = _FakeBackend(
+            "cloude_Media_Compression"
+        )
         self._activity_tracker = tracker
         self._unread_store = _FakeUnreadStore()
 
@@ -435,7 +445,9 @@ class _CountingBackend(_FakeBackend):
 
 def _seam_manager(tracker: SessionActivityTracker) -> _FakeManager:
     mgr = _FakeManager(tracker)
-    mgr.backends = {"ses_1": _CountingBackend("cloude_Media_Compression")}
+    mgr._registry.backends["ses_1"] = _CountingBackend(
+        "cloude_Media_Compression"
+    )
     return mgr
 
 

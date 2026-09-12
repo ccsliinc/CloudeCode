@@ -30,7 +30,7 @@ first-run import. No runtime path writes it.
 
 It writes no row to the `sessions` table.
 
-The `sessions` table is the authority for the badge. `models.py:346-353` says
+The `sessions` table is the authority for the badge. `models/adopt.py` (`AttachableSession.created_by_cloude`) says
 so explicitly, and `session_store.owned_instances` (`:187`) builds the owned
 set with `WHERE origin IN (created, adopted)`. A session with no row, or a row
 with `origin='observed'`, is not in that set. `resolve_ownership`

@@ -1,5 +1,12 @@
 """The listing pass gathers its expensive reads OFF the event loop.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 FIVE GROUPS, AND THE ORDER IS THE ARGUMENT.
 
 1.  STRUCTURAL: the gather runs in a thread, proved by a stand-in read
@@ -119,8 +126,8 @@ def _manager_with(sessions: list[tuple[str, str | None]]) -> SessionManager:
     """
     manager = SessionManager()
     for session_id, tmux_name in sessions:
-        manager.backends[session_id] = _FakeBackend(session_id, tmux_name)
-        manager.sessions[session_id] = Session(
+        manager._registry.backends[session_id] = _FakeBackend(session_id, tmux_name)
+        manager._registry.sessions[session_id] = Session(
             id=session_id,
             status=SessionStatus.RUNNING,
             working_dir=str(ROOT),
@@ -188,7 +195,7 @@ def test_the_listing_gather_runs_off_the_event_loop(monkeypatch):
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: None)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
     monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
-    monkeypatch.setattr(manager, "_owned_instances_from_db", lambda: set())
+    monkeypatch.setattr(manager._owned, "instances_from_db", lambda: set())
 
     async def scenario():
         task = asyncio.create_task(manager.list_session_infos())
@@ -283,7 +290,7 @@ def test_the_prefetched_row_is_identical_to_the_per_row_read(
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: label)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: identity)
     monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: restored)
-    monkeypatch.setattr(manager, "_owned_instances_from_db", lambda: owned)
+    monkeypatch.setattr(manager._owned, "instances_from_db", lambda: owned)
 
     prefetched = asyncio.run(manager.list_session_infos())
 
@@ -326,7 +333,7 @@ def test_an_adopted_id_is_decorated_the_same_way(monkeypatch):
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: "adopted")
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
     monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
-    monkeypatch.setattr(manager, "_owned_instances_from_db", lambda: set())
+    monkeypatch.setattr(manager._owned, "instances_from_db", lambda: set())
 
     prefetched = asyncio.run(manager.list_session_infos())
     per_row = manager._session_info_for(
@@ -355,7 +362,7 @@ def test_an_incomplete_listing_produces_the_same_row_on_both_paths(monkeypatch):
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: "x")
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
     monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
-    monkeypatch.setattr(manager, "_owned_instances_from_db", lambda: None)
+    monkeypatch.setattr(manager._owned, "instances_from_db", lambda: None)
 
     prefetched = asyncio.run(manager.list_session_infos())
     per_row = manager._session_info_for(
@@ -400,7 +407,7 @@ def test_an_adoption_landing_during_the_gather_is_reported_owned(monkeypatch):
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
     monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
     monkeypatch.setattr(
-        manager, "_owned_instances_from_db", lambda: set(adopted)
+        manager._owned, "instances_from_db", lambda: set(adopted)
     )
 
     infos = asyncio.run(manager.list_session_infos())
@@ -455,8 +462,8 @@ def test_a_session_registered_during_the_gather_falls_through_to_live_reads(
     def entering_gather() -> StatusMap:
         # Stands in for the session that gets registered while the
         # gather thread is busy.
-        manager.backends["ses_b"] = _FakeBackend("ses_b", "cloude_b")
-        manager.sessions["ses_b"] = Session(
+        manager._registry.backends["ses_b"] = _FakeBackend("ses_b", "cloude_b")
+        manager._registry.sessions["ses_b"] = Session(
             id="ses_b",
             status=SessionStatus.RUNNING,
             working_dir=str(ROOT),
@@ -476,7 +483,7 @@ def test_a_session_registered_during_the_gather_falls_through_to_live_reads(
     monkeypatch.setattr(manager, "_label_for_tmux_name", label)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
     monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
-    monkeypatch.setattr(manager, "_owned_instances_from_db", lambda: set())
+    monkeypatch.setattr(manager._owned, "instances_from_db", lambda: set())
 
     infos = asyncio.run(manager.list_session_infos())
     labels = {i.tmux_session: i.label for i in infos}
@@ -556,13 +563,20 @@ def test_the_gather_reaches_nothing_but_its_two_arguments():
 #: ``_instance_epochs`` and ``_hook_tmux_names`` by the adopt and hook
 #: paths; ``pinned_themes`` by the theme PATCH; ``_activity_tracker``
 #: holds the mutable dataclasses the hook route writes on every event.
+# THE LIVE CONTAINERS, AS THEY ARE OWNED ON THIS LINE. Each entry is
+# ``(owner attribute on the manager or None for the manager itself,
+# attribute name on that owner)``. The decomposition moved four of these
+# off SessionManager - the registry holds the session and backend tables,
+# the theme store holds the pins, the hook token authority holds the
+# tmux-name map - and wrapping a name the manager no longer carries would
+# make this tripwire silently watch nothing.
 LIVE_CONTAINERS = (
-    "sessions",
-    "backends",
-    "_instance_epochs",
-    "pinned_themes",
-    "_hook_tmux_names",
-    "_activity_tracker",
+    ("_registry", "sessions"),
+    ("_registry", "backends"),
+    (None, "_instance_epochs"),
+    ("_theme_store", "pinned_themes"),
+    ("hook_tokens", "tmux_names"),
+    (None, "_activity_tracker"),
 )
 
 
@@ -634,11 +648,13 @@ def _run_readers_in_a_thread(manager: SessionManager) -> dict:
     Example: _run_readers_in_a_thread(mgr)['sessions']
     """
     seen: dict = {}
-    for name in LIVE_CONTAINERS:
+    for owner_attr, name in LIVE_CONTAINERS:
+        owner = manager if owner_attr is None else getattr(manager, owner_attr)
+        label = name if owner_attr is None else f"{owner_attr}.{name}"
         setattr(
-            manager,
+            owner,
             name,
-            _ThreadRecordingProxy(getattr(manager, name), name, seen),
+            _ThreadRecordingProxy(getattr(owner, name), label, seen),
         )
     readers = manager._listing_readers()
     snapshot = listing_gather.ListingSnapshot(
@@ -706,7 +722,7 @@ def test_the_tripwire_can_detect_a_reader_that_reads_a_live_container():
     def reads_live_state(_name):
         # The edit being controlled for: a reader that reaches back into
         # a container the event loop mutates.
-        return str(len(manager.sessions))
+        return str(len(manager._registry.sessions))
 
     manager._label_for_tmux_name = reads_live_state
     seen = _run_readers_in_a_thread(manager)

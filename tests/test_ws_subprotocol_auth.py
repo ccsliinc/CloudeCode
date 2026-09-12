@@ -255,28 +255,13 @@ class _FakeQueue:
 class _FakeSessionManager:
     """Stand-in exercising the session-scoped WS handler surface.
 
-    The WS handler now threads an optional ``session_id`` through
-    subscribe/unsubscribe/send/resize and consults ``.sessions`` to
-    validate a requested id. With no ``session_id`` query param, the
-    handler falls back to ``current_session()`` — which here is None,
-    so output routes to the "__orphan__" bucket and the send tasks
-    just park on ``_FakeQueue``.
+    The live session table, the lookups and the output subscription all
+    moved to ``SessionRegistry`` in v2 slice S4, so the handler reaches
+    those off ``app.state.services.registry`` and this stub carries only
+    what is still the manager's. With no ``session_id`` query param the
+    handler falls back to ``current_session()``, which on an EMPTY real
+    registry is None, so output routes to the orphan bucket.
     """
-    def __init__(self):
-        self.backend = None
-        self.sessions = {}
-
-    def current_session(self):
-        return None
-
-    def get_backend(self, session_id):
-        return None
-
-    def subscribe_output(self, session_id=None):
-        return _FakeQueue()
-
-    def unsubscribe_output(self, q, session_id=None):
-        pass
 
     def capture_scrollback(self, lines=3000, session_id=None):
         return b""
@@ -318,8 +303,15 @@ def ws_app():
     from fastapi import FastAPI
     from src.api.websocket import router as ws_router
 
+    from types import SimpleNamespace
+
+    from src.core.sessions.registry import SessionRegistry
+
     app = FastAPI()
     app.state.session_manager = _FakeSessionManager()
+    app.state.services = SimpleNamespace(
+        registry=SessionRegistry(log_cap=lambda: 1000)
+    )
     app.state.local_servers = _FakeLocalServers()
     app.state.log_monitor = _FakeLogMonitor()
     app.include_router(ws_router)

@@ -66,6 +66,31 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
     }
 
     /**
+     * Description: say that a WRITE DID NOT LAND, on both surfaces.
+     *   `announce` alone is not enough and that is not a style opinion:
+     *   `#session-sidebar-live` is clipped to a 1px box by
+     *   session-sidebar-density.css, so it reaches a screen reader and
+     *   NOBODY ELSE. The owner reported "new group" as broken when it
+     *   had correctly refused - the refusal was announced, and invisible.
+     *
+     *   ONE SENTENCE, TWO SURFACES. Both calls take the same `text`, so
+     *   the card and the announcement can never drift into saying two
+     *   different things about one failure.
+     *
+     *   Every error path below goes through here rather than through
+     *   `announce`, which is why a grep for `announce(\`could not` in
+     *   this file finds nothing - that is the invariant
+     *   tests/test_write_failure_is_visible.node.mjs holds.
+     * Inputs: text (string) - the already-built failure sentence.
+     * Output: void.
+     */
+    function announceFailure(text) {
+        announce(text);
+        const notice = window.WriteFailureNotice;
+        if (notice && typeof notice.report === 'function') notice.report(text);
+    }
+
+    /**
      * Description: the group store, or null when it cannot be used.
      * Inputs: none. Output: object|null.
      */
@@ -145,7 +170,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
         } catch (err) {
             const reason = err && err.message ? err.message : String(err);
             await refresh();
-            announce(`could not move ${name}: ${reason}`);
+            announceFailure(`could not move ${name}: ${reason}`);
             return false;
         }
         const label = groupUuid
@@ -283,7 +308,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
     function openPickerFor(anchor, name) {
         const G = store();
         if (!G) {
-            announce('groups are unavailable, so this conversation cannot be filed');
+            announceFailure('groups are unavailable, so this conversation cannot be filed');
             return;
         }
         const currentUuid = G.groupOf(name);
@@ -324,7 +349,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
             if (name && made) await commitAssignment(name, made.group_uuid);
             else announce(`group ${raw} created`);
         } catch (err) {
-            announce(`could not create the group: ${err && err.message ? err.message : err}`);
+            announceFailure(`could not create the group: ${err && err.message ? err.message : err}`);
         }
     }
 
@@ -381,7 +406,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
             applyAndRepaint(await window.API.renameSessionGroup(groupUuid, raw));
             announce(`group renamed to ${raw}`);
         } catch (err) {
-            announce(`could not rename: ${err && err.message ? err.message : err}`);
+            announceFailure(`could not rename: ${err && err.message ? err.message : err}`);
         }
     }
 
@@ -409,7 +434,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
             applyAndRepaint(body);
             announce(`group ${group.name} removed, ${body.freed} ${noun} moved to other`);
         } catch (err) {
-            announce(`could not remove: ${err && err.message ? err.message : err}`);
+            announceFailure(`could not remove: ${err && err.message ? err.message : err}`);
         }
     }
 
@@ -435,7 +460,7 @@ console.log('[SessionSidebarGroupActions Module] Loading...');
             announce(`group moved to position ${to + 1} of ${order.length}`);
         } catch (err) {
             await refresh();
-            announce(`could not reorder: ${err && err.message ? err.message : err}`);
+            announceFailure(`could not reorder: ${err && err.message ? err.message : err}`);
         }
     }
 

@@ -147,7 +147,7 @@ async def _drop_backends(manager: SessionManager) -> None:
     Output: None. The tmux sessions themselves are left to the fixture's
       ``kill-server``.
     """
-    for backend in list(manager.backends.values()):
+    for backend in list(manager._registry.backends.values()):
         task = getattr(backend, "_reader_task", None)
         if task is not None:
             task.cancel()
@@ -155,7 +155,7 @@ async def _drop_backends(manager: SessionManager) -> None:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
-    for watcher in list(manager.idle_watchers.values()):
+    for watcher in list(manager._sidecars.idle_watchers.values()):
         try:
             await watcher.stop()
         except Exception:
@@ -212,7 +212,7 @@ def _hook_app(manager: SessionManager) -> FastAPI:
     """Mount the real hook route over a given manager.
 
     Description: the assertion that matters is the ACTUAL status code
-      ``routes.claude_event_hook`` returns, not a direct call to
+      ``hook_event_routes.claude_event_hook`` returns, not a direct call to
       ``validate_hook_token``. The 403 this file exists to prevent is
       produced by the route, so the route is what gets exercised.
     Inputs: manager (SessionManager).
@@ -263,15 +263,15 @@ async def test_adopting_a_session_with_a_row_uses_the_stored_id(live_state,
               working_dir=str(work))
     # What ``_load_hook_tokens`` restores at boot: the durable record of
     # the id this pane's agent presents, and the token bound to it.
-    mgr._hook_tokens[STORED_ID] = "tok_from_before_the_restart"
-    mgr._hook_tmux_names[STORED_ID] = name
+    mgr.hook_tokens.tokens[STORED_ID] = "tok_from_before_the_restart"
+    mgr.hook_tokens.tmux_names[STORED_ID] = name
 
     try:
         result = await mgr.adopt_external_session(name)
 
         assert result["session"].id == STORED_ID
-        assert STORED_ID in mgr.sessions
-        assert f"adopted:{name}" not in mgr.sessions, (
+        assert STORED_ID in mgr._registry.sessions
+        assert f"adopted:{name}" not in mgr._registry.sessions, (
             "the session was re-minted alongside its stored id"
         )
         # The tmux name still travels for the pin-key handle.
@@ -301,8 +301,8 @@ async def test_a_rekeyed_adoption_does_not_rotate_the_hook_token(live_state,
     _start_session(name, STORED_ID, work)
     _seed_row(live_state, mgr, name=name, epoch=_epoch_of(name),
               working_dir=str(work))
-    mgr._hook_tokens[STORED_ID] = original_token
-    mgr._hook_tmux_names[STORED_ID] = name
+    mgr.hook_tokens.tokens[STORED_ID] = original_token
+    mgr.hook_tokens.tmux_names[STORED_ID] = name
 
     try:
         await mgr.adopt_external_session(name)
@@ -314,9 +314,9 @@ async def test_a_rekeyed_adoption_does_not_rotate_the_hook_token(live_state,
         # so "the token was not rotated" is true for the wrong reason.
         # Measured against b276b68 - the test passed until this line
         # existed.
-        assert STORED_ID in mgr.sessions
+        assert STORED_ID in mgr._registry.sessions
 
-        assert mgr.get_hook_token(STORED_ID) == original_token, (
+        assert mgr.hook_tokens.get(STORED_ID) == original_token, (
             "adoption rotated a credential the running agent cannot be "
             "handed a replacement for"
         )
@@ -363,9 +363,9 @@ async def test_adopting_a_session_with_no_row_still_mints_adopted(live_state,
         result = await mgr.adopt_external_session(name)
 
         assert result["session"].id == f"adopted:{name}"
-        assert f"adopted:{name}" in mgr.sessions
+        assert f"adopted:{name}" in mgr._registry.sessions
         # A derived id is minted a token, exactly as before this change.
-        assert mgr.get_hook_token(f"adopted:{name}")
+        assert mgr.hook_tokens.get(f"adopted:{name}")
     finally:
         await _drop_backends(mgr)
 
@@ -404,8 +404,8 @@ async def test_adopting_a_pane_already_held_under_another_id_holds_it_once(
     _start_session(name, STORED_ID, work)
     _seed_row(live_state, mgr, name=name, epoch=_epoch_of(name),
               working_dir=str(work))
-    mgr._hook_tokens[STORED_ID] = "tok_the_agent_already_carries"
-    mgr._hook_tmux_names[STORED_ID] = name
+    mgr.hook_tokens.tokens[STORED_ID] = "tok_the_agent_already_carries"
+    mgr.hook_tokens.tmux_names[STORED_ID] = name
 
     # Stand in for the rehydrate that runs before the adopt: the SAME
     # pane, already registered under the id last boot minted for it.
@@ -413,17 +413,17 @@ async def test_adopting_a_pane_already_held_under_another_id_holds_it_once(
     await mgr.adopt_external_session(name)          # warm it up honestly
     # Re-register the live backend under the OLD id as well, exactly the
     # state the rehydrate leaves behind.
-    mgr.backends[stale_id] = mgr.backends[STORED_ID]
-    mgr.sessions[stale_id] = mgr.sessions[STORED_ID]
-    assert len(mgr.backends) == 2
+    mgr._registry.backends[stale_id] = mgr._registry.backends[STORED_ID]
+    mgr._registry.sessions[stale_id] = mgr._registry.sessions[STORED_ID]
+    assert len(mgr._registry.backends) == 2
 
     try:
         await mgr.adopt_external_session(name)
 
-        assert list(mgr.backends) == [STORED_ID], (
-            f"one pane must leave one registration, got {list(mgr.backends)}"
+        assert list(mgr._registry.backends) == [STORED_ID], (
+            f"one pane must leave one registration, got {list(mgr._registry.backends)}"
         )
-        assert stale_id not in mgr.sessions
+        assert stale_id not in mgr._registry.sessions
     finally:
         await _drop_backends(mgr)
 
@@ -447,17 +447,17 @@ async def test_adopting_the_same_session_twice_holds_it_once(live_state,
     _start_session(name, STORED_ID, work)
     _seed_row(live_state, mgr, name=name, epoch=_epoch_of(name),
               working_dir=str(work))
-    mgr._hook_tokens[STORED_ID] = original_token
-    mgr._hook_tmux_names[STORED_ID] = name
+    mgr.hook_tokens.tokens[STORED_ID] = original_token
+    mgr.hook_tokens.tmux_names[STORED_ID] = name
 
     try:
         first = await mgr.adopt_external_session(name)
         second = await mgr.adopt_external_session(name)
 
         assert first["session"].id == second["session"].id == STORED_ID
-        assert list(mgr.sessions) == [STORED_ID]
-        assert list(mgr.backends) == [STORED_ID]
+        assert list(mgr._registry.sessions) == [STORED_ID]
+        assert list(mgr._registry.backends) == [STORED_ID]
         # Still not rotated on the second pass either.
-        assert mgr.get_hook_token(STORED_ID) == original_token
+        assert mgr.hook_tokens.get(STORED_ID) == original_token
     finally:
         await _drop_backends(mgr)

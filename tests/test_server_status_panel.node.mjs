@@ -125,7 +125,9 @@ const menuSrc = read('client', 'js', 'server-controls-menu.js');
 // order is what the page's script tags do too.
 const actionsSrc = read('client', 'js', 'session-row-actions-confirm.js')
     + '\n' + read('client', 'js', 'session-row-actions.js');
-const launchpadSrc = read('client', 'js', 'launchpad.js');
+// SLICE 7: the home bar is HomeScreen.svelte and the server-controls
+// wire is home-chrome.ts. Every claim below is unchanged.
+const { HOME_ALL_SRC: launchpadSrc } = await import('./lib-home-source.mjs');
 const indexHtml = read('client', 'index.html');
 const css = read('client', 'css', 'server-status.css');
 const cssRules = rules(css);
@@ -466,7 +468,15 @@ test('an existing call site passing no context gets its old copy back', () => {
     // dialog every other surface in the app shows.
     assert.match(actionsSrc, /function confirm\(action, displayName, context\)/);
     assert.match(actionsSrc, /if \(!context\) return '';/);
-    assert.match(launchpadSrc, /SessionRowActions\.confirm\(resolved, display\)/);
+    // THE HOME CARD'S TWO-ARGUMENT CALL MOVED IN SLICE 5. It was
+    // `SessionRowActions.confirm(resolved, display)` in launchpad.js; the
+    // card is a component now and reaches the same function through
+    // `RunningHost.confirmAction`, still with two arguments, still
+    // getting the old copy back. Naming the new file rather than
+    // dropping the assertion is the point: a call site that stops being
+    // checked is a call site that silently gains a third argument.
+    const runningHostSrc = read('web', 'src', 'lib', 'launchpad', 'running-host.ts');
+    assert.match(runningHostSrc, /mod\.confirm\(action, displayName\)/);
 });
 
 // ---------------------------------------------------------------------
@@ -481,14 +491,14 @@ test('server status is an ENTRY_ID, not a rewrite of the menu', () => {
 // The "restart server" row was WITHDRAWN together with
 // POST /api/v1/server/reset: that endpoint spawned a reset.sh the packaged
 // app has never shipped, so the row returned a 500 on every packaged
-// install. See the removal note in src/api/routes.py for why it was
+// install. See the removal note in src/api/server_control_routes.py for why it was
 // withdrawn rather than shipped. Asserted as an absence here so the row
 // cannot reappear without the supervisor-owned action it needs.
 test('the menu carries no server-restart row', () => {
     assert.ok(!/restartServer/.test(menuSrc));
     assert.ok(!/'serverRestartRow'/.test(menuSrc));
     assert.ok(!/restart server, sessions keep running/.test(menuSrc));
-    assert.ok(!/async restartServer\(\)/.test(launchpadSrc));
+    assert.ok(!/restartServer\s*\(/.test(launchpadSrc));
 });
 
 test('the panel and its stylesheet are both loaded, css after styles.css', () => {

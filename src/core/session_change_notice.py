@@ -151,13 +151,27 @@ def publish_hook_status(app_state: Any, session_manager: Any, session_id: str) -
     epoch: Optional[int] = None
 
     tracker = getattr(session_manager, "_activity_tracker", None)
+
+    # BOTH OF THESE READS MOVED, AND TOLERANCE IS WHAT HID IT. The live
+    # session table went to `SessionRegistry` and the hook-to-pane name map
+    # went to `HookTokenAuthority.tmux_names`, so the old
+    # `getattr(session_manager, "get_backend", None)` and
+    # `getattr(session_manager, "_hook_tmux_names", {})` both answered
+    # falsy on every call. With the primary AND its fallback dead,
+    # `tmux_session` was always None, so the unread read below never ran
+    # and every notice went out carrying neither a tmux name nor an unread
+    # flag. The tolerance is KEPT, because this runs on the hook critical
+    # path and must never raise; it is pointed at the objects that now
+    # carry the members rather than at the names that moved.
+    registry = getattr(getattr(app_state, "services", None), "registry", None)
     backend = None
-    getter = getattr(session_manager, "get_backend", None)
+    getter = getattr(registry, "get_backend", None)
     if callable(getter):
         backend = getter(session_id)
     tmux_session = getattr(backend, "tmux_session", None)
     if tmux_session is None:
-        tmux_session = getattr(session_manager, "_hook_tmux_names", {}).get(session_id)
+        authority = getattr(session_manager, "hook_tokens", None)
+        tmux_session = (getattr(authority, "tmux_names", None) or {}).get(session_id)
     epoch = getattr(session_manager, "_instance_epochs", {}).get(session_id)
 
     if tmux_session:

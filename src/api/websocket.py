@@ -25,6 +25,8 @@ from src.api.attach_settle import (
     settle_if_needed,
 )
 from src.api.deps import verify_jwt_from_subprotocol, SUBPROTOCOL_MARKER
+from src.api.ws_connections import ConnectionManager, connection_manager, _resolve_backend
+from src.api.ws_viewer_drain import _drain_viewer, _pump_text
 from src.api.resize_negotiation import (
     apply_negotiated_resize,
     release_client_resize,
@@ -36,175 +38,6 @@ from src.core.bounded_stream import OFFER_ACCEPTED, BoundedStream
 logger = structlog.get_logger()
 
 router = APIRouter()
-
-
-def _resolve_backend(session_manager, session_id: Optional[str]):
-    """Get the backend for a session id, tolerating older managers.
-
-    Args:
-        session_manager: The active SessionManager.
-        session_id: Target session, or None for the manager's current one.
-
-    Returns:
-        The SessionBackend, or None when it cannot be resolved.
-    """
-    if session_id and hasattr(session_manager, "get_backend"):
-        return session_manager.get_backend(session_id)
-    return getattr(session_manager, "backend", None)
-
-
-class ConnectionManager:
-    """Manages WebSocket connections.
-
-    v0.7.0 Part 2: tracks a session_id -> {WebSocket} reverse map alongside
-    the flat set, so ``broadcast_to_session`` can target only the sockets
-    bound to a specific session. The existing ``broadcast`` (fanout-to-all)
-    is preserved for the legacy session-status / log paths that genuinely
-    want every client.
-    """
-
-    def __init__(self):
-        """Initialize connection manager."""
-        self.active_connections: Set[WebSocket] = set()
-        # websocket -> that viewer's ONE outbox. Every broadcast path
-        # OFFERS into this rather than calling `send_text` on the socket,
-        # because a broadcast arriving from a toast, a rename or a resize
-        # while the viewer's writer task is mid-send is a second writer -
-        # and two coroutines awaiting `send` on one socket interleave
-        # frames into a corrupted stream that nothing reports. See
-        # src/core/viewer_fanout.py.
-        self._streams: dict[int, BoundedStream] = {}
-        # session_id -> set of WS connections currently bound to that
-        # session. Populated by ``connect_to_session`` on the WS handshake;
-        # pruned by ``disconnect``. A connection can only ever be bound to
-        # ONE session (the WS endpoint is session-scoped), so we don't
-        # also need a reverse WS->session map - we walk the dict on
-        # disconnect, which is O(N_sessions) and dwarfed by the WS RTT.
-        self._session_connections: dict[str, Set[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, stream=None):
-        """
-        Accept and register a new WebSocket connection.
-
-        NOTE: As of the subprotocol-auth change (Item 3), the handler is
-        responsible for calling `websocket.accept(subprotocol=...)` BEFORE
-        invoking this method - the browser requires the server to echo the
-        negotiated subprotocol, so accept() must happen at the auth site.
-        This method now only registers an already-accepted socket.
-
-        Args:
-            websocket: WebSocket connection to register (already accepted)
-        """
-        self.active_connections.add(websocket)
-        if viewer_fanout.is_viewer_stream(stream):
-            self._streams[id(websocket)] = stream
-        logger.info("websocket_connected", total_connections=len(self.active_connections))
-
-    def bind_session(self, websocket: WebSocket, session_id: Optional[str]) -> None:
-        """Record that ``websocket`` is bound to ``session_id``.
-
-        Idempotent. ``session_id`` of None is a no-op (legacy/orphan WS
-        sockets that never resolved to a session - e.g. the auth-only
-        test path - don't enter the per-session map).
-        """
-        if not session_id:
-            return
-        self._session_connections.setdefault(session_id, set()).add(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        """
-        Unregister a WebSocket connection.
-
-        Also prunes the per-session reverse map so ``broadcast_to_session``
-        never tries to send through a torn-down socket. We walk the dict
-        rather than tracking a reverse pointer - the per-session set
-        cardinality is low (one tab per session typically) so the cost
-        is negligible.
-
-        Args:
-            websocket: WebSocket connection to unregister
-        """
-        self.active_connections.discard(websocket)
-        self._streams.pop(id(websocket), None)
-        for sid, conns in list(self._session_connections.items()):
-            conns.discard(websocket)
-            if not conns:
-                self._session_connections.pop(sid, None)
-        logger.info("websocket_disconnected", total_connections=len(self.active_connections))
-
-    async def broadcast(self, message: str):
-        """
-        Broadcast a message to all connected clients.
-
-        Args:
-            message: Message to broadcast (JSON string)
-        """
-        for connection in self.active_connections.copy():
-            if not self._offer(connection, message):
-                self.active_connections.discard(connection)
-                self._streams.pop(id(connection), None)
-
-    async def broadcast_to_session(self, session_id: str, message: str) -> int:
-        """Broadcast a message to every WS connection bound to ``session_id``.
-
-        Used by the toast routes (v0.7.0 Part 2) to fan a ``toast.new`` or
-        ``toast.ack`` payload out to every browser tab attached to the
-        session - including the tab that triggered the action, so the
-        creator's own UI gets the new toast without a special-case round
-        trip. Failures on a single socket are logged + the socket is
-        removed from BOTH the per-session map and the flat active set;
-        other sockets in the session still receive the message.
-
-        Returns:
-            The count of sockets the message was successfully sent to.
-            0 when no socket is bound to the session (e.g. the toast
-            fires before any browser has attached).
-        """
-        sent = 0
-        conns = self._session_connections.get(session_id)
-        if not conns:
-            return 0
-        for connection in list(conns):
-            if self._offer(connection, message):
-                sent += 1
-            else:
-                logger.warning(
-                    "broadcast_to_session_undeliverable",
-                    session_id=session_id,
-                )
-                conns.discard(connection)
-                self.active_connections.discard(connection)
-                self._streams.pop(id(connection), None)
-        if not conns:
-            self._session_connections.pop(session_id, None)
-        return sent
-
-    def _offer(self, websocket: WebSocket, message: str) -> bool:
-        """Queue one text frame for a socket's own writer. Never awaits.
-
-        Description: THE SINGLE-WRITER SEAM. Everything that used to call
-          ``websocket.send_text`` from a broadcast now lands here, so the
-          only coroutine that ever touches a live terminal socket is that
-          viewer's writer task. It also stops one unreachable browser
-          delaying the rest of a fan-out, because an offer cannot block.
-          A socket registered WITHOUT a stream falls back to nothing and
-          is reported undeliverable rather than being sent to directly -
-          that would be the second writer coming back through the door
-          this closes.
-        Inputs: websocket (WebSocket); message (str) - JSON to send.
-        Output: bool - False when the frame could not be queued, which is
-          the caller's signal to drop that socket.
-        Example: if not self._offer(ws, payload): drop(ws)
-        """
-        stream = self._streams.get(id(websocket))
-        if stream is None:
-            return False
-        return viewer_fanout.offer_text(stream, message) == OFFER_ACCEPTED
-
-
-# Global connection manager
-connection_manager = ConnectionManager()
-
 
 @router.websocket("/ws/terminal")
 async def websocket_terminal(websocket: WebSocket):
@@ -258,6 +91,8 @@ async def websocket_terminal(websocket: WebSocket):
 
     # Get app state
     session_manager = websocket.app.state.session_manager
+    # The live session table is the registry's, not the manager's.
+    registry = websocket.app.state.services.registry
     local_servers = websocket.app.state.local_servers
     log_monitor = websocket.app.state.log_monitor
 
@@ -265,30 +100,27 @@ async def websocket_terminal(websocket: WebSocket):
     # Which session is this WS for? Path is ``/ws/terminal?session_id=<id>``.
     # Missing query param → fall back to the current (most-recent) session
     # so legacy single-session clients (and the auth-only test) keep working.
-    sessions_map = getattr(session_manager, "sessions", None)
     requested_sid = websocket.query_params.get("session_id")
     target_sid: Optional[str] = None
     if requested_sid:
-        if sessions_map is not None and requested_sid not in sessions_map:
+        if requested_sid not in registry.sessions:
             # Unknown session id - close with a clear app-range code.
             logger.warning("ws_unknown_session", session_id=requested_sid)
             await websocket.close(code=4404, reason="unknown session")
             return
         target_sid = requested_sid
     else:
-        cur = None
-        if hasattr(session_manager, "current_session"):
-            try:
-                cur = session_manager.current_session()
-            except Exception:
-                cur = None
+        cur = registry.current_session()
         target_sid = cur.id if cur is not None else None
 
     # Subscribe to THIS session's PTY output only. Taken BEFORE the
     # registration below because the registration needs the stream: every
     # broadcast into this socket goes through it, and a socket registered
     # without one cannot be written to at all.
-    viewer_stream = session_manager.subscribe_output(target_sid)
+    # THE VIEWER'S BOUNDED OUTBOX, from the registry that owns the
+    # subscriber list on this line. It arrived as
+    # ``session_manager.subscribe_output``; that seam does not exist here.
+    viewer_stream = registry.subscribe(target_sid)
 
     await connection_manager.connect(websocket, viewer_stream)
     # v0.7.0 Part 2 - register the WS in the per-session reverse map so
@@ -420,7 +252,7 @@ async def websocket_terminal(websocket: WebSocket):
             # where the pane is now, and a stale value reading "unchanged"
             # is exactly the silent wrong-grid failure this guards.
             measured = await read_pane_geometry(
-                _resolve_backend(session_manager, target_sid)
+                _resolve_backend(registry, target_sid)
             )
             try:
                 outcome = await apply_negotiated_resize(
@@ -457,7 +289,7 @@ async def websocket_terminal(websocket: WebSocket):
             # for why the second branch exists.
             _strategy = await paint_on_attach(
                 websocket,
-                _resolve_backend(session_manager, target_sid),
+                _resolve_backend(registry, target_sid),
             )
             logger.debug("ws_handshake_painted", strategy=_strategy)
         else:
@@ -475,7 +307,7 @@ async def websocket_terminal(websocket: WebSocket):
             await settle_if_needed(verdict)
             _strategy = await paint_on_attach(
                 websocket,
-                _resolve_backend(session_manager, target_sid),
+                _resolve_backend(registry, target_sid),
             )
             logger.info("ws_handshake_painted_fallback", strategy=_strategy)
 
@@ -535,7 +367,7 @@ async def websocket_terminal(websocket: WebSocket):
         # Client bailed during the handshake. Let the outer handler deal
         # with cleanup; no point proceeding to the live-stream loop.
         logger.info("ws_handshake_client_disconnected")
-        session_manager.unsubscribe_output(viewer_stream, target_sid)
+        registry.unsubscribe(viewer_stream, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         await release_client_resize(
@@ -611,7 +443,7 @@ async def websocket_terminal(websocket: WebSocket):
     finally:
         # Cleanup - unsubscribe ONLY this session's queue. Do NOT detach or
         # destroy the session: other tabs (or a later reconnect) may want it.
-        session_manager.unsubscribe_output(viewer_stream, target_sid)
+        registry.unsubscribe(viewer_stream, target_sid)
         local_servers.unsubscribe(local_servers_queue)
         log_monitor.unsubscribe(log_queue)
         # fix/multiclient-tmux-size - drop this client from size negotiation
@@ -722,109 +554,3 @@ async def receive_messages(
     except Exception as e:
         logger.error("receive_messages_error", error=str(e))
         raise
-
-
-async def _pump_text(queue: asyncio.Queue, stream: BoundedStream) -> None:
-    """Move text messages from a source queue into a viewer's outbox.
-
-    Description: A FEEDER, NOT A WRITER. It never touches the socket, so
-      adding a source of server-to-client messages cannot add a second
-      coroutine sending on it. The log monitor and the local-server
-      tracker each hand out their own unbounded fan-out queue; this is
-      where their output enters this viewer's bound and starts counting
-      against the same budget as its terminal bytes. Returns when the
-      viewer's stream is finished, which is the teardown signal.
-    Inputs: queue (asyncio.Queue) - the source's own subscription;
-      stream (BoundedStream) - this viewer's outbox.
-    Output: None.
-    Example: asyncio.create_task(_pump_text(log_queue, viewer_stream))
-    """
-    try:
-        while True:
-            message = await queue.get()
-            if stream.closed:
-                return
-            viewer_fanout.offer_text(stream, message)
-    except asyncio.CancelledError:
-        pass
-
-
-async def _drain_viewer(
-    websocket: WebSocket,
-    stream: BoundedStream,
-    log_monitor=None,
-    session_id=None,
-) -> None:
-    """THE ONE WRITER for this viewer's socket.
-
-    Description: drains the viewer's bounded outbox and is the only
-      coroutine that calls ``websocket.send_*`` once the handshake is
-      over. A pty frame is base64 and goes out as a BINARY frame after
-      the same pattern detection and idle watching the old
-      ``send_pty_output`` did; everything else goes out verbatim as text.
-      Returns when the stream finishes - an ordinary teardown or an
-      overflow - and the caller reads ``stream.overflowed`` to decide
-      what to tell the client.
-
-      A SEND THAT RAISES ENDS THE VIEWER, and the stream is closed so the
-      feeders stop offering into a queue nobody will drain.
-    Inputs: websocket (WebSocket); stream (BoundedStream) - this viewer's
-      outbox; log_monitor - optional, for pattern detection; session_id -
-      the session this stream is bound to.
-    Output: None.
-    Example: asyncio.create_task(_drain_viewer(ws, stream, lm, sid))
-    """
-    try:
-        while True:
-            frame = await stream.get()
-            if frame is None:
-                return
-            if frame.kind == viewer_fanout.FRAME_TEXT:
-                await websocket.send_text(frame.payload)
-                continue
-
-            raw_bytes = base64.b64decode(frame.payload)
-
-            # Pattern detection + idle watching, scoped to THIS session.
-            # We skip both when the backend is in replay mode so replayed
-            # scrollback doesn't look like "new" activity downstream.
-            sm = websocket.app.state.session_manager
-            _backend = None
-            _idle_watcher = None
-            if sm is not None:
-                if session_id and hasattr(sm, "get_backend"):
-                    _backend = sm.get_backend(session_id)
-                    _idle_watcher = getattr(sm, "idle_watchers", {}).get(session_id)
-                else:
-                    _backend = getattr(sm, "backend", None)
-                    _idle_watcher = getattr(sm, "idle_watcher", None)
-            in_replay = (
-                _backend is not None
-                and getattr(_backend, "replay_in_progress", False)
-            )
-            if log_monitor and not in_replay:
-                try:
-                    text = raw_bytes.decode("utf-8", errors="replace")
-                    log_monitor._detect_patterns(text)
-                except Exception as e:
-                    # Don't let pattern detection errors break streaming.
-                    logger.debug("pattern_detection_error", error=str(e))
-
-            if _idle_watcher is not None and not in_replay:
-                try:
-                    await _idle_watcher.handle_chunk(raw_bytes)
-                except Exception as e:
-                    # Terminal streaming is load-bearing, notifications
-                    # are not.
-                    logger.debug("idle_watcher_chunk_error", error=str(e))
-
-            await websocket.send_bytes(raw_bytes)
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        logger.error("drain_viewer_error", error=str(e))
-    finally:
-        # Stop the feeders offering into a queue nothing will drain. The
-        # first close reason wins, so a stream that already overflowed
-        # still reports the overflow to the endpoint.
-        stream.close()

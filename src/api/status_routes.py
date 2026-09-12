@@ -75,9 +75,7 @@ def open_ids_by_name(session_manager: Any) -> Dict[str, str]:
     Returns:
         tmux name -> session id. Empty when nothing is open.
     """
-    backends = getattr(session_manager, "backends", None)
-    if not isinstance(backends, dict):
-        return {}
+    backends = session_manager._registry.backends
     mapping: Dict[str, str] = {}
     for session_id, backend in backends.items():
         name = getattr(backend, "tmux_session", None)
@@ -109,8 +107,8 @@ def socket_drift_warnings(session_manager: Any) -> List[Dict[str, str]]:
         "backend_socket", "configured_socket"}``. Empty when nothing has
         drifted (the overwhelmingly common case).
     """
-    backends = getattr(session_manager, "backends", None)
-    if not isinstance(backends, dict) or not backends:
+    backends = session_manager._registry.backends
+    if not backends:
         return []
     configured = resolve_socket_name()
     drifted: List[Dict[str, str]] = []

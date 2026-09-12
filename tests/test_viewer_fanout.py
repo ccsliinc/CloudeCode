@@ -1,5 +1,12 @@
 """Bounded per-viewer fan-out, and one writer per viewer (issue 38).
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 THE TWO LOAD-BEARING TESTS ARE STRUCTURAL, NOT TIMED. The issue asks for
 "assert TIMING, not just eventual delivery, or it passes on the broken code
 once the slow viewer finally drains", and a wall clock is the wrong way to
@@ -32,6 +39,18 @@ import sys
 from pathlib import Path
 
 import pytest
+
+# ---- minimal env bootstrap so ``src.config`` import succeeds -------------
+# This file reaches ``src.core.session_manager`` from inside a test body,
+# which drags ``src.config`` in with it. Every other module that does the
+# same carries this block.
+import os
+import tempfile
+
+os.environ.setdefault("DEFAULT_WORKING_DIR", tempfile.mkdtemp(prefix="cc_vf_wd_"))
+os.environ.setdefault("LOG_DIRECTORY", tempfile.mkdtemp(prefix="cc_vf_logs_"))
+os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
+os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -154,10 +173,20 @@ def test_the_fan_out_is_synchronous_so_the_tail_loop_never_awaits_a_viewer():
 
 
 class _FakeManagerWithSubscribers:
-    """Just enough of SessionManager for `_make_output_handler` to bind."""
+    """Just enough of SessionManager for `_make_output_handler` to bind.
+
+    The subscriber table lives on the REGISTRY on this line, and the
+    registry here is the REAL one with its table swapped in rather than a
+    reimplementation of ``publish``: the bound, the overflow accounting
+    and the drop are exactly what these tests are about, so a fake that
+    re-spelled them would be asserting its own arrangement.
+    """
 
     def __init__(self, subscribers):
-        self._subscribers = subscribers
+        from src.core.sessions.registry import SessionRegistry
+
+        self._registry = SessionRegistry(log_cap=lambda: 1000)
+        self._registry.subscribers = subscribers
 
 
 def test_a_stalled_viewer_never_delays_a_healthy_one():
@@ -258,17 +287,24 @@ def test_exactly_one_coroutine_in_the_endpoint_sends_after_the_handshake():
     loop's own pong and error replies) plus whatever
     `ConnectionManager.broadcast_to_session` reached in with from a
     toast, a rename or a resize."""
+    # BOTH TRANSPORT MODULES ARE SCANNED, because the writer moved out of
+    # the endpoint module at the 1.4.0 integration to keep that file under
+    # its registered ceiling. Scanning only the endpoint would have made
+    # this assertion pass while measuring nothing, which is the exact
+    # shape of failure it exists to catch.
     from src.api import websocket as ws_mod
+    from src.api import ws_viewer_drain as drain_mod
 
     senders = []
-    for name, fn in vars(ws_mod).items():
-        if not inspect.iscoroutinefunction(fn):
-            continue
-        if getattr(fn, "__module__", None) != ws_mod.__name__:
-            continue  # imported, covered by its own assertion below
-        src = inspect.getsource(fn)
-        if "websocket.send_" in src:
-            senders.append(name)
+    for mod in (ws_mod, drain_mod):
+        for name, fn in vars(mod).items():
+            if not inspect.iscoroutinefunction(fn):
+                continue
+            if getattr(fn, "__module__", None) != mod.__name__:
+                continue  # imported, covered by its own assertion below
+            src = inspect.getsource(fn)
+            if "websocket.send_" in src:
+                senders.append(name)
     # `websocket_terminal` is the endpoint itself: its sends are the
     # dimension request and `terminal.ready`, both issued in one
     # coroutine BEFORE any task starts, so they cannot run concurrently
@@ -361,14 +397,14 @@ def test_a_finished_stream_takes_nothing_more():
 def test_unsubscribing_closes_the_stream_so_the_writer_can_finish():
     """The writer task is parked in `get()`. Closing is what wakes it;
     without that it sits there until the socket itself fails."""
-    from src.core.session_manager import SessionManager
+    from src.core.sessions.registry import SessionRegistry
 
-    manager = _FakeManagerWithSubscribers({})
+    registry = SessionRegistry(log_cap=lambda: 1000)
     stream = viewer_fanout.new_viewer_stream("v")
-    manager._subscribers["ses_1"] = [stream]
-    SessionManager.unsubscribe_output(manager, stream, "ses_1")
+    registry.subscribers["ses_1"] = [stream]
+    registry.unsubscribe(stream, "ses_1")
     assert stream.closed is True
-    assert manager._subscribers["ses_1"] == []
+    assert registry.subscribers["ses_1"] == []
 
 
 def test_the_stream_check_is_structural_and_not_an_identity_test():
@@ -410,16 +446,16 @@ def test_the_stream_check_is_structural_and_not_an_identity_test():
 
 
 def test_unsubscribing_a_bare_queue_does_not_raise():
-    """`subscribe_output` has always been callable by test doubles and
-    older shims. A teardown that raised on one of those would turn an
-    ordinary disconnect into a 500."""
-    from src.core.session_manager import SessionManager
+    """`SessionRegistry.subscribe` has always been callable by test doubles
+    and older shims that hand back a bare queue. A teardown that raised on
+    one of those would turn an ordinary disconnect into a 500."""
+    from src.core.sessions.registry import SessionRegistry
 
-    manager = _FakeManagerWithSubscribers({})
+    registry = SessionRegistry(log_cap=lambda: 1000)
     queue = asyncio.Queue()
-    manager._subscribers["ses_1"] = [queue]
-    SessionManager.unsubscribe_output(manager, queue, "ses_1")
-    assert manager._subscribers["ses_1"] == []
+    registry.subscribers["ses_1"] = [queue]
+    registry.unsubscribe(queue, "ses_1")
+    assert registry.subscribers["ses_1"] == []
 
 
 @pytest.mark.parametrize("bad", [0, -1])

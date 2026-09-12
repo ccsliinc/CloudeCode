@@ -236,8 +236,8 @@ def live_manager(tmp_path, monkeypatch):
                 socket_name=TEST_SOCKET_NAME,
                 session_name=name,
             )
-            manager.backends[session_id] = backend
-            manager.sessions[session_id] = Session(
+            manager._registry.backends[session_id] = backend
+            manager._registry.sessions[session_id] = Session(
                 id=session_id,
                 status=SessionStatus.RUNNING,
                 working_dir=str(tmp_path),

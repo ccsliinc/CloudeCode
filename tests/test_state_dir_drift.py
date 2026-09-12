@@ -412,6 +412,8 @@ def test_an_explicit_state_dir_diverges_and_the_backup_still_finds_the_legacy_fi
     finds it there too (its rungs 2 and 4 both return the new path), so
     the dangerous shape - a backup missing the file the app is actually
     using - cannot occur.
+
+    The bash resolver is deliberately UNCHANGED by #113.
     """
     s, install_dir, new_dir, old_dir, env = _file_case_setup(
         tmp_path, monkeypatch, "explicitdiverge" + filename.replace(".", "")

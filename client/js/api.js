@@ -425,7 +425,7 @@ class API {
      * Projects: live-probe every DB-tracked project's filesystem presence.
      *
      * feat/projects-table (S3). See GET /projects/presence
-     * (src/api/routes.py) - re-stats every project's root on every call,
+     * (src/api/projects_presence_routes.py) - re-stats every project's root
      * never a cached/stale value.
      *
      * @returns {Promise<{status: "ok"|"unreachable", projects: Array<{
@@ -765,7 +765,7 @@ class API {
         }
         const q = params.length ? `?${params.join('&')}` : '';
         // WHY 404 IS EXPECTED HERE, AND IS NOT A MISSING ROUTE.
-        // `GET /api/v1/sessions` exists (src/api/routes.py, mounted at
+        // `GET /api/v1/sessions` exists (src/api/session_crud_routes.py, at
         // the /api/v1 prefix in src/main.py) and answers 404 with
         // {"detail": "No active session"} when the requested - or the
         // current - session does not exist. That is the route's

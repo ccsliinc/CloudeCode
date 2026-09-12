@@ -55,7 +55,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.auth import require_auth
-from src.api.auth import router as auth_router
+from src.api.auth_routes import router as auth_router
 from src.core.db import connect, db_path_for, transaction
 from src.core.db_migration import ensure_db_migrated
 from src.core.project_store import import_from_config

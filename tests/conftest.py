@@ -306,6 +306,40 @@ def real_claude_settings_unchanged() -> Iterator[None]:
         )
 
 
+# ---- the composition root, as a fixture --------------------------------
+#
+# Slice S0 of .claude/notes/backend-decomposition-plan.md. THE BUILDER IS
+# WRITTEN ONCE. A test that needs a whole application asks for this; a
+# test that needs one cluster should construct that cluster instead
+# (ToastInbox() for a toast test), which is a REDUCTION in setup rather
+# than an addition, and is why the 102 bare SessionManager() constructions
+# mostly go away rather than migrate.
+#
+# NOT autouse, and function-scoped on purpose. build_services() constructs
+# a real SessionManager, which reads the hook-token file and the unread
+# store; a session-scoped instance would leak one test's toasts into the
+# next, which is the failure test_two_calls_build_two_independent_
+# applications exists to keep visible.
+
+@pytest.fixture
+def app_services():
+    """One fully wired application, with every production default.
+
+    Description: returns the same :class:`~src.core.composition.AppServices`
+      that ``lifespan`` builds. Override one port by calling
+      ``build_services(...)`` directly instead of using this fixture; the
+      point of the builder is that overriding one thing leaves the rest
+      real, so a wrapper taking keyword arguments here would just be a
+      second, worse spelling of the builder.
+    Inputs: none.
+    Output: AppServices.
+    Example: def test_x(app_services): app_services.toasts.get('ses_1')
+    """
+    from src.core.composition import build_services
+
+    return build_services()
+
+
 # ---- the could-not-evaluate ledger, printed on EVERY run ---------------
 #
 # WHY THIS HOOK EXISTS. The JSONL shape suite proves byte-for-byte export

@@ -245,9 +245,18 @@ def _manager_with_pending(monkeypatch, command, backend):
     from src.config import Settings
     from src.core.session_manager import SessionManager
 
+    from src.core.sessions.registry import SessionRegistry
+    from src.core.sessions.sidecars import AttachmentSidecars
+
     sm = SessionManager.__new__(SessionManager)          # no real lifecycle
-    sm.pending_terminal_commands = {"s1": "top"}
-    sm.backends = {"s1": backend}
+    # __new__ skips __init__, so both collaborators are installed by hand.
+    # ``pending_terminal_commands`` lives on the sidecars and ``backends``
+    # on the registry, and each assignment below reaches the one owner
+    # rather than shadowing it.
+    sm._sidecars = AttachmentSidecars()
+    sm._sidecars.pending_terminal_commands = {"s1": "top"}
+    sm._registry = SessionRegistry(log_cap=lambda: 1000)
+    sm._registry.backends["s1"] = backend
     # Patch on the CLASS: Settings is a pydantic BaseSettings and rejects
     # setting an unknown attribute on an instance.
     monkeypatch.setattr(
@@ -264,7 +273,7 @@ def test_flush_types_the_command_and_pops_it(monkeypatch):
     asyncio.run(sm.flush_pending_terminal_command("s1"))
     assert backend.writes == [b"htop\n"]
     # Popped: a reconnect to the same session must not re-run it.
-    assert sm.pending_terminal_commands == {}
+    assert sm._sidecars.pending_terminal_commands == {}
 
     asyncio.run(sm.flush_pending_terminal_command("s1"))
     assert backend.writes == [b"htop\n"]
@@ -274,7 +283,7 @@ def test_flush_is_a_noop_without_a_pending_command(monkeypatch):
     backend = _FakeBackend()
     cmd = TerminalCommand(id="top", label="top", command="htop")
     sm = _manager_with_pending(monkeypatch, cmd, backend)
-    sm.pending_terminal_commands = {}
+    sm._sidecars.pending_terminal_commands = {}
 
     asyncio.run(sm.flush_pending_terminal_command("s1"))
     assert backend.writes == []

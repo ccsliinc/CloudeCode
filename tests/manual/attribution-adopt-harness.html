@@ -37,6 +37,7 @@
 <link rel="stylesheet" href="../../client/css/styles.css" />
 <link rel="stylesheet" href="../../client/css/home-bar.css" />
 <link rel="stylesheet" href="../../client/css/attribution-prompt.css" />
+<link rel="stylesheet" href="../../client/dist/app.css" />
 <style>
   #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 44vw;
          max-height: 92vh; overflow: auto;
@@ -58,6 +59,10 @@
 <script src="../../client/js/session-row-actions.js"></script>
 <script src="../../client/js/session-theme-tint.js"></script>
 <script src="../../client/js/launchpad.js"></script>
+<!-- The compiled tree. Slice 1 moved the attribution card into it, so
+     this harness cannot render the card without it. A module script, so
+     it runs after the classic scripts above. -->
+<script type="module" src="../../client/dist/app.js"></script>
 <script>
 // Everything the launchpad asks for that is not the subject of this
 // measurement. Each one answers the shape its caller expects, so a
@@ -184,6 +189,12 @@ window.__clickDeclineAll = () => {
 
 window.__attributionReady = false;
 (async () => {
+    // Wait for the deferred bundle before driving anything: the card is
+    // a Svelte component now and these are classic scripts.
+    for (let i = 0; i < 200 && !window.CloudeWeb; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    window.__bundleLoaded = !!window.CloudeWeb;
     const lp = new Launchpad();
     window.__lp = lp;
     lp.init();

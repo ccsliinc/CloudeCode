@@ -15,6 +15,8 @@ WHAT THIS PROVES, AND WHAT IT DOES NOT
 THE CITATION GRAMMAR, WHICH THE DOCUMENT DECLARES IN ITS OWN HEADER
     path/to/file.py::symbol   - that file defines that symbol
     path/to/file.js::symbol   - that file defines that function or method
+    web/src/.../file.ts::sym  - likewise, after the svelte migration moved
+                                the launchpad's actions out of client/js
     METHOD /route             - some router under src/api/ declares it
 
     A citation with no double colon and no leading method is not a
@@ -44,25 +46,46 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHART = REPO_ROOT / "docs" / "session-project-operations.md"
 
+def _router_files() -> Tuple[str, ...]:
+    """Every module under ``src/api`` that declares an ``APIRouter``.
+
+    Description: DISCOVERED rather than listed. This used to be a hand
+      written tuple naming ``src/api/routes.py`` and six siblings, and
+      decomposition slice S6 turned that one file into twenty-three. A
+      hardcoded list does not fail when the code moves - it quietly stops
+      covering the routes it no longer names, and the chart it guards
+      goes stale with a green suite, which is the exact failure this file
+      exists to catch.
+    Inputs: none.
+    Output: repo-relative paths, sorted.
+    Example: ``("src/api/agent_wrappers_routes.py", ...)``.
+    """
+    found = []
+    for path in sorted((REPO_ROOT / "src" / "api").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        if "= APIRouter(" not in path.read_text():
+            continue
+        found.append(str(path.relative_to(REPO_ROOT)))
+    # An empty discovery would pass every assertion below without
+    # checking anything.
+    assert len(found) >= 25, found
+    return tuple(found)
+
+
 #: Routers whose decorators the METHOD /route citations are checked against.
-ROUTER_FILES: Tuple[str, ...] = (
-    "src/api/routes.py",
-    "src/api/auth.py",
-    "src/api/session_groups_routes.py",
-    "src/api/config_files_routes.py",
-    "src/api/status_routes.py",
-    "src/api/setup_routes.py",
-    "src/api/version_routes.py",
-)
+ROUTER_FILES: Tuple[str, ...] = _router_files()
 
 #: `path::symbol`, inside backticks so prose cannot accidentally enrol.
 _SYMBOL_CITATION = re.compile(
-    r"(?<![\w/.])((?:src|client|tests|macOS)/[\w./-]+\.(?:py|js))::([A-Za-z_]\w*)"
+    r"(?<![\w/.])((?:src|client|tests|macOS|web)/[\w./-]+\.(?:py|js|ts|svelte))"
+    r"::([A-Za-z_]\w*)"
 )
 
 #: A bare module citation - a path with no `::`. Held only to file existence.
 _MODULE_CITATION = re.compile(
-    r"(?<![\w/.])((?:src|client|tests|macOS)/[\w./-]+\.(?:py|js))(?!::)(?![\w/.])"
+    r"(?<![\w/.])((?:src|client|tests|macOS|web)/[\w./-]+\.(?:py|js|ts|svelte))"
+    r"(?!::)(?![\w/.])"
 )
 
 #: `METHOD /route`. The chart writes path parameters as bare words
@@ -138,7 +161,7 @@ def _js_symbols(path: Path) -> Set[str]:
       a JavaScript parser; the failure it must catch is "someone renamed
       deleteSessionRecord and the chart still says deleteSessionRecord",
       and a loose matcher catches that without pulling in a JS toolchain.
-    Inputs: path (Path) - a .js file.
+    Inputs: path (Path) - a .js, .ts or .svelte file.
     Output: set[str] - candidate defined names.
     """
     text = path.read_text(encoding="utf-8")

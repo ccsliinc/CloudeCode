@@ -413,3 +413,215 @@ PUSH url set to the sentinel `DISABLED_do_not_push_to_Adoom666_CloudeCode` so a
 push there fails by construction. Do not repair it, and re-apply it on any fresh
 clone. This is a ruling about ccsliinc's remotes and says nothing about anyone
 else's.
+
+## `src/config/settings.py` stays over 500 lines
+**2026-09-10, scope: ccsliinc CloudeCode**
+
+Verbatim, on being shown the one open question left by decomposition slice S5:
+"Leave it it's ok."
+
+`src/config.py` was 2,112 lines and became the 23-module `src/config/` package.
+Every method BODY moved out. What `settings.py` still holds is 109 lines of
+pre-existing field declarations plus 31 typed entry points averaging 13 lines,
+which lands at 632 and over the 500-line guideline. (Re-measured 2026-09-12
+at `b5de919`: 620. Still over the guideline, so the ruling is untouched; the
+figure is recorded because it moves.)
+
+It stays there. This is a RULING, not an observation, and nobody on either side
+is to "fix" it. The class keeps those 31 public names because 111 modules import
+from this package and the suite patches the members on the CLASS: 23 sites patch
+`state_dir_override`, eight patch `type(sm.settings).get_state_dir`. A name that
+stopped resolving there would be invisible to every one of them, which is a
+silent breakage rather than a loud one.
+
+Getting under 500 means DELETING the entry points and migrating their roughly 45
+callers. That is Rule B of the decomposition plan applied to `Settings`, it is
+its own slice, and it is **not scheduled**. It is recorded as a future optional
+slice in `.claude/notes/backend-decomposition-plan.md` so that it is a choice
+someone makes deliberately rather than a line count someone reacts to.
+
+## Two lines declared 1.3.0 on the same morning; his stands and ours is 1.4.0
+**2026-09-11, scope: all repos**
+
+Verbatim: "make ours 1.4 thats fine."
+
+Adoom666 set `macOS/package.json` to 1.3.0 at 09:48 in `6012467` on
+`adamdev/master`. ccsliinc set the same field to the same number at 10:10 in
+`76de420` on `integration/1.3.0`. Twenty two minutes apart, neither knowing.
+Neither was tagged and nothing was published, so nothing downstream had to be
+unwound.
+
+HIS 1.3.0 STANDS. Ours becomes 1.4.0, and 1.4.0 CONTAINS his 1.3.0 rather than
+racing it: the release folds in `adamdev/master` at `6012467` in full. The
+separately planned 1.3.1, which existed to carry his work as a follow-up, is
+collapsed into this release and is not cut.
+
+The branch keeps the name `integration/1.3.0`. It is already on both remotes,
+the name is a handle rather than a declaration, and renaming a pushed branch
+costs more than the tidiness is worth.
+
+### The rule this exists to stop happening again
+
+**WHOEVER IS ABOUT TO BUMP A VERSION SAYS SO FIRST, BEFORE THE COMMIT.** Not
+after, and not in the commit body, because by then the other line may already
+have taken the number.
+
+The coordination protocol covers file paths and design approach and could not
+have caught this: a version number is neither. It is one shared value in one
+shared namespace with no lock on it, which is precisely the shape of thing that
+needs an announcement rather than a convention. Announcing costs one message;
+the alternative is what happened here, which is two releases wearing one number
+and a merge to decide which survives.
+
+## The session's own pin outranks its folder's `.cc.theme`
+**2026-09-11, scope: ccsliinc CloudeCode, taken from Adoom666's issue #65**
+
+Both lines had a theme precedence order and they disagreed. ccsliinc's read the
+dotfile first; Adoom666's inverted it so the per-session pin wins.
+
+HIS IS TAKEN, on merit. `pinned_themes.json` records the theme a user chose for
+THIS conversation and `<working_dir>/.cc.theme` records the default the FOLDER
+carries. A default that outranks an explicit choice is not a default, it is an
+override, and dotfile-first meant every server restart and every boot re-adopt
+threw away a pin that was sitting on disk the whole time, while two sessions
+running out of one repo could never hold two different themes.
+
+Two things follow from it and are part of the same ruling, so neither is to be
+reinstated on its own:
+
+- **The pin-to-dotfile migration is deleted**, on both call sites and in the
+  store. It existed to decay the legacy map while the dotfile was the winner.
+  Under the inversion the same code writes one session's private choice into a
+  folder-wide default that every OTHER session in that directory then inherits.
+- **The reconcile no longer prunes a pin whose tmux name is absent from the live
+  listing.** Deleting a decaying fallback cost nothing; deleting the durable
+  record of a deliberate choice is data loss, and it would have fired for every
+  session not running at the moment the reconcile happened.
+
+`PATCH /sessions/{name}/theme` writes the pin and no longer touches the dotfile,
+for the same reason.
+
+## One config.json writer, and it is the one that takes the lock
+**2026-09-11, scope: ccsliinc CloudeCode**
+
+Both lines independently made config.json have a single writer, and the two
+claims are not the same claim. ccsliinc's relocated the atomic write into
+`src/config/config_file.py`. Adoom666's `src/core/config_writer.py` takes the
+path's lock, reads the file FRESH inside it, and hands the caller that document.
+
+HIS IS TAKEN, because ATOMIC AND SERIALIZED ARE DIFFERENT PROPERTIES and only
+one line had the second. Every writer on both sides was atomic, so a crash could
+never truncate the file. Two arriving together each merged into the base they had
+already read and the second replace threw the first one's block away: the file
+was never corrupt and the update was still lost.
+
+`write_config_atomic` is gone. `config_writes.update_settings_config` and
+`wrappers.mutate` are mutators passed to `config_writer.commit`, which is what
+makes a stale base unrepresentable - a caller cannot supply one because it never
+supplies one. `tests/test_one_config_writer.py` fails the build if a second
+writer of that file appears.
+
+## The bounded viewer fan-out, on ccsliinc's registry
+**2026-09-11, scope: ccsliinc CloudeCode**
+
+Adoom666 bounded the per-viewer outbox (issue #38); ccsliinc moved the
+subscriber containers onto `SessionRegistry`. BOTH ARE TAKEN and neither was
+dropped: the registry hands out a `BoundedStream`, `publish` is SYNCHRONOUS and
+offers rather than awaits, an overflowed viewer is closed and dropped from the
+list so the overflow is one event and not a storm, and `forget` closes each
+outbox rather than only dropping the list.
+
+The synchronous signature is the load-bearing half. `TmuxBackend._emit_output`
+awaits whatever the output handler returns, so a coroutine there puts the tail
+loop - the thing reading the pipe that carries every keystroke echo for every
+session - one await away from a viewer's outbox.
+
+## NavigationGeneration lands in 1.4.0 rather than as a follow-up
+**2026-09-11, scope: ccsliinc CloudeCode**
+
+Adoom666's twelve NavigationGeneration hunks had ZERO references anywhere in
+`web/src` after ccsliinc's Svelte rewrite, and `app.js` tests `detail.nav != null`
+BEFORE it consults the guard - so every Svelte launch path was dispatching an
+event whose stale-navigation guard was silently waived. The absence was measured;
+the user-visible consequence is derived from reading the listener rather than
+reproduced in a browser.
+
+It ships in this release rather than being tracked. The merge is the one moment
+both halves are in one tree, and deferring it means publishing 1.4.0 with a guard
+that is present, dispatched, and waived - which is the false-green shape this
+project keeps paying for.
+
+## Free issues are taken author first, then priority
+**2026-09-11, scope: both parties**
+
+Adoom666 ruled that free issues, the ones with no linked PR, are taken author
+first and priority second: everything `Adoom666` filed in p0, p1, p2 order,
+then everything `ccsliinc` filed in that same order. ccsliinc adopted it
+verbatim in `2ac476a`, merged as `50cf9dc`, so both parties' agents queue the
+same list.
+
+Three details of the rule as their file actually states it, kept because they
+are the parts a paraphrase drops. An issue with **no priority label sorts
+after p2 inside its own author's group**, because it is work nobody has ranked
+rather than unranked work, and putting it first would let filing an unlabelled
+issue jump the queue. An issue from **any other author sorts after both**
+groups. Inside one bucket the **lowest issue number goes first**, the same
+created-ascending tie-break the free list used before.
+
+**AUTHORSHIP SETS ORDER, NEVER OWNERSHIP**, and that half is stated on its own
+because it is the half an agent drops. Taking a turn in a queue claims nothing
+about who may work on the issue.
+
+It lives in `.claude/skills/work/SKILL.md` and `.claude/skills/work/work.sh`.
+There is no `docs/adopt-adam-grab-order` file; that path has been referred to
+in passing and does not exist.
+
+## A deploy that ships commits past the tag gets a version before it ships
+**2026-09-12, scope: all repos**
+
+`v1.4.0` is an annotated tag naming `7da2901`. We then deployed twice more and
+never renumbered, so on 2026-09-12 the live install was running `2898b26`,
+**26 commits past the tag**, while `macOS/package.json` still read `1.4.0` at
+both commits. Verified before writing this: `git rev-list --count
+v1.4.0..2898b26` answers 26, and `git show <ref>:macOS/package.json` answers
+`1.4.0` at `v1.4.0` and at `2898b26` alike.
+
+Nothing was corrupted by that, and the cost was still real. The number stopped
+describing the thing it labelled, which is the same class of fault this project
+has now recorded three times. Its sharpest edge here was a cross-party one:
+pull request #108 was asking the other party to merge a branch whose version
+declaration said 1.4.0 while carrying 26 commits that 1.4.0 does not contain.
+A reviewer reading only the declaration would have been reading a false
+statement about what they were merging.
+
+### The rule
+
+**A DEPLOY THAT SHIPS COMMITS PAST THE CURRENT TAG GETS A VERSION BEFORE IT
+SHIPS, NOT AFTER.** The order is: bump the declaration, commit, tag, push the
+tag, then deploy. Not deploy first and reconcile the number later, because the
+window between the two is a window in which every surface that reads a version
+is lying, and nothing in the system can detect that it is.
+
+This is the other half of the announce rule recorded above under "Two lines
+declared 1.3.0 on the same morning". That rule stops two lines TAKING one
+number. This one stops one line SHIPPING without taking a number at all. They
+fail in opposite directions and neither catches the other's case.
+
+**The check is one command and it is cheap.** Before any deploy:
+
+```
+git describe --tags --exact-match HEAD
+```
+
+An exact match means the tree being deployed is a release and its number is
+honest. Anything else means commits have accumulated past the tag and the
+version must be cut first. It is deliberately the same question
+`src/core/version.py` asks at resolution step 3, so the deploy gate and the
+resolver cannot disagree about what "at a release" means.
+
+### What this ruling produced
+
+`v1.4.1`, a PATCH, tagged at `2898b26`: the same tree that was already
+deployed, now carrying an honest number. It renumbers and contains no code
+change of its own. `v1.4.0`, `v1.2.1` and `v1.2.0` all stand untouched as the
+documented downgrade path.

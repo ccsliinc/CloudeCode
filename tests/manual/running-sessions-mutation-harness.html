@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>running sessions mutation harness</title>
+<!--
+  SLICE 5 - COUNT WHAT A POLL TICK COSTS THE RUNNING-SESSIONS LIST, IN A
+  REAL BROWSER, UNDER THE REAL CSP.
+
+  WHY A BROWSER AT ALL, WHEN THERE IS A VITEST COUNT. Slice 4 measured the
+  answer: its jsdom harness reported 0 mutations on an unchanged tick
+  while Brave reported 6,048, because the harness wrote the store's fields
+  directly and the browser ran the real `loadRunningSessions`, which has
+  an `await` in the middle of it. Anything published either side of that
+  await is two effect flushes, and a keyed list paints both. A harness
+  that cannot reach the real load path hides that class of defect rather
+  than catching it, so this page drives exactly the path the app does.
+
+  WHAT IT MOUNTS. The real `client/dist/app.js`, the real legacy modules
+  the card reads (`session-label.js`, `session-status-ui.js`,
+  `session-row-actions.js`, `session-theme-tint.js`,
+  `session-transport.js`, `session-startup-gate.js`, `ui-flags.js`), the
+  real stylesheets, and `client/js/i18n/boot.js` for the string layer and
+  the shared glyph geometry - in the same order `client/index.html` loads
+  them. `window.API` is the only stub, and it answers the four wire
+  shapes `loadRunningSessions` actually fetches.
+
+  THE FIXTURE'S TWO ORDERS DISAGREE ON PURPOSE. Rows are answered
+  ASCENDING by creation epoch, which is what a server does, and the sort
+  is descending. A fixture whose fetch order matched its display order
+  would score zero whether the defect was there or not.
+
+  VISIBILITY IS RECORDED ON EVERY PHASE. Timers are throttled in a hidden
+  tab, so a measurement taken while the tab was backgrounded is a
+  measurement of the throttle rather than of the render. The numbers are
+  only worth quoting beside a `visible`.
+
+  THE CSP CONTROL IS PLANTED FROM THIS SCRIPT, not written into the HTML
+  above, and that ordering is the whole point: a `<img src>` sitting in
+  the markup is fetched while the document parses, which is BEFORE a
+  deferred listener exists, so the violation it raises is never collected
+  and the control silently proves nothing. It is planted after the
+  listener is installed.
+
+  THE NEGATIVE CONTROL RUNS LAST, ALWAYS, AND IT IS NOT IN THIS FILE.
+  Proving the counter can see a rebuild means doing one - `list.innerHTML
+  = list.innerHTML` over the same rows - and that REPLACES the nodes
+  Svelte owns. The component's effects keep updating the detached ones, so
+  every reading taken afterwards is about a tree that is no longer on
+  screen and silently reports "nothing changed". Measured the hard way:
+  run it, then reload before measuring anything else.
+
+  Open over http://127.0.0.1:5057/tests/manual/running-sessions-mutation-harness.html
+  and read `await window.__rsMeasure({ticks: 12})` from the console.
+-->
+<link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/css/status-led.css" />
+<link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
+<link rel="stylesheet" href="../../client/css/session-startup-gate.css" />
+<link rel="stylesheet" href="../../client/css/launchpad-wrapper-pill.css" />
+<link rel="stylesheet" href="../../client/dist/app.css" />
+<style>
+  #out { position: fixed; top: 8px; right: 8px; z-index: 99999; max-width: 42vw;
+         max-height: 92vh; overflow: auto;
+         font: 11px/1.4 ui-monospace, monospace; white-space: pre;
+         background: #000; color: #0f0; padding: 8px; }
+  body { background: #1e1e1e; color: #ddd; }
+</style>
+</head>
+<body>
+<div id="launchpad-screen" class="screen active">
+  <div id="running-sessions-section" class="launchpad-section running-sessions-section">
+    <div class="launchpad-section-header">
+      <button type="button" class="launchpad-section-toggle" id="running-sessions-toggle"
+              aria-expanded="true" aria-controls="running-sessions-list">
+        <span class="launchpad-section-title">running sessions</span>
+        <span class="launchpad-section-count" id="running-sessions-count" data-listing-ok="1"></span>
+      </button>
+    </div>
+    <div id="running-sessions-list"></div>
+  </div>
+</div>
+<pre id="out">booting...</pre>
+
+<script src="../../client/js/session-label.js"></script>
+<script src="../../client/js/ui-flags.js"></script>
+<script src="../../client/js/status-led.js"></script>
+<script src="../../client/js/session-status-ui.js"></script>
+<script src="../../client/js/session-row-actions-confirm.js"></script>
+<script src="../../client/js/session-row-actions.js"></script>
+<script src="../../client/js/session-theme-tint.js"></script>
+<script src="../../client/js/session-startup-gate.js"></script>
+<script src="../../client/js/session-transport.js"></script>
+<script>
+/**
+ * One screen's worth of sessions, in FETCH order.
+ *
+ * Description: ascending by creation epoch, which is the order a server
+ *   answers in and the OPPOSITE of the order the sort produces. Nine
+ *   projects of five sessions each, matching slice 4's fleet so the two
+ *   measurements are about the same screen.
+ * Inputs: working (Array<string>) - tmux names whose status reads
+ *   `working` instead of `idle`.
+ * Output: {attachable: Array<object>, records: Array<object>}
+ */
+function fleet(working) {
+    var set = {};
+    (working || []).forEach(function (name) { set[name] = true; });
+    var attachable = [];
+    var records = [];
+    for (var p = 0; p < 9; p++) {
+        for (var s = 0; s < 5; s++) {
+            var name = 'cloude_p' + p + '_s' + s;
+            var epoch = p * 100 + s;
+            attachable.push({
+                name: name,
+                label: null,
+                created_by_cloude: true,
+                created_at_epoch: 1700000000 + epoch,
+                window_count: 1,
+                agent_type: 'claude',
+                agent_family: 'claude',
+                agent_family_source: 'wrapper',
+                agent_wrapper_label: null,
+                pinned_theme: null,
+                session_row_id: epoch,
+                parent_session_id: null,
+                status: set[name] ? 'working' : 'idle',
+                unread: false,
+                listing_ok: true,
+                listing_reason: null,
+                startup_gate: 'ready',
+                status_source: 'hook',
+            });
+            records.push({
+                session_uuid: 'u' + epoch,
+                id: epoch,
+                tmux_name: name,
+                tmux_created_epoch: epoch,
+                lifecycle: 'running',
+                project_id: p,
+                project_attribution: 'project',
+                working_dir: '/p' + p,
+                archived_at: null,
+                title: null,
+                parent_session_id: null,
+                last_work_at: null,
+                owned: true,
+                agent_type: 'claude',
+                agent_family: 'claude',
+                agent_family_source: 'wrapper',
+            });
+        }
+    }
+    return { attachable: attachable, records: records };
+}
+
+/** What the stub API currently answers with. Swapped between phases. */
+var CURRENT = fleet([]);
+/** When true, both session probes reject, which is the unknown outcome. */
+var PROBE_FAILS = false;
+
+window.API = {
+    getProjects: function () { return Promise.resolve([]); },
+    getProjectsPresence: function () { return Promise.resolve({ status: 'ok', projects: [] }); },
+    getProjectsAuthority: function () {
+        return Promise.resolve({ mode: 'db', degraded: false, writable: true });
+    },
+    listAttachableSessions: function () {
+        if (PROBE_FAILS) return Promise.reject(new Error('tmux did not answer'));
+        return Promise.resolve(CURRENT.attachable.map(function (r) {
+            return Object.assign({}, r);
+        }));
+    },
+    listSessions: function () {
+        if (PROBE_FAILS) return Promise.reject(new Error('tmux did not answer'));
+        return Promise.resolve([]);
+    },
+    getCurrentSession: function () { return Promise.resolve(null); },
+    listSessionRecords: function () {
+        return Promise.resolve(CURRENT.records.map(function (r) {
+            return Object.assign({}, r);
+        }));
+    },
+    getFeatures: function () { return Promise.resolve({ ui: {} }); },
+};
+
+/** Every CSP violation this page raised, collected from the page itself. */
+window.__cspViolations = [];
+document.addEventListener('securitypolicyviolation', function (event) {
+    window.__cspViolations.push({
+        directive: event.effectiveDirective,
+        blocked: String(event.blockedURI).slice(0, 120),
+    });
+});
+// THE CONTROL, PLANTED AFTER THE LISTENER EXISTS. An off-origin image is
+// refused by `default-src 'self'`, so exactly one violation must appear
+// in every run - and if it does not, the collector is not working and a
+// clean report proves nothing at all.
+(function plantCspControl() {
+    var probe = document.createElement('img');
+    probe.alt = '';
+    probe.style.display = 'none';
+    probe.src = 'https://example.invalid/csp-control.png';
+    document.body.appendChild(probe);
+})();
+</script>
+
+<!-- The string layer and the shared glyph geometry, exactly as
+     client/index.html loads them: a same-origin module ABOVE the
+     bundle's tag, so `window.CloudeI18n` and `window.CloudeGlyphs` exist
+     before app.js evaluates. -->
+<script type="module" src="../../client/js/i18n/boot.js"></script>
+<script type="module" src="../../client/dist/app.js"></script>
+<script type="module">
+/**
+ * Count what the DOM was asked to do, records AND nodes.
+ *
+ * Description: TWO NUMBERS, BECAUSE EACH FLATTERS ONE SIDE. A whole-
+ *   subtree `innerHTML` write is ONE childList record carrying hundreds
+ *   of nodes; a reactive attribute change is one record carrying none.
+ *   Nodes are counted WITH their descendants, because a MutationRecord
+ *   names only the direct children that moved and the cost is building
+ *   the whole subtree.
+ *
+ *   RECORDS ARE COLLECTED IN THE CALLBACK, not by `takeRecords()` at the
+ *   end. Delivery drains the queue too, so any `await` at all empties it
+ *   and a test that drained afterwards reads a perfect zero.
+ * Inputs: el (Element). Output: {stop: () => ({records, nodes})}
+ */
+function watch(el) {
+    const seen = [];
+    const observer = new MutationObserver((batch) => { seen.push(...batch); });
+    observer.observe(el, {
+        childList: true, subtree: true, attributes: true, characterData: true,
+    });
+    const size = (list) => {
+        let total = 0;
+        for (const node of Array.from(list)) {
+            total += 1;
+            if (node.nodeType === 1) total += node.querySelectorAll('*').length;
+        }
+        return total;
+    };
+    return {
+        stop() {
+            seen.push(...observer.takeRecords());
+            observer.disconnect();
+            let nodes = 0;
+            const kinds = {};
+            for (const record of seen) {
+                nodes += size(record.addedNodes) + size(record.removedNodes);
+                kinds[record.type] = (kinds[record.type] || 0) + 1;
+            }
+            return { records: seen.length, nodes, kinds };
+        },
+    };
+}
+
+/** Let Svelte's scheduler flush, then let a microtask or two settle. */
+async function settle() {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+}
+
+/** One tick, exactly as the 5s poller runs it. */
+const tick = () => window.CloudeWeb.launchpad.loadRunningSessions();
+
+const out = document.getElementById('out');
+const list = document.getElementById('running-sessions-list');
+
+/**
+ * Run the whole measurement and answer with every phase's numbers.
+ *
+ * Description: VISIBILITY IS RECORDED PER PHASE. Timers are throttled in
+ *   a hidden tab, so a number taken while backgrounded measures the
+ *   throttle. Every phase carries the `visibilityState` it ran under.
+ * Inputs: opts.ticks (number) - how many poll ticks per window.
+ * Output: Promise<object> - the report.
+ */
+window.__rsMeasure = async function (opts) {
+    const ticks = (opts && opts.ticks) || 12;
+    const report = { ticks, phases: {} };
+    const phase = async (name, body) => {
+        const before = document.visibilityState;
+        const value = await body();
+        report.phases[name] = Object.assign(
+            { visibility_before: before, visibility_after: document.visibilityState },
+            value,
+        );
+    };
+
+    // Mount, then drive ONE tick so the screen is settled. The first
+    // paint after a mount legitimately paints; measuring from the mount
+    // would count the initial render as churn.
+    window.CloudeWeb.launchpad.mountRunningSessions();
+    PROBE_FAILS = false;
+    CURRENT = fleet([]);
+    await tick();
+    await settle();
+
+    await phase('initial_paint', async () => ({
+        rows: list.querySelectorAll('.running-session-row').length,
+        first_row: list.querySelector('.running-session-row')?.dataset.name || null,
+        last_row: [...list.querySelectorAll('.running-session-row')]
+            .pop()?.dataset.name || null,
+    }));
+
+    await phase('idle_ticks', async () => {
+        const w = watch(list);
+        for (let i = 0; i < ticks; i++) { await tick(); await settle(); }
+        return w.stop();
+    });
+
+    await phase('one_status_change', async () => {
+        const w = watch(list);
+        for (let i = 0; i < ticks; i++) {
+            if (i === 5) CURRENT = fleet(['cloude_p3_s2']);
+            await tick();
+            await settle();
+        }
+        const counted = w.stop();
+        const dot = list.querySelector(
+            '.running-session-row[data-name="cloude_p3_s2"] .status-dot');
+        counted.dot_class = dot ? dot.className : null;
+        return counted;
+    });
+
+    await phase('busy_editor_open', async () => {
+        // WHAT THE DELETED GUARD COULD NOT DO. `session-list-busy-guard.js`
+        // answered "is the user mid-edit inside the list we are about to
+        // wipe" and the caller SKIPPED the paint, so a status change
+        // landing during an edit was not shown until the edit closed.
+        const rowEl = list.querySelector(
+            '.running-session-row[data-name="cloude_p7_s1"]');
+        rowEl.querySelector('.running-session-rename').click();
+        await settle();
+        const input = rowEl.querySelector('.running-session-rename-input');
+        input.value = 'half typed';
+        const w = watch(list);
+        CURRENT = fleet(['cloude_p7_s1']);
+        await tick();
+        await settle();
+        const counted = w.stop();
+        const after = rowEl.querySelector('.running-session-rename-input');
+        counted.editor_survived = after === input;
+        counted.editor_text = after ? after.value : null;
+        counted.dot_class = rowEl.querySelector('.status-dot').className;
+        // Put it back, so a later phase is not measuring an open editor.
+        after.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape', bubbles: true,
+        }));
+        await settle();
+        return counted;
+    });
+
+    await phase('failing_probe_ticks', async () => {
+        PROBE_FAILS = true;
+        await tick();
+        await settle();
+        const present = !!list.querySelector('.running-sessions-attention');
+        const w = watch(list);
+        for (let i = 0; i < ticks; i++) { await tick(); await settle(); }
+        const counted = w.stop();
+        counted.attention_before = present;
+        counted.attention_after = !!list.querySelector('.running-sessions-attention');
+        counted.count_text = document.getElementById(
+            'running-sessions-count').textContent;
+        // PUT THE SCREEN BACK, AND TICK. Clearing the flag is not enough:
+        // the rows only return on the next fetch, so a caller that ran
+        // anything after this phase found an empty list and a NEEDS
+        // ATTENTION block. Measured the hard way.
+        PROBE_FAILS = false;
+        await tick();
+        await settle();
+        counted.rows_restored = list.querySelectorAll('.running-session-row').length;
+        return counted;
+    });
+
+    report.csp_violations = window.__cspViolations.slice();
+    out.textContent = JSON.stringify(report, null, 2);
+    return report;
+};
+
+window.__rsReady = true;
+out.textContent = 'ready - call window.__rsMeasure({ticks: 12})';
+</script>
+</body>
+</html>

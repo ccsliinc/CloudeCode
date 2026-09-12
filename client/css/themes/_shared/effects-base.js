@@ -5,7 +5,7 @@
 // `/static/css/themes/`, so a sibling `_shared/` directory is reachable from
 // any theme's effects.js via the relative module specifier
 // `../_shared/effects-base.js` with no server change, no new mount and no
-// change to registry.js. The theme scanner in `src/api/routes.py`
+// change to registry.js. The theme scanner in `src/api/themes_routes.py`
 // (`_scan_themes_root`) skips any directory without a `theme.json`, so
 // `_shared/` is invisible to theme discovery. The manifest's `effects` value
 // is still a bare filename, which is all `effectsUrlFor()` permits; the

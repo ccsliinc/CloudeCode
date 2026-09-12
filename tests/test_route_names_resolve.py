@@ -30,9 +30,38 @@ os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
 os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 
 # ruff: noqa: E402
-import src.api.routes as routes
+import importlib
 
-ROUTES_SRC = ROOT / "src/api/routes.py"
+import pytest
+
+#: Every module under ``src/api/`` that declares an ``APIRouter``. It is
+#: DISCOVERED, not listed: slice S6 split the flat 4,397-line
+#: ``routes.py`` into a sibling per resource, and a hand-maintained list
+#: would quietly stop covering the next one somebody adds. That is the
+#: same defect this file exists to catch, one level up.
+def _route_modules() -> list[str]:
+    """Import names of every ``src/api`` module that declares a router.
+
+    Inputs: none. Output: sorted list of dotted module names.
+    Example: ``["src.api.agent_wrappers_routes", ...]``.
+    """
+    found = []
+    for path in sorted((ROOT / "src" / "api").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        text = path.read_text()
+        if "= APIRouter(" not in text:
+            continue
+        found.append(f"src.api.{path.stem}")
+    return found
+
+
+ROUTE_MODULES = _route_modules()
+
+# A discovery that finds nothing passes every parametrised test below
+# without running one of them, which is the shape of a guard that has
+# quietly stopped guarding.
+assert len(ROUTE_MODULES) >= 20, ROUTE_MODULES
 
 
 def _locally_bound(fn: ast.AST) -> set:
@@ -76,7 +105,8 @@ def _locally_bound(fn: ast.AST) -> set:
     return bound
 
 
-def test_every_route_handler_resolves_its_helper_names():
+@pytest.mark.parametrize("module_name", ROUTE_MODULES)
+def test_every_route_handler_resolves_its_helper_names(module_name):
     """A name a handler will look up at CALL time must exist somewhere.
 
     Checked against the module's real namespace, plus builtins, plus what
@@ -89,7 +119,8 @@ def test_every_route_handler_resolves_its_helper_names():
     fails in production - as run_in_threadpool did, in two routes, as a
     bare 500 with no body.
     """
-    tree = ast.parse(ROUTES_SRC.read_text())
+    routes = importlib.import_module(module_name)
+    tree = ast.parse(Path(routes.__file__).read_text())
     module_names = set(vars(routes)) | set(dir(builtins))
     offenders = []
 
@@ -112,19 +143,27 @@ def test_every_route_handler_resolves_its_helper_names():
     walk(tree, set())
 
     assert not offenders, (
-        "route handlers reference names that resolve nowhere; each is a "
-        f"NameError and a bare 500 the first time it is called: "
-        f"{sorted(set(offenders))[:10]}"
+        f"{module_name}: route handlers reference names that resolve "
+        "nowhere; each is a NameError and a bare 500 the first time it is "
+        f"called: {sorted(set(offenders))[:10]}"
     )
 
 
-def test_run_in_threadpool_is_available_at_module_scope():
-    """The specific regression, named.
+@pytest.mark.parametrize("module_name", ROUTE_MODULES)
+def test_run_in_threadpool_is_available_at_module_scope(module_name):
+    """The specific regression, named, in whichever module still uses it.
 
     It used to be imported inside individual handlers, which is why a new
-    handler could use it and fail only when called.
+    handler could use it and fail only when called. After slice S6 the
+    handlers live in siblings, so the check follows the USE: a module that
+    mentions the name anywhere must bind it at module scope.
     """
+    routes = importlib.import_module(module_name)
+    source = Path(routes.__file__).read_text()
+    if "run_in_threadpool" not in source:
+        pytest.skip(f"{module_name} does not use run_in_threadpool")
     assert hasattr(routes, "run_in_threadpool"), (
-        "run_in_threadpool is not at module scope; a handler that uses it "
-        "without its own local import will NameError at call time"
+        f"{module_name}: run_in_threadpool is not at module scope; a "
+        "handler that uses it without its own local import will NameError "
+        "at call time"
     )

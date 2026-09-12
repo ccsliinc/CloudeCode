@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 from src.core.corpus_ingest_state import (
     FRESHNESS_CANNOT_DETERMINE,
@@ -116,6 +116,65 @@ def _classify(
             "which is not a verdict on the database"
         ),
     }
+
+
+class VerdictReading(NamedTuple):
+    """One already-read verdict record, reduced to what may be said of it.
+
+    Description: the four facts every consumer of the cached verdict
+      needs, carried together so no caller can pair one record's verdict
+      with another record's age. ``verdict`` is one of the VERDICT_*
+      constants, ``freshness`` one of the FRESHNESS_* constants,
+      ``age_seconds`` is None whenever no age could be measured, and
+      ``reason`` is the human sentence behind both.
+    """
+
+    verdict: str
+    freshness: str
+    age_seconds: Optional[float]
+    reason: str
+
+
+def classify_record(
+    record: Optional[Dict[str, Any]],
+    *,
+    now: Optional[datetime] = None,
+    stale_after_seconds: Optional[int] = None,
+) -> VerdictReading:
+    """Reduce an ALREADY-READ verdict record to verdict, freshness and age.
+
+    Description: the single definition of "has this database been
+      verified", shared by ``GET /api/v1/version`` and by the boot gate in
+      ``src/core/db_integrity_gate.py``. It takes the record rather than a
+      state_dir on purpose: a caller that needs both this reduction AND
+      the record's own fields (which database it describes, how big the
+      file was) must read the artifact ONCE, or it can pair one record's
+      identity with a different record's age when the background checker
+      writes between the two reads. A second copy of this reduction would
+      let the boot gate and the status endpoint disagree about whether
+      the database is verified, which is the one disagreement neither
+      surface could explain to a user.
+    Inputs: record (dict | None as returned by :func:`read_verdict`), now
+      (datetime | None - injected by tests so staleness can be exercised
+      without sleeping), stale_after_seconds (int | None - the freshness
+      window, resolved from the configured interval when None).
+    Output: VerdictReading.
+    Example: classify_record(None).verdict -> 'cannot_determine'
+    """
+    window = (
+        stale_after_seconds if stale_after_seconds is not None
+        else resolve_stale_after_seconds()
+    )
+    freshness, age, why = classify_freshness(
+        record, now=now, stale_after_seconds=window,
+    )
+    decided = _classify(record, freshness, why)
+    return VerdictReading(
+        verdict=decided["verdict"],
+        freshness=freshness,
+        age_seconds=age,
+        reason=decided["reason"],
+    )
 
 
 #: The full key set published on ``data.integrity``, in the order
@@ -206,17 +265,18 @@ def integrity_block(
     interval = resolve_interval_seconds()
     stale_after = resolve_stale_after_seconds(interval)
     record = read_verdict(state_dir)
-    freshness, age, why = classify_freshness(
+    reading = classify_record(
         record, now=now, stale_after_seconds=stale_after,
     )
-    decided = _classify(record, freshness, why)
+    freshness = reading.freshness
+    age = reading.age_seconds
     detail = (record or {}).get("detail")
     if isinstance(detail, str) and len(detail) > MAX_DETAIL_CHARS:
         detail = detail[:MAX_DETAIL_CHARS] + " ... (truncated)"
     fields = _base_integrity_fields()
     fields.update({
-        "verdict": decided["verdict"],
-        "reason": decided["reason"],
+        "verdict": reading.verdict,
+        "reason": reading.reason,
         "freshness": freshness,
         "age_seconds": None if age is None else round(age, 1),
         "stale_after_seconds": stale_after,

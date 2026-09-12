@@ -5636,6 +5636,271 @@ no `v1.2.0` tag was created, and nothing was pushed to origin.
 
 ---
 
+## 2026-09-09 - the `web/` build toolchain (Svelte 5 + TS + Tailwind via vite)
+
+Branch `feat/svelte-web`. Round 1 of a screen-by-screen (strangler)
+migration of `client/` to Svelte. Scope was the TOOLCHAIN plus one real
+component proving the pipeline end to end. NOTHING in the running app
+changes behaviour this round: the bundle publishes `window.CloudeWeb` and
+returns, mounts nothing into the document and overwrites no global.
+Full model in `CLAUDE.md`, new section "The `web/` build".
+
+**What landed**
+
+- `web/` vite project: Svelte 5 with `runes: true` forced project-wide,
+  TypeScript strict (`noUncheckedIndexedAccess` on too), Tailwind 4 at
+  build time. Every dependency pinned to an EXACT version,
+  `package-lock.json` committed - the bundle check compares bytes, so a
+  floating transitive dependency would make it fail for a reason nobody
+  caused. `npm ci`, never `npm install`.
+  Pinned: svelte 5.57.0, vite 8.2.2, @sveltejs/vite-plugin-svelte 7.3.0,
+  tailwindcss + @tailwindcss/vite 4.3.3, vitest 5.0.0, typescript 5.9.3,
+  svelte-check 4.7.6, @types/node 24.11.2.
+- Output at `client/dist/` with FIXED names `app.js` / `app.css`, no
+  content hash, so `client/index.html` never has to be rewritten per
+  build. Vite is given a `.ts` entry rather than an HTML file, so its HTML
+  plugin never runs and no inline script is ever emitted.
+- `client/index.html` loads both: a `<link>` last in `<head>` and a
+  `<script type="module">` last in `<body>`, both from `/static/dist/`.
+- `scripts/web-build-check.sh` (new): rebuilds and fails if
+  `git status --porcelain client/dist` is non-empty. Exit 1 = drift,
+  exit 2 = COULD NOT EVALUATE, 2 is not 0. Wired into `deploy-mini.sh`
+  before the transfer (drift -> exit 1 `DEPLOY FAILED`, cannot-evaluate ->
+  exit 3 `CANNOT DETERMINE`; `CLOUDE_DEPLOY_SKIP_WEB_CHECK=1` is the
+  named, printed escape hatch) and into the `javascript` CI job.
+- `.gitignore`: `!client/dist/` negation added. THE `dist/` LINE IN THE
+  PYTHON SECTION WAS SILENTLY SWALLOWING THE WHOLE BUNDLE - it has no
+  leading slash, so it matches a `dist` directory at any depth. Measured
+  before the fix: `git check-ignore -v client/dist/app.js` answered
+  `.gitignore:9:dist/`. Left alone, the deploy would have shipped nothing
+  and its own hash check would have read green, because absent on both
+  sides compares equal.
+- The proof component: `client/js/status-led.js` ported to
+  `web/src/lib/led.ts`, the status half of `session-status-ui.js` to
+  `web/src/lib/status-dot.ts`, and `web/src/lib/StatusLed.svelte` as a
+  real runes component. No legacy caller switched to it.
+- `tests/test_no_remote_assets.py` extended by 6 tests to cover the
+  emitted bundle: no remote URL in a LOADING position, no `eval` /
+  `new Function`, the bundle is committed, index.html references it, and
+  a negative control asserting both detectors can actually match.
+
+**Measured, not assumed**
+
+- vitest: 36 tests pass in `web/`. 30 are a one-for-one port of the
+  behavioural half of `tests/test_status_led.node.mjs`; the other 26
+  blocks in that file assert on the TEXT of `client/css/status-led.css`
+  and were deliberately NOT duplicated (same file, same assertions,
+  already run by CI). The node suite is untouched and still 56 passed.
+- THE EQUIVALENCE PROOF: the test loads the two REAL legacy files in a
+  `vm` sandbox and compares strings across the cross product of status x
+  unread x startup_gate x status_source. **1008 comparisons, 0
+  mismatches**, plus a negative control proving the comparison can fail.
+- IN A REAL BROWSER, under the production CSP served by a scratch static
+  server that IMPORTS `src.security_headers.SECURITY_HEADERS` rather than
+  copying it: the same 1008 comparisons, **0 mismatches**.
+  `CloudeWeb.ledHtml('working',{unread:false})` byte-identical to
+  `SessionStatusUI.dotHtml('working',{unread:false})`.
+- Svelte actually mounts: `CloudeWeb.renderProbe('question', ...)`
+  returned real rendered markup from a compiled runes component in a
+  DETACHED element. A broken Svelte runtime cannot pass that while every
+  pure string function still would.
+- CSP: `window.CloudeWeb` exists after load, so `script-src 'self'` did
+  not refuse the module; `/static/dist/app.css` is in `document.styleSheets`
+  with 10 rules and `tw:opacity-70` computes to `0.7` on a live element,
+  so the stylesheet parsed and applies. A deliberate `eval('1+1')` on
+  that page THREW and raised a `script-src` violation, and a deliberate
+  off-origin `<img>` raised an `img-src` one - so the policy is real and
+  the violation listener works. Nothing the bundle does triggers either.
+- Tailwind emits 7 prefixed utility rules and 0 preflight; `app.css` is
+  835 bytes, `app.js` 36,605 bytes.
+- pytest `tests/test_no_remote_assets.py`: 9 -> 15 passed, 0 failed.
+- `scripts/ci/check-js-syntax.sh`: 215 files parsed cleanly.
+
+**Known gaps, carried forward**
+
+- NO CALLER USES THE PORT YET. The legacy parents build rows as HTML
+  strings and set them with `innerHTML`, so switching one means rewriting
+  a parent. That is round 2, one screen at a time.
+- No vite dev server / HMR, deliberately: it would need a proxy in front
+  of FastAPI and a CSP relaxation. Build and reload.
+- The 26 stylesheet assertions in `tests/test_status_led.node.mjs` are the
+  single source of truth for `client/css/status-led.css` and are NOT
+  mirrored in the web tree. If that stylesheet ever moves into `web/`,
+  they move with it.
+- The browser console reader captured only 1 of the page's many load-time
+  log lines, so "no console errors" from it is WEAK evidence and is not
+  what the CSP claim above rests on. The claim rests on the positive
+  outcome measurements listed there.
+- NOT DEPLOYED. Nothing was pushed and no deploy was run.
+
+## 2026-09-09 - release plan: 1.2 merge with Adam, 1.3 Svelte, slices paused after slice 1
+
+Owner's words: "hes been doing a lot of work, hes going to push it shortly. we
+are going to need to diff both our changes and then discuss them. many are
+already the same and i want to see which is better code. then we will make a
+1.2 release, with a 1.3 of the svelte work, mainly the plugin/theme engine and
+rewrite for adam to pull."
+
+- [ ] Wait for Adam's push to `adamdev` (Adoom666/CloudeCodeDev). Owner will say when.
+- [ ] Then: fetch, recompute merge base against `v1.1` (was `ba2aa5d`, 25
+  overlapping files, 17 hard conflicts per `git merge-tree` on 2026-09-09; see
+  `.claude/notes/divergence-adamdev-2026-09-09.md`), group the overlap by
+  subsystem (status LED, toasts, sidebar, launchpad, hooks, tests, docs), one
+  worker per subsystem producing a three-way view (base / ours / his) and a
+  verdict on the better code by: behaviour under unordered hooks, tests, 500-line
+  rule, docs in the same change, what the owner sees. Same intent: pick one.
+  Different intent: say so, stop for the owner.
+- [ ] Ours-only and his-only changes merge without discussion unless they
+  conflict in behaviour.
+- [ ] Assemble winners into `release/1.2` off `v1.1`, deploy, tag 1.2.
+- [ ] 1.3 = `feat/svelte-web` rebased onto 1.2: Svelte rewrite, plugin surface
+  registry, theme engine. Adam pulls 1.3.
+- [ ] Svelte slices 2 to 7 (`.claude/notes/svelte-migration-launchpad.md`) are
+  PAUSED after slice 1 lands, because his real work sits in the status, toast
+  and sidebar cluster (slices 4 and 5) and porting it before the 1.2 merge
+  would port it twice.
+- Branch state: `v1.1` at `d392aeb` is the release line; `feat/svelte-web` holds
+  `9d31ec4` (toolchain, validated 11/11) plus slice 1 in flight. `origin/main`
+  and `adamdev/v1.1` are 34 behind `v1.1`; push of those held pending owner.
+
+## 2026-09-09 - svelte slice 1: the attribution prompt card, and the mount seam
+
+Slice 1 of `.claude/notes/svelte-migration-launchpad.md`, on `feat/svelte-web`.
+The first legacy screen element actually REPLACED rather than duplicated: the
+Stage C attribution prompt is a Svelte 5 component, and the legacy code for it
+was deleted in the same commit.
+
+**What moved**
+
+- `client/js/launchpad.js`: **224 lines deleted, 27 added, net -197**
+  (6,481 to 6,284). The deleted code is `loadAttributionPrompt`,
+  `renderAttributionPrompt`, `_bindAttributionPrompt`, `_adoptAttributed`,
+  `_declineAttributed` (203 lines together) plus the `attributionPrompt` and
+  `attributionPromptClosed` constructor fields (11 lines) - 214 lines of
+  attribution logic - and two stale comment blocks that described them.
+- `web/src/lib/mount.ts` - `mountPanel(id, Component, props)` /
+  `unmountPanel(id)`. THE ONLY MOUNT PATH for every later slice. One handle per
+  container id, the old one unmounted first, the container never cleared (that
+  would delete sibling content the legacy parent still owns), a missing
+  container warned about rather than swallowed.
+- `web/src/lib/launchpad/attribution.ts` - the ladder and the two answers, with
+  the host (window.API / window.Launchpad / window.SessionLabel) injected so it
+  is testable in Node.
+- `web/src/lib/launchpad/AttributionPrompt.svelte` - runes, legacy class names
+  and element ids kept verbatim so `client/css/attribution-prompt.css` and all
+  26 themes apply unchanged, Tailwind for nothing but the absence of layout, no
+  `{@html}` anywhere.
+- The legacy call site is one guarded line in `loadProjects()`:
+  `window.CloudeWeb.launchpad.mountAttributionPrompt()`.
+
+**Three port decisions worth keeping**
+
+- THE CLOSE FLAG IS MODULE STATE, NOT COMPONENT STATE. Legacy kept it on the
+  Launchpad singleton, where it outlived every re-render and died with the page.
+  The component is REMOUNTED on every `loadProjects()`, so component state would
+  forget the close on the next home-screen entry, and anything durable would
+  contradict the card's own footnote ("closing this without answering brings it
+  back next time"). Module scope is the one lifetime that matches. It is not
+  persisted, and the Vitest case asserts that.
+- THE AGE STRING STILL COMES FROM THE LEGACY `_formatRelativeTime`, through the
+  host, rather than being copied into TypeScript. Slice 5 moves that function;
+  two copies for the length of the migration is how two copies drift. Measured
+  in the browser: the card rendered "started 393d ago" off the legacy
+  implementation.
+- ADOPT DOES NOT REFRESH ANYTHING ITSELF. Legacy reloaded the prompt and THEN
+  the running sessions, in that order; the component keeps the order rather than
+  the helper guessing at half of it. Decline refreshes NOTHING, which is the
+  legacy asymmetry, not an oversight - declining moves no session.
+
+**A regression this caught, in the same round**
+
+The mount call started life unguarded and it was the LAST statement in
+`loadProjects()`. `window.CloudeWeb` is absent in every node harness, so the
+throw rejected the promise every caller awaits: `test_project_list_render_guard`
+went 11 passed to 2 passed / 9 failed and `test_home_screen_mechanics` lost one.
+The call site now tests for the bundle and `console.error`s when it is missing -
+loud, because a prompt that silently never mounts is the same false green the
+card exists to remove, and non-fatal, because Stage C failing must not take the
+home screen down. Both suites are green again.
+
+**Measured, not assumed**
+
+- vitest in `web/`: **58 passed** (36 pre-existing StatusLed, 22 new in
+  `attribution.test.ts`), 2 files. `npm run check` (svelte-check): 262 files, 0
+  errors, 0 warnings.
+- node suite: **191 passed / 2 failed**, and both failures are the documented
+  pre-existing ones (`led_state_for.node.mjs` is a stdin CLI helper that exits
+  non-zero with no input; `test_archive_full_page_mode.node.mjs` was already
+  failing). `scripts/ci/check-js-syntax.sh`: 215 files parsed cleanly.
+- pytest `tests/test_no_remote_assets.py`: 15 passed.
+- Bundle: `client/dist/app.js` 36,605 to 47,720 bytes, `app.css` unchanged at
+  835 bytes (the component adds no Tailwind utility that was not already there).
+- IN A REAL BROWSER (Claude in Chrome), against the repo served by the CSP
+  scratch server that IMPORTS `src.security_headers.SECURITY_HEADERS`, so the
+  page carried the production policy verbatim
+  (`default-src 'self'; script-src 'self' ...; frame-ancestors 'none'`), driving
+  `tests/manual/attribution-prompt-harness.html`:
+  - the card mounts INSIDE `#attribution-prompt` (`cardParentId` read back as
+    `attribution-prompt`), `class="attribution-prompt"`,
+    `data-attribution-state="pending"`, box 800 x 449.6, painted background
+    `rgba(251,191,36,0.18)` off the theme's warning token - not a UA default.
+  - all three rows render, tick boxes `display: none` until asked for, every
+    button non-zero and themed (`adopt all` on `rgb(215,119,87)`), the
+    `--picked` action row hidden.
+  - a LABEL containing `<b>not html</b>` renders as TEXT. Svelte's escaping
+    replaced `_escapeHtml` and the fixture proves it.
+  - "choose individually" adds `attribution-prompt--picking`, reveals the tick
+    boxes and swaps the two action rows. Unticking one row and pressing "adopt
+    the ticked ones" POSTed exactly the two ticked names, in order, and skipped
+    the unticked one. "adopt all" POSTed all three. "leave as external" POSTed
+    all three to the decline endpoint. Picking resets after each answer, as the
+    legacy re-render did.
+  - `?fixture=unavailable` renders the notice line with
+    `attribution-prompt--unknown`, `data-attribution-state="unavailable"`, ZERO
+    buttons and ZERO rows. `?fixture=none` renders nothing and the slot measures
+    0px tall.
+  - the close button renders nothing and the close SURVIVES a remount, which is
+    the module-state rule above, measured.
+  - `mountPanel` proven directly: mounting twice leaves ONE card, `unmountPanel`
+    removes it and returns true, a second call returns false, and a missing
+    container returns null and warns.
+  - **ZERO CSP violations** across all three fixtures and every interaction, and
+    the negative control is what makes that mean something: an off-origin
+    `<img>` appended to the same page raised `img-src`, so the policy is live
+    and the collector fires. (The `eval` control was DISCARDED as invalid - the
+    browser tool executes in an isolated world that the page policy does not
+    govern, so it proved nothing.)
+- Console on that page: one message, the deliberate `mountPanel` warning from
+  the missing-container control. No errors.
+
+**Known gaps, carried forward**
+
+- NO COMPONENT TEST. Vitest here runs in a Node environment and neither `jsdom`
+  nor `@testing-library/svelte` is a dependency; adding one for this slice was
+  out of scope. That is why the whole decision ladder was carved into
+  `viewFor()` and asserted there, and why the markup is proven in the browser
+  instead. A later slice that needs a DOM harness should add it once, with its
+  own reason.
+- ADOPT AND DECLINE WERE NOT FIRED AT A REAL SERVER. The tmux socket name
+  `cloude` is hardcoded (`DEFAULT_SOCKET_NAME`), so a second local app instance
+  would re-adopt the owner's 19 live panes, `ensure_pipe_pane` over their live
+  pipes and mint hook tokens - the exact class of damage CLAUDE.md records four
+  hours of. So the buttons were driven against the harness's stubbed `window.API`
+  (proving the component posts the right names to the right method) and the API
+  contract itself is asserted in Vitest. Nothing on the live install was touched.
+- `.attribution-prompt-slot:empty` still matched in Chrome with the component
+  mounted and rendering nothing, because Svelte's `{#if}` anchors are a comment
+  and two EMPTY text nodes, which Selectors 4 ignores. Older engines might not,
+  and the cost if one does not is exactly zero: the slot carries no other rule,
+  so it measures 0px either way. Measured, not assumed.
+- `tests/manual/attribution-adopt-harness.html` was updated to load the bundle,
+  but it cannot be exercised without Playwright: it delegates its API stubs to
+  injected bindings (`window.__srvPrompt`). Its archived verifier was not run.
+- The two archived pixel verifiers under `scripts/archive/verify/` were not run
+  (they need Playwright). The harness they drive still reports the same shape.
+
+---
+
 ## 2026-09-10 - the electron bundle rebuilt at 1.2.0 and installed on live
 
 Closes the one failure recorded above: the footer read v1.0.33 because
@@ -6536,6 +6801,1433 @@ sorts above 1.0.36, so the visible symptom is a bogus "latest" figure and an
 `upgrade_command` pointing at the forbidden fork's releases page rather than a
 false update prompt. Where the update checker SHOULD point is the owner's call.
 
+## 2026-09-10 - backend decomposition, claim plus plan (no code)
+
+**What this round was.** Measurement and design only. No product code written,
+nothing deployed. Two artifacts: a coordination claim and a plan.
+
+**The claim.** `claims/ccsliinc-backend-decomposition.md` on the orphan `coord`
+branch, committed `dc5db2d`, pushed to `adamdev` and `origin`. Filed BEFORE any
+code, which is what that branch exists for. `scripts/scan_secrets.py` clean
+(1,367 files, exit 0) and `gitleaks protect` clean on the working tree before
+pushing; `gitleaks detect` reports 7 historical findings, all in `THEPROBLEM.md`
+and `worklog.md` from commits dated 2025-10-28 and 2026-04-19/24, files that are
+not in the current tree.
+
+**What Adam has, and where we intersect.** His two active claims are the session
+row menu (client side) and the web UI performance waves
+(`docs/webui-performance-and-session-menu-plan.md`, `scripts/perf/*`,
+`tests/test_perf_*.py`, `client/js/app.js`, `client/js/terminal.js`,
+`src/api/websocket.py`). No path overlap with anything planned here. The
+non-textual overlap is his queued wave 3, "move blocking tmux, SQLite and
+filesystem work off the event loop", which lands in `_session_info_for` and
+`create_session`, our slices 8 and 9. Three files he asked not to have
+rewritten (`session_status_map.py`, `session_instance_index.py`,
+`pipe_wakeup.py`) are READ by slice 8 and rewritten by none of it. His mute work
+(`session_notification_policy.py` 563, `notifications/idle_watcher.py` 513) is
+out of scope even though both are over the 500 guideline. No schema version
+moves.
+
+**Measured, on `release/1.2.1`.** `src/core/session_manager.py` is 8,340 lines,
+one class of 8,055, 136 methods, 68 public, 36 written instance fields, 85 call
+sites from `src/` and 490 from `tests/`, 108 constructions of which 107 are in
+tests, and the constructor takes no arguments. Eleven methods carry 3,045 lines,
+37 percent of the class. By I/O: 43 pure, 62 tmux only, 5 database only, 26
+both. The 36 fields cluster into ten groups with almost no cross traffic;
+`_wipe_session_state` is the only method touching nine at once.
+`src/api/routes.py` is 61 module functions, 51 routes, ZERO instance state.
+`tmux_backend.py` is 38 methods and 12 fields. `config.py` is 14 dataclasses
+plus a 1,426-line `Settings`.
+
+**The design.** Seven collaborator classes (session registry, hook token
+authority, toast inbox, theme store, owned tmux ledger, probe health recorder,
+attachment sidecars), three structural `Protocol`s (tmux reader, session record
+store, clock), and the 71 pure ladder modules left exactly where they are.
+`SessionManager` keeps its name and all 68 public methods as a facade. Two hard
+rules: every slice moves the state and never a copy of it (proved with `is`, not
+by value), and the constructor keeps taking no required arguments.
+
+**Twelve slices**, ordered by how LOUD the failure is rather than how tight the
+cluster is. Probe health first, hook tokens and adoption last, because every
+incident this file has caused was silent from inside the pane. Slices 1 to 7 run
+parallel to Adam; 8 onward waits on `now/adoom666.md`.
+
+**Plan:** `.claude/notes/backend-decomposition-plan.md`, 499 lines, on
+`feat/backend-decomposition`. Force-added, because `.gitignore:183` ignores
+`.claude/*`.
+
+## 2026-09-10 - S1 SHIPPED: ProbeHealthRecorder, the first collaborator
+
+**What moved.** The four probe scalars (`_last_probe_ok`, `_last_probe_reason`,
+`_last_probe_detail`, `_last_probe_socket`) left `SessionManager` for
+`src/core/sessions/probe_health.py`, which now HOLDS a `ProbeHealth` instead of
+re-deriving one from loose fields on every read. `ProbeHealth` itself is defined
+there and re-exported from `session_manager`, so every existing
+`from src.core.session_manager import ProbeHealth` keeps resolving. Delegating
+readers: `last_probe_health`, `_tmux_socket_name`, `tmux_socket_name`,
+`list_attachable_sessions_with_socket`, and the write half of
+`list_attachable_sessions`.
+
+**Line delta.** `src/core/session_manager.py` 8,340 to 8,317 (-23; 53 inserted,
+76 deleted). New: `src/core/sessions/probe_health.py` 194,
+`src/core/sessions/__init__.py` 22. The file grew a docstring-heavy constructor
+while shedding a dataclass and four fields, so the net is smaller than the
+volume moved. Twelve slices, not one.
+
+**A CORRECTION TO THE PLAN, recorded because the next reader will trust it.**
+Section 3 says `ProbeHealth` "is a dataclass nothing constructs". Measured: it
+WAS constructed, at `session_manager.py:6109`, lazily from three loose scalars on
+every call. The seam the plan saw is real; the wording is not. S1 is better
+stated as "the recorder HOLDS a ProbeHealth instead of rebuilding one".
+
+**A DRY defect found and closed in passing.** Three sites read
+`self._last_probe_socket or self._tmux_socket_name()`, but `_tmux_socket_name()`
+already prefers `_last_probe_socket` internally, so `X or f()` where `f()`
+returns X-when-truthy is exactly `f()`. All three collapsed. The probed socket is
+now read in ONE place, which is what makes the no-copy rule structural rather
+than remembered. Also removed the defensive `getattr(self, "_last_probe_socket",
+None)`: left in place it would have returned None silently once the field was
+gone, and the probe-wins-over-settings rule would have died with a green suite.
+
+**HOW THE NO-COPY RULE IS PROVEN, and why it is not the plan's `is` check.**
+Rule A's example (`manager.sessions is registry.sessions`) is for a shared
+mutable dict. This cluster is four SCALARS, and an identity assertion on a value
+proves nothing (rebinding a bool on the facade is invisible through any other
+object, and two equal frozen dataclasses are never `is`). So the proof has three
+legs: (a) the fields DO NOT EXIST on the facade, asserted with `hasattr` over a
+named list; (b) the injected recorder IS the held object, `is`; (c) delegation is
+live in BOTH directions, including through the REAL `list_attachable_sessions`
+path rather than a stubbed method.
+
+**MUTATION RESULTS. Both mutations were run, and both were reverted.**
+1. The named one, the facade keeping its own copy instead of delegating (four
+   fields restored to `__init__`, all readers and writers pointed back at them,
+   recorder still constructed): **6 tests red**, legs (a) and (c) together.
+   Leg (b) alone stayed GREEN, which is exactly why one leg is not enough and
+   the three exist.
+2. False-green, `health` reporting `ok=True` when nothing has been probed:
+   **4 tests red**, including the S1-named "never ran reads cannot_determine and
+   never ok". The PRE-EXISTING `tests/test_s9_recent_and_pills.py` also went red,
+   so the old regression guards still bind through the new indirection.
+   Reverted, 24 green.
+
+**Measured, in this worktree, not quoted.** Control before the change: 5,708
+passed / 2 failed / 19 skipped. After: 5,734 / 2 / 19, the same two
+environmental failures (`test_home_write_guard`, `test_version_probe`). The +26
+is fully accounted by a collection diff: 24 new tests of mine, plus 2 the
+repo-wide `test_no_unresolved_names` guard automatically added for the 2 new
+source modules. ZERO tests removed. Node 200 suites, 0 failures. Listing cost
+ceilings 12 passed. `scan_secrets.py` exit 0.
+
+**New tests.** `tests/test_probe_health_recorder.py` (19) and
+`tests/test_sessions_package_rules.py` (5), the latter enforcing the plan's two
+package-wide rules by AST parse rather than grep, with a guard test that fails
+when the package globs empty (a parametrised test over an empty list passes, so
+a renamed package would otherwise look perfectly compliant).
+
+**Not done, deliberately.** No `Protocol` was added: the plan names three
+(`TmuxReader`, `SessionRecordStore`, `Clock`) and none is a substitution point
+for S1, which does no I/O and calls nothing. No live deploy, so the plan's proof
+by measurement for S1 (`/sessions/list` row count against
+`tmux -L cloude list-sessions | wc -l`) is UNVERIFIED and still owed.
+
+## 2026-09-10 - backend decomposition S2: the theme cluster
+
+Slice S2 of `.claude/notes/backend-decomposition-plan.md`. `pinned_themes`
+and `_theme_accent_cache` left `SessionManager` for `src/core/sessions/`.
+
+- `src/core/sessions/theme_store.py` (466) owns the pin map, its atomic
+  file, and the two-source resolution ladder.
+- `src/core/sessions/theme_accents.py` (116) owns the manifest accent
+  memo. COMPOSED, not inherited.
+- `src/core/sessions/theme_dotfile.py` (144) is the stateless `.cc.theme`
+  format: path, read, atomic write.
+- The plan called S2 "about 250 lines" in one class. It is 726 in three,
+  because the docstring standard roughly doubles the body and one class
+  holding all of it measured 573 lines, over the package's own 500 rule.
+  Split by concern rather than by line count.
+
+`session_manager.py` 8,317 -> 8,207 (-110).
+
+**The no-copy rule, four legs** (`tests/test_theme_store.py`). This
+cluster is dicts, not S1's scalars, so identity is meaningful - and still
+not sufficient on its own, because assigning `self.pinned_themes =
+store.pinned_themes` in `__init__` satisfies it and forks on the first
+rebind. (a) identity across all three spellings; (b) neither name is in
+the facade's instance `__dict__` and both are properties on the class;
+(c) writes cross in both directions INCLUDING a whole-dict rebind, which
+`tests/test_tmux_listing_consumers.py` really does; (d) a real
+`set_pinned_theme` round trip onto real disk, read back by a second store.
+
+**The landmine, and it was not a green-suite one.** Every theme test does
+`monkeypatch.setattr("src.core.session_manager.settings", stub)`. A store
+importing `settings` itself would not see that patch and would read and
+WRITE the owner's real `~/.cloude-sessions/pinned_themes.json` during a
+pytest run. The pin path is therefore an injected zero-argument callable
+resolved at call time, which is what the loose methods did anyway.
+
+**A test that could no longer fail, fixed in the same commit.**
+`tests/test_toast_lifecycle.py` patched `SessionManager._themes_dir` to
+prove the accent cache serves a value after the manifest moves. Once the
+read moved, that patch bound a name nothing consults and the assertion
+would have passed over a manifest that never moved. Repointed at
+`ThemeAccents.themes_dir`, and `test_theme_store.py` carries a negative
+control that the patch actually changes the answer.
+
+**Mutations, all run and all reverted to a byte-identical tree.**
+- facade keeps its own copy of the map, run as TWO variants because the
+  weaker one is the one that matters. A `dict(...)` copy: 8 red across 4
+  files. A REFERENCE copy (`self.pinned_themes = store.pinned_themes`,
+  the naive fix): only 3 red, and leg (a) IDENTITY STAYED GREEN, along
+  with the in-place-write half of leg (c). Only leg (b) (no field on the
+  facade), the whole-dict rebind, and one real behaviour test
+  (`test_successful_empty_probe_still_prunes`) caught it. That is the
+  measurement behind "identity alone proves nothing here".
+- `save()` writes the temp and skips `os.replace`: 4 red.
+- `ThemeStore` imports `settings` instead of taking the provider: 6 red,
+  so the injection is load-bearing rather than ceremony.
+- accent cache reads a cached `None` as a miss: GREEN on the first
+  attempt, which is the useful result. The cache test asserted the return
+  value and the cache contents, and BOTH implementations agree on both:
+  each returns None and each writes None. What separates them is the
+  SECOND call. Test rewritten to publish the manifest after the None is
+  cached and assert the answer does not move; 1 red, reverted, green.
+  A mutation that fails to go red is the point of running it.
+
+**Measured in this worktree, control run by me rather than quoted.**
+Control 5,734 passed / 2 failed / 19 skipped. After: 5,778 / 2 / 19, same
+two environmental failures. Collection 5,755 -> 5,799, +44, ZERO removed:
+35 new in `test_theme_store.py`, 6 from the package-rules parametrisation
+(2 rules x 3 modules), 3 from `test_no_unresolved_names`. Node 200/200.
+Listing cost ceilings hold. `scan_secrets.py` exit 0.
+
+One full run also failed
+`test_session_restart_wrapper_choice.py::test_the_picked_wrapper_is_what_ends_up_in_the_pane`
+in its SETUP ("the pane did not exit" inside a 6s wait). It passes in
+isolation and passed on the immediate re-run of the full suite. Real tmux
+socket, INFRA-49 class, not this change.
+
+No protocol added. The plan names three; none is a substitution point
+here, and the one injection a test needs is a parameter, not a Protocol.
+
+## 2026-09-10 - backend decomposition S3: the toast inbox
+
+Slice S3 of `.claude/notes/backend-decomposition-plan.md`.
+`_pending_toasts` and `_pending_startup_toasts` left `SessionManager` for
+`src/core/sessions/toast_inbox.py` (390 lines), along with the acked-tail
+cap, the supersession rule, the prune and the startup queue.
+
+`session_manager.py` 8,207 -> 8,112 (-95). Cumulative S1+S2+S3: 8,340 ->
+8,112, -228.
+
+**The seam is storage versus everything else.** `record_toast` is 196
+lines, and only the storage half moved. The inbox resolves no session id,
+reads no theme, stamps no label and emits nothing to the notification
+router; those are other clusters and stay on the facade. What DID move is
+every rule about which record wins, which may be rewritten and which may
+be dropped - the three questions a toast store gets wrong.
+
+**A THIRD NO-COPY SHAPE, and it is the one CLAUDE.md warns about.**
+S1 was scalars, S2 was dicts a caller rebinds. This cluster is reached by
+a DEFENSIVE ACCESSOR from another module: `toast_history.py` does
+`getattr(manager, "_pending_toasts", None)` and answers `{}` for a
+non-Mapping. Drop the facade property and every history view goes empty,
+raising nowhere and failing no existing test. That is leg (e), and it
+asserts the reader gets the REAL dict (`is`), not merely that it does not
+explode. Legs (a) identity, (b) no instance field and both are properties,
+(c) writes cross, (d) live delegation through all four public methods.
+
+Both properties are READ-ONLY here, unlike S2's `pinned_themes`. Nothing
+assigns either container wholesale once `_flush_startup_toasts` drains
+through `drain_startup()` instead of rebinding, so a future assignment
+should fail LOUDLY rather than shadow the property with a second
+container.
+
+**Mutations, all run and all reverted to a byte-identical tree.** The
+facade one was run as THREE variants, because only the third isolates the
+claim.
+- facade keeps its own REFERENCE to the records dict: 1 red, leg (b)
+  alone.
+- the facade property is REMOVED entirely: 16 red, 12 of them
+  pre-existing. So a total removal is caught by the repo as it stands.
+- the facade property returns a COPY: **every pre-existing toast suite
+  stays GREEN, 66 of 66**, and only legs (a) and (e) go red. That is the
+  measurement behind this slice's claim. A copy works perfectly on the
+  day it is written and diverges the first time anything writes through
+  the inbox rather than through the facade, and `toast_history`'s
+  tolerant `getattr` cannot tell the difference.
+- `find_supersedable` may return an ACKED record: 2 red, including the
+  pre-existing `test_toast_supersede.py`.
+- `ack` re-stamps a record already acknowledged: 4 red.
+- `prune` caps the UNACKED half too: 2 red.
+
+**A claim corrected rather than left standing.** An earlier draft of this
+entry said `test_toast_lifecycle.py` passed 17 of 17 with the property
+removed. That was measured on a tree where a `git checkout --` had
+already reverted the facade wiring, so it was a reading of the S2 code,
+not of a mutant. Re-measured properly, removal IS caught. The copy
+variant above is the honest version of the same point.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,734 passed
+/ 2 failed / 19 skipped. After S2: 5,778 / 2 / 19. After S3: 5,804 / 2 /
+19, the same two environmental failures throughout. Collection 5,799 ->
+5,825, +26, ZERO removed: 23 new tests, 2 from the package-rules
+parametrisation, 1 from `test_no_unresolved_names`. Node 200/200. Listing
+cost ceilings hold. `scan_secrets.py` exit 0.
+
+The plan's S3 asked for "a test that a duplicated `Stop` acks by KIND and
+never acks the toast the same event just raised, a rule currently
+expressed only in prose". It is
+`test_a_duplicated_stop_acks_by_kind_and_not_the_toast_it_just_raised`,
+end to end through the facade, plus a cutoff negative control beside it.
+
+No protocol added. The inbox does no I/O at all - no tmux, no database,
+no filesystem - so there is nothing to substitute.
+
+## 2026-09-10 - backend decomposition S4: the log buffers and command counts
+
+Slice S4 of `.claude/notes/backend-decomposition-plan.md`. `log_buffers`
+and `command_counts` left `SessionManager` for `SessionRegistry` in
+`src/core/sessions/registry.py` (187 lines), along with the append, the
+per-session line cap, the registration ensure and the teardown.
+
+`session_manager.py` 8,112 -> 8,167 (+55). Cumulative S1+S2+S3+S4: 8,340
+-> 8,167, -173. **This slice GROWS the facade and that is expected, not a
+regression.** The moved BODY was about 20 lines; the property pair plus
+the documented delegation that replaces it is a fixed cost of roughly 70,
+and the docstring standard is what makes it so. S7 moves the other four
+fields of this cluster into the same class and pays that cost only once
+more.
+
+**The registry lands in two pieces, on purpose.** The plan's registry
+cluster is six fields. S4 moves the two with NO reader outside
+`session_manager.py`; S7 moves `sessions`, `backends`, `_subscribers` and
+`_last_session_id`, which have 27 external readers between them. Splitting
+on reader count rather than on the heading puts the pattern under test on
+the half that cannot break a caller.
+
+**PLAN VERSUS CODE: the named coverage does not exist.** S4's entry says
+"Tests: `tests/test_session_backend.py`". Measured before the move,
+`add_log_entry` and `get_recent_logs` appear in ZERO test files in this
+suite, that one included. The only exercise either got was indirect,
+through `_session_info_for` reading `get_recent_logs` for a listing row.
+So no pre-existing test could have gone red for a defect introduced here.
+That is why `tests/test_session_registry.py` is 21 tests rather than a
+handful of legs.
+
+**The no-copy legs, chosen for a cluster with no external reader.** S3
+could lean on a defensive accessor in another module; there is no
+analogue here, and no consumer whose behaviour a copy would break. So:
+(a) identity of both containers; (b) neither name is an instance
+attribute and both are properties on the class; (c) an in-place write
+through either spelling is seen by the other; (d) live delegation through
+`add_log_entry`, `get_recent_logs` and `_wipe_session_state`; (e) an
+injected registry is the object the facade actually holds and uses.
+
+**The setter posture is now a rule with evidence behind it.** A
+write-through setter exists where a rebind is MEASURED (S2's
+`pinned_themes`, which `tests/test_tmux_listing_consumers.py` assigns
+wholesale). Nothing in `src/` or `tests/` assigns either name here, so
+both properties are read-only, like S3's pair. An earlier draft of this
+slice shipped setters for symmetry; they were removed once the rule was
+stated, because a setter nothing needs is a second way to write a
+container that must have one owner.
+
+**The line cap is an injected callable, and that is the S2 hazard in a
+new dress.** `add_log_entry` trimmed to `settings.log_buffer_size`,
+resolved out of `session_manager`'s globals per call. Four test modules
+(`test_s9_recent_and_pills.py`, `test_session_lifecycle_wiring.py`,
+`test_persist_fingerprint_family_wiring.py`,
+`test_tmux_listing_consumers.py`) install a stub `settings` carrying their
+own `log_buffer_size`. A registry importing `settings` itself would read
+the developer's real configuration during a pytest run. The cap is re-read
+per append rather than captured, so a settings reload still takes effect
+on a live manager. There is a leg for it.
+
+**Mutations, all run and all reverted to a byte-identical tree** (sha256
+checked after each revert).
+- facade property returns a COPY: 3 red - legs (a), (c) and (e).
+- `append_log` skips the cap trim: 3 red, the two cap legs and the trim
+  direction test.
+- `forget` drops only the buffer and leaves the counter: 2 red.
+- `forget` is a no-op: 2 red.
+- facade keeps its own plain ATTRIBUTE aliasing the registry's dict:
+  **1 red, leg (b) alone. Leg (a), the `is` check, stays GREEN**, which
+  is S2's measurement reproduced on a second cluster and the reason an
+  identity assertion is never the whole proof.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,804
+passed / 2 failed / 19 skipped. After S4: 5,828 / 2 / 19, the same two
+environmental failures (`test_home_write_guard`, `test_version_probe`).
+Collection 5,825 -> 5,849, +24, ZERO removed: 21 new tests, 2 from the
+package-rules parametrisation, 1 from `test_no_unresolved_names`. Node
+200/200. The three listing cost ceilings pass inside the full run.
+`scan_secrets.py` exit 0. Pre-commit hook left enabled.
+
+No protocol added. The registry does no I/O of its own - the one thing it
+reaches outside itself is the cap, and a zero-argument callable is a
+parameter, not a substitution point.
+
+No patch had to be repointed: nothing in the suite patches or
+monkeypatches `log_buffers`, `command_counts`, `add_log_entry` or
+`get_recent_logs` under any spelling.
+
+## 2026-09-10 - backend decomposition S5: the three per-session sidecars
+
+Slice S5 of `.claude/notes/backend-decomposition-plan.md`. `idle_watchers`,
+`adopt_fifo_offsets` and `pending_terminal_commands` left `SessionManager`
+for `AttachmentSidecars` in `src/core/sessions/sidecars.py` (211 lines),
+taking three clusters out of `_wipe_session_state`.
+
+`session_manager.py` 8,167 -> 8,239 (+72). Cumulative S1..S5: 8,340 ->
+8,239, -101. Like S4 this slice grows the facade, for the same reason:
+three properties plus a documented setter cost more lines than the three
+field declarations and eleven call sites they replace. The god method
+`_wipe_session_state` lost three of its nine clusters, which is the
+measurement the plan actually cares about.
+
+**They are one cluster because they have one lifecycle**, not because
+they are three dicts: each is written on the create or adopt path, read
+once when a client shows up, and dropped when the session goes away.
+
+**The one-shot rule is the point, and half of it was undefended.** The
+plan asks for both. `take_pending_command` already had a pre-existing
+guard - `test_terminal_commands.py::test_flush_types_the_command_and_pops_it`
+went red on the pop-to-get mutation. `take_fifo_offset` had NONE: that
+same mutation on the FIFO offset reddened only the two new tests. A
+reconnect re-seeking to a stale offset would replay against a FIFO that
+has grown by however much output landed meanwhile.
+
+**A getter may not consume.** `peek_fifo_offset` exists next to
+`take_fifo_offset` because `adopt_fifo_start_offset` is a PROPERTY, and
+`peek` and `take` differ by one method call while both read perfectly.
+Its own test, and its own mutation.
+
+**PLAN VERSUS CODE: `flush_pending_terminal_command` did not move, only
+its pop did.** The plan lists it among "their four accessors". It is 60
+lines of settings lookup, backend write and retry loop, which is the S3
+seam - storage versus everything else - so the sidecars own
+`take_pending_command` and the facade keeps the flush. The ordering is
+the safety property rather than the pop alone: the flush can fail after
+the pop on an unknown id, a missing backend or a write error, and a
+session whose command FAILED must still not have it retyped. There is a
+test for that ordering.
+
+**`forget` deliberately does not drop the pending command.** Measured
+pre-move: `_wipe_session_state` popped the watcher and the offset and
+never touched `pending_terminal_commands`. Preserved verbatim, and now
+ASSERTED, so that changing it is a decision somebody makes rather than a
+diff nobody notices. Session ids are not reused, so what is left behind
+is an entry nothing can ever read; worth dropping one day, but a refactor
+is not where a behaviour change belongs.
+
+**The legs, and the one that is necessary but NOT sufficient.** (a)
+identity of all three containers; (b) none of the three is an instance
+attribute and all three are properties; (c) in-place writes cross both
+ways; (c2) a whole-map REBIND through the facade reaches the collaborator
+- this is the cluster that gives the setter rule its evidence, because
+`tests/test_terminal_commands.py` rebinds `pending_terminal_commands`
+wholesale twice while nothing rebinds the other two, which are therefore
+read-only with a negative control asserting the assignment raises; (d)
+live delegation through `idle_watcher`, `adopt_fifo_start_offset` and
+`_wipe_session_state`; (e) the defensive reader in `src/api/websocket.py`
+still finds the watcher; (f) injection is real.
+
+**Leg (e) is where the S3 rule gets QUALIFIED.** `toast_history`'s leg
+asserts `is` on the container and catches a copying property. The
+websocket's is `getattr(sm, "idle_watchers", {}).get(session_id)`, and
+`.get()` on a copy answers correctly - so measured on the copying
+mutation, leg (e) PASSED while (a), (c), (c2) and (f) failed. A
+defensive-accessor leg catches a REMOVED property always, and a COPYING
+one only if it asserts identity on the container itself.
+
+**A patch that had to be repointed.** `tests/test_terminal_commands.py`
+builds its manager with `SessionManager.__new__(SessionManager)`, which
+skips `__init__` entirely, so `_sidecars` does not exist and every S5
+property is unreachable. It now installs `AttachmentSidecars()` by hand
+the same way it already installs `backends`. Two other files bypass the
+constructor (`test_workspace_env_reaches_terminal.py`,
+`test_adoption_three_outcomes.py`) and neither touches an S5 name. Any
+later slice adding a property must re-check those three.
+
+**Mutations, all run and all reverted to a byte-identical tree** (sha256
+checked after each revert).
+- `take_fifo_offset` reads instead of popping: 2 red, both new.
+- `take_pending_command` reads instead of popping: 3 red, one
+  pre-existing.
+- `peek_fifo_offset` consumes: 2 red.
+- `forget` also drops the pending command: 1 red.
+- the three facade properties return COPIES: 4 red, and leg (e) GREEN,
+  as above.
+- the setter shadows instead of writing through: 3 red, two pre-existing.
+- the facade keeps its own attributes aliasing the sidecar dicts: 5 red.
+- `_wipe_session_state` stops reaching the sidecars: 1 red.
+
+**Measured in this worktree.** Control (measured, not quoted) 5,804
+passed / 2 failed / 19 skipped. After S4: 5,828 / 2 / 19. After S5:
+5,856 / 2 / 19, the same two environmental failures throughout.
+Collection 5,849 -> 5,877, +28, ZERO removed against S4 and ZERO against
+the control: 25 new tests, 2 from the package-rules parametrisation, 1
+from `test_no_unresolved_names`. Node 200/200. The three listing cost
+ceilings pass inside the full run. `scan_secrets.py` exit 0. Pre-commit
+hook left enabled.
+
+No protocol added. The sidecars do no I/O at all - no tmux, no database,
+no filesystem, no awaits - so there is nothing to substitute.
+
+**Coordination.** Re-read `now/adoom666.md` and both his claims off
+`adamdev/coord` at `6e09b1c` before starting. Nothing of his names
+`session_manager.py`, `log_buffers`, `command_counts`, `idle_watchers`,
+`adopt_fifo_offsets` or `pending_terminal_commands`. His mute work lives
+in `src/core/session_notification_policy.py` and
+`src/core/notifications/idle_watcher.py`; neither is touched here - S5
+moves only the manager's MAP of watchers, not the watcher. His queued
+wave 3 lands in `_session_info_for` and `create_session`, which are
+slices 8 and 9, not these.
+
+---
+
+## 2026-09-10 - backend decomposition v2, slice S0: the composition root, the four ports, the fixture
+
+Plan v2 (`.claude/notes/backend-decomposition-plan.md` on
+`docs/backend-plan-v2`, `d70bb98`) replaces v1's permanent facade. This is
+its first slice. NO BEHAVIOUR MOVES.
+
+**What landed.**
+- `src/core/sessions/ports.py` - four `typing.Protocol` boundaries,
+  `runtime_checkable`, structural. Zero runtime imports from this project.
+- `src/core/live_ports.py` - `SystemClock`, `LiveSettings`,
+  `LiveSessionRecordStore`. `TmuxReader` gets NO adapter: `TmuxBackend`
+  already satisfies it by shape, which is the point of a structural port.
+- `src/core/composition.py` - `AppServices` (frozen) and `build_services`,
+  the one construction site. It builds the five collaborators the shipped
+  slices created and hands them to `SessionManager` through the keyword
+  seam those slices already added, so `services.themes is
+  manager._theme_store` holds BY CONSTRUCTION.
+- `src/main.py` - `lifespan` calls `build_services()` and publishes
+  `app.state.services` beside `app.state.session_manager`.
+- `tests/conftest.py` - the `app_services` fixture, written once.
+- CLAUDE.md - the pure-forwarder docstring exemption, verbatim from the
+  plan's section 5.
+- `tests/test_sessions_package_rules.py` - RULE 3, nothing under
+  `src/core/sessions/` may import the `settings` singleton.
+
+**Three places the PLAN and the CODE disagreed, and the code won.**
+1. `TmuxReader`'s methods. The plan sketched `list_sessions` /
+   `capture_pane` / `pane_status_all`; the real `TmuxBackend` spells them
+   `discover_existing` / `capture_scrollback` / `capture_visible_screen` /
+   `list_pane_status_all`. The sketch's spelling would have been satisfied
+   by nothing in the tree, which is a rung that can never be observed to
+   fire.
+2. `SessionRecordStore`'s members. `get_instance` is a module function in
+   `session_store.py`, `claim_instance` is one in `session_identity.py`,
+   and the nine `record_*` functions live in seven unrelated modules with
+   no shared shape. What the manager actually funnels every row read
+   through is `_datastore_connection` / `_writable_datastore_connection`,
+   so THAT pair is the port. `claim_instance` joins when S8 gives it a
+   call site to be substituted at.
+3. `AppServices` carries no `tmux` field. A `TmuxReader` is bound to ONE
+   pane; there is no process-wide instance to hold. Putting a per-pane
+   object in a process-wide container is the same category error as
+   keying unread state on a name when it describes an instance.
+
+**The S2 near miss is now a test, not a comment.** `LiveSettings` resolves
+`src.core.session_manager.settings` on EVERY call, because 41 places in
+the suite `monkeypatch.setattr` that name and a reader bound to
+`src.config.settings` would be invisible to all of them and would write
+the owner's real `~/.cloude-sessions` during a pytest run. Four tests fail
+if that indirection is removed. DELETE AFTER S5.
+
+**Mutations, all eight measured, every revert verified byte-identical by
+sha256.**
+1. Drop the `records` field from `AppServices` -> 2 red.
+2. `LiveSettings` reads `src.config.settings` -> 4 red.
+3. The facade's `pinned_themes` property returns a COPY -> 1 red.
+   NOTE, AND IT IS THE MOST USEFUL RESULT HERE: the identity test stayed
+   GREEN and so did the forward data leg. Only the REVERSE leg caught it.
+   `is` alone has now failed four times in this project, and a
+   one-directional data leg is not enough either.
+4. `build_services` hands `AppServices` a second `ThemeStore` -> 4 red.
+5. The manager-plus-collaborator refusal removed -> 1 red.
+6. The REAL `TmuxBackend.capture_scrollback` grows a required argument ->
+   the real conformance leg red, the double GREEN. That is the whole
+   reason both legs exist.
+7. A collaborator imports the settings singleton -> package rule 3 red.
+8. `lifespan` builds services then constructs a second manager -> 2 red.
+
+**Verification.** Control measured first-hand on `209947d`: 5,856 passed /
+2 failed / 19 skipped, 5,877 collected. The two failures are the known
+environmental pair (`test_home_write_guard`, `test_version_probe`).
+
+**Coordination.** Checked live before starting. PR #60 (draft,
+`fix/5-pipe-rotation-fd`) now CLAIMS issue #5, the p0 pipe rotation in
+`tmux_backend.py`. Plan v2 had already removed the tmux_backend split from
+this lane on the strength of #5 being free-but-his; it is now formally
+taken, which confirms rather than changes the plan. #28 and #32 remain
+free, both still labelled `blocked`. No new issue touches
+`session_manager.py`, `composition`, or the ports.
+
+---
+
+## 2026-09-10 - backend decomposition v2, slice S1: retro-fit the five shipped slices, delete the 291 lines of forwarders
+
+**THE GO/NO-GO SLICE, AND IT PASSES.** Plan v2 says: if retro-fitting the
+five shipped slices does not drop `session_manager.py` by roughly 291
+lines plus the migrated readers, the premise is wrong and the honest move
+is to revert to v1's permanent facade.
+
+`src/core/session_manager.py`: **8,239 -> 7,894, a drop of 345 lines.**
+291 of forwarder bodies, 21 blank separators, 33 of comment blocks that
+existed only to explain the forwarders. Zero pure forwarders to a shipped
+collaborator remain, enforced by `tests/test_no_cluster_forwarders.py`
+rather than remembered. Contrast the five slices before this one, which
+moved 101 lines NET between them.
+
+**THE PREDICTION HELD.** The plan predicted 22 test files. Actual: 23
+pre-existing test files, plus my own two S0 files that assert through the
+facade, plus 2 new files. The one the plan's name-grep missed is
+`test_session_kind_listing.py`, which reaches `/sessions/recent` through a
+hand-rolled `_Manager` double and so carries none of the 21 names.
+
+**FOUR DEFENSIVE READERS, and every one of them would have failed
+SILENTLY.** This is the characteristic failure CLAUDE.md names, and it was
+sitting in four places at once:
+- `toast_history.buckets_from_manager` answered `{}` for anything without
+  `_pending_toasts`. Every toast history view empties, nothing raises.
+- `routes.py` guarded `get_toasts` with `hasattr`. The reattach backfill
+  endpoint returns `[]` on every session.
+- `away_routes.py` used `getattr(..., None)` plus a `callable` check on
+  the same method. The away report shows no toasts.
+- `websocket.py` did `getattr(sm, "idle_watchers", {}).get(...)`. No idle
+  watcher, on every session, forever.
+All four were repointed AND their tolerance removed, so the next such
+move is a crash rather than an empty page.
+
+**A GREEN MUTATION FOUND A TEST THAT DID NOT EXIST.** Replacing the
+websocket watcher lookup with a literal `None` broke nothing in 5,900
+tests. The one path guaranteed to fail quietly had no coverage at all,
+which is the worst possible pairing. `tests/test_ws_idle_watcher_lookup.py`
+drives the real `send_pty_output` over a fake socket and a one-item queue;
+the `None` mutation now goes red, and so does a lookup that ignores
+`session_id`.
+
+**`test_route_names_resolve.py` earned its keep.** The first draft of the
+theme migration wrote `request.app.state...` inside `_apply_session_theme`,
+which takes no `request`. That is a NameError and a bare 500 on the first
+click, and no other test in the suite would have caught it. The helper now
+takes the `ThemeStore` as an argument and its two callers pass it.
+
+**One argument reshape, on purpose.** `SessionManager.ack_toast` defaulted
+`reason` to `ACK_REASON_DISMISSED`; `ToastInbox.ack` requires it. 13 test
+call sites now say why the ack happened. An ack that does not record its
+reason is what makes a toast history unreadable, and the route already
+passed it explicitly.
+
+**Mutations, all eight measured, every revert verified byte-identical by
+sha256.**
+1. A forwarder comes back -> 2 red (shape leg and name leg).
+2. The tolerant `getattr` returns to `toast_history` -> 2 red.
+3. `buckets_from_inbox` returns a COPY -> 1 red.
+4. The `/toasts` backfill route answers `[]` -> 2 red.
+5. The websocket watcher lookup answers None -> GREEN first time. Test
+   written, then 1 red.
+6. The watcher lookup ignores `session_id` -> 1 red.
+7. The away report stops reading toasts -> 1 red.
+8. The theme route stops writing the dotfile -> 3 red.
+
+**Patch sweep: clean.** Zero `patch(` or `patch.object(` in the suite aims
+at any of the 21 deleted names, checked before and after.
+
+**Verification.** 5,928 passed / 2 failed / 19 skipped, 5,949 collected,
+against the S0 baseline of 5,902 / 2 / 19 and 5,923 collected. Delta +26,
+accounted by collection diff as 23 in `test_no_cluster_forwarders.py` and
+3 in `test_ws_idle_watcher_lookup.py`. FOUR ids left the listing and all
+four are RENAMES with a matching new id in the same file - the leg (b) and
+leg (e) tests whose old names described the forwarder they no longer test.
+ZERO tests removed. The two failures are the known environmental pair.
+Node 200/200. The three listing cost ceilings pass. `scan_secrets.py` exit
+0, pre-commit hook left enabled.
+
+**What is NOT done, said out loud.** Six pure forwarders remain on the
+class, 81 lines, pointing at `_hook_tokens`, `_unread_store`,
+`_activity_tracker`, the two notification handles and `_tmux_socket_name`.
+Those belong to S7 and later and are deliberately outside
+`test_no_cluster_forwarders.py`'s list, which grows one entry per slice. A
+list that failed for work nobody has done would be a countdown, not an
+invariant.
+
+## 2026-09-10 - decomposition v2 slice S2: `src/models.py` into `src/models/`
+
+Plan v2 section 6, slice S2. Pure filing, zero behaviour, and it exists to
+prove the package machinery on the safest file in the tree before the
+machinery is pointed at anything that runs.
+
+**What moved.** 2,495 lines holding 78 top-level definitions - 73 pydantic
+models, 2 enums, 2 functions and 3 constants - into 16 domain modules plus a
+re-export `__init__.py`. `src/models.py` is DELETED, not emptied, in the same
+commit. Nothing was renamed and no importer changed: all 41 `from src.models
+import ...` sites in `src/`, `tests/` and `scripts/` still read the same names
+off the same objects. Largest module is `sessions.py` at 380 lines, the shim is
+149, every file is under the 500-line guideline.
+
+**The moved bodies are byte-exact.** Each definition was carved by source span
+including the comment block above it, so `git show` of this commit is a pure
+move plus 17 new headers. Two now-redundant section comments (`# API Response
+Models`, `# WebSocket Message Models`) were KEPT rather than tidied away,
+because a byte-exact diff is a property a reviewer can check and a tidied one
+is a property they have to take on trust.
+
+**The proof that nothing changed.** Every model's `model_json_schema()`, field
+annotations and model config were fingerprinted from the flat file at `1cc7046`
+and from the package, and compared: 78 names, zero differences once module
+qualnames (`src.models.Session` -> `src.models.sessions.Session`) and lambda
+repr addresses are normalised. `SessionInfo`'s two levels came through
+unchanged, which is what the plan named as this slice's trap.
+
+Three names the flat module leaked and the package does not re-export: `Enum`,
+`Field` and `field_validator`, which were only ever visible because they were
+imported at the top of one file. Checked before deleting: nothing in the tree
+imports any of them from `src.models`, and there is no `import *`.
+
+**`tests/test_models_package_rules.py`, 198 tests.** The frozen 78-name public
+surface, `__all__` parity with it, one-definition-per-name, and the two-level
+`SessionInfo` shape asserted in BOTH directions with the three fields that
+genuinely live on both levels named rather than left out.
+
+**The no-copy legs, chosen for THIS data.** A package split's characteristic
+failure is a class PASTED into two modules: both importable, neither
+recognising the other, and no traceback explaining it. So identity is one leg
+of four, not the proof.
+(a) `models.X is submodule.X` for all 78 names.
+(b) forward - build through the submodule, assert `type(...) is models.X`.
+(c) reverse - build through the root, assert `type(...) is submodule.X`. One
+    direction is not enough: S1 measured a copy that left the identity leg and
+    the forward leg both green.
+(d) through pydantic - `SessionInfo(session=...)` re-validates its nested
+    field against whatever its annotation resolves to, so a copy is silently
+    rebuilt as the copy and the VALUE still looks right. Assert the class that
+    comes OUT.
+
+**Five mutations, five red, every revert byte-identical by sha256.**
+1. Drop `SessionStats` from the re-export -> 2 red.
+2. Define `SessionStats` a second time in `common.py` -> 2 red.
+3. Flatten `SessionInfo.unread` down onto `Session` -> 1 red (the trap).
+4. Re-export `Session` as a SUBCLASS of the real one -> 4 red, including
+   both data legs. `isinstance` alone would have passed the reverse; the
+   `type(...) is` assertions are what made it fail.
+5. `adopt.py` keeps its own pasted `Session` instead of importing the
+   sibling -> 2 red.
+
+**Patch sweep: nothing to repoint.** Zero `patch(` or `patch.object(` anywhere
+in the tree aims at `src.models`, before or after.
+
+**Verification.** 6,141 passed / 2 failed / 20 skipped, 6,163 collected,
+against a control MEASURED on the same tree at `1cc7046` of 5,928 / 2 / 19 and
+5,949 collected. Delta +214, accounted entirely by collection diff: 198 in the
+new rules file (197 pass, 1 skip) and 16 in
+`test_no_unresolved_names.py::test_every_loaded_name_is_bound_somewhere`, which
+parametrises over source modules and now sees 17 files where it saw 1. ZERO
+tests removed, zero renamed. The two failures are the known environmental pair.
+Node 200/200 as CI globs them, `check-js-syntax.sh` clean. The three listing
+cost ceilings pass. `scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Doc paths repaired in the same commit**, per gotcha 8: CLAUDE.md's
+`src/models.py:138` and `src/models.py` in the `/sessions/list` section, and
+`docs/session-attribution-import.md`'s `models.py:346-353`, which was a line
+range rather than a name and would have been wrong on the next edit anyway.
+
+**Plan versus code: one disagreement, minor.** The plan's stopping condition
+says `src/models.py` ends "under 200, a re-export shim only". A module and a
+package of one name cannot coexist, so the shim is `src/models/__init__.py` at
+149 lines and the flat file is gone. The budget is the same number and it is
+enforced by `test_the_re_export_shim_stays_a_shim`.
+
+## 2026-09-10 - decomposition v2 slice S3: OwnedTmuxLedger
+
+Plan v2 section 6, slice S3. The first slice on the boot path, and the first
+one that moves a durable file.
+
+**What moved.** `src/core/sessions/owned_tmux_ledger.py`, 435 lines, owns the
+owned tmux NAME set (`owned_tmux_sessions` -> `OwnedTmuxLedger.names`), the
+pre-v3 backfill sentinel, the boot listing, `session_metadata.json` (load,
+save, the atomic write and the pointer drop) and the two datastore-backed
+ownership queries (`_owned_instances_from_db` -> `instances_from_db`,
+`owned_tmux_instances` -> `instances`, `is_owned_tmux_name` -> `is_owned_name`).
+`src/core/session_manager.py` goes 7,894 to 7,725, a drop of 169.
+
+`SessionManager` keeps no copy and no forwarder: `self._owned` is the ledger and
+every one of the 66 internal reads reaches it directly. `AppServices` grew an
+`owned_tmux` field and `build_services` hands the SAME object to both sides.
+Rule B is enforced by `tests/test_no_cluster_forwarders.py`, whose deleted-name
+list grew by the seven members that left.
+
+**Three methods stayed, and they are not forwarders.** `_load_session_metadata`
+registers the session the ledger parsed, which wires backends and subscribers
+and would put the registry on the far side of the package rule.
+`_save_session_metadata` fills in the current session as a default.
+`_clear_stale_metadata` wipes in-memory state the ledger cannot see. Each does
+work of its own, so the full docstring rule applies to each and does.
+
+**The socket and the metadata path are late-bound, and both had to be.**
+`_tmux_socket_name` lets the PROBED socket win over the configured one, and a
+captured string would key every ownership read on the configured value and
+answer the badge from a socket nothing was ever written to. The metadata path is
+a callable resolving `settings` out of the `session_manager` module's globals at
+call time, which is the S2 near-miss rule: a ledger that imported `src.config`
+would be invisible to the 41 `monkeypatch.setattr("src.core.session_manager.settings", ...)`
+calls in the suite and would read and WRITE the owner's real
+`~/.cloude-sessions/session_metadata.json` during a plain pytest run. In
+`build_services` the socket callable closes over the name `manager`, which the
+NEXT statement binds; there is no value that could be supplied at that point.
+
+`SettingsReader` grew one method, `session_metadata_path`, which is the growth
+model its own docstring describes: one method at a time, when a collaborator
+genuinely needs one.
+
+**The no-copy legs, chosen for THIS data.** The risk here is two objects holding
+one logical set, which passes every `==` assertion until the first write through
+the wrong reference and then badges a session this app created as somebody
+else's.
+(a) identity, `services.owned_tmux is manager._owned`;
+(b) data forward, add through the manager's handle, read on the ledger;
+(c) data reverse, add on the ledger, read through the manager. S1 measured a
+    copy that left (a) and (b) both green and failed only here;
+(d) through the FILE, which is the medium this cluster exists for: save from one
+    ledger, load into a second, then mutate the first and assert the second does
+    not see it. That last half is the control on the other three - if they
+    passed because everything in the module aliases everything else, (d) fails.
+The same four legs were added to `tests/test_composition_root.py`'s existing
+services-versus-facade pair.
+
+**Seven mutations. Six red, one green that was MY MUTATION'S FAULT, and one
+that was red outside the runner I first used.**
+1. `build_services` stops handing the ledger to the manager -> 3 red, all three
+   composition legs.
+2. `write_atomic` writes in place, no tmp and no rename -> 1 red.
+3. `drop_session_pointer` stops re-writing the owned set -> 2 red, including the
+   pre-existing `test_owned_set_survives_stale_clear.py`.
+4. A failed read empties the owned set -> 1 red.
+5. `is_owned_name` falls back to a `cloude_` prefix match -> 4 red. That is the
+   spoofable heuristic the set exists to replace.
+6. `save` stops stamping the owned set onto the payload -> 6 red across four
+   files.
+7. **GREEN, and the test was right.** `self._owned.names = set(self._owned.names)`
+   after construction is not a divergence at all: the copy is assigned back ONTO
+   the ledger, so both references still see one object. Rewritten as 7b, a
+   create-path write into a local copy (`_copy = set(...); _copy.add(...)`),
+   which is the divergence that can actually happen. 7b is red - in
+   `test_session_backend.py`, NOT in the focused runner I had been using, which
+   is worth writing down: a mutation is only measured against the tests you
+   actually ran.
+
+Every revert verified byte-identical by sha256.
+
+**A reverted file, and the lesson.** Reverting mutation 7 with
+`git checkout -- src/core/session_manager.py` threw away every S3 edit to that
+file, because the file was not yet committed. Re-applied from the same script
+(`scratchpad/s3/apply_manager.py`) and re-verified. Revert a mutation with the
+`.bak` you took, never with git, while the slice is uncommitted.
+
+**Patch sweep and repointed guards.** No `patch(` in the suite aims at any name
+that moved: the 23 sites patching `_load_session_metadata` /
+`_save_session_metadata` target members that still exist. Repointed: two
+`monkeypatch.setattr(SessionManager, "_owned_instances_from_db", ...)` in
+`test_s4_regressions.py` onto `OwnedTmuxLedger.instances_from_db`; the
+`AppServices` field list and the port conformance double; two SOURCE-TEXT guards
+in `test_session_ownership_origin.py`, one of which got STRONGER because the two
+resolvers have left `session_manager.py` and no longer need exempting; and
+`tests/test_launchpad_help_content.node.mjs`, which reads
+`owned_names=set(...)` out of the manager source to check a help-text claim and
+would otherwise have been the only failing node suite.
+
+**A double stopped answering a question nobody asks.** The listing double in
+`test_tmux_listing_consumers.py` carried an owned-name set that no assertion ever
+observed; the route reads `list_attachable_sessions()` and nothing else. Removed
+rather than repointed, so a future read through it is an AttributeError.
+
+**Verification.** 6,170 passed / 2 failed / 20 skipped, 6,192 collected, against
+the S2 tree's 6,141 / 2 / 20 and 6,163 collected. Delta +29, accounted entirely
+by collection diff: 18 in `test_owned_tmux_ledger.py`, 7 in the forwarder
+invariant's deleted-name list, 3 in `test_sessions_package_rules.py` (one more
+module in the package, three rules each) and 1 in `test_no_unresolved_names.py`.
+ZERO tests removed. The two failures are the known environmental pair. Node
+200/200, `check-js-syntax.sh` clean. The three listing cost ceilings pass.
+`scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Plan versus code, and the code won twice.**
+1. The plan's mutation for this slice is "make the atomic write skip the `.bak`.
+   If nothing goes red, the rule that protects the user's whole setup is
+   undefended." THERE IS NO `.bak` IN THIS WRITE. `_write_metadata_atomic` was
+   tmp plus `fsync` plus `os.replace` and never had one; the `.bak` belongs to
+   `Settings.update_settings_config` in `src/config.py`, which is slice S5. The
+   invariant that IS here is the atomic rename, and mutation 2 above is the test
+   of it.
+2. The plan says "9 test files, 2 `src` call sites". The `src` count is exactly
+   right. A plain attribute grep finds 13 test files, but re-measured with the
+   plan's own methodology (accesses through a variable named `manager`, `sm`,
+   `session_manager` or `mgr`) it is 9 on the nose. The extra four are two
+   docstring-only mentions and two files using other variable names, plus
+   `test_session_ownership_origin.py`, whose reach is source text rather than an
+   attribute and which a name-grep of either kind would have missed.
+
+**What is NOT done, said out loud.** `SessionManager._datastore_connection` and
+`_writable_datastore_connection` survive with about 28 callers across clusters
+this slice does not own; the ledger reaches the datastore through the
+`SessionRecordStore` port instead, so the ONE ownership caller moved and the
+private pair keeps the rest until their own slices. And `routes.py` still guards
+`active_tmux_names` with `hasattr` two lines from the call this slice edited;
+that name belongs to S4 and removing its tolerance here would change behaviour
+outside this slice.
+
+## 2026-09-10 - backend decomposition v2, slice S4: the registry's second half
+
+`src/core/sessions/registry.py` grows from 187 to 441 lines and now owns the
+LIVE SESSION TABLE as well as the log buffers: `sessions`, `backends`,
+`subscribers` (was `_subscribers`), `last_session_id` (was `_last_session_id`),
+the registration path, every lookup, the "current session" pointer with its
+self-repair, the output fan-out and `registered_ids_for_tmux_name`.
+`src/core/session_manager.py` goes **7,725 to 7,589**, and twelve members are
+gone from the class: `current_session`, `current_backend`, `session`, `backend`,
+`get_session`, `get_backend`, `list_sessions`, `_resolve_session_id`,
+`_register_session`, `_registered_ids_for_tmux_name`, `subscribe_output`,
+`unsubscribe_output`.
+
+**No copy and no forwarder.** All 82 internal reads go through
+`self._registry`, and `__init__` creates none of the four containers - a new
+test parses `__init__` and fails if it ever does, because an attribute
+assignment is invisible to the existing forwarder SHAPE walk. `AppServices`
+needed no new field: the registry has been on it since S0, so the composition
+root already hands the same object to both sides.
+
+**Three methods stayed and none is a forwarder.** `_make_output_handler`
+builds a per-session closure over `publish`, which is real work rather than a
+forward. `idle_watcher` and `adopt_fifo_start_offset` each reach TWO
+collaborators (the registry for which session is current, the sidecars for what
+is attached to it), so neither belongs on either one alone.
+
+**The no-copy legs are chosen for this data, and there are five.** What can go
+wrong here is not a wrong value, it is TWO CONTAINERS: two dicts written
+through one path agree forever and diverge only when a create through the
+manager meets a boot re-adopt through the registry, which is the 22-rows-for-21
+-panes shape. So: (a) identity, kept only as the cheap canary; (b) FORWARD,
+write through the manager and read through a registry reference captured
+BEFORE that write; (c) REVERSE, write through the registry and read through
+`has_active_session` / `is_session_live` / `active_tmux_names`, which walk the
+dicts themselves; (d) TWO REFERENCES ONE PANE, register one tmux name under two
+ids through two different references and require the query to see both, which
+is the plan's named negative control and a no-copy leg at once; (e) DELETION,
+because `pop` on a copy leaves the original populated and an add-only suite
+cannot see that. (d) carries its own control: an unregistered name finds
+nothing, and `also` naming an id with no backend is refused.
+
+**Five mutations, five RED, every revert byte-identical by sha256.** Reverted
+from `.pristine` copies, never with `git checkout`.
+1. The composition root hands the manager a DIFFERENT registry from the one in
+   `AppServices`: 5 red across `test_composition_root` and
+   `test_lifespan_composition`.
+2. `registered_ids_for_tmux_name` returns only the first match: 2 red,
+   including the PRE-EXISTING `test_adopt_rekey_stored_id`.
+3. `forget` stops repairing the current pointer: 1 red.
+4. `publish` fans out to every subscriber instead of the session's own: 4 red,
+   including the pre-existing `test_session_backend::
+   test_concurrent_sessions_output_isolation`.
+5. THE NO-COPY ONE: `register` writes into `dict(self.sessions)` and rebinds.
+   **Leg (a) stayed GREEN** - both spellings still read one attribute on one
+   object at any instant - and legs (b) and (e) went red. That is the whole
+   argument for choosing legs per slice rather than reusing an `is` check.
+
+**Ten defensive readers repointed, and NINE of them were invisible to the first
+sweep** because they were spelled `getattr(manager, "backends", None)` rather
+than `manager.backends`. Every one would have answered empty instead of
+raising: `session_view_clears` (twice - a view would have stopped clearing any
+flag), `session_status_seed_read`, `session_agent_infer_apply`,
+`claude_title_sync_apply`, `local_servers`, `status_routes` (twice),
+`away_routes` (twice) and `routes.py`. `read_alternate_screen` now takes the
+REGISTRY rather than the manager, because a `callable` guard on `get_backend`
+answers None for a moved method and a real refusal identically. The
+`hasattr(session_manager, "active_tmux_names")` guard that the S3 entry flagged
+as belonging to this slice is gone, and the `elif` behind it was dead code.
+
+**Patch sweep clean.** No `patch(`/`patch.object(` in the suite aims at any of
+the twelve deleted names. One monkeypatch repointed:
+`test_boot_readopt.py` patched `mgr._register_session` and now patches
+`mgr._registry.register`. Both node source-text guards
+(`test_launchpad_help_content`, `test_session_ownership_badge`) still match
+without edits, checked rather than assumed.
+
+**Verification.** Control MEASURED on this tree before any edit: 6,169 passed /
+3 failed / 20 skipped, 6,192 collected. After: **6,200 passed / 2 failed / 20
+skipped, 6,222 collected**. Collection diff is exact: +31 added (14 in the new
+`test_session_registry_live.py`, 16 parametrised cases in
+`test_no_cluster_forwarders.py`, 1 rename replacement), -1 removed, and the
+removed one is `test_open_ids_tolerates_a_manager_with_no_backends_dict`
+RENAMED to `test_open_ids_is_empty_when_nothing_is_registered` in the same
+file. **ZERO tests removed.** The two remaining failures are the known
+environmental pair. The control's third failure,
+`test_boot_readopt_real_tmux::test_attach_to_a_dead_pane_still_succeeds`,
+passed after the change: it drives the real `cloude` socket and is the
+INFRA-49 flake class, not a regression either way. Node 200/200,
+`check-js-syntax.sh` 227 files clean, four listing cost ceilings pass,
+`scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+**Plan versus code, and the code won twice.**
+1. The plan says "31 test files touch these attributes but only 41 times".
+   Re-measured today with the plan's own methodology it is **37 files and 138
+   hits**, three times the stated reach. Wide and shallow was right; the number
+   was not.
+2. `src/core/sessions/registry.py`'s own module docstring said the second half
+   was slice "S7", which is version 1 numbering. Under plan v2 it is S4. The
+   docstring is rewritten rather than left to become the stale-doc trap gotcha
+   8 warns about.
+
+**What is NOT done, said out loud.** `test_session_registry.py`'s legs (a) and
+(c) became degenerate when S1 deleted the forwarders - both sides of each
+assertion now read `manager._registry` - and this slice did not repair them,
+because they belong to the log-buffer half and the real legs for the live table
+are in the new file. Worth a follow-up.
+
+## 2026-09-10 - backend decomposition v2, slice S5: src/config.py into src/config/
+
+`src/config.py`, 2,112 lines, is DELETED. In its place a 23-module package:
+13 typed `config.json` blocks and the one named error in their own files
+(bodies byte-exact, carved by source span including the comment above each,
+the same machinery slice S2 proved on `src/models.py`), and the 1,426-line
+`Settings` split into a LOADER plus typed READERS - `auth_loader`,
+`state_paths`, `agent_command`, `config_file`, `config_writes`, `summary`,
+`wrappers`, `provider_models`, `bootstrap`. `__init__.py` is a 73-line
+re-export, so not one of the 111 importers changed.
+
+**PROOF THAT NOTHING MOVED: A FINGERPRINT, NOT A READING.** Every public
+name the flat module exposed was recorded before and after - pydantic json
+schema, field annotations and defaults for all 13 models, plus all 31
+`Settings` method signatures and all 19 field annotations. Over the 21
+shared public names there is exactly ONE difference, and it is an
+improvement the standards require: `_mutate_wrappers(self, mutation)` gained
+`mutation: Callable[[List[dict]], List[dict]]`.
+
+**THE FINGERPRINT EARNED ITS KEEP IMMEDIATELY.** The first run found FOUR
+models whose schema would no longer build - `AgentsConfig`, `AuthConfig`,
+`ProjectConfig`, `WorkspaceConfig` - because a carved module did not import a
+name its annotations use (`AgentWrapper`, `Union`, `Literal`, `Dict`). They
+became unresolved ForwardRefs. Every one of those models still CONSTRUCTED
+fine, so the suite was green on three of the four; only a schema build says
+so. This is the S2 trap restated: a package split fails by an annotation
+resolving somewhere new. A fifth, `default_terminal_commands` missing in
+`auth.py`, was caught by `test_no_unresolved_names.py` and would have been a
+NameError the first time that default fired.
+
+**37 NAMES THE FLAT MODULE LEAKED ARE NOT RE-EXPORTED** - its own imports
+(`json`, `os`, `Path`, `Field`, `TerminalCommand`, `MODEL_ID_PATTERN`,
+`wrapper_store` and the rest). Checked rather than assumed: zero of the 37 is
+imported from `src.config` anywhere in `src/`, `tests/`, `scripts/` or
+`macOS/`.
+
+**DUPLICATION REMOVED, AND THE BIGGEST ONE HAD NO TEST UNDER IT.**
+`load_auth_config` carried the four-line malformed-block pattern TWELVE
+times. It is now `auth_loader.parse_block`, with the event name and the log
+payload as arguments because those genuinely differ - a workspace env VALUE
+can be a secret, so that block logs key names only. **Measured before
+touching it: 21 test files reach `load_auth_config` and NOT ONE asserts any
+of the twelve `invalid_*_config_block` fallbacks.** The whole degraded path
+was unmeasured. `tests/test_config_block_tolerance.py` is 20 new tests over
+it, including the two extremes pointing OPPOSITE ways on purpose (a mangled
+`message_archive` yields disabled, the safe direction; a mangled `ui` yields
+the ALL-DEFAULT object, because an unparseable block must not be able to HIDE
+a capability) and the negative controls: a valid block round-trips, a missing
+file and invalid JSON and a missing secret are all still REFUSED. Also
+collapsed: four copies of the "run setup_auth.py" `FileNotFoundError`, four
+of the invalid-JSON wrap, and TWO copies of the atomic write, into
+`config_file.py`.
+
+**SEVEN MUTATIONS. THREE RED IMMEDIATELY, FOUR CAME BACK GREEN, AND ALL FOUR
+WERE A MISSING TEST RATHER THAN A MEANINGLESS MUTATION.** Reverted from
+`.pristine` copies, never `git checkout`; every revert byte-identical by
+sha256.
+1. RED. The plan's named mutation: the atomic write stops making the `.bak`.
+   Two tests. (Note this IS the write that has a `.bak`; the S3 entry
+   recorded that the plan had aimed the same mutation at the session-metadata
+   write, which never had one.)
+2. GREEN, then RED. The write stops being atomic - in place instead of
+   tmp-plus-rename. Green because BOTH PATHS PRODUCE IDENTICAL FINAL BYTES;
+   they differ only when the write does not finish, which no outcome
+   assertion can see. Two new tests stage the difference: a serialisation
+   that fails part way must leave `config.json` untouched, and the
+   destination must never be opened for writing at all.
+3. RED. `parse_block` stops falling back: 14 red.
+4. RED. The state-file pin stops sticking: 3 red, including the two that
+   exist because a re-derived pin silently MOVED `session_metadata.json`.
+5. GREEN, then RED. `get_agent_command` resolves the state directory
+   EAGERLY. Green because no test had ever made that resolution FAIL, which
+   is the only thing the laziness protects: `get_state_dir` raises on an
+   unwritable directory, and the wrapper-less branch has no scripts
+   directory to need. A launch that always worked would start failing on
+   the box least able to afford it.
+6. GREEN, then RED. A writer stops invalidating `_auth_config_cache`. Green
+   for a precise and worrying reason: `test_config_settings.py`'s fixture
+   EMPTIES the cache before every test, so no test in that file had ever
+   exercised a WARM cache - which is the only state a running server is in
+   after its first read. The new test warms it first; without the
+   invalidation the PATCH writes correctly and reports the PRE-write value
+   straight back.
+7. GREEN, then RED. The merge stops re-validating, so a block pydantic
+   refuses reaches disk and the next load quietly falls back to that block's
+   defaults - the user's notifications setup gone with no error anywhere.
+
+**THE ONE RULE THIS SLICE COULD NOT MEET, SAID PLAINLY.**
+`src/config/settings.py` is **632 lines, over the 500-line guideline**. It is
+109 lines of pre-existing field declarations plus 31 typed entry points
+averaging 13 lines; every method BODY is gone. It cannot go lower without
+either inheritance (banned) or deleting `Settings`' public surface and
+migrating its ~45 callers - Rule B applied to `Settings`, which plan v2's S5
+does not specify and which is its own slice. Measured reason the surface has
+to stay: 111 modules import from this package and the suite patches these
+members on the CLASS, 23 sites on `state_dir_override`, eight on
+`type(sm.settings).get_state_dir`. **This needs the owner's call**: accept it,
+or schedule S5b to migrate the callers. Recorded in CLAUDE.md as a known
+measured exception so the next agent does not read it as drift.
+
+**CARVED OUT, DELIBERATELY.** Plan v2's S5 also asks for a validated
+`AgentChoice` value object that only `validate_agent_choice` can construct.
+That is a typed-API change threading through four restart paths, not a
+relocation, and folding it into a commit that moves 2,112 lines would make a
+failure unattributable to either half. Not done, not hidden.
+
+**Two other things found and fixed rather than left.**
+`test_config_defaults_source_of_truth.py` sliced the loader with
+`source.index("\n    def ")`; it now slices by AST. Its known HOLE is
+recorded in the test: the four blocks read through a CONSTANT (`ui`,
+`workspace`, `server_prefs`, `message_archive`) are invisible to its regex
+AND absent from `supported_keys()`, so the two agree by both being blind.
+And `socket.gethostname()`'s `except Exception` narrowed to `OSError`, which
+is what it raises.
+
+**Verification.** Control for this slice is the S4 commit, measured: 6,200
+passed / 2 failed / 20 skipped, 6,222 collected. After: **6,248 passed / 2
+failed / 20 skipped, 6,270 collected.** +52 added (20 tolerance, 4 config
+settings, 2 agent families, 26 from `test_no_unresolved_names.py`, which is
+parametrised over source FILES and the package has 22 more of them), -4
+removed, and all four are the SAME parametrised test's ids being
+re-disambiguated by pytest (`agents.py` became `agents.py0`/`agents.py1`
+because the name now exists in two places). **ZERO tests removed.** The two
+failures are the known environmental pair. Node 200/200, four cost ceilings
+pass, `scan_secrets.py` exit 0, pre-commit hook left enabled.
+
+---
+
+## 2026-09-10 - the S5 settings question, RULED and closed
+
+The owner was shown the one open question S5 left and ruled on it, verbatim:
+**"Leave it it's ok"**.
+
+`src/config/settings.py` stays at 632 lines. It is the ONE ruled exception to
+this project's 500-line rule and it is not a precedent for any other file.
+Recorded in three places so nobody, on either side, "fixes" it later:
+
+- `docs/DECISIONS.md`, entry "`src/config/settings.py` stays over 500 lines".
+  The file binds both teams. Its exact blob was carried across from
+  `feat/work-protocol` and the entry APPENDED, so a later merge stays clean.
+- `CLAUDE.md`, where the existing note was rewritten to read as a RULING with
+  the owner's words and the date, rather than as an observation someone could
+  take as an invitation.
+- `.claude/notes/backend-decomposition-plan.md` section 11, FO1, as a future
+  OPTIONAL slice. Plan v2's exact blob was carried across from
+  `docs/backend-plan-v2` in the same commit, because the branch was still
+  carrying plan v1 while shipping plan v2's slices, and a stale doc is worse
+  than no doc.
+
+**The migration is NOT SCHEDULED.** Getting under 500 needs the 31 typed entry
+points deleted and roughly 45 callers migrated. That is Rule B applied to
+`Settings` and it is a test-suite migration wearing a refactor's clothes: 111
+modules import from the package and the suite patches these members on the
+CLASS, 23 sites on `state_dir_override` and eight on
+`type(sm.settings).get_state_dir`. A name that stopped resolving there fails
+silently, not loudly. If it is ever taken it gets its own slice, its own patch
+sweep and its own control.
+
+---
+
+## 2026-09-10 - S6 SHIPPED: the two route monoliths into siblings
+
+Plan v2's S6. `src/api/routes.py` **4,397 to 106** and `src/api/auth.py`
+**1,674 to 362**, into 29 new sibling modules plus two pure core modules.
+Both stopping-condition rows met (routes.py under 500, auth.py under 500).
+Largest new file is `hook_event_routes.py` at 441; every one is under 500.
+
+**THE PLAN CONTRADICTS ITSELF AND THE CODE SETTLED IT.** Section 3.4 says
+`src/api/routes/` (a package) while section 7 says "`src/api/routes.py`
+under 500". Those cannot both exist: a package shadows a module of the same
+name. `src/api/` already carries eleven `<resource>_routes.py` siblings and
+S6's own prose says "the eleven-sibling pattern the directory already has",
+so it is flat siblings with `routes.py` left as the aggregator. That keeps
+`from src.api.routes import router` resolving for `src/main.py` and ten test
+files, untouched.
+
+**ORDER IS PRESERVED BY CONSTRUCTION, and that is the fingerprint.** Modules
+are CONTIGUOUS runs of the original declaration order, so aggregating in
+that order reproduces the table exactly. Two resources were not contiguous
+and keep a second router rather than moving:
+`provider_models_routes.local_models_router` (registered second) and
+`auth_routes.status_router` (`GET /auth/status`, registered between the
+clone route and the command lists). **Fingerprint: 51 routes, 18 auth
+routes and 99 openapi operations, IDENTICAL before and after on path,
+method set, endpoint name, response model, status code, dependency count,
+response class, schema inclusion AND position.**
+
+**NOTHING IS RE-EXPORTED FROM THE AGGREGATOR BUT `router`.** A re-export
+would let `monkeypatch.setattr(routes_mod, "_bundled_themes_root", ...)`
+go green while patching a name the handler no longer reads. Every such
+site was repointed at the module that owns the name.
+
+**auth.py IS NOW THE AUTHORITY AND DECLARES NO ROUTER.** 83 call sites
+import `require_auth` from it, so every auth-side route module depends on
+it; a router there would need the imports back and the cycle would only
+resolve by ordering them at the bottom of the file. `auth_routes.py`
+assembles that side instead. Acyclic, and `test_api_route_modules.py`
+enforces it.
+
+**Two decision halves lifted to pure modules**, per the plan's S6.
+`src/core/hook_event_presentation.py` is the toast copy;
+`src/core/hook_toast_gate.py` is the mute-then-subagent ladder, which had
+no test of its own because it was reachable only through an HTTP POST.
+`tests/test_hook_toast_gate.py` is 18 cases and over half of them are
+negative controls: a gate that suppressed broadly would pass every "it
+went quiet" test and rebuild the false-silence failure.
+
+**A REAL DEFECT FOUND, not introduced.** Five siblings inherited a
+FUNCTION-LOCAL `from fastapi.concurrency import run_in_threadpool` - nine
+of them across the five - which is the exact defect
+`tests/test_route_names_resolve.py` was written for: the next handler in
+that module uses the name and NameErrors into a bare 500. Hoisted to module
+scope and the local imports deleted.
+
+**Three structural tests were pointed at a file that no longer holds what
+they check**, and all three would have gone quietly useless:
+`test_route_names_resolve.py` (hardcoded `src/api/routes.py`, now
+discovers every module declaring a router and parametrises over 46),
+`test_docs_operations_chart_drift.py` (a seven-entry `ROUTER_FILES` tuple,
+now discovered the same way), and `test_rename_writes_label_not_tmux.py`
+plus `test_session_fork.py` and `test_configured_wrappers_path.py`, which
+AST-parse a named source file.
+
+**Patch sweep: 22 sites across 19 files, and the first grep found 13 of
+them.** The nine it missed were spelled through a different alias
+(`from src.api import routes as routes_module`) or reached a name the
+literal grep did not contain. A second sweep by AST - resolve each file's
+alias for the module, then check every attribute against the aggregator's
+real namespace - found the rest and now reports zero.
+
+**Mutations.** (1) Delete one `include_router` line: red on
+`test_the_aggregator_actually_serves_what_it_assembles`. It ALSO exposed a
+hole in the new test's own per-module case, which skipped instead of
+failing because it inferred "mounted elsewhere" from having no aggregated
+routes - which is what a deleted include looks like. Replaced with an
+explicit register of the modules `src/main.py` mounts directly; the
+mutation is now red twice. (2) Strip a module-scope import from a sibling:
+red on `test_every_route_handler_resolves_its_helper_names` for that
+module, proving the generalisation actually covers the new files. Both
+reverted by hunk and verified byte-identical by sha256.
+
+**Imports are emitted PER NAME.** The first pass copied whole statements,
+so any sibling needing one model got all fifty names of
+`from src.models import (...)` - the monolith's coupling surface handed to
+every file. `themes_routes.py` went from 253 lines to 202 on that change
+alone.
+
+**Verification.** Control MEASURED on this branch at `a1bf306`: 6,248
+passed / 2 failed / 20 skipped, 6,270 collected. After: **6,478 passed /
+2 failed / 76 skipped, 6,556 collected.** +289 added, -3 removed, and all
+three "removals" are accounted: two are `test_route_names_resolve`'s
+un-parametrised ids being replaced by 92 parametrised ones, and one is a
+parametrised id that embeds the worktree path. **ZERO tests removed.** The
++289: 147 `test_api_route_modules.py` (new), 92
+`test_route_names_resolve.py` (2 tests over 46 route modules), 31
+`test_no_unresolved_names.py` (parametrised over source FILES, and there
+are exactly 31 new ones), 18 `test_hook_toast_gate.py` (new), 1 the
+worktree-path id. The two failures are the known environmental pair. Node
+200/200 as CI runs it, four listing cost ceilings pass, `scan_secrets.py`
+exit 0, pre-commit hook left enabled.
+
+**Not done, and said out loud.** `src/api/recreate_routes.py` (582) and
+`src/api/websocket.py` (675) were already over the guideline and are not in
+this slice's lane. They are on an explicit register in
+`test_api_route_modules.py` with their measured size, so they are visible
+and may not GROW; a register that tolerates any number is the rule deleted
+with extra steps.
+
+---
+
+## 2026-09-10 - S7 SHIPPED: HookTokenAuthority
+
+Plan v2's S7. The four pieces of hook-token state and the eight methods
+that touch them off `SessionManager` and onto
+`src/core/sessions/hook_token_authority.py`, 447 lines.
+**`session_manager.py` 7,589 to 7,294**, and the 291 lines it lost are the
+methods themselves, not a forwarder block: nothing forwards, and the
+facade keeps no copy of any of the four.
+
+**THE INVARIANT IS NOW STRUCTURAL.** `mint` is the only writer of a
+secret, `keep` re-binds a tmux name and cannot reach one, `recover`
+accepts a superseded value once and never mints. That separation is what
+ended the 4h24m outage of 2026-09-08 (a derived-id adopt minted at
+16:16:40.633984Z, the first rejection 130 ms later, 4,325 more until the
+owner restarted the pane by hand), and it used to be a comment.
+
+**THE PLAN SAID "zero `src/` reach". IT IS FOUR.** Measured here:
+`session_boot_readopt.py` (two, one of them a WRITE through
+`.setdefault`), `claude_title_sync_apply.py`, `session_status_seed_read.py`
+and `hook_event_routes.py`. **THREE OF THE FOUR ARE DEFENSIVE READERS
+SPELLED `getattr(manager, "_hook_tmux_names", None) or {}`**, so a grep
+for the plain attribute finds ONE of them. Left alone, each would have
+gone on answering `{}` forever: the title sync would stop resolving a
+pane's name, the status seed would lose its instance identification, and
+the boot re-adopt would hold nothing - all silently, all green. Repointed
+onto `authority.name_for` / `authority.tmux_names`, with the TOLERANCE
+KEPT and now pointed at `hook_tokens`, because a caller may still inject a
+manager double that has no authority and that must answer "nothing
+recorded" rather than raise.
+
+**`get_env_for_spawn` STAYS ON THE MANAGER, against the plan's listing.**
+It is 60 lines of workspace-env composition - the user's global env, the
+development root, the default shell, the LM Studio address - with three
+lines of token in it. Only the token acquisition moved, as
+`authority.token_for_spawn`. Moving the whole method would have put the
+workspace settings layering inside a credential module.
+
+**The gc's one outside reach became a callback.** It used to pop
+`manager._instance_epochs` inline; the authority now takes `on_drop` and
+returns the ids it dropped, so the collaborator does not know that cache
+exists.
+
+**Rule A, four legs, chosen for THIS data.** Identity (no `_hook_tokens`,
+`_hook_tmux_names`, `_hook_tokens_durable` or `_superseded_hook_tokens`
+left on the manager); FORWARD (mint through the authority, read back);
+DELETION (pop through one reference, read through the other - the leg that
+actually caught S4, because writing into `dict(...)` leaves every
+add-only assertion green); and the TMUX NAME MAP separately, because
+`keep` re-binds a name without touching a secret and a copied name map
+would pass every token assertion while losing the only durable record of
+which pane an id was injected into.
+
+**Mutations, four, and one judged.**
+(A) `keep()` calls `mint()` - the one the plan names: RED on
+`test_keep_does_not_rotate_the_secret` plus both re-key tests in
+`test_adopt_rekey_stored_id.py`. (B) `recover()` accepts broadly, the
+credential bypass: RED on 7, four of them pre-existing. (C) gc treats an
+unreadable metadata file as `owned = set()`: **GREEN, and judged
+MEANINGLESS rather than a missing test** - the `if not owned: return []`
+guard two lines below already catches an empty set, so the mutation
+changes no behaviour at all. Re-run as (C2) with `owned = {"__unreadable__"}`,
+which is what "actioned as nothing is owned" really looks like: RED on
+`test_an_unreadable_owned_list_keeps_every_token`. (D) `compare_digest`
+replaced by `==`: RED on `test_validate_hook_token_uses_compare_digest`.
+Every revert verified byte-identical by sha256
+(`75538bef4d66edc082318df202df14fa9b53664536b1a526859abec1d50f9ac7`).
+
+**Negative controls, both the plan's and two more.** A forged token of the
+RIGHT LENGTH is refused; `recover` refuses a value this process never
+minted (`no_match`); refuses a superseded value against a DIFFERENT pane;
+and refuses with `unavailable` when there was nothing to search - kept as
+a separate word because a check that could not run must never read as one
+that ran and cleared.
+
+**Test-side sweep: 13 files, 88 lines.** Two test doubles had to grow a
+real authority rather than a stand-in:
+`test_claude_title_sync_apply.py`'s `_FakeManager` and
+`test_workspace_env_reaches_terminal.py`'s `SessionManager.__new__`
+construction, which skips the constructor entirely.
+
+**Verification.** Control is the S6 commit `e859106`: 6,478 passed / 2
+failed / 76 skipped, 6,556 collected. After: **6,498 passed / 2 failed /
+76 skipped, 6,576 collected.** +20 added, **ZERO removed**: 16 the new
+`test_hook_token_authority.py`, 1 `test_no_unresolved_names` (one new
+source file), 3 `test_sessions_package_rules` (one new package module,
+three rules). The two failures are the known environmental pair. Node
+200/200, four listing cost ceilings pass, `scan_secrets.py` exit 0.
+
+**Prose repointed in 6 src files.** Every ``_mint_hook_token`` /
+``validate_hook_token`` / ``_hook_tmux_names`` reference in a docstring or
+comment now names the authority. A stale doc sends the next agent to write
+a bug.
+
+---
+
+## 2026-09-11 - CORRECTION: 22 of S6's new skips were a coverage hole
+
+Raised in review: skips went 20 to 76 across the round and the S6 report
+accounted for every ADDED test and not one skipped one. A skip is a test
+that does not run, and this round had already been bitten once by exactly
+that shape.
+
+**The full breakdown, from a run taken for this purpose (`pytest -q -rs`),
+before the fix. 76 total.**
+
+| count | reason | new? |
+|---|---|---|
+| 33 | `<module> does not use run_in_threadpool` | NEW, S6 |
+| 22 | `<module> is mounted onto the app by src/main.py` | NEW, S6 |
+| 9 | `CLOUDE_REAL_HOOK_TESTS` not set | pre-existing |
+| 4 | a non-object jsonl line has no key order | pre-existing |
+| 4 | corpus fidelity, no `CLOUDE_FIDELITY_DB` on this box | pre-existing |
+| 1 | `rsvg-convert` not installed | pre-existing |
+| 1 | playwright/chromium absent | pre-existing |
+| 1 | the root is allowed to be the root | pre-existing |
+| 1 | `routes.py` IS the aggregator | NEW, S6 |
+
+Pre-existing total is 20, which is the baseline figure exactly. S6 added
+56 and S7 added none.
+
+**THE 22 WERE A COVERAGE HOLE WEARING A SKIP, and it is the SAME defect I
+had already fixed once in this round, one layer out.** The first version
+of `test_every_router_a_sibling_declares_reaches_the_application` INFERRED
+"mounted elsewhere" from a module having no routes in the aggregator,
+which is what a deleted include looks like; mutation caught it and I
+replaced the inference with an explicit register. The register was still
+wrong: it turned "I decided not to check this one" into 22 silent
+non-assertions covering every archive route, the whole auth side, the
+projects routes, the clone flow and the settings write. Fixing the
+inference and keeping the exemption fixed the symptom.
+
+**The fix removes the exemption rather than justifying it.** The test now
+asserts against the ASSEMBLED APPLICATION (`src.main.app`) instead of this
+package's aggregator. A sibling reaches the app three ways - through
+`src/api/routes.py`, mounted directly by `src/main.py`, or through another
+sibling's router such as `auth_routes` or `archive_routes` - and only the
+application knows about all three, so no register and no exemption is
+needed. The only remaining conditional is `ARCHIVE_GATED`, six modules
+`src/main.py` mounts behind `MESSAGE_ARCHIVE.enabled`, named WITH THEIR
+CONDITION; `conftest.py` sets `CLOUDE_MESSAGE_ARCHIVE=1`, so under pytest
+they are mounted and DO assert.
+
+**Mutation-proved on all three mounting paths**, the way the first one
+was. (1) `src/main.py` drops `toast_router`: RED on `[toast_routes.py]`.
+(2) `auth_routes.py` drops `projects_routes.router`: RED on
+`[projects_routes.py]`. (3) the main aggregator drops `themes_routes`: RED
+on `[themes_routes.py]` AND on the fleet count. Every revert byte-identical
+by sha256. Note (1) was ALSO caught by the pre-existing
+`test_client_called_routes_exist.py`, but only because the client happens
+to call that route; nothing covered a router the client never calls.
+
+**THE REMAINING 33 ARE NOT A HOLE, and that was proved rather than
+argued.** `test_run_in_threadpool_is_available_at_module_scope` asserts
+that a module which USES the name binds it at module scope; a module whose
+source never mentions it has nothing to assert. The skip is keyed on a
+MEASURED PROPERTY OF THE FILE, not on an absent precondition, and its
+companion `test_every_route_handler_resolves_its_helper_names` runs for
+all 46 modules and never skips. Measured: adding an unbound
+`run_in_threadpool` call to `health_routes.py` dropped the skip count 33
+to 32 and turned BOTH tests red. `routes.py IS the aggregator` is the
+cycle test declining to ask whether a file imports itself.
+
+**Question 4, answered plainly: no skip introduced here can hide a real
+failure on the owner's machine.** The 34 remaining new ones are keyed on
+the source text of the file under test, which is the same on every
+machine. The 20 pre-existing ones are honest could-not-evaluates: an
+opt-in variable, a database this box does not have, two absent binaries.
+
+**Verification.** Before: 6,498 passed / 2 failed / 76 skipped, 6,576
+collected. After: **6,520 passed / 2 failed / 54 skipped**, same 6,576
+collected - the 22 skips became 22 passes and nothing else moved. The two
+failures are the known environmental pair.
 ---
 
 ## 2026-09-10 - v1.2.0 and v1.2.1 PUBLISHED on ccsliinc/CloudeCode
@@ -6637,6 +8329,1071 @@ NOT CHANGED THIS ROUND: the owner has not ruled on where it should point.
 would want the same ruling.
 
 
+## 2026-09-09 - 1.2 merge decisions (owner), adamdev/master at 887b8fc
+
+Comparison reports: `.claude/notes/compare-1.2/{status-led,sidebar,toasts-launchpad-terminal,backend,non-overlap}.md`.
+Owner's answers, verbatim: "1. his. 2. keep, make a setting. 3. mine. 4. yes. 5. yes you can. make sure you use his latest."
+1. Unread rides the OUTER ring as a still green ring (HIS model); the `done` bucket and his status-key legend come with it. Supersedes the 2026-09-09 "ring means activity only" paragraph in CLAUDE.md, which must be rewritten, not left contradicting.
+2. Manual mark-unread control is KEPT, behind a setting (config toggle, default on).
+3. Sidebar row controls: OURS (kebab menu with restart). His inline pin/close icons and his removal of restart from live rows are NOT taken.
+4. Dead rows go to Recent (ours). His dead-row restart surface on the live list is not taken.
+5. His CI hardening, skip audit and pytest.ini changes are taken; re-baseline the test counts in CLAUDE.md afterwards.
+6. Version: 1.2 must sort above his v1.0.36.
+- [ ] Merge on `release/1.2` (worktree off `v1.1`), then validate, deploy live, tag.
+
+## 2026-09-10 - 1.3: the plugin surface registry, and mark unread as its first plugin
+
+Branch `feat/svelte-1.3` (off `release/1.2`). Owner's decisions taken as
+given and not relitigated: plugins are build-time TypeScript modules on a
+typed registry, no dynamic loading, no manifest schema, no permissions
+system, no marketplace, no settings UI this round; themes are already
+expandable and are NOT rebuilt; the first plugin is the manual mark-unread
+control, keeping `ui.show_mark_unread_control` as its enable toggle.
+
+- [x] `web/src/lib/plugins/types.ts` - four surfaces (`session-card-action`,
+  `launchpad-panel`, `sidebar-item`, `status-source`), one payload type each,
+  `PluginContext` (flags + refresh) and `SessionCardRow` (name + unread, and
+  nothing a reader does not yet exist for). The three unproven surfaces carry
+  the smallest payload their consumer plainly needs and say so in the file.
+- [x] `web/src/lib/plugins/registry.ts`, 143 lines. `createRegistry()` factory
+  so no mutable singleton is exported and a test gets isolation with no
+  test-only `reset()`; order is `order` then `id`, never insertion; a
+  duplicate plugin id or contribution id is refused, logged, and refused ALL
+  OR NOTHING; `surfacesOf` returns a sorted copy.
+- [x] `web/src/lib/plugins/mark-unread/index.ts` - one `session-card-action`.
+  `enabled` reads `show_mark_unread_control` as `!== false`; `run` calls
+  `window.API.setSessionUnread` and then `context.refresh()`; label, glyphs,
+  class list and aria state are the shipped ones.
+- [x] Legacy wiring, no dual path. `client/js/session-row-menu.js` CONCATENATES
+  `window.CloudeWeb.sessionCardActions(row, context)` where the hardcoded
+  `markUnreadHtml` call sat, and routes `[data-plugin-action]` into
+  `window.CloudeWeb.runSessionCardAction`. DELETED in the same commit: that
+  builder call, the `[data-mark-unread]` dispatch branch,
+  `SessionSidebarClicks.onMarkUnreadClick` and its export, the sidebar's
+  `_onMarkUnreadClick` and the list keydown binding - the last two had been
+  unreachable since the control folded into the kebab menu.
+- [x] Slices 2 to 7 of the launchpad carve remain PAUSED. Nothing else moved.
+
+Measured on this branch, 2026-09-10:
+- vitest 88 passed / 0 failed (4 files), 29 of them new: 12 registry blocks,
+  17 surface blocks. svelte-check 0 errors 0 warnings over 269 files.
+- Node 197 suites, 0 failures, count unchanged because the row-menu
+  assertions EXTEND `tests/test_session_sidebar_rows.node.mjs` rather than
+  adding a 198th file. That sandbox now loads the REAL `client/dist/app.js`
+  beside the legacy modules (the emitted bundle has no import or export
+  statement, so it runs in a `vm`), so the mark-unread assertions are about
+  the shipped path and not a fixture.
+- pytest 2 failed / 5634 passed / 19 skipped, identical to this branch's
+  baseline; the two are the known environmental pair (`test_home_write_guard`,
+  `test_version_probe`).
+- Browser, real production CSP via a static server importing
+  `src.security_headers`: flag ON, the item renders from the plugin path,
+  is decorated into `role="menuitem"`, is visible, and a click on a row
+  painted unread called `setSessionUnread('cloude_harness', false)` once and
+  repainted once; flag OFF, the item is absent and the menu's other three
+  items are untouched. ONE CSP violation in the run and it is the deliberate
+  off-origin image negative control, so the collector is proven live.
+
+**Known gaps, recorded rather than papered over:**
+- `client/js/launchpad.js` still draws its own mark-unread through
+  `SessionStatusUI.markUnreadHtml` with its own `_handleMarkUnread`. That
+  screen is not migrated, so it keeps its path this round; the equivalence
+  test is what stops the two copies drifting. Moving it is the launchpad
+  slice's job.
+- Keyboard activation of the mark-unread item inside the row menu did not
+  work before this change and does not now: it is a `role` span in a panel
+  mounted on `document.body`, and the only Enter/Space handler was bound on
+  the sidebar LIST, which never saw it. Unchanged on purpose - this round is
+  a re-seat, not a fix - but it is a real gap and it is now the plugin
+  surface's to close.
+- Three of the four surfaces have no consumer. Their payload types are a
+  best guess and are marked as such in `types.ts`.
+
+## 2026-09-10: fix literal NUL bytes in tracked source (found by validation)
+
+`web/src/lib/plugins/registry.ts` had a literal NUL byte inside the
+contribution composite-key template literal (`` `${c.surface}<NUL>${c.id}` ``),
+which made `file`/`grep` classify the file as binary (plain `grep` returned
+nothing; `grep -a` was needed). A repo-wide byte scan of every tracked file
+under source/doc extensions found two more independently: `client/js/markdown-lite.js`
+(9 NULs - the `[\s\x00-\x1f]` char-class range plus the `\0CODE...\0` /
+`\0BLOCK...\0` stash sentinels) and `tests/test_restart_continuity_copy.node.mjs`
+(1 NUL, `[^\x00-\x7f]`). All replaced with the `\0` / `\x00` escape - runtime
+value unchanged, only the source encoding fixed. No separator character or
+key semantics changed; NUL-as-separator is the established, correct pattern
+here (same idea as the launchpad's tmux-name+epoch key).
+
+Added a Vitest test to `registry.test.ts` proving the composite key is
+`surface\0id`, not `surface + id` concatenated (negative control: mutating
+the source to drop the separator makes the test fail, confirmed then
+reverted). Added `tests/test_no_literal_nul_in_source.py` as a repo-wide
+guard (git-tracked text files only, `client/dist/`/vendored trees excluded),
+with a negative control against a planted NUL in a tmp file, plus
+parametrized checks on the three files this defect was found in.
+
+Rebuilt and committed `client/dist/app.js` (the fix reaches the compiled
+bundle; confirmed esbuild/vite preserved the `\0` escape rather than writing
+a literal byte in the minified output). `web/npm test`: 89/89 passed.
+`svelte-check --threshold error`: 0 errors. Node suites: 197/197 passed.
+`scripts/scan_secrets.py`: clean, exit 0. Full `pytest -q`: 5639 passed, 2
+failed (both the known environmental failures,
+`test_home_write_guard::test_guard_refuses_the_real_claude_settings_path_by_name`
+and `test_version_probe::test_current_version_empty_when_unresolvable`), 19
+skipped - nothing new introduced.
+
+## 2026-09-10 - BACKLOG: the idle warning goes full width when the sidebar is pinned
+
+Owner's report, verbatim: "also put into backlog the idle warning, is going
+full width when sidebar is pinned".
+
+- [ ] The idle warning bar spans the full viewport width instead of stopping at
+  the sidebar edge when the sidebar is PINNED (open and holding layout space).
+  It presumably renders against the viewport rather than against the content
+  column, so the pinned sidebar's gutter is not subtracted. Unconfirmed: the
+  exact element and whether it is a fixed-position bar or a flow element with a
+  width rule; measure before fixing, do not guess which of the two it is.
+- Not reproduced or diagnosed yet; recorded from the owner's observation only.
+- Related surfaces that already solve this correctly and are worth copying:
+  the sleep/wake away bar (`client/js/terminal-away-bar.js`) and the sidebar
+  gutter token `--sidebar-gutter`.
+- Fix belongs in the SVELTE rewrite if the affected screen has already moved by
+  the time it is picked up, since the vanilla client is being replaced screen by
+  screen (`.claude/notes/svelte-migration-launchpad.md`). If it still bites in
+  the vanilla client before then, a CSS-only fix is acceptable and expected to
+  be thrown away.
+
+## 2026-09-10 - the design notes were never in git, and now are
+
+`.gitignore:183` is `.claude/*`, so everything under `.claude/notes/` was
+UNTRACKED except `HANDOFF.md` (and `TODO.md`), which had already been
+force-added at some point. That meant the whole 1.3 roadmap and every
+comparison report existed only as loose files in ONE working tree, invisible
+from any other worktree, absent from every clone, and one `git clean -x` away
+from gone. Nobody had noticed because reading them from the main repo worked
+perfectly.
+
+Force-added onto `feat/svelte-1.3`:
+- `.claude/notes/svelte-migration-launchpad.md` (522 lines) - the seven-slice
+  carve plan for `launchpad.js`, the state model, the plugin seam, the KISS
+  calls. This is the 1.3 roadmap; losing it would mean re-deriving it.
+- `.claude/notes/plugins-and-themes-research.md` (174) - the herdr teardown and
+  why our themes were already extensible.
+- `.claude/notes/divergence-adamdev-2026-09-09.md` (118).
+- `.claude/notes/troubleshooting.md` (773) - the file CLAUDE.md tells every
+  agent to read before investigating, which no fresh clone has ever had.
+- `.claude/notes/compare-1.2/*.md` (6 files) - the per-subsystem verdicts that
+  the owner's 1.2 decisions rest on, plus the round-2 review of Adam's
+  performance work.
+
+- [ ] Decide whether `.gitignore`'s `.claude/*` should keep excluding notes by
+  default. Force-adding works but is invisible: a NEW note is silently
+  untracked again unless someone remembers `-f`. Options: narrow the ignore to
+  the genuinely local paths (`.claude/sessions/`, `.claude/logs/`,
+  `.claude/tasks/`) and track `notes/` normally, or keep the ignore and add a
+  guard test that fails when a file under `.claude/notes/` is untracked.
+  The second is cheaper and matches how this repo already guards things.
+
+## 2026-09-10 - StatusLed.test.ts split (500-line rule)
+
+- [x] `web/src/lib/StatusLed.test.ts` (635 lines) split along its own
+  describe() seams into four files, no assertion rewritten: `led-legacy-fixture.ts`
+  (62, shared vm sandbox loader), `StatusLed.drift-guard.test.ts` (52, the two
+  legacy-vocabulary-pin cases), `StatusLed.parity.test.ts` (152, the
+  byte-for-byte equivalence matrix), `StatusLed.behaviour.test.ts` (426, the
+  rest of "the vocabularies" + "markup per state" + "the mapping from server
+  signals"). All 39 original test names verified identical before/after via a
+  sorted-name diff (93/93 full-suite names matched). Mutation-tested the drift
+  guard post-split by adding a bogus `shimmer` entry to `OUTER_STATES` in
+  `client/js/status-led.js`: exactly 1 of 93 tests failed (the drift guard
+  case), reverted clean. svelte-check 0 errors, `client/dist` bundle unchanged,
+  node suite 200/200, `scan_secrets.py` clean. Committed `e143ceb` on
+  `feat/svelte-1.3-on-121`.
+
+## 2026-09-10 - the string layer (i18n foundation), issue #61 / PR #62
+
+Owner's direction, verbatim: "making classsed code and probably should have
+language vars if we can get this to be bigger and people want to use this".
+Architecture only; no translations written. Landed BEFORE slice 2 of the Svelte
+migration on purpose, so slices 2 to 7 port their screens straight into it
+instead of every file being rewritten twice.
+
+- [x] ONE catalog both clients read: `client/js/i18n/catalog.en.js`, a plain ES
+  module of flat dotted keys, data only. Four readers, no build step for
+  `client/`: Vite imports it, `boot.js` publishes it to the legacy tree as a
+  same-origin module script, vitest imports it, and the `.node.mjs` suite
+  imports it and injects it into its `vm` sandboxes. That last one is what made
+  this shape work, and it is why the catalog is not JSON and not a classic IIFE.
+- [x] Keys name what a string MEANS, never the screen it is on, so they survive
+  slices 2 to 7. Flat so `grep -rn` finds every use across both trees.
+- [x] No library: `Intl.PluralRules` + `Intl.NumberFormat`, both memoized. Every
+  ICU runtime compiles with `new Function`, which `script-src 'self'` refuses.
+  Plural sets are keyed by CLDR category with `other` mandatory.
+- [x] Missing key renders the KEY, loudly (deduped `console.error`), never
+  throws. Missing runtime does the same, and never a second string table.
+- [x] Locale is browser-local through a ladder (localStorage override,
+  `navigator.languages` prefix-matched, then `en`). NOT the settings block: it
+  must resolve synchronously at first paint, and #43 is redesigning that block.
+  The ladder is the seam for making it a server preference later.
+- [x] Ported surface, chosen by MEASUREMENT rather than by suggestion: the group
+  summary label (`summaryHtml`). It carries an explicit zero, a seven-key
+  lookup, a plural with a count and a second count, and it was the only
+  candidate with just ONE node-test sandbox to update. The alternative,
+  `session-status-ui.js`, had 17.
+- [x] Sentence ASSEMBLY is shared too, not just the copy:
+  `client/js/labels/session-summary.js` is imported by the Svelte tree and
+  reached by the legacy tree through `globalThis.CloudeLabels`. One function,
+  one catalog, two callers.
+- [x] Pseudo-locale, DERIVED from en so it cannot go stale, wrapping and
+  lengthening by 40 percent so it finds unextracted strings and layout that
+  cannot take a longer language in one pass.
+- [x] MUTATION-PROVEN, and the result changed the design. A literal returned at
+  the top level fails all three checks. A literal interpolated INTO another
+  message PASSES the balanced-span check, because the outer message wraps it,
+  and is caught only by the bracket-COUNT assertion and the source scan. The
+  count assertion exists because that mutation was run, not because it was
+  predicted. Reverted byte-identical, suite green.
+
+Verified: `npm test -- --run` 147 passed / 11 files (baseline was 93 / 7, so 54
+added and none broken). `svelte-check --threshold error` 0 errors, 284 files.
+`npm run build` then `git status --porcelain client/dist` empty after committing
+the rebuilt bundle; `./scripts/web-build-check.sh` exit 0. Node suite as CI runs
+it: no FAIL lines, including `test_archive_full_page_mode.node.mjs`, which
+CLAUDE.md records as pre-existing-failing and which passed here.
+`pytest -q tests/test_no_remote_assets.py` 15 passed. `scan_secrets.py` exit 0,
+1448 files. `node --check` on all nine JS files touched.
+
+Open items, stated rather than discovered:
+- [ ] The reactive repaint is proven at the module level (subscription fires,
+  `t()` returns the new locale's string) but NOT by a MOUNTED component, because
+  vitest runs in `node` and jsdom would be a new dev dependency bought to
+  re-test Svelte's own core promise. The first component slice 2 ports is where
+  that last link gets exercised for real.
+- [ ] Server strings are out of scope and the reason is data, not effort: toast
+  bodies are STORED, so translating at write time is wrong and at read time is a
+  schema change. `.claude/notes/i18n-design.md` section 7 prices it.
+- [ ] RTL is a CSS project, not a string project: `client/css/` holds 235
+  physical-direction declarations across 49 files and 16,924 lines, and zero
+  logical equivalents. Nothing here blocks it.
+- [ ] Only ONE surface is ported. The other 12 files carrying `n === 1 ? ...`
+  plural ternaries (launchpad.js, toast.js, terminal-away-gap.js,
+  session-sidebar-groups.js and the rest) are untouched by design; each is a
+  slice's own step 1.
+
+## 2026-09-10 - svelte slice 2: the recent sessions section, ported into the string catalog
+
+Issue #67, PR #68 on `Adoom666/CloudeCodeDev` (the primary; also mirrored to
+`origin`). Branched off `feat/i18n-foundation` (`3cd61a4`), which is PR #62 and
+not merged, so #68 targets `master` ONLY because GitHub refuses to auto-link
+`Closes #N` on a pull request that does not target the default branch - and that
+link is what tells the other side the issue is taken. First attempt targeted
+`feat/i18n-foundation` and polled eight times for a linkage that could never
+appear; worth knowing before someone else loses four minutes to it.
+
+**What moved.** 792 legacy lines deleted. Out of `client/js/launchpad.js`:
+`loadRecentSessions`, `_renderRecentSessionRowHtml`, `renderRecentSessions`,
+`_bindRecentSessionClicks`, `_forkSession`, `_deleteSessionRecord`,
+`_restartPlan`, `_restartNotice`, `_restartRecentSession`,
+`initDeletedSessionsToggle`, `_applyDeletedSessionsToggleState`,
+`getDeletedSessionsVisiblePref`, `setDeletedSessionsVisiblePref` and the four
+fields behind them (-638, +35 for the rewired call sites).
+`client/js/session-recent-visibility.js` (-148) and its `<script>` tag in
+`client/index.html` (-6) are gone outright.
+
+**The store starts here, holding the recent slice only.**
+`web/src/lib/sessions/store.svelte.ts`: `recentPayload` and `recentInFlight` as
+runes, exported through accessors (a `$state` exported by value is read once at
+import and every consumer holds a dead snapshot), plus `refreshRecent(fetch,
+includeArchived, t)` and `reset()`. It owns no timer yet - slice 3 brings the 5s
+poll here WITH the `clearInterval` on teardown that `launchpad.js` has never had.
+
+**The three-outcome contract, and where it is held.** `recentView()` in
+`web/src/lib/launchpad/recent.ts` is a ladder returning one of four values:
+`unavailable` / `empty` / `hidden` / `rows`. `unavailable` carries the notice and
+HAS NO `rows` KEY AT ALL, so a caller cannot reach a row list from a state that
+did not confirm one. The store is the other half: a REJECTED fetch is recorded as
+`probe_unavailable` plus a notice naming the reason, never cleared - clearing
+would read as `never_probed` with no notice, which is a quieter version of the
+same lie. And `stateOf()` defaults an absent state to `never_probed`, never `ok`.
+
+**MUTATION PROOF, three of them.**
+1. Three-outcome gate: `if (state !== 'ok')` -> `if (false)` in `recentView`.
+   4 named tests failed, including "`probe_unavailable` renders the notice and
+   CANNOT render rows, even with sessions present". Reverted; recent.ts back to
+   sha256 `4247d030...`, 302 pass.
+2. i18n, a literal returned at the top level (`recentCountUnavailableLabel`
+   returning its string): source scan FAIL, balanced-span FAIL, bracket count
+   FAIL. All three, as `.claude/notes/i18n-design.md` predicts.
+3. i18n, a literal interpolated INTO another message (`pickNamed` defaulting the
+   title): source scan FAIL, balanced-span PASS, bracket count PASS. Row 2 of the
+   design's measured table reproduced exactly on this surface. Reverted;
+   recent-session.js back to sha256 `8a872a96...`.
+   NOTE the honest limit: on THIS surface every sentence is one whole message, so
+   the bracket count is 1 either way and cannot see mutation 3. The SOURCE SCAN
+   is the only guard that catches it here. It also fired unprompted during the
+   round, on a `warn()` wrapper in `prefs.svelte.ts` that hid two diagnostics
+   from the `console.*` stripper - correct behaviour, and the call sites are
+   literal `console.warn` again because of it.
+
+**33 catalog keys added** (25 -> 58), all `session.recent.*` / `session.archive.*`
+/ `session.restart.*` / `session.fork.*` / `session.name.*` / `error.*`, keyed by
+DOMAIN not by screen. Assembly in `client/js/labels/recent-session.js`, the
+design's step 3. Eight files added to `PORTED_FILES`. Pseudo-locale coverage over
+the ported surface: 32 sentences, every one `isPseudo` true, every count exactly
+as expected, plus a case asserting a user's own TITLE is NOT pseudo-localised
+because it is data, and one asserting a clean resume still says nothing.
+
+**ONE USER-VISIBLE WORDING CHANGE, flagged rather than slipped in.** The
+attention block's title read `CANNOT DETERMINE recent sessions`; the catalog's
+own voice guard refuses a leading capital, so it is now
+`recent sessions CANNOT BE DETERMINED` (shout kept, sentence starts lowercase)
+and the fallback detail became its own distinct message,
+`the last read of the stored session records did not answer`. Nothing else the
+user reads changed. `ENDED` and `ARCHIVED` are lowercase in the catalog and
+uppercased by `text-transform` in `.recent-session-lifecycle` /
+`.recent-session-deleted`, so those pixels are identical.
+
+**Tests: 147 -> 302 vitest (+155), 200 -> 196 node files, 0 failures.**
+Ported and node originals DELETED: `test_recent_sessions`,
+`test_recent_deleted_sessions`, `test_recent_deleted_visibility`,
+`test_no_delete_wording` (the vitest version is a strict SUPERSET - it also scans
+the catalog and `web/src/**`, which is where the copy actually went).
+TRIMMED, keeping everything not about this slice: `test_recent_section_collapse`
+(one repaint case out, four `initSectionDisclosures` cases stay),
+`test_session_restart_identity` (17 out, 3 tree cases stay),
+`test_ended_sessions_visibility` (2 out, 12 stay),
+`test_session_lists_are_disjoint` (7 out, 7 stay).
+NOT touched: `test_row_action_confirm_names_label`. It targets
+`_handleSessionRowAction`, which is slice 5 and has not moved, so deleting it
+would remove a guard for live code.
+
+**Browser proof**, scratch server on 127.0.0.1:5057 importing
+`src.security_headers` via `scripts/lib_csp_static_server.py`, real production
+CSP served (`default-src 'self'; script-src 'self' + the harness's own three
+inline hashes; frame-ancestors 'none'`). Never pointed at the live install and no
+real session touched. Measured: `ok` renders 3 rows with restart gated to the two
+`stopped` ones and `archive` (not delete) on all three; the show-archived toggle
+put `true` on the wire, persisted `1` under the legacy key
+`cloude.launchpad.deletedSessionsVisible`, and the archived row rendered AND
+survived sharing its tmux name `cloude_Mac` with a live session - the six-rows-
+one-shown regression, held in a browser; `probe_unavailable`, `never_probed` and
+a thrown fetch each rendered the notice with ZERO rows and `cannot determine` in
+the count; empty with the filter on kept the section up, empty with it off hid it.
+CSP violations: exactly ONE, the deliberate off-origin `<img>` negative control
+(`img-src`, `https://example.com/...`), which is also what proves the collector
+was live. Zero from the slice. Console: only the two expected warnings from the
+deliberate throw.
+
+Open items, stated rather than discovered:
+- [ ] The vitest suite still cannot MOUNT a component (node environment, and
+  jsdom would be a new dev dependency). The four-branch template is proven in the
+  real browser above and nowhere else. Slice 1's open item is therefore still
+  open, now with a browser measurement behind it rather than nothing.
+- [ ] Cross-surface agreement between RECENT and the project tree is UNGUARDED
+  until slice 4. The case that watched them name the same ended session lived in
+  `test_ended_sessions_visibility` and could not survive the two surfaces living
+  in two trees; each half is asserted separately now. Said out loud because that
+  is exactly how they drifted apart the first time.
+- [ ] The live-sessions list still comes from the legacy `window.Launchpad`
+  singleton, mirrored into component state on each refresh. Slice 3 moves it into
+  the store and that mirror goes.
+- [ ] `_deriveRunningSessionDisplayName` is still legacy (slice 5) and reached
+  through the host. When it is absent the name ladder falls to the working
+  directory rather than guessing at the mapping.
+
+## 2026-09-10 - svelte slice 3, the session data layer into one store (issue #70, PR #71)
+
+Branched off `feat/svelte-slice-2` (`722e903`) onto `feat/svelte-slice-3`.
+The highest-risk slice of the seven, per the carve plan, and it is done.
+
+**787 legacy lines out of `client/js/launchpad.js`** (5726 -> 5162 after the
+sequencers went back in). Thirteen methods: `loadProjects`,
+`loadProjectAuthority`, `loadProjectPresence`, `loadRunningSessions`,
+`loadSessionAttribution`, `_buildWorkStampIndex`, `_resolveSessionAttribution`,
+`_noteListingUnknown`, `_listingReasonFromError`, `_listingDetailFromError`,
+`_sortRunningSessionsByWork`, `_workStampFor`, `_startRunningSessionsPoller`,
+plus the twelve constructor fields they wrote and one misfiled docstring.
+
+**The store is the only data owner now.** `web/src/lib/sessions/store.svelte.ts`
+(487 lines) holds fourteen `$state` fields behind accessors; the pure rules live
+next door in `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`,
+`env.ts` and `types.ts`, each under the 500-line guideline. `launchpad.js` keeps
+four thin sequencers (`loadProjects`, `loadRunningSessions`,
+`loadSessionAttribution`, `_startRunningSessionsPoller`) that hold nothing and
+only order the still-legacy render calls, plus `stopRunningSessionsPoller`, which
+is new. The twelve fields became accessor properties on `Launchpad.prototype`
+with NO fallback object behind them, so a missing bundle throws by name rather
+than quietly becoming a second data owner.
+
+**Four mutations, all measured red, all reverted byte-identical (sha256 checked):**
+
+| mutation | named tests that failed |
+|---|---|
+| `agent_wrapper_label` given a `\|\|` default | 3 in `running.test.ts` |
+| the epoch-keyed rung disabled so the join is always name-only | `attribution.test.ts` + `store.test.ts` |
+| a failed records fetch latching `listingOk` true | 2 in `store.test.ts`, plus the node tree test |
+| `clearInterval` removed from `stop()` | 3 in `poller.test.ts` |
+
+Mutation 3 initially went red only in vitest, because no test walked the whole
+route from a rejected fetch to a rendered group. A case was added to
+`test_session_attribution_join.node.mjs` that starts at the endpoint refusing and
+asserts the row lands in `needsAttention` and NOT in `noProject`; the mutation
+then goes red at both levels. That gap is the reason the mutations are run.
+
+**Counts.** vitest 302 -> 458 (5 new suites, 156 cases). Node suite 196 files,
+0 failures, unchanged from baseline. `svelte-check` 0 errors over 311 files.
+`scan_secrets.py` exit 0. `tests/test_no_remote_assets.py` 15 passed.
+
+**i18n.** 8 keys added under `session.listing.*` and `project.list.*`, assembled
+by the new `client/js/labels/session-listing.js`. 8 files added to `PORTED_FILES`.
+Pseudo-locale: 8 of 8 assembled sentences fully bracketed, with a negative
+control asserting a SERVER-supplied `listing_detail` is passed through and is NOT
+localised - server strings stay out of scope this round, deliberately, and the
+guard is capable of telling the difference. A reason token (`http_500`,
+`tmux_missing`) is an identifier and stays untranslated.
+
+**Browser proof**, against a throwaway server importing `src.security_headers`,
+never the live install and never the owner's sessions. Home up: 3 ticks in 11.5s.
+`#launchpad-screen` off `.active`: ZERO requests, interval still alive. Back to
+home: 3 ticks again with nothing restarting it - which is what makes the zero
+evidence rather than a coincidence. After `stopSessionPolling()`: zero, and
+`polling` false. CSP: exactly 2 violations, both planted controls (`img-src` and
+`script-src-elem`), zero from the bundle.
+
+Two instrument bugs were found and fixed while measuring, and both would have
+produced a false green: a control planted in the HTML fires before a DEFERRED
+module listener exists and is silently missed, so the controls are planted by the
+listener's own module now; and Chrome throttles `setInterval` in a hidden tab, so
+a phase measured while backgrounded reported one tick per 16s. Every phase
+records its own `visibilityState` for that reason.
+
+Findings left alone, on purpose:
+- [ ] The live-only merge branch never sets `status_source`, so a session that
+  reaches the launchpad ONLY through `/sessions/list` carries no status
+  provenance and its tooltip says nothing. It looks like a missing line. Pinned
+  by a test rather than fixed: slice 3 is a MOVE, and fixing a behaviour while
+  relocating it makes a regression impossible to bisect. Slice 5 owns that
+  tooltip.
+- [ ] The name-keyed `.find(s => s.name === tmuxName)` in the merge is the same
+  known-bad lookup that stood in `launchpad.js`, moved rather than fixed, and it
+  is re-registered in `test_no_name_keyed_session_row_lookup`. Fixing it needs the
+  server to ship a durable key on the live row that the attachable row also
+  carries.
+- [ ] `_archivedVisible` is still a real field on `Launchpad`, because the two
+  toggles that write it are still in that file. It moves with the tree prefs in
+  slice 4.
+- [ ] There is still no caller for `stopRunningSessionsPoller` in the legacy
+  shell, because the legacy shell has no teardown. Slice 7's shell is what will
+  use it; until then the store owns a timer that CAN be stopped, which is the
+  half that was missing.
+
+Protocol notes for the next slice:
+- The name-key guard now scans `web/src` as well as `client/js`, and SKIPS
+  `client/dist`. The emitted bundle is generated and minified, so an allowlist
+  keyed on its text would churn on every build; its source is scanned instead.
+  Without that change the guard would have gone quietly green on the day the code
+  it guards moved house.
+- `tests/helpers/cloude-web-sandbox.mjs` is how a node harness gets the store.
+  Nineteen harnesses use it. It supplies the timing globals Svelte's runtime
+  needs (`queueMicrotask` and friends) and the locale ladder's two reads
+  (`navigator`, `localStorage`), because a vm context carries none of them and
+  the failures surface as a ReferenceError from inside minified Svelte.
+
+## 2026-09-10 - svelte slice 4: the project tree, and the render guard it replaces
+
+Issue #76, PR #77 (Adoom666/CloudeCodeDev). Branch `feat/svelte-slice-4` off
+slice 3's `97476a1`.
+
+DONE:
+- [x] The whole project tree out of `client/js/launchpad.js` and into
+  `web/src/lib/launchpad/`: the join (`project-groups.ts`), the per-project
+  decisions (`project-node.ts`), the two three-outcome ladders
+  (`project-chrome.ts`), the fold state (`tree-collapse.svelte.ts`), the
+  navigation seam (`project-tree-host.ts`), the one outside control
+  (`project-chrome-control.ts`) and eight components. `launchpad.js` went from
+  5,106 to 4,093 lines; `renderProjectList()` is one call to
+  `CloudeWeb.launchpad.mountProjectTree()`.
+- [x] `client/js/project-list-render-guard.js` DELETED (220 lines), with
+  `_lastProjectListSig`, `_collapsedProjectNodes`, `_archivedVisible` and the two
+  archived-pref accessors. Its `<script>` tag in `client/index.html` went with it.
+- [x] `mountPanel` gained `ensurePanel`, which is what stops the 5s tick
+  unmounting and rebuilding the tree it just deleted the repaint of.
+- [x] 44 catalog keys under `project.*` and `session.*`, assembled in
+  `client/js/labels/project-tree.js`. Pseudo-locale coverage extended over all 16
+  new files; the seven NEEDS ATTENTION reasons are asserted as catalog keys.
+- [x] Vitest 458 -> 779. Node suite 196 -> 187 files, 0 failures.
+
+THE GUARD'S THREE FUNCTIONS HAD THREE UNRELATED CONSUMERS, and only one of them
+was the project tree. `decide` died with the repaint. `shouldPoll` moved to
+`web/src/lib/sessions/poller.ts`, beside the tick it gates. `isBusy` moved to
+`client/js/session-list-busy-guard.js`, because `renderRunningSessions` still
+writes `innerHTML` and a poll landing under an open rename input still destroys
+it. Slice 5 deletes that file too.
+
+MEASURED, in a real DOM (jsdom) driving the compiled component through the real
+store with a real `MutationObserver`, 9 projects x 5 sessions = 442 elements:
+- 12 ticks, NOTHING changing: 0 records, 0 nodes. The old guard already achieved
+  this and the test asserts it so nobody can sell the slice on it.
+- 12 ticks, EXACTLY ONE status changing: 5 records, 0 nodes. Five because the LED
+  encodes its state in five attributes on ONE element (`class`, `data-inner`,
+  `data-outer`, `title`, `aria-label`). The plan's "under 5" was an estimate; five
+  is the measured floor and the test pins it so a sixth write fails.
+- The legacy mechanism on the same fixture: 1 record carrying 916 nodes.
+- The busy case the guard could not do: a status change lands with a row menu
+  open, the dot updates and the menu is still the same node.
+
+STILL OPEN:
+- [ ] THE REAL-CHROME RUN IS NOT DONE, and it is blocked on a human step. Two
+  scratch servers were stood up (the slice-4 build and a slice-3 baseline, each
+  with its own state dir and `.env`), the slice-4 one loaded correctly in Chrome
+  once - `mountProjectTree` present, the old guard absent, 9 nodes / 45 rows / 442
+  elements painted from the real bundle, matching jsdom's 443 - and then the
+  extension session was lost. Every origin after that (`127.0.0.1:5011`,
+  `:8010`, `localhost:8010`) is refused by the browser before a request leaves
+  it, while `curl` gets 200 and `https://example.com` loads fine, so it is a
+  per-origin extension permission and not the app. Granting the Claude-in-Chrome
+  extension access to the scratch origin is the missing step.
+- [ ] `scripts/ci/mutate-restart-identity-and-content-dedupe.sh` has dead
+  mutations. Its RECENT ones went stale in slice 2 and its TREE ones went stale
+  here; they now report `cannot_determine` rather than a false `killed`. Rebuilding
+  it against the vitest suite is its own job.
+- [ ] `_renderFamilyPillHtml` still exists in `launchpad.js` for the running-row
+  list. `AgentFamilyPill.svelte` is the same rules as a component and
+  `agent-family-pill.test.ts` holds the two to the same verdicts until slice 5
+  deletes the legacy copy.
+- [ ] `StatusLed.svelte` gained a `transport` prop. The legacy tree and running
+  rows both passed `transport` to `SessionStatusUI.dotHtml` and the component
+  silently dropped it, so a disconnected session painted a confident dot. Slice 5
+  should check the running row passes it too.
+- [ ] The fold is still in-memory only, exactly as the legacy field was. A
+  reload opens every project. Persisting it would be a new behaviour and needs
+  its own decision.
+
+Protocol notes for the next slice:
+- `vitest.config.ts` now carries `resolve.conditions: ['browser']`. Without it
+  `import { mount } from 'svelte'` resolves to the SSR build, whose `mount` exists
+  only to throw `lifecycle_function_unavailable`. It reads as a broken test
+  environment and is a resolution setting.
+- A `MutationObserver`'s queue is drained by DELIVERY as well as by
+  `takeRecords()`. Any `await` at all lets the callback run and empties it, so a
+  test that awaits and then calls `takeRecords()` reads ZERO and looks like a
+  perfect score. Collect in the callback. It cost three failing tests to find.
+- Count mutation NODES with their descendants. A record names only the DIRECT
+  children that moved, so an `innerHTML` write over nine project nodes reports
+  nine added and nine removed rather than the 916 they carry.
+- The i18n source guard now strips `<!-- -->` comments too. A `.svelte` header
+  comment that QUOTES the copy it explains was being reported as untranslated
+  copy. A multi-class string literal reads to it as two words, so slice 4 uses
+  Svelte's array `class={['a', 'b']}` form.
+- `jsdom` is a new devDependency in `web/`, and it is there for one reason: the
+  slice's whole claim is a mutation count, and counting real DOM mutations against
+  a real mounted component is the only measurement of it that means anything.
+
+### 2026-09-10 later - the real-browser run, and the number it corrected
+
+Brave, `127.0.0.1:5057` (the port slice 2 used; every NEW origin I invented -
+`5011`, `8010`, `localhost:8010` - was refused by the browser before a request
+left it, which is a per-origin extension permission and not the app). Same
+fixture as the Vitest harness: 9 projects, 45 rows, 442 elements against
+jsdom's 443. `visibilityState` was `hidden` for every phase and is recorded
+with every number below.
+
+| measurement | real browser | vitest DOM | agrees |
+|---|---|---|---|
+| 12 ticks, nothing changing | **6048 records / 16128 nodes** | 0 / 0 | NO |
+| one status change | **5 attribute records on one dot** | 5 / 0 nodes | yes |
+| legacy `innerHTML` rebuild | **1 record / 918 nodes** | 1 / 916 | yes |
+| busy case (menu open) | **dot updated, same node, menu intact** | same | yes |
+
+**THE BROWSER NUMBER IS AUTHORITATIVE FOR THE REAL TICK PATH, and the
+disagreement is a defect this slice introduced rather than an instrument
+artefact.** 6048 over 12 ticks is 504 records and 1344 nodes PER TICK, every one
+a `childList` record on `.project-node__sessions`, with ZERO attribute records -
+so it is not the data changing. Measured about it:
+
+- the rows are MOVED, not rebuilt: the row element, its `.status-dot` and its
+  parent are all the same node after a tick, still connected, still 45 of them.
+- the row ORDER is identical across three consecutive ticks, in the DOM and in
+  the store.
+- EVERY individual store write costs 0: `runningSessions`, `sessionRecords`,
+  `workStampByName`, `projects`, `projectPresence`, the three attribution
+  structures, and all seven of `loadSessionAttribution`'s assignments replayed
+  by hand - synchronously, after a microtask, and after a real fetch.
+- ONLY the real `loadSessionAttribution()` reproduces it: 432 records / 1152
+  nodes standalone. So the trigger is inside `loadAttribution` and it is NOT the
+  seven assignments it ends with. NOT ROOT-CAUSED.
+
+WHY THE VITEST TEST CANNOT SEE IT, which is the part to fix first:
+`tree-harness.ts` writes the store's fields directly through `applyFixture`. It
+never calls `loadRunningSessions` or `loadSessionAttribution`, so it measures the
+tree's response to a DATA CHANGE and not the tick the app actually runs. A
+harness that drove the real load path would have failed on the first run.
+`mutation-count.test.ts`'s "12 ticks, nothing changing: 0 records" is TRUE OF
+THE ASSERTION IT MAKES and NOT true of a real poll tick; the file should say so
+until this is closed.
+
+- [ ] Root-cause the per-tick `childList` churn on `.project-node__sessions`
+  and drive `mutation-count.test.ts` through `loadRunningSessions` rather than
+  through `applyFixture`. Until then the committed "0 records on an unchanged
+  tick" figure describes the harness, not the app.
+- [ ] The 12-tick loop could not be completed in a backgrounded tab: after a few
+  minutes hidden, the browser throttles the inter-tick timer far enough that the
+  run does not finish. The real 5s poller ticked ONCE in 60 seconds, measured.
+  Every figure above was therefore driven by calling the tick's own work
+  directly, which is a deviation from "let the poller drive it" and is stated
+  rather than hidden. Foregrounding the tab needs either the owner or macOS
+  automation permission for AppleScript, which hung when tried.
+
+### 2026-09-10 later still - the churn, root-caused and fixed
+
+ROOT CAUSE, in `web/src/lib/sessions/store.svelte.ts` (SLICE 3's file, not a
+component). `loadRunningSessions` published the row set TWICE:
+
+    runningSessions = rows;                       // fetch order
+    await this.loadSessionAttribution(t);         // <- an await
+    runningSessions = sortRunningSessionsByWork(...);   // sort order
+
+Two assignments either side of an await are two separate effect flushes, so
+every subscriber saw the unsorted order and then the sorted one. The fetch
+order is ascending by creation epoch and `sortRunningSessionsByWork` ends
+`(b.created_at_epoch || 0) - (a.created_at_epoch || 0)`, i.e. DESCENDING - so
+the two orders are exact opposites and a keyed `{#each}` moved all 45 rows to
+match the intermediate and then moved them all back, every tick.
+
+THAT EXPLAINS EVERY MEASUREMENT and nothing else did: rows MOVED not rebuilt
+(identity survives a move), final order stable (it ends on the sorted one),
+`childList` only on `.project-node__sessions`, zero attribute records, and
+every individual store write costing 0 (a single synchronous write is one
+flush; only an await between two of them splits it).
+
+THE LEGACY RENDERER COULD NOT SEE IT. It painted once, at the end, from
+whatever the fields held - so an intermediate state was free. The moment a
+subscription replaced the repaint, it stopped being free. This is the general
+shape to watch for in slices 5 to 7: **anything that publishes an intermediate
+state was invisible before and is not invisible now.**
+
+FIX: one assignment, already sorted, after the await. Attribution still runs
+BEFORE the sort, which was the load-bearing ordering; the rows just stay in a
+local until then. Six lines.
+
+RE-MEASURED, Brave, `127.0.0.1:5057`, one session, `visibilityState: hidden`
+recorded on every phase, 9 projects / 45 rows / 442 elements:
+
+| measurement | before fix | after fix | vitest |
+|---|---|---|---|
+| 12 ticks, nothing changing | 6048 rec / 16128 nodes | **0 / 0** | 0 / 0 |
+| 12 ticks, one status change | (buried in the churn) | **5 records, 0 nodes** | 5 / 0 |
+| legacy `innerHTML` rebuild | 1 / 918 | **1 / 918** | 1 / 916 |
+| busy case, menu open | passed | **passed** | passed |
+
+The five are `class`, `data-inner`, `data-outer`, `title`, `aria-label` on ONE
+`status-dot`, `sameNode: true`. The busy case: dot `idle` to `working` with the
+menu open, dot is the same node, menu still connected, still in the tree, still
+in the same row, text intact. **Browser and Vitest now agree on all four.**
+
+HARNESS GAP CLOSED. `tree-harness.ts` gained `fixtureHost()` and `fleet()`, a
+real `SessionHost` answering a fixed fleet IN FETCH ORDER, so
+`store-tick-mutations.test.ts` drives `sessionStore.loadRunningSessions()` - the
+actual tick - instead of writing store fields. The fixture's fetch order and
+display order DISAGREE on purpose: one whose orders happened to match would
+pass whether the defect was there or not. `mutation-count.test.ts` keeps its
+narrower job (what the TREE does when its data changes) and its header now says
+which file to add to when the question is "what does a tick cost".
+
+MUTATION-PROVEN: reintroducing `runningSessions = rows;` turns
+`store-tick-mutations.test.ts` red on 3 of 8 - 5184 records / 13824 nodes over
+12 ticks, the changed-status case reading 5189 instead of 5, and the source rule
+finding two assignments instead of one. Reverted byte-identical.
+
+- [x] The per-tick churn is closed, and the committed "0 records on an
+  unchanged tick" figure is now true of the app and not only of the harness.
+- [ ] Slice 3's own tests did not catch this and still do not assert it:
+  `store.test.ts` checks WHAT `loadRunningSessions` ends up holding, never how
+  many times it publishes on the way there. The new source-rule test lives in
+  slice 4's directory because that is where the subscriber is; if slice 5 adds a
+  second subscriber it belongs somewhere shared.
+
+---
+
+## 2026-09-10 - SLICE 5, THE RUNNING SESSIONS LIST (issue #90, PR #91)
+
+Branched off `feat/svelte-slice-4` at `e5662d8`. The home screen's flat list of
+live sessions is `web/src/lib/launchpad/RunningSessions.svelte` now.
+
+`client/js/launchpad.js` 4,093 to 3,023 lines, **1,032 gone**: the fifteen
+methods the plan named, `_lastRunningSig`, and two orphan docblocks slice 4 left
+behind when it deleted the tree-row renderers they described. Two whole files
+deleted with their script tags: `client/js/session-list-busy-guard.js` (its own
+header said slice 5 deletes it) and `client/js/launchpad-wrapper-pill.js` (one
+caller, so it moved rather than stayed). `_deriveRunningSessionDisplayName`
+survives as a four-line shim because `app.js:1403` derives a deep-link slug from
+it; the rule itself is `web/src/lib/sessions/session-label.ts`.
+
+### The double-publish audit, and what it found
+
+Slice 4's defect was the ROW SET published twice per tick. Audited every path
+this slice touches for the same shape and found it ONE FIELD OVER:
+`loadRunningSessions` opened with `runningSessionsListing = emptyListing()` and
+assigned the real verdict after the same await. The later assignment is
+UNCONDITIONAL, so the reset changed nothing about the answer and everything
+about how many times it was published - and this list is the ONLY surface that
+renders that verdict, so nothing before it could have caught it. On a screen
+whose probe is failing, every 5s tick removed the NEEDS ATTENTION block and put
+it back and flipped the heading between a number and "could not be determined".
+Fixed; `running-tick-mutations.test.ts` holds it as a source-shape assertion AND
+as a measured count, and re-asserts slice 4's row-set rule from this surface
+because two subscribers now depend on it.
+
+Nothing else published twice. The chrome writes (`setCount`,
+`setSectionVisible`) are `$effect`s over `$derived` values, so an unchanged tick
+recomputes and writes nothing.
+
+### Measured in Brave, production CSP, 127.0.0.1:5057
+
+`tests/manual/running-sessions-mutation-harness.html`, served by
+`scripts/lib_csp_static_server.py`'s handler, 45 rows over 9 projects, driven
+through the real `loadRunningSessions`.
+
+| window | records | nodes |
+|---|---|---|
+| 12 idle ticks | **0** | **0** |
+| 12 ticks, ONE status change | **5**, all attributes | **0** |
+| 12 ticks, failing probe | **0** | **0** |
+| busy: rename editor open + status change | **10**, all attributes | **0** |
+| NEGATIVE CONTROL: one legacy `innerHTML` rebuild | 1 | **2,439** |
+| NEGATIVE CONTROL: twelve of them | 12 | **29,256** |
+
+The five are the LED's own `class`, `data-inner`, `data-outer`, `title`,
+`aria-label` on ONE `status-dot`. Busy case: the editor kept its node and its
+half-typed text AND the dot updated, which the guard could not do - it skipped
+the paint. Menu case: with `SessionRowMenuOpen.isOpen()` forced true (the
+guard's other trigger, and a GLOBAL one, so a sidebar menu froze this list too)
+the dot still moved, because nothing consults that predicate any more.
+
+CSP: exactly one violation in every run, the deliberate off-origin image, and it
+is planted from the listener's own script rather than the markup - an `<img>` in
+the HTML is fetched during parse, before a deferred listener exists, so its
+violation is never collected and the control silently proves nothing.
+
+TWO CAVEATS, STATED RATHER THAN BURIED. The tab reported
+`visibilityState: hidden` on every phase with `hasFocus()` true, which is an
+occluded window rather than a backgrounded tab; a microtask-only control using
+no timer at all returned identical counts, so the throttle is not in the
+numbers. And the `innerHTML` negative control REPLACES the nodes Svelte owns, so
+every reading after it is about a detached tree - it must run last, and the
+harness header now says so. That cost a round: three post-control readings
+looked like a component that had stopped updating.
+
+### Mutations
+
+| # | mutation | result |
+|---|---|---|
+| 1 | publish the listing verdict twice per tick | RED, 2 tests (shape + measured count) |
+| 2 | inline the LED markup instead of `ledStateFor` | RED, 5 tests across 4 files |
+| 3 | hardcode mark unread instead of the plugin bridge | RED, 3 tests |
+| 4 | drop restart from a live row | **GREEN - the test was wrong** |
+
+All four reverted byte-identical (sha256 checked). Mutation 4 is the one worth
+keeping: it went through `browserRunningHost.actionsFor`, and nothing tested
+that function. The component tests drive a RECORDING host and the parity test
+drives the legacy module DIRECTLY, so neither crossed the seam between them.
+`web/src/lib/launchpad/running-host.test.ts` now hangs the real legacy modules
+on the real `window` under jsdom and asserts the host answers exactly what the
+module answers, id for id and in order; mutation 4 re-applied turns it red on
+two cases. A pass-through needs a test of its own.
+
+### Tests
+
+Vitest 787 to **995**, 37 files. Node 187 files / 0 failures to **180 / 0**.
+`svelte-check --threshold error` 0 errors and 0 warnings.
+
+Seven node files deleted, their assertions ported to behaviour tests:
+`test_agent_family_pill`, `test_launchpad_wrapper_pill`,
+`test_launchpad_rename_edits_label`, `test_running_sessions_unknown`,
+`test_session_label_rendering`, `test_dead_pane_not_running`,
+`test_row_action_confirm_names_label`. Nine more trimmed at the launchpad case
+and pointed at where it went.
+
+### i18n
+
+43 keys, all under `session.*`, extending rather than duplicating -
+`session.badge.tmux`, `session.badge.external` and the family-pill keys are
+reused from slice 4. `client/js/labels/running-session.js` is the assembler.
+Four buckets for the relative age and a plural set for the count, both through
+`Intl`; no zero key, because the section HIDES on a measured zero and copy no
+translator can see in context is worse than none.
+
+The pseudo-locale coverage guard caught TWO literals the eye did not:
+`'the api client is not loaded'` thrown from the host (a thrown sentence is
+still a sentence, and `reasonFrom` prints it on screen - it is
+`ApiUnavailableError` with a catalog message now) and a class list that its
+heuristic reads as prose (the array form fixes it). 12 files appended to
+`PORTED_FILES`.
+
+`.running-sessions-attention__head` gained `text-transform: uppercase`, the same
+move slice 4 made for `.badge`: casing is the stylesheet's job so the catalog
+can keep the voice rule.
+
+- [x] Slice 5 shipped, measured in a real browser, four mutations run.
+- [x] The slice 3 follow-up above ("if slice 5 adds a second subscriber the
+  source rule belongs somewhere shared") is answered the cheap way for now: the
+  rule is asserted in BOTH surfaces' tick tests, over the same method. A shared
+  file would be one more thing to find; two assertions over one function are
+  cheaper than one assertion nobody can locate.
+- [ ] `SessionStatusUI.markUnreadHtml` now has NO caller. It is kept
+  deliberately as the anchor both parity tests compare the catalog against, and
+  that is written into the code. If a later slice wants it gone, the words have
+  to move somewhere a test can still reach independently.
+- [ ] The four `surface === 'launchpad'` branches in
+  `client/js/session-row-menu-actions.js` were never reachable - nothing passes
+  that surface, which IS issue #66 - and two of them named methods this slice
+  deleted. `runClose` and `runRename` now say so instead of calling a dead name;
+  `repaintSurface` was repointed at the store. Whoever takes #66 wires the menu
+  to the Svelte row, not to `window.Launchpad`.
+- [ ] `running-host.ts::resolveSessionId` is still a name-keyed round trip
+  (`x.tmux_session === tmuxName`), moved from `launchpad.js` unchanged. It is
+  NOT registered in `test_no_name_keyed_session_row_lookup.node.mjs` because
+  that scanner's pattern is single-line and this call is written across
+  several - registering it would be a dead entry failing the test the other
+  way. Named in that file's prose instead. The real fix is a durable key on the
+  live row, which is its own change.
+
+## 2026-09-10 - svelte slice 6: the modals and the create flows (#98, PR #99)
+
+`client/js/launchpad.js` 3,023 -> 1,875 lines: 1,219 lines removed and 71
+added back as the two forwards and the comments explaining them. Plus
+`client/js/project-create-folder.js` (312) deleted outright, so 1,531 lines of
+legacy are gone. NOTE the commit message for `1f98e2d` says "3,023 to 1,866" -
+that figure was measured before the last two shim comments landed and
+understates the file by nine lines. The number here is the measured one. Two survive as one-line forwards because their callers are
+slice 7's: `showConfirmModal` (providers.js:476) and `createConsoleSession`
+(terminal-commands-panel.js:256). `_escapeHtml` stays for providers.js:83 and
+now has NO caller in its own file; the three modal-local copies and the one
+injected into `folder-picker-modal.js` are gone, so that picker runs on its
+own default escaper for the first time.
+
+THE FIVE FOLDER RULES, each held and tested by name.
+1. The folder step cannot be skipped. `create-flow.ts` asks provider, name,
+   FOLDER, then creates, and a cancel at any step creates NOTHING. The
+   generated-id fallback in `SessionManager.create_session` is untouched and
+   stays for an old client.
+2. `realpath`, never `expanduser`. Unchanged on the server, where it belongs.
+3. Containment is component-wise, never `str.startswith`. Also unchanged.
+4. `project_parent_dir`, never `working_dir`. The clone, the console and
+   open-from-folder still post `working_dir` with a folder from anywhere.
+5. A name is REFUSED, never rewritten. `validateName` returns a CODE and
+   `client/js/labels/project-create.js` renders the sentence, so the rule and
+   the copy are two things and the en values stay byte-identical to
+   `src/core/project_directory.py`.
+
+Four mutations, all RED, all reverted byte-identical (sha256 compared, no
+`git checkout --`): expanduser for realpath (2 python tests), startswith
+containment (1), sanitise a slash (8 vitest), skip the folder step (4 vitest).
+None came back green.
+
+The intermediate-publish audit found NONE on any path this slice touches.
+`loadProjects`, `loadProjectPresence` and `loadProjectAuthority` each assign
+once, after their await. The two in-flight pairs in this slice (`placeholder`
+loading -> unavailable, and the clone's `status` busy -> error) are a state
+machine rather than a clear-and-restore, which is the shape slices 4 and 5
+each found.
+
+`openProjectFromFolder` was NOT in the slice plan and moved anyway: it is the
+only caller of `saveProjectWithUniqueName` and `showFolderPickerModal`, both of
+which were, so leaving it would have left one method reaching across the seam
+four times for a flow whose every step had gone.
+
+- [x] Slice 6 shipped: 1236 vitest (was 995), 176 node files 0 failures (was
+  180; four ported and deleted), svelte-check 0 errors 0 warnings.
+- [x] Browser proof under the real CSP on 127.0.0.1:5057, via
+  `tests/manual/create-flow-modal-harness.html`: the create flow asks for a
+  folder and posts `project_parent_dir` with no `working_dir` and no `ses_`
+  shape; `punch/list test` is refused with a visible sentence and comes back
+  still typed; the clone modal collects its parent and sends it as `parentDir`;
+  cancelling the folder step performs no write at all.
+- [ ] EVERY BROWSER PHASE MEASURED `visibilityState: hidden` while
+  `document.hasFocus()` was true - the extension drives a Brave window that is
+  not the foreground OS window. The flows all completed anyway, which is the
+  harder case given gotcha 9, but nothing here is a measurement of a PAINTED
+  modal. A repeat with a foreground window would be worth one run.
+- [ ] `project.create.console.description` ("console session") goes through the
+  catalog and is then STORED as the console project's description. A locale
+  switch does not retranslate a description already written. That is the
+  server-strings gap `.claude/notes/i18n-design.md` section 7 names, and this
+  is the first place in the client that writes a translated string into
+  durable data.
+- [ ] `cloneFailure` no longer renders the word "Error" for an Error with an
+  empty message. The hand-written mapper did (`(e && e.message) || e` falls
+  through to the object), and the pseudo-locale case is what caught it.
+- [ ] The i18n source guard learned two things it did not know: `class="a b"`
+  is a stylesheet contract and not copy, and a short list of SERVER error
+  fragments (`already exists`, `not authenticated`, ...) are matched but never
+  rendered. Both are asserted by negative controls; `title`, `aria-label` and
+  `placeholder` are still scanned.
+
+## 2026-09-10 - svelte slice 7: the shell, the shim, and the end of launchpad.js
+
+Issue #102, draft PR #103 on `Adoom666/CloudeCodeDev`. Branch
+`feat/svelte-slice-7`, off `feat/svelte-slice-6` at `1da6528`.
+
+**DONE. `client/js/launchpad.js` IS DELETED.** The last 1,875 lines moved:
+`renderLaunchpadUI`'s 363-line template string, the six FAB methods,
+`bindHeaderHelpToggle`, `initSectionDisclosures` / `setSectionExpanded` and the
+collapsed-section map, `renderHomeBarVersion`, `wireServerControls`,
+`updateStatus`, `showError`, `_explainRefusedProject`, and the eight navigation
+methods (`openProjectByName`, `selectProject`, `detachAndOpenProject`,
+`connectToExistingSession`, `detachAndCreateNew`, `_handleAttachRunningSession`,
+`_returnToActiveRunningSession`, `_findRunningSessionBySlug`). Sixteen new
+modules under `web/src/lib/launchpad/`, plus `client/js/labels/home-screen.js`
+and 62 catalog keys. The script tag left `client/index.html`.
+
+**`window.Launchpad` is eight members and MERGES rather than assigns.**
+`launchpadScreen`, `init`, `loadProjects`, `loadRunningSessions`,
+`openProjectByName`, `_deriveRunningSessionDisplayName`, `sessionRecords`,
+`showProviderModal`. The merge is an ordering fact: the bundle is a deferred
+module and `providers.js` publishes the launch picker onto that object earlier,
+from a classic script. The plan predicted twelve members; the three it expected
+to survive were resolved at their call sites instead - `providers.js` got its
+own escaper and calls `App.showConfirmModal` directly, and
+`terminal-commands-panel.js` calls `window.CloudeWeb.launchpad`.
+
+**The four load-bearing ids re-derived and unchanged**: `app.js:896`
+(`.active` on `#launchpad-screen`), `app.js:358` (re-parent `#statusText` into
+`#home-bar-status`), `app.js:381` (`#home-bar-status-text`),
+`globalAudioToggle.js:300` (sibling insert into `.home-bar`). Not drifted at
+all. Anchors enumerated in `home-anchors.ts`; the re-parenting is left alone,
+no message bus.
+
+**Repaint audit: the shell holds no reactive state and paints once.** The one
+change is the refetch path - `loadProjects()` used to REMOUNT the attribution
+card and the RECENT list; both now export `refresh()` on their mount handle and
+`panels.ts::refreshLaunchpadPanels` calls it.
+
+**Four mutations, all red, all reverted byte-identically** (verified with
+`git diff --stat` empty, never `git checkout --`): removing
+`#home-bar-status-text`; letting a deep-link miss fall through to
+`selectProject`; painting a theme in `onMount`; dropping `openProjectByName`
+from the shim.
+
+**Slice 6's finding closed: `project.create.console.description` is gone.** It
+was a catalog sentence STORED in `config.json`, so a locale change could never
+retranslate it. The console project is created with no description, which is
+what an adopted session's row has always carried.
+
+**Two test-guard refinements, both with negative controls, both worth keeping:**
+`tests/test_no_remote_assets.py` flagged the home bar's `<a href="https://nyedis.ai">`
+once that markup moved into the bundle - an anchor NAVIGATES and loads nothing,
+and the same link in `client/index.html` was never checked, so the bundle rule
+was stricter than the hand-written one by accident. An ordered no-capture branch
+exempts anchors and a new control asserts a `<link href>`, a `<script src>`, an
+import, a Worker, an `@import` and a `url()` all still fail.
+`tests/test_archive_entry_points.node.mjs` matched the bare substring
+`showArchive`, which also matches `showArchived` - the RECENT and PROJECTS
+filter label. Tightened to the CALL.
+
+**Test moves.** Node: 176 to 171 files, 0 failures. Deleted:
+`test_home_screen_mechanics`, `test_deeplink_resolver`, `test_deeplink_fork_name`,
+`test_header_help_and_toggle` (ported to
+`web/src/lib/launchpad/{HomeScreen.behaviour,navigation}.test.ts`) and
+`test_launchpad_create_label` (its last payload is asserted behaviourally in
+`navigation.test.ts`). Sixteen re-pointed at the new `tests/lib-home-source.mjs`.
+`tests/lib-home-mechanics.mjs` lost its `vm` launchpad sandbox.
+Vitest 1,236 to 1,334.
+
+### OPEN, carried out of this slice
+
+- **`web/src/lib/launchpad/navigation.ts:119` is a name-keyed session lookup.**
+  Moved, not introduced: it resolves the listing row whose label the adopt
+  response does not carry, and `tmuxName` is the only handle an adopt is made
+  with. Registered in `tests/test_no_name_keyed_session_row_lookup.node.mjs`
+  with its reason. The fix is the same one `web/src/lib/sessions/running.ts`
+  needs: a durable key on the live row that the attachable row also carries.
+- **The server-strings gap itself is still open.** Slice 7 closed the one place
+  the CLIENT reached it. Stored toast bodies still cannot follow a locale
+  change; that needs a message id plus parameters on the stored record, an
+  `Accept-Language` on the API client and a Python catalog. See
+  `.claude/notes/i18n-design.md` section 7.
+- **The home screen's CSS was not ported and should not be.** Components still
+  use the legacy class names and `client/css/`, which is what keeps all 26
+  themes working with zero theme work. Revisit after the sidebar round, or
+  never.
+- **`#58` and `#66` remain open and unclaimed** (re-checked 2026-09-10, both
+  labelled `blocked`).
+
+### 2026-09-11 - what the browser proof found, and the two fixes it forced
+
+Driven in Brave against a scratch server on 127.0.0.1:5057 that imports
+`src.security_headers`, so the page ran under the real
+`default-src 'self'; script-src 'self'` policy. **Zero CSP violations across
+every phase.** `document.visibilityState` read **`hidden`** with
+`hasFocus: false` in every phase, exactly as slices 5 and 6 measured; no
+foreground window was available, so nothing here is a claim about painted
+pixels - it is a claim about the DOM, the network calls and the CSP.
+
+**FOUND 1: a static placeholder inside a panel container survives forever.**
+`#project-list` shipped `<div class="launchpad-empty">loading projects...</div>`
+in the shell markup, and `mountPanel` APPENDS into its container - it never
+clears what was already there. The legacy `renderProjectList()` cleared it with
+an `innerHTML` write, so the line was on screen above the tree permanently.
+Fixed by emptying the container: `ProjectTree.svelte` renders its own empty
+state, so the placeholder had nothing left to say. The `home.projects.loading`
+key is deleted with it. **The rule this leaves behind: a panel owns its
+container, so no markup goes inside one.**
+
+**FOUND 2: gotcha 9 was ported verbatim and it hung a real tab.** The rejoin's
+pre-fit did `await new Promise(r => requestAnimationFrame(() =>
+requestAnimationFrame(r)))`. A browser does not paint a backgrounded tab, so it
+never runs that tab's rAF callbacks - a deep link resolved in the hidden tab
+froze inside `prepareTerminal` and never returned (the CDP call timed out at
+45s). MOVED, not introduced: `launchpad.js` had the same two lines. Slice 7 is
+the moment it became measurable, because the path is now reachable from a test.
+`nav-host.ts::twoFrames` races the pair against a 250 ms timer, the same number
+and the same rule `client/js/terminal-layout-wait.js` already uses for the
+terminal's own connect: a layout wait may DELAY the work, never cancel it.
+
+**Proven, in order:** a hard reload of `/` publishes the bundle, carries no
+`launchpad.js` script tag, and leaves `window.Launchpad` a PLAIN OBJECT with
+exactly the eight members (so `providers.js`'s earlier write survived the
+merge); `App.showLaunchpad()` renders the whole screen - help disclosure, five
+FAB actions, three sections, four panel containers, both archive filters, the
+home bar; `#statusText` sits inside `#home-bar-status` and `globalAudioBtn` is
+its sibling in `.home-bar`, still true after three navigations away and back;
+a deep link to `slice7demo` resolves to the live row and enters the terminal
+via `getSession` in 1.0s with ZERO `createSession` calls; a deep link to a
+ghost AND a deep link to a name that IS a launcher project with no live session
+behind it both create nothing, show ONE `#deep-link-error` banner naming the
+target, and return to `/` with the launchpad active; mounting the shell issues
+ZERO `applyTheme` calls and each hop issues exactly one, through
+`ThemeNavigation`, returning home to the theme it started on.
+
+### OPEN, and named rather than left silent: the seven manual pixel harnesses
+
+`tests/manual/*.html` are hand-run geometry harnesses that mount the shipped
+markup so a real headless Chromium can MEASURE it - real pixels, which no node
+or vitest assertion can produce. Seven of them carry
+`<script src="../../client/js/launchpad.js">` and that file is gone, so each
+now 404s on that tag:
+
+    attribution-prompt-harness.html        attribution-adopt-harness.html
+    ended-sessions-harness.html            home-mechanics-geometry-harness.html
+    header-icons-and-menu-harness.html     project-tree-geometry-harness.html
+    project-authority-geometry-harness.html
+
+They already load `client/dist/app.js` beside it, so the fix is mechanical and
+small per file: drop the dead tag and call
+`window.CloudeWeb.launchpad.mountHomeScreen({})` where the harness currently
+waits for the legacy shell to render. Their drivers -
+`scripts/verify_home_mechanics.py`, `scripts/verify_header_icons_and_menu.py`
+and the ones under `scripts/archive/verify/` - then need re-running to confirm
+the numbers did not move. NOT done in this slice because it is a second,
+independent verification surface and doing it badly would leave a green pixel
+check measuring nothing, which is worse than a red one. None of the seven is in
+`.github/workflows`, so CI is unaffected.
+
+**And `scripts/ci/mutate_message_archive_flag.py` carries two DEAD mutations**,
+C1 and C2, both keyed on markup (`id="archive-section"`, the `ArchiveEntry.ensure()`
+call) that left the home screen well before slice 7 - they were already
+unfindable, and now the file they name does not exist either. They should be
+retired or re-pointed at whatever still carries that gate. Not in CI either.
 ## 2026-09-10 - GAME PLAN: four tracks, and the dependency that orders them
 
 Owner's direction, verbatim: "come up with a game plan, lets get this all into
@@ -6819,6 +9576,242 @@ suites against current HEAD and got 58/58, independently confirming its
 invariants survived v2's forwarder deletion. A worker cross-checking a LATER
 worker's change is better evidence than either checking itself, and it was free.
 
+## 2026-09-11 - RELEASE PLAN: 1.3.0 is ours, 1.3.1 is Adam integrated
+
+Owner's direction, verbatim: "ok, update git and lets get this finished and
+then make a 1.3.1", and earlier on testing: "if shit isnt working we can only
+test by working."
+
+**1.3.0 = our two rewrites, deployed and used.**
+- [ ] `integration/1.3.0` merges `feat/svelte-slice-7` (client, 7 slices,
+      `launchpad.js` deleted, i18n, plugin registry) with
+      `feat/backend-decomposition` (13 slices, `session_manager.py` 8,340 to
+      7,294, `routes.py` 4,397 to 106, `config.py` and `models.py` into
+      packages). IN FLIGHT.
+- [ ] Validate the combined tree, both suites, against measured per-chain
+      controls so any regression is attributable.
+- [ ] Deploy to live and run THE TWO GATES recorded 2026-09-10, which no suite
+      can substitute for: `boot_readopt_complete` held plus skipped against
+      `tmux -L cloude list-sessions | wc -l`, and the `/sessions/list` row count
+      checked SEPARATELY from that log line. The backend slices touch the boot
+      re-adopt path and have never run against a live server.
+- [ ] OWNER USES IT on real sessions. This is a release step, not an optional
+      one: the fixture preview could not find the broken group control until he
+      clicked it, and it cannot find anything that needs a real pane.
+- [ ] Fix what real usage exposes, then tag `v1.3.0` and publish with an
+      installer, a sha256 and the downgrade block, on `origin` (public).
+
+**1.3.1 = Adam integrated.**
+- [ ] His `master` is 153+ commits past our 1.2.1 base. Most of it lands in
+      client code we deleted or rewrote, so this is a DESIGN merge, not a
+      textual one. Run the same comparison round that 1.2 got: per-subsystem
+      verdicts, an approach-level check, not just `git merge-tree`.
+- [ ] Deliberately AFTER the owner has used 1.3.0. Doing it before means two
+      unknowns at once, and the 1.2 round already showed the expensive failure
+      is a silently stale port that conflicts with nothing.
+- [ ] Backend v2 S8 is still blocked on his open issue #32 (`_session_info_for`);
+      it belongs in this round, not 1.3.0.
+
+### Git state, synced 2026-09-11
+- 9 branches that existed only on `adamdev` are now mirrored to `origin` too,
+  so every branch we have is on both remotes.
+- `coord`: both remotes at `94e1429`; the LOCAL ref is stale at `6e09b1c`
+  because that branch is checked out in a worktree and cannot be fetched into.
+  Remotes are the truth; no work is missing.
+- `main`: `origin/main` is `ecd0669` (the v1.2.0 tag commit) and the LOCAL
+  `main` at `fd9e0a8` has diverged from it. Local main is not used by anything
+  and was left alone rather than force-moved. Do not treat local `main` as
+  current.
+- The untracked `web/` in the main checkout is 104 MB of node_modules left from
+  when the tree sat on `feat/svelte-web`. Nothing in it is trackable. Harmless.
+
+## 2026-09-11 - GATE: database backup to archive-nas BEFORE live 1.3.0 testing
+
+Owner's instruction, verbatim: "once we are confident on the code, we take a
+database backup to the archive NAS. this way i can test the site live."
+
+So the backup is a GATE, not a chore: it is what makes live testing safe, and
+it happens AFTER the combined tree validates and BEFORE the deploy.
+
+- [ ] Take the backup with `VACUUM INTO`, not a file copy. The live database is
+      roughly 4.5 GB and is being written by a running server; a straight `cp`
+      of an open SQLite file can capture a torn page. The existing restic job
+      (`/Users/jsugamele/docker-management/devices/mini-m4/backup-m4.sh`)
+      already uses `VACUUM INTO` for exactly this reason and is the pattern.
+- [ ] Destination: archive-nas 10.0.1.237, TrueNAS SCALE, ssh user
+      `truenas_admin` (a bare `ssh 10.0.1.237` fails), path
+      `/mnt/ARCHIVE/vault/85_cloud-exports/claude/`. Pool had 8.5 TB free.
+      Defined in the Infrastructure project's `config/servers.yaml`.
+- [ ] VERIFY THE COPY, do not trust the transfer: sha256 both ends and compare,
+      the way the 2026-09-09 archive round did. An unverified backup is a
+      belief, and the whole point of this gate is that the owner can break the
+      live install and get back.
+- [ ] Also record what the ROLLBACK actually is, in the same place as the
+      backup, so it is one command and not a reconstruction: redeploy
+      `release/1.2.1` (tagged, published, known good), and for the app bundle
+      move back `/Applications/Cloude Code.app.rollback-1.2.0-20260910T120538`
+      then `launchctl bootout` and `bootstrap`. NEVER `kickstart -k`; it
+      SIGKILLs Electron and orphans the python server on port 8000, which the
+      next app refuses to adopt.
+- [ ] Note the nightly restic job also covers the app data dir, so there IS a
+      second copy, but it is a scheduled snapshot rather than a point-in-time
+      taken immediately before the change. Take the explicit one anyway.
+
+Depends on: `integration/1.3.0` validating. Blocks: the live deploy and all
+live testing of the rewrite.
+
+## 2026-09-11 - BUG (real, not the demo): a failed write is INVISIBLE to a sighted user
+
+Found because the owner clicked "new group" on the 1.3.0 preview and reported
+it broken. It was not broken: the preview correctly REFUSED the write and said
+so. He could not see the refusal.
+
+- [ ] The error sentence is produced correctly and reaches the page verbatim.
+  It is announced through `session-sidebar-group-actions.js`'s `announce()`
+  into `#session-sidebar-live`, which the stylesheet clips to
+  `width:1px; height:1px; clip:rect(0,0,0,0)`. That element exists for assistive
+  technology. So a SCREEN READER USER HEARS the failure and a SIGHTED USER GETS
+  SILENCE. The accessible path works and the visual path is missing, which is
+  the opposite of the usual defect.
+- MEASURED on four of four controls driven: sidebar group create, group
+  rename/delete from the menu, launchpad archive, launchpad restart picker.
+  In every case the live region read the full sentence while nothing rendered.
+  Not every control was driven; four were, four swallowed.
+- THIS IS THE LEGACY SIDEBAR AND LAUNCHPAD ERROR PATH, so it is present on
+  LIVE 1.2.1 today, not something the rewrite introduced. The sidebar is
+  deliberately outside the launchpad migration.
+- [ ] Fix: a failure must reach a visible surface as well as the live region.
+  The app already has a toast system with a global poll and per-session
+  dismissal; routing `announce()`'s ERROR path to a toast while keeping the
+  live-region announcement is the small version. Do NOT replace the live region,
+  or the screen-reader path regresses to match the visual one.
+- [ ] Add a test that fails when an error path writes ONLY to a clipped element.
+  This project already fails builds on patterns (remote assets, literal NUL
+  bytes, unresolved names); the same shape applies. A negative control is
+  mandatory: the test must fire on a real swallowed error and stay quiet when a
+  visible surface is used.
+- Related, same class, found the same way: an endpoint check is not a page
+  check. The preview was reported as needing no auth because
+  `/api/v1/auth/status` returned authenticated; the CLIENT keeps its own gate
+  and rendered a login screen anyway. Verify what the screen shows, not what the
+  route answers.
+
+Preview for the owner: `http://10.0.1.150:5057/` (fixtures, not his sessions;
+reads live, writes refused). Stop it with `kill 97386`.
+
+---
+
+## 2026-09-11 - integration/1.3.0: both of our chains merged, measured against per-chain controls
+
+`integration/1.3.0` off `release/1.2.1` at `942638e`. Adam's line is NOT in
+this branch and is the next round (1.3.1), per the release plan above.
+
+**Order: backend first, then client.** The backend chain is the smaller diff
+(16 commits) and its structural moves are what the client's references must
+resolve against, so merging it first makes the client merge the step that can
+expose cross-chain staleness, and therefore attributable. It also lands
+`docs/DECISIONS.md` and the new route-mount test before the client arrives, so
+both are available as instruments.
+
+**Conflicts, four files across the two merges, all resolved additively.**
+`.claude/TODO.md` twice and `CLAUDE.md` once: every side was a pure append of
+dated entries with ZERO heading overlap, kept in full and verified by diffing
+the heading set against both parents each time. `CLAUDE.md`'s stack table took
+the client's new "Compiled frontend" row AND the backend's `src/config/` path.
+`client/js/launchpad.js` was a modify/delete: the delete wins, the backend side
+held one comment line repointing a removal note, and that note survives in the
+two node tests that carry it.
+
+**THE BASE MOVED TWICE WHILE THIS RAN.** `release/1.2.1` went
+`4d8aa76` -> `12d9dcc` -> `942638e` mid-session, all TODO appends from another
+session on the main checkout. Pinned to `942638e` and re-pointed once rather
+than chasing it. Re-check before the PR merges.
+
+**The numbers, each against a control MEASURED on the chain tip first.**
+
+    pytest        backend tip 19ac32d   6520 passed /  2 failed / 54 skipped
+                  client  tip 82b8cb2   5715 passed /  6 failed / 19 skipped
+                  MERGED               6527 passed /  6 failed / 54 skipped
+    vitest        client tip 1335 / MERGED 1335, 47 files
+    svelte-check  client tip 0 errors / MERGED 0 errors, 401 files
+    node suite    client tip 171/171  / MERGED 171/171
+
+**ZERO NEW FAILURES. The merged six are the SAME six the client tip already
+had**, and running the client chain's own pytest is what proved it. The
+backend control is the pre-existing environmental pair
+(`test_home_write_guard`, `test_version_probe`). The other FOUR are the client
+chain's own, all one root cause - `client/js/launchpad.js` and
+`tests/test_recent_deleted_sessions.node.mjs` were deleted and three things
+still point at them:
+
+- `tests/test_ui_flags_setting.py::test_the_client_actually_probes_the_flag`
+  **IS CATCHING A REAL BUG AND WAS LEFT RED ON PURPOSE.** Nothing in
+  `web/src` calls `UIFlags.ensure()`; only `client/js/session-sidebar-fetch.js`
+  does. So on the SVELTE HOME SCREEN the probe never runs,
+  `showMarkUnreadControl()` answers its default `true` forever, and
+  `ui.show_mark_unread_control: false` is dead on that surface. That is the
+  "a setting nothing reads is not a setting" failure the test exists for, and
+  it contradicts the standing ruling that the control ships behind that flag.
+  Repointing the test would have destroyed the evidence; fixing it is a
+  behaviour change in the client chain's own subsystem and belongs to its
+  author, not to a merge.
+- `tests/test_docs_operations_chart_drift.py` (2): `docs/session-project-operations.md`
+  still cites `client/js/launchpad.js`.
+- `tests/test_recent_deleted_sessions_runs.py`: a python wrapper whose node
+  sibling was deleted. Its coverage WAS ported -
+  `web/src/lib/launchpad/recent-visibility.test.ts` says so in its header - so
+  this one is dead weight, the same shape the client chain already retired in
+  `tests/test_project_list_render_guard_runs.py`.
+
+**Collection delta fully accounted, zero coverage removed.** Union of the two
+tips is 6598, merged collects 6587. The 11: one is
+`test_project_list_render_guard_runs.py`, deleted by the client chain; the
+other ten are absent from the backend tip too, being renamed or re-parametrised
+by the decomposition. Coverage in those areas GREW -
+`test_no_unresolved_names` 265 params on the client tip to 347, route-table
+assertions 2 to 92 plus 147 new `test_api_route_modules` cases.
+
+**The four cross-chain checks, the ones a clean merge cannot vouch for.**
+- LED parity + drift guard + behaviour: 39 tests pass. The fixture reads the
+  REAL `client/js/status-led.js` and `session-status-ui.js` off disk, and the
+  suite carries its own NEGATIVE CONTROL proving the comparison can fail.
+  Neither chain touched `status-led.js`.
+- i18n pseudo-locale coverage guard: 289 tests in `coverage.test.ts`, 324
+  across `web/src/lib/i18n/`. All pass.
+- Every route the client calls still mounts: `test_api_route_modules.py` 146
+  passed / 1 skipped against `src.main.app`, `test_client_called_routes_exist.py`
+  7 passed. The assembled app answers 88 OpenAPI paths and all four the client
+  consumes are present under `/api/v1/`.
+- **NO FIELD MOVED LEVEL.** An AST diff of the base `src/models.py` against the
+  new `src/models/` package finds EVERY class field-identical - `Session` 11,
+  `SessionInfo` 21, `SessionRecord` 27, `AttachableSession` 16, and no class
+  differing anywhere in the sweep. The decomposition was a pure move. Confirmed
+  a second way off the live pydantic models, and every field
+  `web/src/lib/sessions/types.ts` reads sits on the level it expects.
+
+**KNOWN GAP, not fixed here.** `tests/test_client_called_routes_exist.py`
+scans `client/js/**/*.js` ONLY. It never looks at `web/src`, so it is green and
+proves nothing about the new home screen. Harmless TODAY because `web/src`
+makes exactly one API call and does it through the legacy `window.API`; every
+other `/sessions/...` mention there is a docstring. It stops being harmless the
+day someone writes a raw `fetch` in a `.svelte` file.
+
+**Bundle freshness PASSES**: `npm run build` leaves
+`git status --porcelain client/dist` empty and `scripts/web-build-check.sh`
+exits 0 reading BUNDLE CURRENT. Also: 191 `client/js` files `node --check`
+clean, `scripts/scan_secrets.py` exit 0 over 1636 files, the four listing cost
+ceilings 16 passed, secret-scan pre-commit hook run on every commit.
+
+Version set to **1.3.0** in `macOS/package.json`, still the single
+hand-written source after the config repackage. NOT tagged, NOT deployed.
+
+**Stale doc found, left alone.** `CLAUDE.md` still describes the LED as having
+retired the outer `unread` state onto the inner dot. `docs/DECISIONS.md` records
+the owner choosing the OPPOSITE on 2026-09-09 ("1. his"), and the shipped
+`client/js/status-led.js:123` agrees with the ruling - `unread` IS in
+`OUTER_STATES`. The CODE is correct and the merge did not touch it; only the
+prose is describing the branch that lost. Flagged rather than edited, because
+DECISIONS is Adam's to restate.
 ## 2026-09-10 - both update checkers retargeted, 33 stale drafts deleted, the kept-behaviours question put to Adam
 
 Three owner-authorised errands, on `fix/update-checker-target` off `release/1.2.1`.
@@ -6950,3 +9943,711 @@ Three owner-authorised errands, on `fix/update-checker-target` off `release/1.2.
 - `scripts/ci/check-js-syntax.sh`: 227 files parsed cleanly.
 - `node --check` on both touched JS files.
 - `venv/bin/python3 scripts/scan_secrets.py`: exit 0, clean, 1393 files scanned.
+
+---
+
+## 2026-09-11 - the six pytest failures on integration/1.3.0, triaged one by one
+
+Raised in review: the project baseline has been TWO all session, so the client
+chain brought FOUR extra and nobody triaged them. Seven slices each measured
+their own control and the number crept. All six, with the actual failure read
+rather than guessed.
+
+**(a) ENVIRONMENTAL, 2 - the documented pair, and now the reason each fails.**
+
+- `tests/test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`
+  The guard DOES refuse, correctly. The test asserts the literal string
+  `/Users/jsugamele/.claude/settings.json` appears in the refusal, and the
+  message carries
+  `/Users/.../Sync/Claude/settings.json` instead, because `~/.claude` is a
+  SYMLINK into iCloud on this machine and the guard reports the resolved path.
+  That is gotcha 6 turning up inside a test. Machine-shaped, not code-shaped.
+- `tests/test_version_probe.py::test_current_version_empty_when_unresolvable`
+  Wants `""` for an unresolvable version and gets `1.0.33`, because on a real
+  checkout the probe resolves one. Needs an isolated install dir to mean
+  anything here.
+
+**(b) REAL BUG, 1 - left red deliberately, because a merge commit is the wrong
+place to change behaviour and would make it unbisectable.**
+
+- `tests/test_ui_flags_setting.py::test_the_client_actually_probes_the_flag`
+
+  **What is broken.** `client/js/ui-flags.js` answers every flag's shipped
+  DEFAULT until its probe lands, and `show_mark_unread_control` defaults
+  `true` (`ui-flags.js:43`, and `showMarkUnreadControl()` returns
+  `_flags.show_mark_unread_control !== false`). The ONLY caller of
+  `UIFlags.ensure()` left in the tree is
+  `client/js/session-sidebar-fetch.js:72`. Nothing in `web/src` calls it. So on
+  the SVELTE HOME SCREEN the probe never runs, the flag answers `true`
+  forever, and `ui.show_mark_unread_control: false` in config.json does
+  nothing on that surface. The control is not missing - it renders, via
+  `web/src/lib/plugins/mark-unread/index.ts` - it simply cannot be turned OFF.
+  The setting is dead, which is precisely the failure the test's own docstring
+  names: "a setting nothing reads is not a setting, and the failure is silent".
+
+  **Which commit introduced it.** `97476a1`, svelte slice 3, "the session data
+  layer into one svelte store". `git log -S` over `client/js/launchpad.js` has
+  exactly two commits: `67990f3` (2026-09-09 20:48) ADDED the caller, under the
+  title "fix(ui-flags): give ensure() a caller, or the setting ships dead", and
+  `97476a1` REMOVED it about a day later while moving the poll tick into
+  `web/src/lib/sessions/store.svelte.ts`, without carrying it across. Slice 7
+  (`f28faef`) then deleted `launchpad.js` outright, so no trace is left to
+  notice. The removed block even carried the comment "Same call in
+  session-sidebar-fetch.js, because either surface may be the first one a page
+  load reaches" - the reason it was needed was sitting in the lines deleted.
+
+  **Why it matters more than the rest.** This is a KEPT BEHAVIOUR. It is
+  recorded in `docs/kept-behaviours/ccsliinc.md` under "the manual mark-unread
+  control", whose `paths:` line names `client/js/launchpad.js` explicitly, and
+  it is a standing ruling in `docs/DECISIONS.md` ("The mark-unread CONTROL is
+  not replaced by the unread INDICATOR", 2026-09-08, scope: all repos), which
+  says it "ships behind `ui.show_mark_unread_control`, default on, so turning
+  it off is a setting rather than a deletion". The rewrite silently disabled
+  the switch the owner insisted on keeping. NOTE: `docs/kept-behaviours/` is
+  NOT in `release/1.2.1` or either chain tip - it lives on `feat/work-protocol`
+  and `docs/plugin-policy`. That is its own gap, and it is why slice 3 had no
+  file in its own tree to trip over.
+
+  **The smallest fix**, for whoever takes it, NOT applied here: in
+  `web/src/lib/sessions/store.svelte.ts`, at the top of `loadRunningSessions()`
+  - the same position the deleted block held in the legacy poll tick - call the
+  probe and do NOT await it:
+
+      const ui = (globalThis as any).UIFlags;
+      if (ui && typeof ui.ensure === 'function') ui.ensure();
+
+  Not awaited because a flag must never be able to delay the session list;
+  memoised onto one promise inside `ui-flags.js`, so a poll costs nothing after
+  the first tick. Then widen the test from two `client/js` files to the svelte
+  call site, so it guards where the code now is.
+
+**(c) STALE, TARGET MOVED, 3 - fixed in `882073e`.**
+
+- `tests/test_docs_operations_chart_drift.py::test_every_cited_file_exists`
+- `tests/test_docs_operations_chart_drift.py::test_every_cited_symbol_is_defined_in_the_file_it_is_cited_from`
+  `docs/session-project-operations.md` cited `client/js/launchpad.js` nine
+  times. Repointed to where each action went: fork and the record delete to
+  `web/src/lib/launchpad/recent-actions.ts`, create and adopt to
+  `navigation.ts`, respawn and rename to `running-host.ts`. **The citation
+  grammar could not express those targets** - both regexes accepted only
+  `src|client|tests|macOS` roots and `.py|.js`, so a repointed citation would
+  have become invisible prose and the guard would have passed holding nothing.
+  Widened to the `web` root and `.ts`/`.svelte`. Proven both ways: a planted
+  bogus web symbol and a planted bogus web module each turn it red.
+- `tests/test_recent_deleted_sessions_runs.py::test_deleted_session_records_reach_the_recent_list`
+  A wrapper that only shelled out to a node file the client chain deleted.
+  DELETED, because the assertion was ported, not dropped:
+  `web/src/lib/launchpad/recent-actions.test.ts` carries the 2026-09-07 lesson
+  in its header and asserts `expect(r.fetched).toEqual([true])`. Same treatment
+  the client chain already gave `test_project_list_render_guard_runs.py`. Swept
+  for other wrappers pointing at deleted node files: none.
+
+**Suite after: 3 failed / 6530 passed / 54 skipped**, collection unchanged at
+6587 (one wrapper out, one negative control in). node 171/171, vitest 1335,
+svelte-check 0 errors, bundle CURRENT, secret scan exit 0.
+
+**DEPLOY VERDICT.** Nothing here blocks the deploy on test grounds: the two
+environmental failures are machine-shaped and the third is a dead SETTING, not
+a broken session. The mark-unread control still renders and still works; only
+the switch that hides it is inert, and its default is the state the owner
+wants. So 1.3.0 can ship with `test_ui_flags_setting` known-red PROVIDED it is
+filed and fixed in 1.3.1 - what must not happen is it being normalised into
+the baseline the way these four just were. The real gates before live remain
+the two recorded 2026-09-10 (boot re-adopt held-plus-skipped against
+`tmux -L cloude list-sessions | wc -l`, and the `/sessions/list` row count
+checked separately) plus the database backup gate, none of which a suite can
+substitute for.
+
+**Also corrected here.** `src/api/routes.py` off CLAUDE.md's do-not-grow list
+(106 lines after S6, an aggregator now); the other four on that list
+re-measured and all still over 500. `test_client_called_routes_exist.py`
+extended to read `web/src` `.ts` and `.svelte`, with
+`test_the_web_src_arm_actually_fires` as a permanent negative control - that
+arm reports ZERO paths on a clean tree today, which is exactly when a broken
+scanner is invisible. **CLAUDE.md's LED paragraph needed NO correction**: the
+merged tree already carries the ring model and cites the ruling (`6768dcc`,
+"state the shipped led model on first encounter"). The stale text was in the
+1.2.1 base, one of the chains had already fixed it, and re-editing would have
+collided with `docs/handoff-1.3` for nothing.
+
+## 2026-09-11 - RELEASE 1.4.0: the superset, his 1.3.0 absorbed
+
+Owner's ruling, verbatim: "make ours 1.4 thats fine", then "ill wait for the
+superset". Both lines declared 1.3.0 on the same morning, 22 minutes apart,
+neither knowing. His stands; ours is 1.4.0 and CONTAINS his. The separately
+planned 1.3.1 is collapsed into this release. Branch keeps the name
+`integration/1.3.0` - it is already on both remotes and a name is a handle,
+not a declaration.
+
+### Scope, corrected
+
+The round was briefed as "his 17 commits". It is not. Merge base is
+`4d8aa76`; **89 of his non-merge commits were new to this line, 245 files,
++50446 / -3761** - his whole night, not just the five his release names.
+Every risk estimate downstream of the 17 was wrong, which is worth
+remembering: MEASURE THE MERGE BASE BEFORE QUOTING A COMMIT COUNT.
+
+### The verdict that matters: a clean merge proved nothing
+
+Sixteen conflicts out of 245 files. The conflicts were never the risk.
+
+- [x] `src/api/routes.py` was **silently reverted with zero conflicts**.
+      This line carved it 4,387 -> 106 lines (assembly plus registration
+      order); his line kept editing the flat file; the merge resolved to
+      HIS 4,593 and every route would have been declared twice. Nothing
+      throws - FastAPI takes the first match. Restored, and his 15 hunks
+      ported into the siblings that own those routes.
+- [x] `_drain_viewer` read `getattr(sm, "idle_watchers", {})` and
+      `hasattr(sm, "get_backend")`. Both answer FALSY here rather than
+      raising, so pattern detection and idle watching would have gone dead
+      on every session with the suite green.
+- [x] `test_listing_off_the_loop`'s thread tripwire named six live
+      containers; four do not exist on `SessionManager` here, and
+      `setattr` on a name an object lacks SUCCEEDS. It would have wrapped
+      four decoys and passed while measuring two of six.
+- [x] `self._last_probe_socket` in the status-map construction: an
+      AttributeError on the listing hot path. Found by the sweep, not by
+      reading diffs.
+
+### The sweep, encoded
+
+- [x] `tests/test_cross_boundary_references.py`. Found versus verified:
+      **388 package-symbol imports out of `src.config` / `src.models`, 388
+      resolve; 384 `self.<attr>` references over 80 distinct names in
+      `session_manager.py`, all 80 resolve.** Mutation-verified (planting
+      a stale attribute makes it fail, naming the attribute and the line),
+      with a negative control because both real assertions are "nothing
+      was found" - the shape that passes when the collector is broken.
+- [x] The client half added `tests/test_client_cross_references.node.mjs`,
+      2,086 found and 2,086 verified.
+
+### Design collisions, judged on merit, all in docs/DECISIONS.md
+
+- [x] ONE CONFIG WRITER: **his**. Atomic and serialized are different
+      properties and only his had the second.
+- [x] THEME PRECEDENCE: **his** (#65), pin over dotfile, with the pin-to-
+      dotfile migration deleted and the reconcile prune dropped.
+- [x] BOUNDED FAN OUT: **his bound on our registry**, both kept.
+- [x] DEAD-PANE REAPER: ours, WITH his `session_pane_death` reading, which
+      closes the `remain-on-exit` husk gap CLAUDE.md has carried since
+      2026-09-08 - against the owner's 2026-09-08 ruling that dead rows
+      leave the live list and go to Recent.
+- [x] NAVIGATIONGENERATION: lands in this release rather than tracked.
+
+### The bug the merge paid for
+
+- [x] **Clicking a running session row on the home screen did nothing.**
+      Both the running list and the project tree routed through
+      `window.Launchpad._returnToActiveRunningSession` /
+      `._handleAttachRunningSession`; slice 7 deleted both and `shim.ts`
+      never republished them, so all four call sites logged `missing()`
+      and returned. PRE-EXISTING on this line at `acfa49b`, invisible to
+      every unit test (they hand in a recorder and assert what the list
+      ASKED FOR), and caught by HIS browser-driven
+      `tests/test_perf_harness_smoke.py`, which is the first test in the
+      combined tree that drives a real click. Rewired onto the compiled
+      `navigation.ts` paths that were already written and already tested.
+
+### Verification, measured
+
+- [x] pytest **4 failed / 7261 passed / 57 skipped**, against measured
+      parents of 7 (ours, `da1b4ae`) and 4 (his, `6012467`). The four are
+      EXACTLY his four: three real-tmux family plus the shared
+      environmental `test_home_write_guard`. **Zero new failures.**
+- [x] node **195/195** (the client half reported 194/195; the one it left
+      is fixed, it asserted against `src/core/*.py`)
+- [x] vitest **1340/1340**, `svelte-check` **0 errors**
+- [x] `npm run build` then `client/dist` clean; `web-build-check.sh` reads
+      BUNDLE CURRENT **against the combined tree**
+- [x] `check-js-syntax.sh` 268 files clean; `node --check` 221 client/js
+      files, 0 failures
+- [x] `scan_secrets.py` exit 0, 1,777 files
+- [x] Four cost ceilings pass on the merged tree AND on his parent: the
+      `4N+1` datastore bound on `/sessions/list`, the 4-connection bound
+      on the attachable pass, the subprocess count that must not grow with
+      session count, and the socket-scope refusal. His off-the-loop gather
+      composes with this line's decomposition without breaching either.
+- [x] Four cross-chain checks: LED parity + drift guard 8/8, i18n incl.
+      pseudo-locale coverage 324/324, every probed route MOUNTED on the
+      assembled `src.main.app` (0 unmounted, 401/403 not 404), and the
+      SessionInfo two-level field guard passes.
+- [x] gitleaks hook ran on every commit, never `--no-verify`. It refused
+      the merge once, on a credential-shaped literal in his new
+      `tests/test_settings_import_collect.node.mjs`; allowlisted BY VALUE,
+      not by path, so a real credential in that same file is still caught.
+      He never touched `.gitleaks.toml`, so that file would have failed
+      our CI secret scan on arrival.
+
+### Left alone deliberately
+
+- [ ] THREE SETTINGS PANELS NEVER MOUNT. `settings-*-slot` ids queried by
+      `settings-panel.js` and emitted by nothing, plus dead-but-guarded
+      `destroySessionBtn` / `detachSessionBtn`. PRE-EXISTING on both lines
+      AND at the merge base, so it is not merge damage; folding a fix in
+      would make it indistinguishable from merge damage in the blame.
+      Real product bug on live today. NEEDS ITS OWN CHANGE.
+- [ ] `DETACH_SETTLE_MS = 0` in `web/src/lib/launchpad/navigation.ts`
+      stands. This merge did not restructure detach; if a later one does,
+      that constant needs another look. Left as a named constant so it is
+      one edit away.
+- [ ] `tests/test_toast_render_batch.node.mjs` is a known load-sensitive
+      flake on his master (once in 223, then 15/15 in isolation). It
+      passed here. Do NOT widen its budget: a timeout long enough never to
+      flake is long enough to hide a real hang.
+- [ ] Not tagged, not deployed, per the brief.
+
+---
+
+## 2026-09-12 - DOCS PASS after the 1.4.0 release and deploy - DONE
+
+Written by the documentation agent working `docs/steward-1.4.0-round` off
+`b5de919`, while three other agents work `src/**`, `client/**` + `web/**` and
+`scripts/**` in parallel. Everything below was verified against git, the
+GitHub API, the code at `b5de919` or a throwaway reproduction. Where a claim
+could not be verified it says so in those words.
+
+### CORRECTION - the fold's commit and file counts, both wrong in this file
+
+The `2026-09-11 RELEASE 1.4.0` entry above says **"89 of his non-merge commits
+were new to this line, 245 files, +50446 / -3761"**, and `CLAUDE.md` carried
+the same pair. Re-measured 2026-09-12:
+
+    git rev-list --no-merges --count 4d8aa76..6012467   -> 89
+    git log --no-merges --format='%an' 4d8aa76..6012467 | sort | uniq -c
+                                                        -> 84 psyance
+                                                           3  Adoom666
+                                                           2  Joseph Sugamele
+    git diff --shortstat 4d8aa76 6012467
+                        -> 244 files changed, 48172 insertions(+), 3761 deletions(-)
+
+- **89 and 87 are both right, about different questions.** 89 is the raw range
+  count; 87 is how many of those are HIS (84 `psyance` + 3 `Adoom666`). The
+  other 2 are ours, carried back in by the two merges of our line he took
+  inside his own. 87 is not a correction of 89 and neither should be quoted
+  without saying which it is. The published release body uses a third frame
+  and it reproduces exactly: **87 of the 171 non-merge commits between `v1.2.1`
+  and `v1.4.0`**, 198 commits over 27 merges, 704 files.
+- **244 files, not 245**, and **+48172, not +50446**. Deletions match at 3761.
+  No spelling of that diff reproduces the old pair. The per-commit sum, the one
+  derivation that runs higher, is +49306 / -4297 over the same 244 files.
+- The lesson the old entry drew is unchanged and still the right one: MEASURE
+  THE MERGE BASE BEFORE QUOTING A COMMIT COUNT. Add to it: say which side of
+  the base you are counting, and whether you are counting commits or authors.
+
+### CORRECTION - `src/api/routes.py` before slice S6 was 4,397, not 4,387
+
+`CLAUDE.md` said **4,387** in "Where the 1.4.0 integration moved things" and
+**4,397** in "How we work here" - the file disagreed with itself about the one
+number that same paragraph tells you to check first on any merge. Measured:
+
+    git show e859106^:src/api/routes.py | wc -l   -> 4397
+    git show e859106:src/api/routes.py   | wc -l  -> 106
+    git show release/1.2.1:src/api/routes.py | wc -l -> 4387
+
+4,387 is the count at `release/1.2.1` and at the merge base `4d8aa76`; the
+file grew ten lines before S6 ran. Corrected in `CLAUDE.md`. The 4,593-line
+merge result is confirmed (`git show d7c81ee:src/api/routes.py | wc -l`), and
+that file carries **51 route decorators**, every one already declared by a
+sibling.
+
+### CORRECTION - the test baseline was stale by two rounds
+
+`CLAUDE.md` read **5758 passed / 0 failed / 18 skipped** from 2026-09-10 and
+said zero failed was the number to hold. Current, at `b5de919`:
+
+- **7303 passed / 4 failed / 57 skipped, out of 7364 collected.** The 7303/4
+  is the figure the `b5de919` commit itself recorded from a full run.
+- Re-measured independently by this pass, clean worktree with a `config.json`
+  copied in, `-p no:randomly -m "not real_tmux"`: **6957 passed / 1 failed /
+  57 skipped / 349 deselected in 193.18 s**, the one failure being
+  `test_home_write_guard`. A bare `--collect-only -q` on the same tree answers
+  **7364 tests collected**.
+- **6957 + 1 + 57 + 349 = 7364.** The arithmetic closing exactly is what makes
+  the partial run evidence about the full one rather than a second unrelated
+  number.
+- The four, all environmental, all failing identically on his parent
+  `6012467`: `test_cold_socket_born_at_depth_real_tmux`,
+  `test_cold_socket_options_real_tmux`, `test_tmux_launch_batching_real_tmux`,
+  and
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`.
+  Three of the four are in the `real_tmux` group.
+- **Node re-measured by this pass** with the CI loop's own
+  `for suite in tests/*.node.mjs`: **195 suites, 195 pass, 0 fail** at
+  `b5de919`. `CLAUDE.md` said 206/206 from 2026-09-10. THE COUNT WENT DOWN
+  BECAUSE OF THE MIGRATION, not because coverage was lost: the svelte slices
+  retired node suites whose subject they deleted and re-asserted them in
+  vitest under `web/src`, which the `tests/*.node.mjs` glob cannot see.
+- **vitest was NOT re-measured by this pass.** `1340/1340` with `svelte-check`
+  at 0 errors is the reading recorded above for the 1.4.0 merge round and is
+  carried as that round's measurement, not this one's.
+
+### DONE - released, published and deployed
+
+- [x] **`v1.4.0` is an annotated tag naming `7da2901`.** `b5de919`, the boot
+      integrity gate, is ONE COMMIT PAST the tag and is the tip of
+      `integration/1.3.0` on both `origin` and `adamdev` (both confirmed at
+      `b5de919b23d8f727185b54f270b4e0d8fc2759cc`). Note the local branch in
+      the owner's main checkout was still at `57d1c32` when this pass started;
+      fetch before you read it.
+- [x] **Published on `origin` (ccsliinc/CloudeCode), marked Latest**,
+      published 2026-09-11T22:29:38Z, one asset
+      `Cloude.Code-1.4.0-arm64.dmg` at 126,619,315 bytes, sha256 printed in
+      the body beside the `shasum -a 256` line that verifies it. `v1.2.0` and
+      `v1.2.1` remain published as the downgrade path.
+- [x] **`adamdev` has no published release ON THIS LINE**, which is not the
+      same as "no published release". Its `v1.2.0`, `v1.0.36` and `v1.0.35`
+      are DRAFTS; `v0.8.1` from 2026-08-04 is published there and still wears
+      the Latest badge. Stated precisely because the loose version was
+      circulating.
+- [ ] **OPEN, small: the published release body carries one wrong number.**
+      It says `src/api/routes.py` "drops from 1160 lines to 303". Measured, it
+      is 4,387 at `v1.2.1` and 106 at `v1.4.0`; neither figure is that file at
+      either tag. Everything else in the body reproduces exactly. The body
+      lives on GitHub, so this is a release edit and not a commit. Not done
+      here because this pass does not edit published releases.
+- [x] **Deployed to the live mini and running.** REPORTED by the owner
+      2026-09-11: mac-mini-m4, 19 sessions intact across four restarts. NOT
+      re-verified here - this pass does not touch the live host.
+      `scripts/deploy-mini.sh --verify-only` is what re-checks it.
+
+### DONE - two defects that merged cleanly, shipped, and were fixed on live
+
+Both in `c725905`, both the same mechanism as the four the merge sweep caught:
+a name that moved, reached through something that answers falsy or gets
+swallowed rather than raising where a test can see it.
+
+- [x] **`src/api/websocket.py:270` passed `session_manager` where lines 307
+      and 325 passed `registry`.** The live session table moved to
+      `SessionRegistry`, so `SessionManager` carries no `get_backend` and
+      `_resolve_backend` raised `AttributeError`. THE RAISE WAS SWALLOWED by
+      the handshake's own `except Exception`, which logs `ws_handshake_error`
+      and falls through to the streaming loop - so the socket lived and bytes
+      streamed while the NEGOTIATED RESIZE and the ATTACH PAINT were skipped
+      on every terminal open. Measured on live: `ws_handshake_resize` 1,
+      `ws_handshake_error` 1, `ws_handshake_painted` 0. This is the mechanism
+      behind this project's historical wrong-grid and "input lag" symptom,
+      arriving again by a new route. `tests/test_ws_handshake_paint.py` is
+      behavioural on purpose: a test asserting line 270 passes a variable
+      NAMED `registry` would pass forever through a rename, and a test that
+      only checked the socket survived would pass WITH the defect, because
+      surviving is what the swallow guarantees.
+- [x] **`src/core/session_change_notice.py` had it twice in one function.**
+      `publish_hook_status` read `get_backend` off the manager through a
+      `getattr` and fell back to `_hook_tmux_names`; both moved, the first to
+      the registry and the second to `HookTokenAuthority.tmux_names`. Both
+      answer falsy on a real `SessionManager`, so `tmux_session` was always
+      None, the `if tmux_session:` block never ran, and every hook status
+      notice on `/ws/events` shipped with neither a tmux name nor an unread
+      flag. The tolerance is KEPT - this is the hook critical path and must
+      never raise - and pointed at the objects that now carry the members.
+
+### DONE - the boot integrity gate, `b5de919`
+
+- [x] `ensure_db_migrated` ran `PRAGMA integrity_check` unconditionally at
+      `db_migration.py:280`, BEFORE the schema-version gate, so it ran whether
+      or not a migration was pending. Measured 2026-09-11 on the owner's
+      5.4 GB `cloude.db`: **51.8 s of a 55 s startup window**, after which the
+      whole rest of the lifespan took 200 ms. Warm-cache floor about 21 s,
+      cold about 54 s. Six hours after the daily checker had walked the same
+      file in 19.767 s and written `ok`.
+- [x] `src/core/db_integrity_gate.py` is the ladder: **ten refusal rungs, one
+      skip rung**, and every refusal runs the check. `checker_disabled`,
+      `never_ran`, `freshness_cannot_determine`, `stale`, `verdict_failed`,
+      `verdict_cannot_determine`, `db_path_mismatch`, `install_id_unrecorded`,
+      `install_id_mismatch`, `db_smaller_than_verified`.
+- [x] A cached FAILURE runs the live pragma rather than short-circuiting, so a
+      stale failure cannot become permanent.
+- [x] The artifact now records `meta.install_id` and `db_size_bytes`. It used
+      to record only `db_path`, which is derived identically on both sides and
+      therefore proved almost nothing.
+- [x] **What it CANNOT detect, written into the module rather than implied
+      away**: an in-place restore of a same-size-or-larger backup of the SAME
+      install; bit rot arising between the check and the boot; an unclean
+      shutdown, which is not cheaply detectable at all because a `-wal` file is
+      present whenever a connection is open and routinely survives a clean
+      exit - and this is a menubar app that is killed constantly, so any crash
+      heuristic built on it would refuse always or never. The freshness window
+      is the only control for all three, as it always was for the daily check.
+- [x] 37 new tests, every refusal rung proven by COUNTING whether the walk
+      happened rather than by reading back a label. Negative control watched
+      go red: forcing an unconditional skip turned 37 passed into 35 failed /
+      2 passed.
+- [x] **Startup 21.4 s to 1.867 s with a logged skip** - REPORTED by the owner
+      from the live restart 2026-09-11, not re-measured by this pass. Note
+      21.4 s is the WARM-CACHE end of the range, not the 51.8 s worst case.
+
+### DONE - the six checks that were green while measuring nothing
+
+Full write-up with the mechanism for each, and the re-measurement of each, in
+`.claude/notes/troubleshooting.md` under
+`## 2026-09-11 / 2026-09-12 - SIX CHECKS THAT WERE GREEN WHILE MEASURING
+NOTHING`. Promoted into `CLAUDE.md` as **gotcha 11**. In brief:
+
+1. A bare `dist/` in `.gitignore` swallowed `client/dist`; the deploy would
+   have shipped no bundle and every hash check would have compared absent
+   against absent and read green. Closed by the `!client/dist/` negation.
+2. The docs drift guard's citation regexes matched only `.py`/`.js` under the
+   old roots, so a citation repointed at `web/src/**.ts` would have become
+   invisible prose and the guard would have passed forever holding nothing.
+   Same commit, same shape: `test_client_called_routes_exist.py` scanned
+   `client/js` only and went silent on the whole svelte client. Both fixed in
+   `882073e`, both with planted-failure controls.
+3. `rsync --no-compress`. **The circulating summary of this one was wrong and
+   the correction matters**: openrsync exits **1** with 1,392 bytes on
+   **stderr** and copies nothing. What made it green was the PIPELINE -
+   `2>&1 | tail -1` exits 0 without `pipefail` and 1 with it, both measured.
+   The fix is `pipefail`, not a different flag.
+4. `deploy-mini.sh`'s up-check passed against the DYING OLD PROCESS: `kill`
+   returns immediately and the `curl` after it has no identity in it, so it
+   proves something answered and never that the new build is what answered.
+5. The same check reported "up" with nothing listening. **RECORDED AS
+   UNRESOLVED.** The script at `b5de919` cannot produce that from a closed
+   port (curl exits 7 and the loop takes the failure branch), so either
+   something else was answering or the observation came from a different
+   check. Not explained here on purpose.
+6. `tmux -L cloude list-sessions` over a non-interactive ssh. Measured against
+   the real mini: `ssh mac-mini-m4 'echo $PATH'` gives
+   `/usr/bin:/bin:/usr/sbin:/sbin`, no tmux on it; `zsh -lc` finds
+   `/opt/homebrew/bin/tmux`. With stderr suppressed, "command not found"
+   renders as "zero sessions".
+
+### Coordination with the other party, state as of 2026-09-12
+
+- [x] **Their 1.3.0 was built ON our release line.** Confirmed:
+      `git merge-base --is-ancestor release/1.2 6012467` answers YES, and the
+      merge base of `release/1.2.1` and `6012467` is `4d8aa76`. They already
+      hold all our released code.
+- [x] **Both proposals accepted**: our 1.4.0 absorbs their 1.3.0, their 1.3.0
+      stays put. Recorded in `docs/DECISIONS.md` under "Two lines declared
+      1.3.0 on the same morning; his stands and ours is 1.4.0".
+- [x] **We adopted their issue grab order** in `2ac476a`, merged as `50cf9dc`:
+      author first then priority, unlabelled sorting after p2 WITHIN its
+      author's group, other authors after both, ties by lowest issue number.
+      **QUEUE ORDER IS NOT OWNERSHIP.** CORRECTION to how this was briefed:
+      it did NOT land in a file called `docs/adopt-adam-grab-order`; there is
+      no such path. It landed in `.claude/skills/work/SKILL.md` and
+      `.claude/skills/work/work.sh`.
+- [ ] **Their tip is `f1732d5`.** Overnight they shipped **#106** (remove the
+      connect pill, `98afd92`, merged `ea2cbc9`) and **#113** (state dir
+      isolation, `5d86205` / `81505bd` / `c860f87`, merged `405e9e8`), plus
+      `a20091e` re-measuring their own stale test baselines.
+- [ ] **#113 MUST BE PORTED, NOT MERGED.** It edits `src/config.py` as a
+      single flat file; on our line that is the 23-module `src/config/`
+      package. Confirmed from the commits: `81505bd` changes 46 lines of
+      `src/config.py` and `c860f87` changes 12 more. A merge would re-inflate the
+      package the same way `src/api/routes.py` was re-inflated.
+      **Owned by the `port/113-state-dir-isolation` branch.**
+- [ ] **PROCESS NOTE, recorded factually and without accusation.** They
+      committed to announcing before re-entering the client, the toast surface
+      or `session_manager.py`. The #106 connect pill work is a client change
+      and no announcement was found on the thread. It may simply be that the
+      commitment was scoped to the contested files. Worth confirming rather
+      than assuming, in either direction.
+
+### OPEN - carried forward, written to survive being closed within the hour
+
+**THREE OF THESE ARE BEING WORKED RIGHT NOW BY PARALLEL AGENTS.** Each entry
+below states what was measured at `b5de919` by this pass, so a later reader
+can tell whether it was closed or whether it drifted. Do not mark one done
+from a branch name; mark it done from a re-measurement.
+
+- [ ] **The sleep/wake AWAY BAR is full width and overlaps when the sidebar is
+      out.** Filed 2026-09-10 above, still open at `b5de919`.
+      `client/js/terminal-away-bar.js` and `terminal-away-gap.js` are the
+      surface. CLIENT AGENT territory.
+- [ ] **A failed write is INVISIBLE to a sighted user.** Filed 2026-09-11
+      above, still open at `b5de919`. CLIENT AGENT territory.
+- [ ] **Three `settings-*-slot` panels never mount, plus two dead-but-guarded
+      buttons.** Re-measured at `b5de919`: `client/js/settings-panel.js`
+      queries `#settings-wrappers-slot` (line 348),
+      `#settings-toast-history-slot` (352), `#settings-settings-import-slot`
+      (359) and `#settings-terminal-commands-slot` (366);
+      `grep -n "settings-.*-slot" client/index.html` returns NOTHING, so no
+      slot is emitted by the document. `destroySessionBtn` /
+      `detachSessionBtn` are referenced by `client/js/session-editor-menu.js`,
+      `terminal.js` and `themes/themeSelector.js`. PRE-EXISTING on both lines
+      and at the merge base, so not merge damage. CLIENT AGENT territory.
+- [ ] **Stale harnesses still citing the deleted `client/js/launchpad.js`.**
+      **CORRECTION to the briefed count: it is not seven.** Measured at
+      `b5de919`, `grep -rln "launchpad\.js" scripts/` returns **17 files**, of
+      which **11 are outside `scripts/archive/`**: nine `scripts/ci/mutate-*`
+      mutation harnesses, plus `scripts/verify_header_icons_and_menu.py` and
+      `scripts/verify_home_mechanics.py`. Only ONE of the eight users of
+      `scripts/lib_pixel_measure.py` cites it
+      (`scripts/verify_home_mechanics.py`), so "seven stale pixel harnesses"
+      does not reproduce under any spelling this pass tried. Re-measure before
+      quoting a number. SCRIPTS AGENT territory.
+- [ ] **`deploy-mini.sh`'s up-check has no identity in it.** See findings 4
+      and 5 above and the troubleshooting section. SCRIPTS AGENT territory,
+      branch `fix/deploy-upcheck-identity`.
+
+### SLOTS LEFT FOR THE PARALLEL AGENTS - fill these in, do not rewrite them
+
+The three other agents' work lands after this pass. Their findings belong
+here, appended under each heading, so that this entry stays a record of what
+was true at `b5de919` and the next entries record what changed.
+
+- **`src/**` agent** - findings and what shipped: _pending, append below._
+- **`client/**` + `web/**` agent** - findings and what shipped: _pending,
+  append below._
+- **`scripts/**` agent** - findings and what shipped: _pending, append below._
+
+### OPERATIONAL HAZARD - two agents, one scratchpad, one deleted worktree
+
+- [ ] **A previous agent's git worktree was deleted mid-task by another
+      agent's sweep of the shared session scratchpad.** Both agents were
+      writing under the same session scratchpad directory and one cleaned up
+      what it took to be its own leftovers. The work in the deleted worktree
+      that had not been committed was gone.
+      **THE RULE: COMMIT EARLY AND OFTEN, AND DO NOT HOLD WORK IN A
+      WORKTREE.** A commit survives the directory; an uncommitted edit does
+      not. Give a worktree a distinctive name that identifies whose it is, and
+      never sweep a path you did not create. This pass committed after every
+      file.
+
+## 2026-09-12 - consolidation of the four 1.4.0 branches onto integration/1.3.0
+
+- [x] Merged, in this order and for this reason: `port/113-state-dir-isolation`
+      (src), `fix/deploy-upcheck-identity` (scripts), `fix/client-four-defects`
+      (client/web), `docs/steward-1.4.0-round` (docs last, so the docs describe
+      the final state). The four branches own DISJOINT FILE SETS - no two touch
+      the same file - so the order cannot change the resulting tree at all and
+      every merge was textually clean. Order was chosen for bisectability, not
+      for correctness, and a clean merge was treated as proof of nothing.
+- [x] The named cross-boundary hazard, the committed bundle: CLEARED BY
+      MEASUREMENT. Only `fix/client-four-defects` touches `web/src`, so the
+      bundle it committed was already built from the final merged sources. A
+      rebuild on the merged tree reproduced `client/dist/app.js` and `app.css`
+      byte for byte (`git diff -- client/dist/` empty) and
+      `scripts/web-build-check.sh` reads BUNDLE CURRENT.
+- [x] The hazard NOT named in the brief, and the one that mattered: the state
+      dir change makes an explicit `CLOUDE_STATE_DIR` SUPPRESS the legacy
+      `LOG_DIRECTORY` pin. On a box where state files sat at the legacy
+      location that would silently repoint `session_metadata.json`,
+      `hook_tokens.json` and the unread store on next boot, which is the
+      410-and-token-storm failure this project has already paid for. MEASURED
+      ON LIVE BEFORE DEPLOYING: `CLOUDE_STATE_DIR=` is set but EMPTY, so
+      `state_dir_is_explicit` returns False and the legacy rung fires exactly
+      as before; and the legacy directory holds no state files at all, every
+      one of them being in the default state dir. Provable no-op on live.
+- [x] Verification on the merged tree: pytest 7318 passed / 4 failed / 57
+      skipped, the four being the known environmental four; node 198/198;
+      vitest 1342/1342; `svelte-check` 0 errors over 402 files;
+      `tests/test_deploy_restart_check.sh` 26/26; `test_cross_boundary_references.py`
+      and `test_client_cross_references.node.mjs` both green;
+      `import src.main` succeeds.
+- [x] Docs figures that MOVED were corrected rather than left standing:
+      CLAUDE.md and HANDOFF.md carried 195 node suites, 1340 vitest and 7303
+      pytest, all correctly dated to `b5de919`. The consolidated readings are
+      now recorded beside them, dated, rather than overwriting the base's.
+
+## DONE - cut v1.4.1, 2026-09-12
+
+APPEND ONLY. Nothing above is deleted.
+
+### Why the number moved, measured before acting
+
+- [x] `v1.4.0` is an annotated tag naming `7da2901`. Live and deployed was
+      `2898b26`. `git rev-list --count v1.4.0..2898b26` answers **26**, and
+      `git show <ref>:macOS/package.json` answers `1.4.0` at BOTH refs. Every
+      figure in the brief reproduced exactly; nothing in it was wrong.
+- [x] The cross-party cost is what made it urgent rather than tidy: **PR #108
+      was asking the other party to merge a branch whose version declaration
+      said 1.4.0 while carrying 26 commits that 1.4.0 does not contain.**
+- [x] `macOS/package.json` re-confirmed as the ONLY hand-written declaration of
+      the release version, checked rather than assumed. The two other tracked
+      `package.json` files are private build workspaces carrying their own
+      independent numbers that deliberately do not track the release:
+      `web/package.json` at `0.1.0` and
+      `scripts/codemirror-vendor/package.json` at `1.0.0`. The `VERSION` file
+      is GENERATED from the tag at release time and carries a header saying so.
+      Do not "fix" either workspace to match a release number.
+
+### The classification, argued rather than assumed
+
+- [x] **PATCH.** `src/api/` is untouched across the entire range: `git diff`
+      over `src/api/` produced zero added or removed route decorators, so no
+      endpoint was added, removed or reshaped. 33 files, +5375 / -133.
+- [x] Steelmanned the MINOR case and rejected it. The boot gate adds no
+      capability a user can invoke, configure or observe as a new thing: no
+      config key, no flag, no endpoint, and all ten refusal rungs fall back to
+      the pre-1.4.0 behaviour. The restored shim members REPAIR controls 1.4.0
+      already advertised and silently broke; restoring an advertised control is
+      a fix, not a feature.
+- [x] This line's own precedent is MORE permissive, not less: `v1.2.1` was a
+      patch and carried a new user-visible feature (durable mute), a large
+      performance change and a removed gesture (double-click rename). 1.4.1's
+      surface is strictly smaller.
+
+### What was cut
+
+- [x] `d4f76d4` on `integration/1.3.0`: `macOS/package.json` 1.4.0 to 1.4.1,
+      plus one appended `docs/DECISIONS.md` entry. Staged by name, gitleaks
+      pre-commit hook ran clean, no `--no-verify`.
+- [x] Pushed **adamdev first, then origin**, each verified by its own
+      `git ls-remote` rather than by the push printing success. Both read
+      `d4f76d406372a09e636731329786196e726fe899`.
+- [x] Annotated tag `v1.4.1`, object `42d3f5f`, naming `d4f76d4`. Pushed to
+      both, verified per remote with `git ls-remote --tags`.
+      `v1.4.0` (`4936413`), `v1.2.1` (`54d95d1`) and `v1.2.0` (`f4ede4c`) all
+      re-read after the push and UNCHANGED.
+- [x] `.github/workflows/release.yml` run **34699953914**, success in 95 s.
+      Its tag-versus-package.json guard passed, which was pre-run locally with
+      `node --print "require('./macOS/package.json').version"` before pushing.
+- [x] Published on `origin` only, marked Latest:
+      https://github.com/ccsliinc/CloudeCode/releases/tag/v1.4.1
+      `adamdev` gets no published release, per the standing rule.
+
+### The artifact was verified, not assumed
+
+- [x] Downloaded the published asset and computed its hash here rather than
+      quoting the API's own `digest` field: sha256
+      `4fc72fe86ebbc037c74253539cd0164c2474fe231ecccfb86ef78ab1399a6199`,
+      126,619,457 bytes. The two agree.
+- [x] Mounted the DMG: `CFBundleShortVersionString` and `CFBundleVersion` both
+      read **1.4.1**, `codesign --verify --deep --strict` passes, signature
+      ad-hoc, identifier `com.cloudecode.menubar`. **The workflow's own guard
+      compares the tag to package.json at SOURCE and never opens the built
+      bundle, so this is a check it does not make.**
+
+### The notes for his agent, which is the half that mattered
+
+- [x] **PR #108 description rewritten** for 1.4.1 with a "read this first if you
+      saw this PR before 2026-09-12" block at the top explaining the renumber,
+      that the contents did not change, and the patch reasoning.
+- [x] **The six-path conflict table survived, and that was PROVEN twice.**
+      Fingerprinted its sha256 before editing, re-fingerprinted after, then
+      read the body BACK FROM GITHUB and fingerprinted the live copy:
+      `c47f2ac382d0d632cc31ec82238602ed5430a4f71eddc791c6646692312bc17b` all
+      three times.
+- [x] **The conflict SET was re-measured against his `master` at `f1732d5`
+      after the version commit**, with `git merge-tree --write-tree
+      --name-only`, and is byte for byte identical to the pre-commit baseline.
+      `src/config.py` is still the modify/delete whose default leaves HIS file
+      in the tree. `macOS/package.json` does NOT become a seventh conflict: he
+      last touched it at the merge base `6012467`, so git takes ours, and
+      resolving the merge tree shows the merged blob reads `"version": "1.4.1"`.
+- [x] **#107 comment posted**, short and self-contained, assuming zero relay:
+      https://github.com/Adoom666/CloudeCodeDev/issues/107#issuecomment-5646589751
+- [x] **`docs/DECISIONS.md`** appended (never rewritten) with the dated ruling.
+
+### Open, deliberately not acted on
+
+- [ ] **The version string on live still reads 1.4.0.** `2898b26` is `d4f76d4`
+      minus the version bump, so live's SERVER code is 1.4.1's and no behaviour
+      is missing; what is stale is the string, because the installed Electron
+      bundle is the 1.4.0 DMG and `resolve_version` reads the `VERSION` file
+      stamped at install time. NOT deployed and NOT restarted, on the owner's
+      explicit instruction, with 19 sessions live on the box. Correcting it is
+      an install, not a code change, and needs his go-ahead.
+- [x] **CORRECTED, and the correction is the lesson.** This entry first said
+      the tag push would fire adamdev's copy of `release.yml` and leave a draft
+      there. That was an INFERENCE stated as a measurement and it is FALSE.
+      Measured afterwards via `gh api repos/Adoom666/CloudeCodeDev/actions/
+      workflows`: on `adamdev`, `release`, `tests` and `secret scan` are all
+      `disabled_manually`, and only the two Claude workflows are active. The
+      tag push fired NOTHING there and `gh release list` on adamdev shows no
+      `v1.4.1` at all, draft or otherwise. Its published Latest is still
+      `v0.8.1` from August, with 1.2.0 and 1.0.3x sitting as drafts, exactly as
+      HANDOFF already recorded. **Only `origin` builds a DMG**, which also
+      means origin is the only place a tag push can be verified by a build.

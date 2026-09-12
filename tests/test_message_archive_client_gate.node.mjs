@@ -60,7 +60,10 @@ function read(...parts) {
     return fs.readFileSync(path.join(ROOT, ...parts), 'utf8');
 }
 
-const LAUNCHPAD = read('client', 'js', 'launchpad.js');
+// SLICE 7: the home screen's markup is a Svelte component now, and
+// the claim - there is no archive door left in the body to gate - is
+// made against every slice 7 source rather than one deleted file.
+const { HOME_ALL_SRC: LAUNCHPAD } = await import('./lib-home-source.mjs');
 const ENTRY_SRC = read('client', 'js', 'archive-entry.js');
 
 /**
@@ -150,7 +153,7 @@ function loadHeader(feature) {
 // the wrong reason - the exact defect class this file is guarding.
 
 await test('POSITIVE CONTROL: the source files loaded and are non-empty', () => {
-    assert.ok(LAUNCHPAD.length > 1000, 'launchpad.js did not load');
+    assert.ok(LAUNCHPAD.length > 1000, 'the home screen source did not load');
     assert.ok(ENTRY_SRC.length > 1000, 'archive-entry.js did not load');
     assert.ok(!LAUNCHPAD.includes('zzqqxyz-not-in-this-file'),
         'the substring search returns true for everything');
@@ -221,13 +224,13 @@ await test('the probe is single-flight', async () => {
 // with the archive OFF ends up with a visible door onto a 302.
 
 await test('the launchpad has no archive door left to gate', () => {
-    assert.ok(LAUNCHPAD.length > 1000, 'launchpad.js did not load; vacuous');
+    assert.ok(LAUNCHPAD.length > 1000, 'the home screen source did not load; vacuous');
     assert.ok(!LAUNCHPAD.includes('id="archive-section"'),
         'the launchpad archive section is back and needs its own gate again');
     assert.ok(!LAUNCHPAD.includes('id="launchpad-archive-entry"'),
         'the launchpad archive row is back and needs its own gate again');
     assert.ok(!/ArchiveEntry/.test(LAUNCHPAD),
-        'launchpad.js reaches for ArchiveEntry again, so it is gating (or ' +
+        'the home screen reaches for ArchiveEntry again, so it is gating (or ' +
         'failing to gate) something this suite does not know about');
 });
 

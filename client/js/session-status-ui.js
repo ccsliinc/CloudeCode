@@ -331,6 +331,13 @@ console.log('[SessionStatusUI Module] Loading...');
      *   clicked and its CURRENT state, so the handler can send the
      *   opposite value without re-querying the DOM.
      *
+     *   THE COMPILED TREE PAINTS THIS SAME CONTROL FOR THE SIDEBAR ROW
+     *   MENU, from web/src/lib/plugins/mark-unread/. The two are held
+     *   together by web/src/lib/plugins/session-card-actions.test.ts,
+     *   which loads THIS file and compares attribute by attribute. If
+     *   you change the label, the glyph or a class here, that test is
+     *   where it will surface.
+     *
      *   RETURNS '' WHEN `ui.show_mark_unread_control` IS FALSE. The
      *   owner kept this control and asked for a switch rather than the
      *   deletion one line of this project shipped; see
@@ -348,19 +355,26 @@ console.log('[SessionStatusUI Module] Loading...');
      *     '<span class="mark-unread-toggle" role="button" ...>...</span>'
      */
     function markUnreadHtml(tmuxName, unread) {
-        // THE ONE GATE, so every surface hides it together. Both callers
-        // (session-sidebar-rows.js and launchpad.js) interpolate this
-        // return value straight into a row's HTML, so an empty string
-        // removes the control from all of them and there is no second
-        // place to remember. `UIFlags` answers the DEFAULT (shown) until
-        // its probe lands and whenever it cannot run at all, so a failed
+        // THE GATE FOR THIS SURFACE. ONE CALLER IS LEFT: launchpad.js,
+        // whose running-sessions rows interpolate this straight into a
+        // row's HTML, so an empty string removes the control there. The
+        // sidebar row menu no longer calls this at all - mark unread is
+        // a `session-card-action` plugin now (web/src/lib/plugins/
+        // mark-unread/), and it reads the SAME flag through its own
+        // `enabled`, so the two surfaces still hide together off one
+        // config key. `UIFlags` answers the DEFAULT (shown) until its
+        // probe lands and whenever it cannot run at all, so a failed
         // read never takes the control away - see client/js/ui-flags.js.
         if (globalThis.UIFlags && !globalThis.UIFlags.showMarkUnreadControl()) {
             return '';
         }
+        // SHORTENED IN THE 1.4.0 MERGE. Moves with `session.unread.clear`
+        // and `session.unread.set` in client/js/i18n/catalog.en.js or not
+        // at all: session-card-actions.test.ts holds this builder's title
+        // against the label the plugin resolves from those keys.
         const label = unread
-            ? 'clear unread flag'
-            : 'mark unread for followup';
+            ? 'clear unread'
+            : 'mark unread';
         const pressed = unread ? 'true' : 'false';
         // tmuxName is the only user-controlled value in this module. A
         // session name is free text, so it can hold a quote, an angle
@@ -392,12 +406,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   envelopeOutlineSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function envelopeOutlineSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
-            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '</svg>'
-        );
+        return glyph('envelope-outline');
     }
 
     /**
@@ -410,13 +419,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   envelopeFilledSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function envelopeFilledSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<rect x="2" y="3.5" width="12" height="9" rx="1.25" stroke="currentColor" stroke-width="1.5"/>' +
-            '<path d="M2.5 4.25L8 8.5L13.5 4.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<circle cx="12.5" cy="3.5" r="2.5" fill="currentColor" stroke="var(--color-bg, #000)" stroke-width="0.75"/>' +
-            '</svg>'
-        );
+        return glyph('envelope-filled');
     }
 
     /**
@@ -434,15 +437,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   trashIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function trashIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M3 4.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M5.5 4.5V3.25C5.5 2.83579 5.83579 2.5 6.25 2.5H9.75C10.1642 2.5 10.5 2.83579 10.5 3.25V4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M4.5 4.5L5 12.75C5 13.1642 5.33579 13.5 5.75 13.5H10.25C10.6642 13.5 11 13.1642 11 12.75L11.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M6.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M9.5 6.75V11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('trash');
     }
 
     /**
@@ -461,12 +456,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   closeIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function closeIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('close');
     }
 
     /**
@@ -492,13 +482,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   restartIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function restartIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M13 8A5 5 0 1 1 11.4 4.3" stroke="currentColor" ' +
-            'stroke-width="1.5" stroke-linecap="round"/>' +
-            '<path d="M12.9 1.9V5.1H9.7L12.9 1.9Z" fill="currentColor"/>' +
-            '</svg>'
-        );
+        return glyph('restart');
     }
 
     /**
@@ -513,12 +497,7 @@ console.log('[SessionStatusUI Module] Loading...');
      *   pencilIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function pencilIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<path d="M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M9 4L12 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('pencil');
     }
 
     /**
@@ -593,13 +572,37 @@ console.log('[SessionStatusUI Module] Loading...');
      *   archiveIconSvg() -> '<svg width="16" height="16" ...>...</svg>'
      */
     function archiveIconSvg() {
-        return (
-            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none">' +
-            '<rect x="2" y="2.75" width="12" height="3" rx="0.75" stroke="currentColor" stroke-width="1.5"/>' +
-            '<path d="M3.25 5.75V12.5C3.25 12.9142 3.58579 13.25 4 13.25H12C12.4142 13.25 12.75 12.9142 12.75 12.5V5.75" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
-            '<path d="M6.5 8.5H9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
-            '</svg>'
-        );
+        return glyph('archive');
+    }
+
+    /**
+     * Read one glyph out of the shared geometry, at CALL time.
+     *
+     * Description: SLICE 4 MOVED THE PATH DATA, NOT THE ICON. The
+     *   coordinates now live in client/js/icons/glyphs.js as data, so a
+     *   Svelte component can render them as real elements while this
+     *   classic script keeps handing back the string an `innerHTML`
+     *   caller needs. Two renderers, ONE set of coordinates: a copy in
+     *   each tree is the DRY violation with the most visible failure
+     *   mode there is, the same button drawn two different shapes on two
+     *   screens.
+     *
+     *   READ AT CALL TIME, NEVER AT DEFINITION TIME. `globalThis
+     *   .CloudeGlyphs` is published by the deferred module
+     *   client/js/i18n/boot.js, and this file is a CLASSIC script that
+     *   runs before it. Every icon here is called during a render, which
+     *   is long after boot - the same rule every `t()` consumer follows.
+     * Inputs: name (string).
+     * Output: string - the SVG element, or '' when the module is absent.
+     * Example: glyph('pencil')
+     */
+    function glyph(name) {
+        var glyphs = globalThis.CloudeGlyphs;
+        if (!glyphs || typeof glyphs.glyphSvg !== 'function') {
+            console.error('SessionStatusUI: the glyph module is not loaded, icon:', name);
+            return '';
+        }
+        return glyphs.glyphSvg(name);
     }
 
     window.SessionStatusUI = {

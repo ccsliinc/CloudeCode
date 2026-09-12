@@ -1,5 +1,12 @@
 """``terminal.ready``: the one positive statement that the pane can hear.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 WHAT IS BEING PROVED, AND WHY IT IS NOT OBVIOUS. The attach handshake in
 ``src/api/websocket.py`` opens the socket, asks the client for its dims,
 and sits in a receive loop that DISCARDS every binary frame arriving
@@ -97,9 +104,18 @@ def _manager(monkeypatch, command, backend, pending=True):
     from src.config import Settings
     from src.core.session_manager import SessionManager
 
+    from src.core.sessions.registry import SessionRegistry
+    from src.core.sessions.sidecars import AttachmentSidecars
+
     sm = SessionManager.__new__(SessionManager)          # no real lifecycle
-    sm.pending_terminal_commands = {"s1": "top"} if pending else {}
-    sm.backends = {"s1": backend}
+    # THE COLLABORATORS ARE EXPLICIT, because __new__ runs no __init__ and
+    # on this line the pending command lives on AttachmentSidecars and the
+    # backend table on SessionRegistry rather than on the manager.
+    sm._sidecars = AttachmentSidecars()
+    if pending:
+        sm._sidecars.set_pending_command("s1", "top")
+    sm._registry = SessionRegistry(log_cap=lambda: 1000)
+    sm._registry.backends["s1"] = backend
     monkeypatch.setattr(
         Settings, "get_terminal_command", lambda self, cid: command, raising=False
     )

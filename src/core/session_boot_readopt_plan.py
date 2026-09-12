@@ -31,7 +31,7 @@ environment at ``new-session`` time, which means the running agent
 carries the CREATE-TIME id for the rest of its life and presents it on
 every hook. The durable record of that id is the hook-token store, whose
 ``tmux_names`` map (session_id -> tmux name) is restored at boot by
-``SessionManager._load_hook_tokens``. Reversing that map is therefore not
+``HookTokenAuthority.load``. Reversing that map is therefore not
 a heuristic - it recovers the exact id the pane is already using, which
 is what makes hooks work again with no 410 and no re-mint.
 
@@ -207,7 +207,7 @@ def resolve_session_id(
       over unchanged state cannot disagree.
     Inputs: name (str) - tmux session name. row (dict) - the sessions
       row for this instance. hook_names (dict[str, str]) - session_id ->
-      tmux name, as restored by ``_load_hook_tokens``.
+      tmux name, as restored by ``HookTokenAuthority.load``.
     Output: tuple[str, str] - ``(session_id, id_source)``.
     Example: resolve_session_id('cloude_a', row, {'ses_1': 'cloude_a'})
              # ('ses_1', 'hook_token')

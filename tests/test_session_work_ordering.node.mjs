@@ -28,6 +28,11 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+// SLICE 3: the session data layer lives in the compiled bundle, and the
+// `Launchpad` fields this harness drives are accessors over that one
+// store. The REAL client/dist/app.js is evaluated in this sandbox rather
+// than stubbed, so these assertions run against the shipped path.
+import { installCloudeWeb } from './helpers/cloude-web-sandbox.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -84,6 +89,7 @@ function loadModules(names) {
     };
     context.window = context;
     vm.createContext(context);
+    installCloudeWeb(context);
     for (const name of names) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', name), 'utf8'),
@@ -214,19 +220,88 @@ await test('the stamp index takes the MAX per tmux name, not the last seen', () 
     assert.equal(index.size, 1);
 });
 
-await test('the launcher orders its own lists the same way', () => {
-    // launchpad.js runs a separate list (the running-sessions section and
-    // the project tree). Two surfaces answering the ordering question
-    // differently is the class of bug this repo keeps re-finding, so the
-    // source is pinned here rather than left to drift.
-    const src = fs.readFileSync(path.join(ROOT, 'client', 'js', 'launchpad.js'), 'utf8');
-    const body = src.slice(src.indexOf('_sortRunningSessionsByWork() {'));
-    const sortBody = body.slice(0, body.indexOf('\n    }'));
-    assert.ok(sortBody.length > 0, '_sortRunningSessionsByWork is gone');
-    assert.ok(!sortBody.includes('is_active'),
-        'the launcher sort leads with is_active again - attaching reorders the tree');
-    assert.ok(src.includes('_workRecencyAttrs'),
+await test('the launcher orders its own lists the same way', async () => {
+    // THE SAME CLAIM, MEASURED INSTEAD OF READ. This used to slice the
+    // TEXT of `Launchpad._sortRunningSessionsByWork` out of launchpad.js
+    // and assert that the identifier `is_active` did not appear in it.
+    // That could only ever hold while the function stayed in one file
+    // under one name, and slice 3 moved it to
+    // web/src/lib/sessions/attribution.ts without changing a rule - so a
+    // source scan would have gone red over a pure relocation, and a
+    // rename would have made it go GREEN over a deletion, which is worse.
+    //
+    // What is actually worth guarding is the thing the comment always
+    // said: two surfaces answering the ordering question differently is
+    // the class of bug this repo keeps re-finding. So both surfaces are
+    // now RUN over one row set and required to agree, and the row set is
+    // built so that a sort leading with `is_active` cannot produce the
+    // same answer.
+    const rows = [
+        { name: 'cloude_stale', created_by_cloude: true, created_at_epoch: 9000 },
+        { name: 'cloude_busy', created_by_cloude: true, created_at_epoch: 1000 },
+        { name: 'cloude_none', created_by_cloude: true, created_at_epoch: 5000 },
+    ];
+    const records = [
+        { tmux_name: 'cloude_stale', tmux_created_epoch: 9000, last_work_at: '2026-09-01T00:00:00Z' },
+        { tmux_name: 'cloude_busy', tmux_created_epoch: 1000, last_work_at: '2026-09-09T00:00:00Z' },
+    ];
+    const stamps = Fetch.workStampIndex(records);
+    const expected = ['cloude_busy', 'cloude_stale', 'cloude_none'];
+
+    // THE SIDEBAR's own sort. Note it reads `last_work_at` OFF THE ROW,
+    // because the sidebar stamps its rows from the index before sorting,
+    // where the launcher looks the stamp up while comparing. Two
+    // mechanics; the claim under test is that they answer the same.
+    const sidebarRows = rows.map((r) => ({
+        ...r,
+        last_work_at: stamps.get(r.name) || null,
+    }));
+    assert.deepEqual(
+        [...Fetch.defaultSort(sidebarRows)].map((r) => r.name),
+        expected,
+        'the sidebar stopped ordering by work'
+    );
+
+    // THE LAUNCHER's, which is the compiled tree's now, driven through
+    // the two endpoints exactly as a poll tick drives it. `is_active` is
+    // set on the row that must NOT move: a sort that led with it would
+    // hoist `cloude_none` to the top and this fails.
+    const web = installCloudeWeb(vm.createContext({
+        console: { log() {}, warn() {}, error() {} },
+    }));
+    const store = web.launchpad.sessions;
+    store.useHost({
+        listAttachableSessions: async () => rows.map((r) => ({ ...r, status: 'idle' })),
+        listSessions: async () => [{
+            tmux_session: 'cloude_none', activity_status: 'idle', session: { id: 'ses_x' },
+        }],
+        getCurrentSession: async () => null,
+        listSessionRecords: async () => records,
+    });
+    await store.loadRunningSessions((k) => k);
+    assert.deepEqual(
+        [...store.runningSessions].map((r) => r.name),
+        expected,
+        'the launcher disagrees with the sidebar, or leads with is_active again'
+    );
+    assert.equal(store.runningSessions.find((r) => r.name === 'cloude_none').is_active, true,
+        'the row that must not move was not actually the live one');
+    store.reset();
+    store.useHost(null);
+
+    // THE LABEL MOVED IN SLICE 4, AND SO DID THIS ASSERTION'S TARGET.
+    // `_workRecencyAttrs` was a renderer on the launchpad singleton; the
+    // rule is `workAttrs()` in web/src/lib/launchpad/project-node.ts now,
+    // and the two callers that differ only in which sentence they hover
+    // are named constants beside it. Reading the TS source keeps the
+    // claim - that an unrecorded row is LABELLED rather than silently
+    // sorted last - attached to the file that makes it.
+    const src = fs.readFileSync(
+        path.join(ROOT, 'web', 'src', 'lib', 'launchpad', 'project-node.ts'), 'utf8');
+    assert.ok(src.includes('SESSION_WORK_UNRECORDED_KEY'),
         'the launcher no longer labels its unrecorded rows');
+    assert.ok(src.includes('PROJECT_WORK_UNRECORDED_KEY'),
+        'the launcher no longer labels its unrecorded projects');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

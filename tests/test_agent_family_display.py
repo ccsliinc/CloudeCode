@@ -322,9 +322,9 @@ async def test_session_info_for_unresolvable_agent_type_renders_unknown(monkeypa
         tmux_session="cloude_ses_x",
         agent_type="wrapper-that-was-deleted",
     )
-    mgr.sessions["ses_x"] = sess
-    mgr.backends["ses_x"] = _FakeBackend("cloude_ses_x")
-    mgr._subscribers.setdefault("ses_x", [])
+    mgr._registry.sessions["ses_x"] = sess
+    mgr._registry.backends["ses_x"] = _FakeBackend("cloude_ses_x")
+    mgr._registry.subscribers.setdefault("ses_x", [])
     monkeypatch.setattr(
         mgr, "_build_tmux_status_map",
         lambda: {"cloude_ses_x": {"status": "idle", "pid": 1}},
@@ -351,9 +351,9 @@ async def test_session_info_for_resolvable_agent_type_renders_the_fact(monkeypat
         tmux_session="cloude_ses_y",
         agent_type="codex",
     )
-    mgr.sessions["ses_y"] = sess
-    mgr.backends["ses_y"] = _FakeBackend("cloude_ses_y")
-    mgr._subscribers.setdefault("ses_y", [])
+    mgr._registry.sessions["ses_y"] = sess
+    mgr._registry.backends["ses_y"] = _FakeBackend("cloude_ses_y")
+    mgr._registry.subscribers.setdefault("ses_y", [])
     monkeypatch.setattr(
         mgr, "_build_tmux_status_map",
         lambda: {"cloude_ses_y": {"status": "idle", "pid": 1}},

@@ -49,6 +49,7 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 # ruff: noqa: E402
 from src.config import settings
 from src.core.session_manager import SessionManager
+from src.core.sessions.hook_token_authority import HookTokenAuthority
 from src.core.tmux_backend import TmuxBackend
 from tests.socket_guard import derive_test_socket
 
@@ -112,7 +113,11 @@ def _spawn_and_capture(socket_name: str, shell_snippet: str, work_dir: Path) -> 
     """
     out_path = work_dir / f"env-{uuid.uuid4().hex[:8]}.txt"
     manager = SessionManager.__new__(SessionManager)
-    manager._hook_tokens = {}
+    # ``__new__`` skips the constructor, so the token authority the
+    # spawn env is minted from has to be attached by hand. A REAL one
+    # pointed at a throwaway directory, not a stand-in, so this cannot
+    # quietly disagree with what get_env_for_spawn expects.
+    manager.hook_tokens = HookTokenAuthority(lambda: work_dir)
     session_id = f"wsenv-{uuid.uuid4().hex[:6]}"
     spawn_env = manager.get_env_for_spawn(session_id)
 

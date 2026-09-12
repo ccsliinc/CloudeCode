@@ -214,7 +214,7 @@ test('NO CALL SITE MEASURES OUTSIDE THE GUARD, across the whole client', () => {
         + 'TerminalMetrics.guardedFit or TerminalLayout.requestFit');
 });
 
-test('the launchpad no longer reaches into the terminal controller to fit', () => {
+test('the home screen no longer reaches into the terminal controller to fit', () => {
     // A layering violation independent of the duplicate-fit problem, and
     // an unguarded one: those numbers become the pane's BIRTH geometry,
     // so a grid from an unstyled cell births a real tmux pane at a size
@@ -222,12 +222,25 @@ test('the launchpad no longer reaches into the terminal controller to fit', () =
     // Comments are allowed to NAME the thing that was removed - that is
     // how the next reader learns not to put it back - so this reads code
     // with the comment lines stripped.
-    const src = read('client/js/launchpad.js')
+    // THE 1.4.0 MERGE MOVED THIS RULE, IT DID NOT RETIRE IT.
+    // `client/js/launchpad.js` is deleted and the rejoin path is
+    // `web/src/lib/launchpad/nav-host.ts`. That file had the defect in
+    // one of its two functions and not the other: `terminalDims()`
+    // already went through the metrics owner while
+    // `browserPrepareTerminal()` still fitted the addon itself, which is
+    // exactly the kind of within-one-file inconsistency a guard aimed at
+    // a deleted file stops catching.
+    const src = read('web/src/lib/launchpad/nav-host.ts')
         .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-    assert.ok(!/TerminalController\.fitAddon/.test(src),
-        'launchpad.js must ask TerminalMetrics for the grid, not fit it itself');
-    assert.ok(src.includes('window.TerminalMetrics.currentGrid()'),
+    assert.ok(!/fitAddon/.test(src),
+        'nav-host.ts must ask TerminalMetrics for the grid, not fit it itself');
+    assert.ok(src.includes('currentGrid()'),
         'the rejoin pre-fit must read the grid through the metrics owner');
+    // BOTH readers, not just the one that was broken: a fix that left the
+    // other reaching in would pass a check that only counted fitAddon.
+    assert.equal((src.match(/currentGrid\(\)/g) || []).length, 2,
+        'both terminalDims() and browserPrepareTerminal() read the grid, and '
+        + 'both must read it the same way');
 });
 
 test('the rejoin path no longer awaits a bare animation frame', () => {
@@ -235,13 +248,18 @@ test('the rejoin path no longer awaits a bare animation frame', () => {
     // painting, and the session fetch and the terminal entry both sit
     // below this wait - so a bare one does not delay the rejoin, it
     // cancels it.
-    const src = read('client/js/launchpad.js');
-    const fn = src.slice(src.indexOf('_returnToActiveRunningSession'));
-    const body = fn.slice(0, fn.indexOf('\n    /**'));
-    assert.ok(!/requestAnimationFrame\(\(\)\s*=>\s*requestAnimationFrame/.test(body),
-        'a bare double-rAF await never resolves in an unpainted tab');
-    assert.ok(body.includes('TerminalLayoutWait'),
-        'the wait must be raced against a timer instead');
+    // Same move as above. web/src races the two frames against a timer
+    // inside `twoFrames()` rather than calling into the classic
+    // TerminalLayoutWait module, which is a different mechanism for the
+    // same rule, so the assertion is on the RULE: no unraced rAF await.
+    const src = read('web/src/lib/launchpad/nav-host.ts');
+    const fn = src.slice(src.indexOf('function twoFrames('));
+    const body = fn.slice(0, fn.indexOf('\n}'));
+    assert.ok(/setTimeout\(/.test(body),
+        'the wait must be raced against a timer, or a tab the browser is not '
+        + 'painting never resolves it and the rejoin is cancelled, not delayed');
+    assert.ok(/requestAnimationFrame/.test(body),
+        'and it must still prefer the frame when there is one');
 });
 
 test('every pane resize leaves through sendResize, and each names its source', () => {

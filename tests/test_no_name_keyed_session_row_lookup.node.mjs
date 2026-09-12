@@ -101,16 +101,30 @@ const NAME_KEYED_FIND = /\.find(?:Index)?\(\s*\(?[\w$]*\)?\s*=>[^;]*?(?:\.name|t
  */
 function clientJsFiles() {
     const out = [];
-    const walk = (dir) => {
+    const walk = (dir, exts) => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            // `dist` IS EXCLUDED, and that is not a hole in the guard.
+            // client/dist/app.js is the EMITTED bundle: it is generated,
+            // it is minified, and its snippet text changes shape on every
+            // build, so an allowlist keyed on that text would need
+            // rewriting whenever anything unrelated was compiled. Its
+            // SOURCE is web/src, which this function now walks, so every
+            // line that reaches the bundle is still read - once, in the
+            // spelling a human wrote and a reviewer can judge.
             if (entry.name === 'node_modules' || entry.name === 'vendor'
-                || entry.name.startsWith('.')) continue;
+                || entry.name === 'dist' || entry.name.startsWith('.')) continue;
             const full = path.join(dir, entry.name);
-            if (entry.isDirectory()) walk(full);
-            else if (entry.name.endsWith('.js')) out.push(full);
+            if (entry.isDirectory()) walk(full, exts);
+            else if (exts.some((e) => entry.name.endsWith(e))) out.push(full);
         }
     };
-    walk(path.join(ROOT, 'client'));
+    walk(path.join(ROOT, 'client'), ['.js']);
+    // THE COMPILED TREE IS SCANNED TOO, because the migration is moving
+    // this exact code into it. Slice 3 took the session merge out of
+    // launchpad.js; a guard that only read client/js would have gone
+    // quietly green on the day the thing it guards moved house, which is
+    // the quietest way for a test to stop testing.
+    walk(path.join(ROOT, 'web', 'src'), ['.ts', '.svelte']);
     return out;
 }
 
@@ -193,44 +207,73 @@ function findHits(root) {
 // does not have to re-derive it from scratch.
 // ---------------------------------------------------------------------
 const ALLOWED_MATCHES = {
-    'client/js/launchpad.js::.find(s => s.name === tmuxName': [
-        'KNOWN BUG, unfixed by this guard. this.runningSessions.find by',
-        'name - launchpad.js is excluded from edits by this task (another',
-        'agent is in it); flagged here, not fixed here.',
+    'web/src/lib/launchpad/navigation.ts::.find((row) => row.name === tmuxName': [
+        'KNOWN BUG, MOVED NOT INTRODUCED. Slice 7 of the svelte migration',
+        'ported this from `_handleAttachRunningSession`, where it stood as',
+        '`.find(r => r.name === tmuxName)`. It resolves the LISTING ROW',
+        'whose label the adopt response does not carry, and `tmuxName` is',
+        'the only handle the adopt was made with - the attach came from a',
+        'row click or a deep link, neither of which has a durable key for',
+        'a session this app has not adopted yet. Listed rather than fixed',
+        'because a MOVE that also changes behaviour is a regression nobody',
+        'can bisect. The blast radius is small and named: the worst case',
+        'is a recreated pane reusing a name and the tab opening with the',
+        'previous session of that name`s label, on a session whose label',
+        'the server did not send. The fix is the same one the entry below',
+        'needs - a durable key on the live row that the attachable row',
+        'also carries.',
     ].join(' '),
-    'client/js/launchpad.js::.find(x => x.name === name': [
-        'KNOWN BUG, unfixed by this guard. Same shape as the entry above,',
-        'a second call site in the same file. launchpad.js is excluded',
-        'from edits by this task; flagged here, not fixed here.',
+    'web/src/lib/sessions/running.ts::.find((s) => s.name === tmuxName': [
+        'KNOWN BUG, MOVED NOT INTRODUCED. This is the same lookup that',
+        'stood in launchpad.js as `.find(s => s.name === tmuxName)`,',
+        'ported line by line by slice 3 of the svelte migration. It is',
+        'listed here rather than fixed because slice 3 is a MOVE: fixing',
+        'a behaviour while relocating it makes a regression impossible to',
+        'bisect. The fix needs the server to ship a durable key on the',
+        'live row that the attachable row also carries, which is its own',
+        'change.',
     ].join(' '),
-    'client/js/launchpad.js::.find((s) => s && s.name === tmuxName': [
-        'KNOWN BUG, unfixed by this guard. Same shape, a third call site.',
-        'launchpad.js is excluded from edits by this task; flagged here,',
-        'not fixed here.',
-    ].join(' '),
-    'client/js/launchpad.js::.find(x => x && x.tmux_session === tmuxName': [
-        'KNOWN BUG, unfixed by this guard. Same shape via the',
-        'tmux_session field instead of .name. launchpad.js is excluded',
-        'from edits by this task; flagged here, not fixed here.',
-    ].join(' '),
-    'client/js/launchpad.js::.find(s => s.name === name': [
-        'KNOWN BUG, unfixed by this guard. Same shape, a fifth call site',
-        '(note: distinct from the s.name === tmuxName entry above -',
-        'compares against a differently-named local variable, which is',
-        'why both survive as separate allowlist keys).',
-        'launchpad.js is excluded from edits by this task; flagged here,',
-        'not fixed here.',
-    ].join(' '),
-    'client/js/launchpad.js::.find(p => p.name === projectName': [
-        'NOT a session identity lookup: this.projects is keyed by project',
-        'name by design in this app (a launcher project has no other',
-        'identity), not a sessions row. Different entity, same regex',
-        'shape.',
-    ].join(' '),
-    'client/js/launchpad.js::.find((p) => p.name === chosen': [
-        'NOT a session identity lookup: same projects-by-name lookup as',
-        'the entry above, a second call site.',
-    ].join(' '),
+    // THREE MORE ENTRIES RETIRED IN SLICE 5, and two of the three really
+    // are gone rather than moved.
+    //
+    // `.find(x => x.name === name)` lived in `_updateRunningSessionAges`,
+    // which walked the painted rows and looked each one back up by the
+    // `data-name` it had just read off the DOM. The card is a component
+    // now and its age is derived from the row object it was rendered
+    // from, so there is nothing to look up.
+    //
+    // `.find((s) => s && s.name === tmuxName)` was `_handleRestartSession`
+    // and `_handleSessionRowAction` resolving a row back from the handle
+    // their delegated click handler had been given. Both are functions
+    // over a row now (web/src/lib/launchpad/running-actions.ts) and the
+    // row is passed in, captured at PAINT time - which is also the frozen
+    // snapshot rule the row menu already holds itself to.
+    //
+    // `.find(x => x && x.tmux_session === tmuxName)` DID SURVIVE, as
+    // `resolveSessionId` in web/src/lib/launchpad/running-host.ts. It is
+    // not registered below because this scanner's pattern is
+    // single-line and that call is now written across several, so
+    // registering it would be a dead entry failing this test for the
+    // opposite reason. It is named here instead: the lookup still
+    // exists, it is still a name-keyed round trip, and it is still the
+    // right shape to fix when `/sessions/list` carries a durable key.
+    // TWO ENTRIES RETIRED IN SLICE 4, and the reason is worth the line.
+    // `.find(s => s.name === name)` lived in
+    // `_bindProjectSessionRowClicks`, which resolved the clicked row back
+    // to a live session by NAME after reading the name off the DOM. The
+    // tree is a component now, so the row's own object is in scope at the
+    // click and there is nothing to look up - the known bug this entry
+    // registered went away with the lookup rather than being fixed.
+    // `.find(p => p.name === projectName)` was the edit button doing the
+    // same round trip for a PROJECT; same fix, and it was never a session
+    // identity lookup anyway. A dead entry here is worse than no entry,
+    // because it tells the next reader a call site exists that does not.
+    // A THIRD RETIRED IN SLICE 6, for the same reason:
+    // `.find((p) => p.name === chosen)` was `startSessionInExistingProject`
+    // resolving the PICKED project by name, and that method is now
+    // `web/src/lib/launchpad/entry-flows.ts`. It was never a session
+    // lookup either - projects ARE named entities in this data model, and
+    // the name is what the picker resolves with.
     'client/js/session-sidebar-fetch.js::.find((r) => r.name === tmuxName': [
         'KNOWN BUG, unfixed by this guard. This is mergeLiveRow(), and',
         'its own module docstring names this exact function as the',

@@ -106,12 +106,761 @@ in this file, on the same principle as `tests/test_no_remote_assets.py`.
 | Terminal | tmux (live backend) driving a PTY, xterm.js client-side | `src/core/tmux_backend.py`, `client/js/terminal.js` |
 | Frontend | vanilla JS, no framework, NO build step for `client/` | `client/` |
 | Desktop shell | Electron wrapper (has its own `package.json`) | `macOS/` |
-| State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config.py`, `src/core/refresh_store.py` |
+| Compiled frontend | Svelte 5 (runes) + TypeScript + Tailwind, built by vite | `web/`, output in `client/dist/` |
+| State | JSON on disk (`config.json`), plus one SQLite file for refresh tokens | `src/config/`, `src/core/refresh_store.py` |
 
 `client/` is served straight off disk under `/static`. There is no bundler, no
 transpile, no `client/package.json`. A file you add there is live on reload, so
 it must be valid in the browser as written. Run `node --check` on every JS file
-you touch.
+you touch. That is still true of `client/js`; the one compiled tree is `web/`,
+described next.
+
+## The `web/` build
+
+**TWO FRONTEND TREES LIVE IN THIS REPO AT THE SAME TIME, ON PURPOSE.** `client/js`
+is the app: hand-written vanilla JS, no build step, served off disk. `web/` is a
+Svelte 5 + TypeScript + Tailwind project that vite compiles into `client/dist/`.
+They coexist for the length of a screen-by-screen (strangler) migration, and
+during it a screen is either legacy or compiled, never half of each. The
+owner's framing, verbatim: "lean and mean. kiss." No SvelteKit, no node process
+at runtime, no SSR, and no vite dev server - FastAPI serves the emitted files
+under `/static` exactly as it serves everything else.
+
+| Piece | Where |
+|---|---|
+| The vite project | `web/package.json`, `web/vite.config.ts`, `web/svelte.config.js`, `web/tsconfig.json`, `web/vitest.config.ts` |
+| Tailwind entry (utilities only, prefixed) | `web/src/app.css` |
+| Entry point, publishes `window.CloudeWeb` | `web/src/main.ts` |
+| The first ported component and its two pure modules | `web/src/lib/StatusLed.svelte`, `led.ts`, `status-dot.ts` |
+| THE ONE MOUNT PATH, used by every migration slice | `web/src/lib/mount.ts` |
+| Slice 1, the attribution prompt card | `web/src/lib/launchpad/AttributionPrompt.svelte`, `attribution.ts` |
+| Slice 2, the recent sessions section | `web/src/lib/launchpad/RecentSessions.svelte`, `recent.ts`, `recent-actions.ts`, `recent-chrome.ts`, `recent-visibility.ts` |
+| Slice 3, the session data layer | `web/src/lib/sessions/store.svelte.ts`, `running.ts`, `attribution.ts`, `listing.ts`, `poller.ts`, `host.ts`, `env.ts`, `types.ts` |
+| Slice 4, the project tree | `web/src/lib/launchpad/ProjectTree.svelte` and its six children, `project-{groups,node,chrome,chrome-control,tree-host}.ts`, `tree-collapse.svelte.ts` |
+| Slice 5, the running sessions list | `web/src/lib/launchpad/RunningSessions.svelte`, `RunningSessionRow.svelte`, `RunningSessionName.svelte`, `StartupGateBadge.svelte`, `WrapperPill.svelte`, `running-{row,actions,host,chrome}.ts`, `web/src/lib/sessions/session-label.ts` |
+| Slice 6, the modals and the create flows | `web/src/lib/launchpad/{ModalShell,ChoiceModal,CloneModal,EditProjectModal,ProjectFolderModal,ProjectNameModal}.svelte`, `create-{flow,host,harness}.ts`, `entry-flows.ts`, `open-folder-flow.ts`, `project-{actions,folder}.ts`, `modals.ts`, `modal-types.ts`, `web/src/lib/modal.ts` |
+| Slice 7, the shell and the shim | `web/src/lib/launchpad/{HomeScreen,HelpDisclosure,RichText}.svelte`, `home-{screen-host,chrome,sections,anchors}.ts`, `new-fab.ts`, `panels.ts`, `navigation.ts`, `nav-host.ts`, `deep-link.ts`, `status-report.ts`, `rich-text.ts`, `shim.ts` |
+| The copy the shell prints | `client/js/labels/home-screen.js` |
+| The copy those two print | `client/js/labels/project-tree.js`, `client/js/labels/running-session.js` |
+| The shared icon geometry, as DATA | `client/js/icons/glyphs.js` |
+| The copy the data layer prints | `client/js/labels/session-listing.js` |
+| Put the REAL bundle in a node test's sandbox | `tests/helpers/cloude-web-sandbox.mjs` |
+| Per-device UI preferences, on the legacy keys | `web/src/lib/ui/prefs.svelte.ts` |
+| Its tests, incl. the equivalence proof | `web/src/lib/StatusLed.parity.test.ts` (the proof), `StatusLed.behaviour.test.ts`, `StatusLed.drift-guard.test.ts`, sharing `led-legacy-fixture.ts` |
+| Slice 1's tests | `web/src/lib/launchpad/attribution.test.ts` |
+| Slice 2's tests | `web/src/lib/launchpad/recent{,-actions,-chrome,-visibility}.test.ts`, `no-delete-wording.test.ts` |
+| The emitted bundle, COMMITTED | `client/dist/app.js`, `client/dist/app.css` |
+| Prove the committed bundle is current | `scripts/web-build-check.sh` |
+
+**The workflow is `npm run build` from `web/`, and `npm run watch` for a
+rebuild-on-save loop.** `npm test` runs vitest, `npm run check` runs
+svelte-check. There is deliberately NO vite dev server and no HMR: a dev server
+would need a proxy in front of FastAPI and a CSP relaxation to load its client,
+and both are permanent complications bought for a convenience. Build, reload,
+move on.
+
+**THE OUTPUT FILE NAMES ARE FIXED - `app.js` and `app.css`, no content hash -
+and that is a decision, not a default.** `client/index.html` is a hand-maintained
+1400-line file that keeps loading the legacy scripts throughout the migration,
+so it references the bundle by a name that must never change; a hashed name
+would mean rewriting that file on every build. Cache correctness is not given
+up, because `NoCacheStaticFiles` (`src/main.py`) already stamps
+`Cache-Control: no-cache, must-revalidate` on every `.js` and `.css`, so the
+browser revalidates each load. The names are set in
+`build.rollupOptions.output`.
+
+**`client/dist` IS COMMITTED, AND THE `.gitignore` NEGATION THAT KEEPS IT
+TRACKED IS LOAD BEARING.** `scripts/deploy-mini.sh` ships the committed file set
+by tar and the mini runs no build, so an ignored bundle would deploy nothing -
+and every hash check in that script would then compare an absent file against an
+absent file and read green, because absent on both sides compares equal. Note
+the `dist/` line in the Python section of `.gitignore` has no leading slash and
+so matches a directory named `dist` at ANY depth: measured 2026-09-09,
+`git check-ignore -v client/dist/app.js` answered `.gitignore:9:dist/`. The
+`!client/dist/` negation is what un-ignores it.
+
+**A COMMITTED ARTIFACT HAS ONE FAILURE MODE AND IT IS SILENT**, so
+`scripts/web-build-check.sh` exists: it rebuilds from `web/src` and fails if
+`git status --porcelain client/dist` is non-empty. It is wired into
+`deploy-mini.sh` BEFORE the transfer (exit 1 becomes `DEPLOY FAILED`, its exit 2
+- could not evaluate, no node - becomes `CANNOT DETERMINE`, because a check that
+did not run is not a check that passed; `CLOUDE_DEPLOY_SKIP_WEB_CHECK=1` is the
+named, printed escape hatch) and into the `javascript` job in
+`.github/workflows/tests.yml`. Every dependency in `web/package.json` is pinned
+to an exact version and `package-lock.json` is committed, because the check
+compares BYTES and a floating transitive dependency would make it fail for a
+reason nobody caused. Use `npm ci`, not `npm install`.
+
+**NO INLINE SCRIPT AND NO REMOTE ANYTHING, WHICH IS WHY VITE NEVER SEES AN
+HTML FILE.** `build.rollupOptions.input` points at `web/src/main.ts`, not at an
+`index.html`, so vite's HTML plugin never runs and never emits a document or
+the inline module-preload script that `script-src 'self'` would refuse. We own
+`client/index.html`. `tests/test_no_remote_assets.py` now also reads the
+emitted bundle: it fails on a remote URL in a LOADING position (an import
+specifier, a CSS `@import` or `url()`, a `src`/`href`, a Worker) and on any
+`eval` or `new Function`, with a negative control asserting both patterns can
+actually match - a bare `https?://` scan would fail on Svelte's own error-message
+URLs and the XHTML namespace string, which are inert, and teach everyone to add
+exemptions.
+
+**TAILWIND SHIPS UTILITIES ONLY, PREFIXED `tw:`, INSIDE `@layer utilities`, AND
+ALL THREE OF THOSE ARE ABOUT NOT TOUCHING THE RUNNING APP.** Preflight is not
+imported at all, because it is a global reset and this stylesheet loads beside
+every legacy stylesheet in the app. The prefix exists because Tailwind finds
+class names by scanning TEXT, comments included: the first build of `web/src/app.css`
+emitted `.container`, `.block`, `.inline` and `.ring` purely because those words
+appear in the prose of the TypeScript beside it. Measured on this repo
+2026-09-09, no legacy element carries any of the four (the five `container` hits
+are all `*-container` compounds), so that was a landmine rather than a live bug -
+and `tw:flex` cannot collide with anything the legacy tree writes. The layer is
+the guard in the other direction: for normal declarations an UNLAYERED rule
+beats a layered one at any specificity, and every legacy stylesheet here is
+unlayered. Automatic source detection is off (`source(none)`) with one explicit
+`@source` naming `web/src`, so nothing outside that tree can contribute a class
+name.
+
+**THE FIRST PORT IS THE STATUS LED, AND ITS CONTRACT IS BYTE-IDENTICAL OUTPUT.**
+`web/src/lib/led.ts` ports `client/js/status-led.js` and
+`web/src/lib/status-dot.ts` ports the status half of
+`client/js/session-status-ui.js`; `window.CloudeWeb.ledHtml(status, signals)`
+must return exactly what `SessionStatusUI.dotHtml(status, signals)` returns.
+That is not asserted by hand-written expectations, which would only prove the
+port agrees with what the porter remembered:
+`web/src/lib/StatusLed.parity.test.ts`
+loads the two REAL legacy files in a `vm` sandbox and compares string against
+string across the whole cross product of status, unread flag, startup gate and
+status source - 1008 comparisons, plus a negative control proving the
+comparison is capable of failing. Measured in a real browser under the
+production CSP on 2026-09-09: 1008 of 1008 identical.
+
+**THE STATUS LED IS STILL WIRED TO NOTHING, AND THAT IS DELIBERATE.**
+`main.ts` publishes it but no legacy parent calls it: the parents build their
+rows as HTML strings and set them with `innerHTML`, so switching one means
+rewriting a parent, which is slices 4 and 5. The Svelte runtime is proven end
+to end regardless: `window.CloudeWeb.renderProbe()` mounts the compiled
+component into a DETACHED element and hands back its `outerHTML`, so a broken
+Svelte runtime cannot pass while every pure string function still would.
+
+**`mountPanel` IS THE ONLY WAY A COMPONENT REACHES THE DOCUMENT, AND EVERY
+SLICE USES IT.** `web/src/lib/mount.ts` records one `mount()` handle per
+container id and `unmount()`s the previous one before mounting the next.
+Svelte's `mount()` APPENDS and returns a handle that owns the reactive effects
+behind those nodes, so calling it twice on one container paints twice and
+leaves the first set of effects running, subscribing and answering forever.
+Nothing outside that file may call `mount()` on an element that is in the
+document. It does NOT clear the container - `unmount()` removes the nodes
+Svelte created and nothing else, which is exactly right while a container is
+shared with legacy markup mid-migration, and a helper that also wiped would be
+a hidden second behaviour a later slice could not turn off. A missing container
+is a warned no-op, not a throw: that is what the legacy renderers did, and a
+mount that silently does nothing is indistinguishable from a component that
+renders nothing.
+
+### Migration status
+
+The plan and its seven slices are `.claude/notes/svelte-migration-launchpad.md`.
+A slice deletes its legacy code in the same commit; a screen is legacy or
+compiled, never half of each.
+
+- **Slice 0, toolchain** - DONE (`9d31ec4`). vite + Svelte 5 + TypeScript +
+  Tailwind, the StatusLed proof component, nothing wired.
+- **Slice 1, the attribution prompt card** - DONE. 224 lines out of
+  `client/js/launchpad.js`, `mountPanel` built, `loadProjects()` calls
+  `window.CloudeWeb.launchpad.mountAttributionPrompt()` where its own render
+  used to run. Proven in a real browser under the production CSP.
+- **Slice 2, the recent sessions section** - DONE (issue #67, PR #68 on
+  `Adoom666/CloudeCodeDev`). 792 legacy lines gone: nine methods and the two
+  show-archived preference accessors out of `client/js/launchpad.js`, plus
+  `client/js/session-recent-visibility.js` and its script tag deleted outright.
+  The shared store starts here holding the recent slice only. Every user-visible
+  string goes through `client/js/i18n/catalog.en.js`; 33 keys added.
+  Proven in a real browser under the production CSP.
+- **Slice 3, the session data layer** - DONE (issue #70, PR #71 on
+  `Adoom666/CloudeCodeDev`). 787 legacy lines gone: thirteen methods and
+  the twelve instance fields they wrote, out of `client/js/launchpad.js`.
+  See "The launchpad's session data layer" below.
+- **Slice 4, the project tree** - DONE (issue #76, PR #77).
+- **Slice 5, the running sessions list** - DONE (issue #90, PR #91 on
+  `Adoom666/CloudeCodeDev`). 1,032 legacy lines gone from
+  `client/js/launchpad.js` (4,093 to 3,023): fifteen methods, the
+  `_lastRunningSig` cache and two orphan docblocks slice 4 left behind,
+  plus `client/js/session-list-busy-guard.js` and
+  `client/js/launchpad-wrapper-pill.js` deleted outright with their script
+  tags. See "The running sessions list" below.
+- **Slice 6, the modals and the create flows** - DONE (issue #98, PR #99 on
+  `Adoom666/CloudeCodeDev`). Seventeen methods and `client/js/project-create-folder.js`
+  left `client/js/launchpad.js` for eleven entry points on the namespace.
+- **Slice 7, the shell, and the end of `client/js/launchpad.js`** - DONE
+  (issue #102, PR #103 on `Adoom666/CloudeCodeDev`). THE FILE IS DELETED.
+  The last 1,875 lines - `renderLaunchpadUI`'s 363-line template string, the
+  six FAB methods, the header help toggle, the three section disclosures and
+  their localStorage map, the home bar's version chip and server-controls
+  wire, `updateStatus`, `showError` and the eight navigation methods - are
+  `web/src/lib/launchpad/HomeScreen.svelte` and the modules beside it. See
+  "The home screen shell, and the shim that replaced launchpad.js" below.
+
+**SEVEN SLICES DONE IS NOT A FINISHED MIGRATION, AND READING IT THAT WAY IS
+THE MISTAKE THIS PARAGRAPH EXISTS TO STOP.** What those seven slices finished
+is the LAUNCHPAD: the home screen, the launcher, the project tree and the
+session lists. The rest of the app is still the hand-written tree, and it is
+the larger half. Measured at `v1.4.0` and again at `b5de919`, identical at
+both: **137 files under `web/src`** (26 `.svelte`, 110 `.ts`, and `app.css`) against
+**221 files under `client/js`**, every one of them `.js` (205 at the top
+level, 16 in `labels/`, `icons/`, `i18n/` and `themes/` - a bare
+`ls client/js/*.js` answers 205 and silently misses the subdirectories), and
+`client/index.html`
+still loads **155 `<script>` tags** by hand beside the one
+`<script type="module" src="/static/dist/app.js">` at the bottom of it.
+`client/js/launchpad.js` is gone; `client/dist/app.js` and `client/dist/app.css`
+are committed.
+
+**STILL VANILLA, AND NOT SCHEDULED**: the terminal and everything around it
+(`client/js/terminal.js` and its family), the toasts
+(`client/js/toast.js` and the modules beside it), the sidebar row menus
+(`client/js/session-row-menu.js`), the restart picker
+(`client/js/session-restart-picker.js`), the settings panels
+(`client/js/settings-panel.js`, `settings-sections.js`) and the archive
+screens. So the answer to "is the client Svelte now" is NO - it is BOTH, and
+the first question about any client change is which tree owns that screen.
+
+**THE STATUS LED IS THE ONE THING THAT LIVES IN BOTH TREES AT ONCE, ON
+PURPOSE, AND IT IS NOT A DUPLICATION BUG.** `client/js/status-led.js` is still
+loaded by `client/index.html` and still paints every legacy surface, while
+`web/src/lib/led.ts` paints the compiled rows, and the contract between them
+is BYTE-IDENTICAL OUTPUT proven by `web/src/lib/StatusLed.parity.test.ts`
+against the
+real legacy file in a `vm` sandbox. Delete or edit one of them alone and half
+the app's lights change while the other half does not, which the parity test
+is there to make loud. See "The `web/` build" above.
+
+## The home screen shell, and the shim that replaced launchpad.js
+
+`client/js/launchpad.js` DOES NOT EXIST. Slice 7 deleted it. The home screen
+is `web/src/lib/launchpad/HomeScreen.svelte`, mounted into the empty
+`#launchpad-screen` div `client/index.html` still owns, and `window.Launchpad`
+is a shim the bundle publishes.
+
+| Piece | File |
+|---|---|
+| The shell's markup, and every anchor in it | `web/src/lib/launchpad/HomeScreen.svelte` |
+| The help panel, and the marker set its prose carries | `HelpDisclosure.svelte`, `RichText.svelte`, `rich-text.ts` |
+| Mount and tear down the screen | `home-screen-host.ts` |
+| The four panels, in mount order, as ONE list | `panels.ts` |
+| The imperative wires: version, server controls, help, disclosures | `home-chrome.ts` |
+| The collapsed-section map, on the legacy key | `home-sections.ts` |
+| The ids outside code addresses, written down | `home-anchors.ts` |
+| The "+" speed dial | `new-fab.ts` |
+| Every navigation, and the two rules they may not break | `navigation.ts`, `nav-host.ts`, `deep-link.ts` |
+| The status line and the error card | `status-report.ts` |
+| `window.Launchpad` | `shim.ts` |
+
+**THE SHIM MERGES, IT DOES NOT ASSIGN, AND THAT IS AN ORDERING FACT.** The
+bundle is a `<script type="module">`, so it runs AFTER every classic script on
+the page. `client/js/providers.js` publishes the launch picker onto
+`window.Launchpad` at its own load time, which is earlier. Assigning a fresh
+object in the bundle would drop that publication on the floor and the first
+"new project" would open a picker that resolves null; so `publishLaunchpadShim`
+merges into whatever it finds, and `providers.js` creates the object if it is
+not there yet. `window.CloudeWeb` still THROWS on a collision, for the opposite
+reason: nothing but `main.ts` is supposed to publish into it.
+
+**EIGHT MEMBERS, EACH WITH A NAMED CALLER, AND THE LIST IS MEASURED RATHER THAN
+REMEMBERED.** `launchpadScreen` and `init` (`app.js`, the "already inited" test
+and the mount), `loadProjects` (`app.js`, on every arrival at the screen),
+`loadRunningSessions` (`terminal.js`), `openProjectByName` (`router.js`),
+`_deriveRunningSessionDisplayName` (`app.js`, the deep-link slug),
+`sessionRecords` (`session-sidebar-clicks.js`), and `showProviderModal`, which
+`providers.js` WRITES and `nav-host.ts` reads. The migration plan predicted
+twelve; six slices of movement plus three call sites resolved in this one leave
+these eight, and `web/src/lib/launchpad/shim.test.ts` greps `client/js` and
+requires the two sets to agree in BOTH directions - a member the tree uses and
+the shim lacks is a TypeError on whatever screen reaches it, and a member
+nothing uses is dead weight that makes the next reader think this is unfinished.
+
+**THE FOUR LOAD-BEARING IDS ARE ANCHORS, AND THE RE-PARENTING IS LEFT ALONE.**
+`app.js:896` toggles `.active` on `#launchpad-screen`, which stays in
+`client/index.html` and is the MOUNT TARGET, so the shell never renders it.
+`app.js:358` re-parents the one `#statusText` node into `#home-bar-status`;
+`app.js:381` writes `#home-bar-status-text` from that node's `data-status`
+through a MutationObserver; `globalAudioToggle.js:300` inserts its button as
+`#home-bar-status`'s SIBLING, which makes `.home-bar` load-bearing too. All
+four re-derived on this tree, unchanged. `home-anchors.ts` enumerates them so a
+guard can iterate. **What this costs the shell is that every one of those nodes
+must be STATIC markup**: a `{#if}` or a keyed `{#each}` over them re-creates the
+node and silently drops whatever was moved in, and the symptom - a status light
+that vanishes on the second visit to the home screen - looks nothing like its
+cause. There is deliberately NO message bus for either surface; the plan's
+section 6 asks for an anchor and says so.
+
+**THE SHELL READS NOTHING, SO IT PAINTS ONCE.** Slices 4 and 5 both found the
+same trap - a reactive subscription makes every intermediate assignment a
+repaint where the old renderer painted once at the end - and this component
+carries no rune but its props. The one thing that changed is the REFETCH path:
+`loadProjects()` used to REMOUNT the attribution card and the RECENT list to
+refresh them, throwing both away to change at most a row. Each now exports
+`refresh()` on its mount handle and `panels.ts::refreshLaunchpadPanels` calls
+it. `HomeScreen.behaviour.test.ts` holds a MutationObserver across the mount
+and asserts zero records outside the four panel containers.
+
+**A DEEP LINK STILL NEVER CREATES, AND THE GUARD IS STILL DOUBLE.**
+`openProjectByName` resolves LIVE sessions only and reaches
+`Router.rejectTarget` on a miss; `selectProject` throws while
+`resolvingDeepLink` is set, so a future refactor that re-wires the two fails
+loudly instead of minting `<name>-2`. A listing that did not run is still not
+an empty listing: the ladder re-asks up to five times while the probe CANNOT
+DETERMINE and takes the first answer that did run.
+
+**TWO THINGS THE BROWSER FOUND THAT NO TEST HAD.** First, `mountPanel`
+APPENDS into its container and never clears it, so the
+`<div class="launchpad-empty">loading projects...</div>` the shell used to put
+inside `#project-list` sat on screen above the tree forever - the legacy
+`renderProjectList()` had been clearing it with an `innerHTML` write. A PANEL
+OWNS ITS CONTAINER: no markup goes inside one. Second, the rejoin's pre-fit
+carried gotcha 9 over verbatim from `launchpad.js` - a bare
+`await requestAnimationFrame` pair, which NEVER RESOLVES in a backgrounded tab,
+so a deep link resolved there froze inside `prepareTerminal` and never
+returned. `nav-host.ts::twoFrames` races it against a 250 ms timer, the same
+number and the same rule `client/js/terminal-layout-wait.js` uses: a layout
+wait may DELAY the work, never cancel it.
+
+**THE HELP PROSE KEEPS WHOLE SENTENCES, WHICH IS WHY IT CARRIES MARKERS.** It
+is the longest copy this app owns and nearly every paragraph has an inline
+`<code>` in it. Splitting each into the fragments around those spans fixes the
+english word order into the template, and word order is exactly what a
+translation changes. So each paragraph is ONE catalog message carrying
+`[[code]]`, `((em))` and `<<link>>`, expanded by `rich-text.ts` into DATA that
+`RichText.svelte` renders through Svelte's own `{expr}` escaping - so there is
+no `{@html}` on this path, which is the review trigger the migration plan names
+for this screen. A marker set is not a mini-language: no expressions, no
+nesting, one pass, nothing compiled. **A COMMAND IS NOT COPY**: the three shell
+commands the panel shows are data in `client/js/labels/home-screen.js`, because
+a translated `tmux -L cloude` is a broken instruction.
+
+**AND `project.create.console.description` IS GONE RATHER THAN WORKED AROUND.**
+It was a catalog sentence that got STORED as the console project's description
+in `config.json`, so a locale change could never retranslate it - the
+server-strings gap `.claude/notes/i18n-design.md` section 7 names, reached from
+the client. A description is USER data; the console row is identified by its
+NAME, and an adopted session's project row has carried `''` since it shipped.
+The console project is now created with no description at all.
+
+**THREE LEGACY CALL SITES WERE RESOLVED, NOT FORWARDED.** `providers.js` has
+its own `escapeForMarkup` (the text-node form, so the browser's serialiser is
+the implementation) and calls `window.App.showConfirmModal` directly, which is
+the owner it was forwarding to through the shim anyway;
+`terminal-commands-panel.js` calls `window.CloudeWeb.launchpad.createConsoleSession`.
+`create-host.ts` also stopped bouncing five of its own calls through the shim.
+
+**THREE OF SLICE 2's MOVED METHODS HAVE CALLERS THE SLICE DOES NOT OWN, and
+they were not left behind as a second copy.** The project tree's ended rows
+archive and restart (slice 4); the running-sessions row forks (slice 5). Both
+still-legacy surfaces now call `window.CloudeWeb.launchpad.archiveSessionRecord`
+/ `.restartRecentSession` / `.forkSession` by name. One behaviour, one greppable
+call site per surface, no dual path. `tests/test_session_restart_identity.node.mjs`
+stubbed that NAMESPACE rather than `Launchpad._restartRecentSession`, because
+stubbing the old method name would assert against a function nothing calls,
+which is the quietest way for a test to stop testing. THAT SUITE IS GONE - a
+later slice deleted it along with the surface it drove, and this pass did not
+find a one-to-one successor for it under `web/src`. The lesson is what is
+being kept here, not the file.
+
+**THE RECENT SECTION'S HEADING IS STILL LEGACY MARKUP, AND THAT IS DELIBERATE.**
+`mountPanel` puts the component inside `#recent-sessions-list`, while
+`#recent-sessions-count`, `#recent-show-deleted-toggle` and
+`#recent-sessions-section`'s own visibility are SIBLINGS of it that this section
+still owns. `initSectionDisclosures()` binds the collapse to that heading once at
+boot, so re-rendering it would drop the listener on the floor and the failure
+would be a chevron that stops working rather than an error anybody sees. The
+three writes therefore live in one module, `recent-chrome.ts`, injected as part
+of the component's host so it stays assertable with no document.
+`web/src/lib/launchpad/recent-chrome.test.ts` asserts the component's chrome
+never touches the list container AT ALL, by recording every element it asks for.
+
+**A `localStorage` READ AT IMPORT TIME BREAKS THE BUNDLE'S OWN CONTRACT, and it
+broke a test that had nothing to do with this slice.** `main.ts` promises that
+LOADING the bundle does no work. `prefs.svelte.ts` first read its preference at
+module scope, and `tests/test_session_row_menu_superset.node.mjs` started failing:
+it loads `client/dist/app.js` into a `vm` sandbox where `localStorage` is absent
+and `console` carries no `warn`, so the read threw, the catch reached for a
+method that did not exist, and the whole bundle failed to evaluate. The read is
+lazy now, on first ACCESS. Any new module in this tree owes the same check.
+
+**THE LEGACY CALL SITE IS GUARDED, AND THE GUARD IS LOUD.** `client/index.html`
+loads the bundle as a deferred module, so in a browser `window.CloudeWeb` is
+always there by the time a screen renders. It is absent in every node harness,
+and the mount call is the LAST statement in `loadProjects()` - so an unguarded
+throw there rejects the promise every caller awaits and takes the whole home
+screen down over a card. Measured: it did, and
+`tests/test_project_list_render_guard.node.mjs` went from 11 passed to 9
+failed. THAT SUITE IS GONE TOO, deleted in `90a9e87` along with the legacy
+render guard it drove; the measurement is kept because the mechanism is. The call site tests for the bundle and `console.error`s when it is
+missing, because a panel that silently never mounts is the same false green
+this project keeps paying for. Any later slice's call site needs the same
+shape.
+
+## The launchpad's session data layer
+
+Slice 3 of the launchpad migration. The four fetches, the attribution
+join, the work-stamp index, the three-outcome listing latch and the 5s
+poll left `client/js/launchpad.js` and now live in
+`web/src/lib/sessions/`.
+
+**THE LEGACY FIELDS ARE ACCESSORS, SO THERE IS EXACTLY ONE DATA PATH.**
+`this.projects`, `this.runningSessions`, `this.sessionAttribution*`,
+`this.sessionRecords`, `this._workStampByName`, `this.projectPresence`,
+`this.projectAuthority`, `this.projectsListingOk`, `this._archivedFetchOk`
+and `this.runningSessionsListing` are no longer instance fields: they are
+properties on `Launchpad.prototype` that read and write `sessionStore`.
+Roughly forty renderer lines still SAY `this.runningSessions` and every
+one of them is now a store read, which is what stops a renderer painting a
+stale array while the store holds a fresh one. **There is no fallback
+object behind them, deliberately** - an accessor that quietly fell back to
+a local field when the bundle was missing would be a second data owner
+that works, looks right, and disagrees the moment either side is written
+to. A missing bundle throws by name. In a browser it cannot happen;
+a node harness evaluates the real `client/dist/app.js` in its sandbox
+through `tests/helpers/cloude-web-sandbox.mjs`, which is strictly better
+than a stub because those tests then exercise the shipped store.
+
+**`loadRunningSessions` WAS PORTED LINE BY LINE AND NOT TIDIED.** Seven
+fields are overwritten UNCONDITIONALLY and must never be `||`-defaulted:
+`agent_family`, `agent_family_source`, `agent_wrapper_label`,
+`startup_gate`, `status_source`, `label`, and the wrapper-level `status`.
+Each is a three-outcome field whose null is a real answer meaning "the
+server could not determine it", so a `||` keeps the previous tick's value
+and a session whose wrapper was deleted mid-session goes on being named
+after it. Note `!== undefined ? x : null` is NOT `|| null`: the first
+preserves a server-sent null, zero, false or empty string as itself.
+`web/src/lib/sessions/running.test.ts` is written so each of those goes
+RED on a default. **KNOWN GAP, LEFT ALONE:** the merge's live-only
+unshift branch never set `status_source`, so a session reaching the
+launchpad ONLY through `/sessions/list` carries no status provenance. It
+reads like a missing line and it may be one; it was pinned by a test
+rather than fixed, because slice 3 is a MOVE and fixing a behaviour while
+relocating it makes a regression impossible to bisect. It belongs to
+slice 5, which owns that tooltip.
+
+**BOTH JOIN RUNGS SURVIVE, AND WHICH ONE A ROW TAKES IS A PROPERTY OF THE
+TWO ENDPOINTS DISAGREEING.** `sessionAttributionByInstance` keys on
+`${tmux_name}\u0000${created_at_epoch}`; `sessionAttribution` is the
+name-only fallback and never holds an archived row. `/sessions/attachable`
+excludes live sessions and `SessionInfo` carries NO `created_at_epoch`, so
+a live-only row is unshifted with `created_at_epoch: live.created_at_epoch
+|| 0` and therefore ALWAYS takes the name-only rung. `ambiguous` and
+`listingOk === false` are refusals that route to NEEDS ATTENTION and must
+never render as "no project" - empty maps alone say the second thing, and
+the latch is the only thing that makes them say the first.
+
+**THE POLL FINALLY HAS A TEARDOWN.** `_startRunningSessionsPoller` called
+`setInterval` and the word `clearInterval` appeared NOWHERE in
+`launchpad.js`; the handle was stored purely as an idempotence flag.
+`web/src/lib/sessions/poller.ts` owns the interval and `stopPolling()`
+clears it. The two gates are unchanged - signed in, and
+`ProjectListRenderGuard.shouldPoll(document)` - and A SKIP IS NOT A STOP:
+the interval keeps running while the launchpad is not the screen on
+display, so returning to it resumes with nothing to restart. Measured in
+a real browser under the production CSP: 3 ticks in a 11.5s window with
+home up, ZERO with `#launchpad-screen` off `.active`, 3 again on return
+with nothing restarting it, and zero after `stopPolling()`.
+
+**`window` IS NOT `globalThis`, AND THAT COST A DEBUGGING ROUND.** The
+methods that moved read `window.Auth`, `window.UIFlags` and
+`window.ProjectListRenderGuard`. Those are the same object in a browser
+and are NOT in a node `vm` sandbox, where the harness builds a plain
+object and hangs it on the context. A first draft reached for
+`globalThis`, the poller's auth gate answered false, and the tick silently
+never ran - it surfaced in `tests/test_project_list_render_guard.node.mjs`,
+since deleted in `90a9e87`, looking exactly like a repaint bug. A BARE `window` reference also THROWS
+where a property read would not, because vitest runs this tree in the
+`node` environment on purpose. `web/src/lib/sessions/env.ts` is the one
+place both are handled; anything new in this tree reads through it.
+
+## The running sessions list
+
+Slice 5 of the launchpad migration. The home screen's flat list of live
+sessions left `client/js/launchpad.js` and is
+`web/src/lib/launchpad/RunningSessions.svelte`, which READS the store
+rather than being told to paint.
+
+**IT REPLACED A REPAINT WITH A SUBSCRIPTION, AND THE THING IT DELETED IS
+WORTH NAMING.** `renderRunningSessions()` built a JSON signature of every
+row, compared it to `_lastRunningSig`, and on a difference wrote
+`#running-sessions-list.innerHTML` and rebound one delegated listener.
+Three things that shape could not do, all structural:
+
+1. A CHANGED TICK WAS NEVER CHEAP. One flipped status dot rebuilt every
+   row on screen.
+2. IT BOUGHT CORRECTNESS WITH STALENESS. `session-list-busy-guard.js`
+   SKIPPED the paint entirely while an inline rename input was open or a
+   row menu was up, because an `innerHTML` write under either destroys
+   what the user is doing. So a status change landing during one was
+   simply not shown. **That file is deleted rather than consumed**: a
+   component's rows are not rebuilt, so there is nothing to guard.
+3. A FIELD LEFT OUT OF THE SIGNATURE STAYED STALE FOREVER.
+   `agent_wrapper_label` and `startup_gate` were each ADDED to that
+   signature after shipping, each because the value changes with nothing
+   else on the row changing at all. A subscription cannot have that bug:
+   the template reads the field, so the field is the dependency.
+
+**MEASURED IN BRAVE UNDER THE PRODUCTION CSP, 2026-09-10**, over a
+9-project, 45-row screen driven through the real `loadRunningSessions`
+(`tests/manual/running-sessions-mutation-harness.html`, served by
+`scripts/lib_csp_static_server.py`'s handler on 127.0.0.1:5057): twelve
+idle ticks cost **0 mutation records and 0 nodes**; twelve ticks
+containing ONE status change cost **5 records, every one an attribute,
+and 0 nodes**; twelve ticks on a FAILING probe also cost 0 and 0. The
+negative control is what makes those numbers mean anything - one
+legacy-style `innerHTML` rewrite of the same rows scores **1 record and
+2,439 nodes**, and twelve of them 29,256. The tab reported
+`visibilityState: hidden` throughout (`hasFocus()` true, so an occluded
+window rather than a backgrounded tab); a microtask-only control that
+uses no timer at all returned the identical counts, so the throttle is
+not in the numbers.
+
+**AND THE BUSY CASE IS THE ONE THE GUARD COULD NOT DO.** With a rename
+editor open and half-typed text in it, a tick carrying a status change
+cost 10 attribute records and 0 nodes, the editor kept its node AND its
+text, and the dot updated. With `SessionRowMenuOpen.isOpen()` forced true
+- the guard's other trigger, which was GLOBAL, so a menu open on the
+sidebar froze the home list too - the dot still updated, because nothing
+consults that predicate any more.
+
+**THE LISTING VERDICT IS PUBLISHED ONCE PER TICK, AND THAT IS SLICE 4's
+DEFECT ONE FIELD OVER.** `e5662d8` fixed the ROW SET: it was assigned in
+fetch order, then again sorted after an await, and a keyed list moved all
+45 rows and moved them back. `loadRunningSessions` was still opening with
+`runningSessionsListing = emptyListing()` and assigning the real verdict
+after the same await. The assignment after it is unconditional, so the
+reset changed nothing about the ANSWER and everything about how many
+times it was published: on a screen whose probe is failing, every tick
+removed the NEEDS ATTENTION block and put it back and flipped the heading
+between a number and "could not be determined". This list is the ONLY
+surface that renders that verdict, so nothing else could have caught it.
+`web/src/lib/launchpad/running-tick-mutations.test.ts` holds both halves,
+as a source-shape assertion AND as a measured count.
+
+**NOTHING RENDERS HTML FROM A STRING, AND FIVE MODULES HAD TO BE SPLIT TO
+KEEP IT THAT WAY.** `SessionRowActions.html`, `SessionStatusUI
+.markUnreadHtml`, `SessionStartupGate.indicatorHtml`,
+`SessionThemeTint.attrs`/`swatchHtml` and `LaunchpadWrapperPill.html` all
+return markup, and there is no `{@html}` anywhere in this migration. Four
+of the five are SHARED with the sidebar row and therefore stay; the card
+consumes their DATA halves (`actionsFor`, `labelFor`, `isAwaiting`,
+`colorsFor`) and renders its own elements.
+`web/src/lib/launchpad/running-copy.parity.test.ts` loads each real module
+in a `vm` sandbox and holds its words against the catalog's, with a
+negative control per comparison, so two carriers cannot become two
+answers. `LaunchpadWrapperPill` had exactly one caller and moved.
+
+**THE FIVE REMAINING ICONS BECAME DATA.** `client/js/icons/glyphs.js` held
+`pencil` and `archive` for exactly this reason; `close`, `trash`,
+`restart` and the two envelopes joined them, and the five builders in
+`session-status-ui.js` are one-line delegates to `glyphSvg` now. ONE set
+of coordinates, two renderers - the alternative is the same button drawn
+two different shapes on two screens. The emitted strings are
+byte-identical to the ones they replaced, which is asserted rather than
+assumed. **Any `vm` sandbox that loads `session-status-ui.js` must inject
+`CloudeGlyphs`** the way `client/js/i18n/boot.js` publishes it, or every
+icon answers the empty string; `tests/helpers/cloude-web-sandbox.mjs`
+does it for every harness that uses it.
+
+**MARK UNREAD ARRIVES THROUGH THE PLUGIN BRIDGE NOW, AND THE SECOND COPY
+IS GONE.** `launchpad.js` drew its own inline envelope control through
+`markUnreadHtml` with its own `_handleMarkUnread`, which is what the
+plugin's own docblock called out as the remaining dual path. The card
+renders `window.CloudeWeb.sessionCardMenuItems(row, ctx)` and activates
+through `runSessionCardAction`, so `ui.show_mark_unread_control` is read
+once, by the contribution's `enabled`, for both surfaces. An EMPTY list
+is what the flag being off looks like and stays silent; an absent
+FUNCTION is a bundle that failed to load and is loud. The contribution's
+two labels moved into the catalog with the rest of this surface and
+`session-card-actions.test.ts` still holds them against the real
+`markUnreadHtml`.
+
+**`markUnreadHtml` NOW HAS NO CALLER AND IS KEPT ON PURPOSE.** It is the
+anchor the two parity tests compare against, so deleting it would delete
+the only independent record of what those words are. It is not dead
+weight; it is the control.
+
+**THE HOST IS THE SEAM, AND A MUTATION PROVED IT NEEDED ITS OWN TEST.**
+`web/src/lib/launchpad/running-host.ts` is the one place this surface
+reaches `window`. Dropping restart from a live row INSIDE it failed
+nothing: the component tests drive a recording host, and the parity test
+drives the legacy module directly, so neither crossed the seam between
+them. `running-host.test.ts` hangs the REAL legacy modules on the real
+`window` under jsdom and asserts the host answers exactly what the module
+answers, id for id and in order. **A pass-through is where a
+pass-through stops passing things through, and it needs a test of its
+own.**
+
+**THE RENAME PENCIL LOST A RUNG THAT COULD NEVER FIRE.** The legacy chain
+was `session_id || tmux_session || name`, and the middle rung has never
+had a value on this surface: every row the merge produces comes from an
+`AttachableSession`, which carries `name` and no `tmux_session`. A rung
+that has never been observed to fire is unmeasured, not proven; this one
+is provably unreachable and was dropped rather than carried forward
+looking like a fallback somebody relies on. The three STATES are
+unchanged and are asserted as behaviour.
+
+**THE SESSION-LABEL RULE NOW HAS A TYPED CALLER IN THIS TREE.**
+`web/src/lib/sessions/session-label.ts` delegates to
+`client/js/session-label.js`, the shared module the sidebar row, the tab
+title, the in-page header and the toast cards all read, and
+`project-tree-host.ts` was repointed at it - it used to call
+`Launchpad._sessionDisplayLabel`, which this slice deleted.
+
+## The plugin surface registry
+
+A typed, BUILD-TIME registry of the four places a feature may extend a
+screen, plus the one real feature that now arrives through it. It lives in
+`web/src/lib/plugins/` and is compiled into `client/dist/app.js` with
+everything else in that tree.
+
+| Piece | Where |
+|---|---|
+| The four surfaces and every payload type | `web/src/lib/plugins/types.ts` |
+| Register, and ask a surface what it holds | `web/src/lib/plugins/registry.ts` |
+| The `session-card-action` adapter: describe them, run one | `web/src/lib/plugins/session-card-actions.ts` |
+| The ship list, the whole "loader" | `web/src/lib/plugins/builtin.ts` |
+| The worked example | `web/src/lib/plugins/mark-unread/index.ts` |
+| THE ONE BRIDGE, both directions | `client/js/session-row-menu-plugins.js` |
+| The legacy consumer | `client/js/session-row-menu{,-items,-actions}.js` |
+
+**FOUR SURFACES, AND THE LIST IS CLOSED UNTIL A CONSUMER ARGUES OTHERWISE:**
+`session-card-action`, `launchpad-panel`, `sidebar-item`, `status-source`.
+They are the four `.claude/notes/svelte-migration-launchpad.md` section 6
+named. ONLY THE FIRST IS PROVEN - it has a real consumer and a real
+contribution. The other three carry the smallest payload their eventual
+consumer plainly needs and are documented in `types.ts` as unsettled, so the
+first real consumer is expected to change the type rather than work around
+it. A surface with no reader is a guess about a screen nobody has written.
+
+**PLUGINS ARE BUILD-TIME MODULES, AND THE REASON IS THE CSP.** A plugin is a
+TypeScript module in this tree, added to the `BUILTIN` array in `builtin.ts`
+and compiled in. There is NO loader, no manifest schema, no permissions
+model, no marketplace, no settings page and no dynamic `import()` of a
+runtime-assembled path, because `script-src 'self'` forbids remote script,
+inline script and `eval` - "fetch a plugin and run it" has no implementation
+in this browser tab, only a CSP relaxation pretending to be one. The owner's
+framing, verbatim: "lean and mean. kiss." If a runtime rung is ever wanted,
+the precedent to copy is the theme `effects.js` flow in
+`client/js/themes/registry.js`: same-origin, flat non-traversable filename,
+explicit consent remembered per id. Never a remote URL, never `eval`.
+
+**THEMES ARE A SEPARATE, OLDER, WORKING SYSTEM AND ARE NOT THIS.** 26 bundled
+manifests at `client/css/themes/<id>/theme.json` plus a user themes
+directory, scanned server-side by `GET /themes`, already carry `cssVars`, an
+optional whole `themeCss`, an `xterm` palette and the consent-gated
+`effects.js`. Themes were already expandable and are NOT being rebuilt.
+Nothing on this registry duplicates, replaces or wraps them: a contribution
+that wants to recolor something belongs in a theme manifest.
+
+**ORDER IS DECLARED AND TOTAL, NEVER INSERTION LUCK.** `surfacesOf(kind)`
+sorts on each contribution's `order` (absent reads as 0) and then on its
+`id`, and hands back a sorted COPY, so a read cannot mutate the registry and
+two builds that import the plugins in a different sequence paint the same
+list. A DUPLICATE ID IS REFUSED AND LOGGED rather than overwriting: silent
+last-write-wins would let a new plugin replace a shipped control with
+something that merely shares its name, and the symptom would be a control
+that "stopped working" with nothing in the log. The refusal is ALL OR
+NOTHING, so a partially registered plugin is never a state to handle. No
+mutable singleton is exported - `createRegistry()` builds an independent one
+(which is how the tests get isolation with no test-only `reset()`), and
+`register` / `surfacesOf` are functions over one private instance.
+
+**`enabled(context)` IS WHAT MAKES A SHIPPED CONTRIBUTION SWITCHABLE WITHOUT
+UNREGISTERING IT**, and it reads flags as `!== false`. That is
+`client/js/ui-flags.js`'s own rule carried through unchanged: a probe that
+could not run, an older server or an unparseable config all leave a control
+where the user last saw it, because turning "I could not tell" into "hide it"
+is how a capability disappears with nobody deciding to remove it. It is
+checked TWICE - at render and again in `runSessionCardAction` - since a menu
+can sit open across a poll or a flag change, and checking only at paint time
+would make the flag a suggestion.
+
+**THE WORKED EXAMPLE IS MARK UNREAD, AND IT IS A RE-SEAT, NOT A REDESIGN.**
+The control shipped in 1.2 behind `ui.show_mark_unread_control`
+(`src/config/ui.py::UIConfig`, served on `GET /api/v1/features`). 1.2.1 then
+rewrote the row menu into a DECLARATIVE TABLE and mark unread was one of the
+eight items in it: an entry in `session-row-menu-items.js`, an availability
+probe in `session-row-menu.js::contextFromRow` asking whether
+`SessionStatusUI.markUnreadHtml` returned empty, and a
+`session-row-menu-actions.js::runMarkUnread` that fabricated a detached
+element for `SessionSidebarClicks.onMarkUnreadClick`. All four are DELETED,
+along with `onMarkUnreadClick` itself and the two list-scoped bindings that
+had been unreachable since the control folded into the menu. THERE IS NO
+DUAL PATH, and that is mutation proven: emptying the `BUILTIN` ship list
+removes the item from the live menu entirely and fails five node cases and
+nine vitest cases by name, rather than falling back to anything.
+
+**A CONTRIBUTION SUPPLIES A MENU ITEM, NOT MARKUP, AND THAT IS THE 1.2.1
+SHAPE RATHER THAN THE ONE THIS SURFACE WAS BORN WITH.** It was first written
+against a menu that CONCATENATED raw HTML from whichever module owned each
+control, so `SessionCardAction` carried `icon`, `className` and `attrs` and
+the adapter emitted a `<span role="button">`. 1.2.1's menu renders every item
+itself as the same `<button role="menuitem">` with a label and a shortcut
+letter, so a contribution that still emitted its own span would paint a
+control unlike its seven neighbours, absent from the arrow-key focus ring and
+invisible to `itemIdForKey`. Those three fields were deleted rather than left
+unread; a contribution now supplies `shortcut`, `label(row)` and `run`, plus
+the `order` it already had. `client/js/session-row-menu-plugins.js` is the
+ONE bridge - `menuItems(row)` to describe, `run(id, ctx)` to activate - and
+`session-row-menu.js::itemsFor` is the ONE place the two lists meet, merging
+on `(order, id)`. The native table numbers itself 100, 300, 400, 500, 600,
+700, 800; mark unread takes 200, which is the second slot the owner's
+2026-09-10 superset ruling put it in. THE RULING DID NOT CHANGE - the eight
+items, their order, the separator above restart and close, and the flag gate
+are all still asserted by `tests/test_session_row_menu_superset.node.mjs`,
+whose own docblock anticipated this port: "a port that satisfies these is
+correct whatever it renders".
+
+**WHICH OPTIONAL ITEMS A ROW OFFERS IS STILL CAPTURED AT PAINT TIME.** The
+trigger's `data-row-menu-mark-unread` became `data-row-menu-plugin-items`, a
+comma-joined id list: the same fact - which optional items this row offers -
+recorded for ALL of them rather than for one by name. 1.2.1's frozen-snapshot
+rule is unchanged, and the round-trip case that proves it now reads
+`pluginItems` in place of `markUnreadAvailable`.
+
+**THE WORDS ARE THE SHIPPED WORDS, PROVEN RATHER THAN REMEMBERED.**
+`web/src/lib/plugins/session-card-actions.test.ts` loads the REAL
+`client/js/session-status-ui.js` in a `vm` sandbox and compares
+`markUnreadHtml`'s `title` and `aria-label` against the contribution's
+`label`, in both unread states. It used to compare MARKUP attribute by
+attribute, which stopped meaning anything the moment a contribution supplied
+none; what survived is the part a user can see, and it still matters because
+the sidebar row DRAWS ITS OWN INLINE COPY through `markUnreadHtml` (that
+screen is not migrated; the home screen stopped having a second copy when
+slice 7 deleted `client/js/launchpad.js`) and two surfaces describing one
+action in different words would read as two features. The negative controls are kept: the
+comparison is proven able to fail, and the parser still refuses markup it
+cannot read.
+
+**THE NODE SUITE RUNS THE REAL BUNDLE, NOT A FIXTURE.**
+`tests/test_session_sidebar_rows.node.mjs` and
+`tests/test_session_row_menu_superset.node.mjs` load `client/dist/app.js`
+into their `vm` sandboxes alongside the legacy modules - the emitted file carries no
+`import` or `export` statement, so it runs there and publishes the real
+`window.CloudeWeb`. So the assertions about the menu are about the shipped
+path. The guard in the bridge is LOUD, AND IT GUARDS THE FUNCTION RATHER
+THAN THE RESULT: a missing bundle `console.error`s and drops the
+contributions, while an EMPTY list stays silent because that is exactly what
+`ui.show_mark_unread_control: false` looks like. Confusing the two is how a
+panel silently loses a shipped control, which is the false green this project
+keeps paying for.
+
+Measured in a real browser under the production CSP (a static server
+importing `src.security_headers`), 2026-09-10: flag on, the item renders from
+the plugin path, is decorated by the menu into a `role="menuitem"`, is
+visible, and a click calls `setSessionUnread` with the OPPOSITE of the
+painted state and repaints once; flag off, it is absent and the menu's other
+three items are untouched. One CSP violation in the whole run, and it is the
+deliberate off-origin image placed as the negative control.
+
+NOTE THAT MEASUREMENT PREDATES THE 1.2.1 REBASE and was taken against the
+concatenated-HTML shape described above. The behaviour it records is
+unchanged and is covered by the node and vitest suites, but THE BROWSER RUN
+HAS NOT BEEN REPEATED against the declarative menu. Repeat it before quoting
+it as current.
 
 ## Architecture, the parts that shape everything else
 
@@ -132,9 +881,29 @@ guessing.
 **Created vs adopted is a real distinction, not a detail.** Cloude Code can
 attach to a tmux session it did not create. A TRULY external one - no row for
 its instance triple - gets an id of `adopted:<tmux-name>` and is absent from
-`owned_tmux_sessions`. Anything that parses, matches, displays or routes on a
+the owned tmux name set. Anything that parses, matches, displays or routes on a
 session id has to handle both shapes. Strip the prefix to recover the tmux name;
 do not assume the id is a clean display string.
+
+**THAT SET LIVES ON `OwnedTmuxLedger`, NOT ON THE MANAGER, AND SO DOES THE FILE
+THAT REMEMBERS IT.** `src/core/sessions/owned_tmux_ledger.py` owns the set (as
+`.names`), the pre-v3 backfill sentinel, the boot listing,
+`session_metadata.json` and the two datastore-backed ownership queries
+(`is_owned_name`, `instances`). `SessionManager` holds one as `self._owned` and
+keeps no copy and no forwarder; `build_services` hands the same object to
+`AppServices.owned_tmux`, so a route reaches it there rather than through the
+manager. `owned_tmux_sessions` is still the ON-DISK key in that file and must
+stay spelled that way, because a v3 file written by an older build uses it.
+
+Two halves of that file are unrelated and must not be confused: the owned set is
+about EVERY session this app created, and the session pointer is about the one
+most-recently-active. `drop_session_pointer` unlinks the pointer and re-writes
+the set, because unlinking the file outright threw away N sessions' ownership
+record to clean up one, on the ORDINARY path - after which every
+launcher-created session resolved EXTERNAL. The write is tmp plus `fsync` plus
+`os.replace` and `tests/test_owned_tmux_ledger.py` measures the protocol rather
+than the resulting file, because a plain in-place write produces identical
+contents and no atomicity.
 
 **AN ADOPTION RESOLVES THE ID, IT DOES NOT MINT ONE, and the difference is the
 hook path.** `adopt_external_session` opened with the literal
@@ -165,7 +934,11 @@ behind. Measured on live minutes after the re-key shipped: the rehydrated
 `adopted:cloude_Agent_-_Cloude_Code`, the browser's adopt correctly re-keyed to
 `ses_fb8dd410`, and `GET /sessions/list` returned **22 rows for 21 live tmux
 sessions** - one pane, two backends, two tailers on one FIFO.
-`_registered_ids_for_tmux_name` is what enforces the rule. Note this was caught
+`SessionRegistry.registered_ids_for_tmux_name` is what enforces the rule; it
+lives on the registry rather than the manager because it has to run against
+the very `backends` dict the registration path writes, and a second dict
+holding a copy answers every equality assertion while missing the second
+registration. Note this was caught
 only because the deploy was verified against `/sessions/list` rather than
 against the `boot_readopt_complete` log line, which was perfect.
 
@@ -373,11 +1146,12 @@ ladder unable to identify the instance for the life of the process.
 **EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
 The owner's rule, verbatim: "all sessions belong to projects, the root folder
 ... its impossible to not have a project." Nothing in memory carries it - the
-`Session` model (`src/models.py:138`) has no project field and `SessionInfo`
+`Session` model (`src/models/sessions.py:45`) has no project field and `SessionInfo`
 ships none, so `/sessions/list` cannot lose a project and cannot restore one.
 The launchpad tree reads `project_id` / `project_attribution` off
 `GET /sessions/records`, joined to the live session by tmux name plus epoch in
-`_buildProjectSessionGroups` (`client/js/launchpad.js:3878`), and it tests
+`buildProjectSessionGroups` (`web/src/lib/launchpad/project-groups.ts`, moved
+there by slice 4 from `client/js/launchpad.js:3878`), and it tests
 `attribution === 'none'` BEFORE it looks at `project_id`. So a row carrying
 both an id and `none` renders under "no project" while holding a perfectly good
 one, which is what the owner saw. The invariant is enforced in
@@ -1004,7 +1778,7 @@ at boot (`src/main.py:537-539`), stopped on shutdown (`:776-777`), read by
 `GET /sessions/{session_name}/local-servers` (`src/api/routes.py:2614`) and
 cleared when a session is destroyed (`:963`). **The owner ruled it STAYS.** Do
 not remove the tracker, the route, the two WebSocket message models
-(`src/models.py:1818, 1826`) or the model fields, and do not disable the
+(`src/models/websocket.py`) or the model fields, and do not disable the
 janitor. It is dead code retained deliberately, which is not the same thing as
 dead code nobody noticed, and this paragraph exists so a dead-code sweep can
 tell the two apart.
@@ -1020,7 +1794,8 @@ and unread. **Do not put any panel back in flow beside the terminal container.**
 
 **AND THE `local_servers` FIELD ON THE API IS HARDCODED EMPTY, SO IT DOES NOT
 REFLECT WHAT THE TRACKER KNOWS.** `SessionInfo.local_servers` and
-`SessionStats.local_servers` (`src/models.py:229, 236`) are assigned an empty
+`SessionStats.local_servers` (`src/models/sessions.py:136`, and the
+resolved list on `SessionInfo`) are assigned an empty
 value at all four assignment sites: `session_manager.py:4845` (`0`),
 `session_manager.py:5167` (`[]`), `routes.py:1459` (`[]`) and `:1461` (`0`).
 Those literals PREDATE the panel removal, so this is not a consequence of it.
@@ -1045,7 +1820,8 @@ answer it with the real number in front of him.
 
 ## The `/sessions/list` shape
 
-`GET /sessions/list` returns `SessionInfo` objects (`src/models.py`), and the
+`GET /sessions/list` returns `SessionInfo` objects
+(`src/models/sessions.py`), and the
 fields sit on **two different levels**:
 
 - On the wrapper: `activity_status`, `unread`, `startup_gate`, `tmux_session`,
@@ -1627,41 +2403,327 @@ false, and an in-process memo keyed on the tmux INSTANCE keeps a `ps` off the
 `PreToolUse` path. Steady state on a healthy box is one indexed SELECT per pane
 per server process and no subprocess at all.
 
+## Where the 1.4.0 integration moved things
+
+`integration/1.4.0` folded the other party's `adamdev/master` at `6012467`
+into this line in full. **RE-MEASURED 2026-09-12, BECAUSE THIS FILE AND
+`.claude/TODO.md` BOTH CARRIED A WRONG PAIR OF NUMBERS.** The range
+`4d8aa76..6012467` holds **89** non-merge commits, of which **87 are his**
+(84 `psyance`, 3 `Adoom666`) and **2 are ours**, carried back in by the two
+merges of our line he took inside his own. So 87 and 89 are both right about
+different questions and neither is a correction of the other; say which one
+you mean. The tree diff over that range is **244 files, +48172 / -3761**
+(`git diff --shortstat 4d8aa76 6012467`). The 245 files and +50446 this file
+and the TODO both used to state are not reproducible by any spelling of that
+diff; the per-commit sum, the one derivation that does run higher, reads
++49306 / -4297 over the same 244 files. The release-wide frame is different
+again and is the one the published notes use: **87 of the 171 non-merge
+commits between `v1.2.1` and `v1.4.0`**, 198 commits across 27 merges, 704
+files changed. Most of it
+merged with no conflict, and the interesting part of the round was the code
+that merged CLEANLY AND WAS WRONG, because his tree reaches for seams this
+line's decomposition had already moved. If you are porting anything else
+across, this is the map.
+
+| His spelling | This line |
+|---|---|
+| `session_manager.sessions` / `.backends` | `session_manager._registry.sessions` / `.backends` |
+| `session_manager._subscribers` | `session_manager._registry.subscribers` |
+| `session_manager.subscribe_output` / `unsubscribe_output` | `SessionRegistry.subscribe` / `.unsubscribe` |
+| `session_manager._pending_toasts`, `ack_toast`, `get_toasts` | `session_manager._toast_inbox.pending` / `.ack` / `.get` |
+| `session_manager._hook_tmux_names`, `_mint_hook_token` | `session_manager.hook_tokens.tmux_names` / `.mint` |
+| `session_manager.pinned_themes`, `set_project_theme`, `resolve_project_theme` | `session_manager._theme_store.*` |
+| `session_manager.pending_terminal_commands` | `session_manager._sidecars` |
+| `session_manager._owned_instances_from_db`, `is_owned_tmux_name` | `session_manager._owned.instances_from_db` / `.is_owned_name` |
+| `session_manager._last_probe_socket` | `session_manager._probe_health.socket` |
+| `src/api/routes.py` handlers | the sibling module that owns the resource |
+| `src/config.py`, `src/models.py` | the `src/config/` and `src/models/` packages |
+
+**THE DANGEROUS HALF IS THE ONE THAT DOES NOT RAISE.** Three of those reads
+arrived behind a `hasattr` or a `getattr(..., {})` default, so on this line
+they would have answered falsy rather than failing: `_drain_viewer` would
+have run with no idle watcher and no pattern detection on every session,
+silently, with the whole suite green. `tests/test_listing_off_the_loop.py`'s
+thread tripwire was worse - `setattr` on a name an object does not carry
+SUCCEEDS, so it would have wrapped four decoy containers and passed while
+measuring two of six.
+
+**AND TWO MORE OF THAT EXACT SHAPE SURVIVED THE SWEEP AND REACHED
+PRODUCTION.** Both were fixed in `c725905`, after the 1.4.0 deploy, and both
+are the same mechanism one layer out: a name that moved, reached through
+something that answers falsy or gets swallowed rather than raising where a
+test can see it.
+
+`src/api/websocket.py:270` passed `session_manager` into `_resolve_backend`
+while lines 307 and 325 passed `registry`. The live session table moved to
+`SessionRegistry`, so `SessionManager` carries no `get_backend` and the call
+raised `AttributeError` - **and the whole handshake sits under one
+`except Exception` that logs `ws_handshake_error` and falls through to the
+streaming loop**, so the socket lived and bytes still streamed while the
+NEGOTIATED RESIZE and the ATTACH PAINT were both skipped on every terminal
+open. Measured on live: `ws_handshake_resize` 1, `ws_handshake_error` 1,
+`ws_handshake_painted` 0. That is the documented mechanism behind this
+project's wrong-grid and "input lag" symptom, arriving again by a new route.
+`tests/test_ws_handshake_paint.py` is deliberately BEHAVIOURAL: it drives the
+real handshake against a real `SessionRegistry` and a manager stand-in that
+faithfully has no `get_backend`, and asserts the pane's screen REACHES the
+client. A test asserting that line 270 passes a variable named `registry`
+would pass forever while somebody renamed the variable and put the defect
+back, and a test that merely opened a socket and checked it survived would
+pass WITH the defect, because surviving is exactly what the swallow
+guarantees.
+
+`src/core/session_change_notice.py` had it twice over in one function.
+`publish_hook_status` read `get_backend` off the manager through a `getattr`
+and fell back to `_hook_tmux_names`, and BOTH of those moved - the first to
+the registry, the second to `HookTokenAuthority.tmux_names`. Measured against
+a real `SessionManager`, both answer falsy, so `tmux_session` was always
+None, the `if tmux_session:` block never ran, and **every hook status notice
+on `/ws/events` went out carrying neither a tmux name nor an unread flag**.
+The tolerance is KEPT, because this runs on the hook critical path and must
+never raise; it is pointed at the objects that now carry the members rather
+than at the names that moved.
+
+**THE SWEEP THAT FOUND THEM IS WORTH RE-RUNNING AFTER THE NEXT FOLD.** An
+AST pass over every `self.<attr>` in `session_manager.py`, resolved against
+the real class, plus every `from src.config import X` / `from src.models
+import Y` resolved against the package. Static import plus an attribute
+existence check beats reading diffs here, because the whole point is that
+the diff looks fine.
+
+**AND `src/api/routes.py` IS THE ONE TO WATCH ON A MERGE.** This line carved
+it from 4,397 lines to 106 in `e859106`, slice S6 - the assembly and the
+registration order, which is the route table's matching order - while his
+line kept editing the flat file. The merge resolved that to his file plus his
+additions, 4,593 lines, ZERO conflicts reported, the decomposition silently
+reverted and every route declared twice: **51 route decorators in that one
+file**, every one of them already declared by a sibling. Nothing would have
+thrown; FastAPI takes the first match, so which handler answered would have
+depended on include order. If a future merge touches that file, check its
+LINE COUNT before you check anything else.
+
+This paragraph said **4,387** until 2026-09-12 while "How we work here" next
+door said **4,397**, so the file disagreed with itself about the one number
+it tells you to check. 4,387 is the count at `release/1.2.1` and at the merge
+base `4d8aa76`; the file grew ten lines before S6 ran. Measured:
+`git show e859106^:src/api/routes.py | wc -l` is 4397 and
+`git show e859106:src/api/routes.py | wc -l` is 106. **A number quoted in two
+places drifts in one of them**, which is the general form of this and of the
+commit counts above, and the only defence is to measure both when you touch
+either.
+
+### What shipped, and where it is published
+
+Verified 2026-09-12 against git and the GitHub API, because "we released it"
+is the kind of claim that decays quietly.
+
+- **`v1.4.0` is an ANNOTATED TAG naming commit `7da2901`**, not `b5de919`.
+  `b5de919`, the boot integrity gate, is one commit PAST the tag and is the
+  tip of `integration/1.3.0` on both `origin` and `adamdev`. The branch keeps
+  the name `integration/1.3.0`: it is already on both remotes and a name is a
+  handle, not a declaration.
+- **The release is published on `origin` (ccsliinc/CloudeCode)**, marked
+  Latest, published 2026-09-11T22:29:38Z, one asset
+  `Cloude.Code-1.4.0-arm64.dmg` (126,619,315 bytes) with its sha256 printed
+  in the body beside the `shasum -a 256` line that checks it. `v1.2.0` and
+  `v1.2.1` are still published there and are the stated downgrade path.
+- **`adamdev` (Adoom666/CloudeCodeDev) HAS NO PUBLISHED RELEASE ON THIS
+  LINE**, which is not the same as having none at all - a claim worth saying
+  precisely because the loose version gets repeated. Its `v1.2.0`, `v1.0.36`
+  and `v1.0.35` are DRAFTS; the newest thing actually published there is
+  `v0.8.1` from 2026-08-04, and it still wears the Latest badge. Releases
+  live on ours by the ruling in `docs/DECISIONS.md`, "Adam's repo is the
+  primary, ours is the backup, releases stay on ours".
+- **THE PUBLISHED RELEASE BODY CARRIES ONE WRONG NUMBER AND IT HAS NOT BEEN
+  CORRECTED.** It says `src/api/routes.py` "drops from 1160 lines to 303".
+  Measured, it is 4,387 at `v1.2.1` and 106 at `v1.4.0`; neither 1160 nor 303
+  is the count of that file at either tag. Everything else in that body
+  reproduces exactly: 87 of 171 non-merge commits (84 psyance, 3 Adoom666),
+  198 commits over 27 merges, 704 files, 26 Svelte components, and python
+  modules under `src/` going 264 to 377. The body is on GitHub rather than in
+  this repo, so fixing it is an edit to the release, not a commit.
+- **`RELEASE-NOTES.md` IN THIS REPO STOPS AT v1.0.9 AND IS NOT WHERE RELEASE
+  NOTES LIVE ANY MORE.** Its newest heading is `## v1.0.9`; every release
+  from v1.2.0 on is written in the GitHub release body. Do not "bring it up
+  to date" without deciding which of the two is the record - two copies of a
+  release note is the same drift this section exists to catch.
+- **Deployed to the live mini and running.** Reported by the owner
+  2026-09-11: deployed to mac-mini-m4, 19 sessions intact across four
+  restarts. NOT re-verified by this documentation pass, which does not touch
+  the live host; `scripts/deploy-mini.sh --verify-only` is what re-checks it.
+
 ## How we work here
 
 - **Every function documented**: one-line description, typed inputs, typed
   output, and an example when the usage is not obvious. Types belong in the
   Python signature, not only in the docstring.
+- **A pure forwarder is exempt from the full docstring rule.** A member whose
+  entire body is `return self._collaborator.method(...)` has no behaviour of
+  its own to document. Restating the collaborator's contract creates a SECOND
+  copy of it that can go stale, and a confidently wrong doc sends the next
+  agent to write a bug. Such a member carries one line naming its replacement
+  and its delete date, and nothing else. The exemption applies ONLY to a member
+  marked deprecated with a delete date, so it cannot be stretched to cover a
+  thin method that does anything at all: one argument reshaped, one default
+  filled in, one error translated, and the full rule applies again. Types still
+  belong in the signature, on the forwarder as on everything else. The
+  measurement behind this: the first five decomposition slices left 23 pure
+  forwarders costing 291 lines, an average of 12.7 lines to forward one call,
+  which is why two of those three slices GREW the file they were shrinking.
 - **DRY, single source of truth, named constants.** No magic strings. A literal
   like the hook marker or the socket name lives in exactly one module and gets
   imported.
 - **New logic goes in new focused modules.** These files are already past the
   500-line guideline and should not grow: `client/js/terminal.js`,
-  `client/js/launchpad.js`, `client/js/app.js`, `client/css/styles.css`,
-  `src/config.py`, `src/api/routes.py`, `src/core/session_manager.py`. Edit them
-  when the change belongs there; do not use them as the default landing spot.
+  `client/js/app.js`, `client/css/styles.css`,
+  `src/core/session_manager.py`. Edit them when the change
+  belongs there; do not use them as the default landing spot.
+  `src/api/routes.py` CAME OFF THIS LIST: decomposition slice S6 took it from
+  4,397 lines to 106 across 29 siblings, so it is an aggregator now and adding
+  a router line to it is the correct move rather than a thing to avoid.
+- **`src/config/` is a package**, not a module: one typed block of `config.json`
+  per file, `settings.py` holding only the env-backed fields and the two caches,
+  and the behaviour in named siblings (`auth_loader`, `state_paths`,
+  `agent_command`, `config_file`, `config_writes`, `summary`, `wrappers`,
+  `provider_models`). `__init__.py` re-exports every public name the flat module
+  had, so `from src.config import settings` is unchanged.
+  **`settings.py` IS OVER THE 500-LINE GUIDELINE AND THE OWNER HAS RULED
+  THAT IT STAYS THERE.** His words, 2026-09-10, on being shown the one open
+  question S5 left: "Leave it it's ok". This is a RULING, recorded in
+  `docs/DECISIONS.md` under "`src/config/settings.py` stays over 500 lines", and
+  it binds both sides: do not "fix" this file to hit a line count. The class
+  keeps 31 public names because 111 modules import from this package and the
+  suite patches those members on the CLASS (23 sites patch `state_dir_override`,
+  eight patch `type(sm.settings).get_state_dir`); a name that stopped resolving
+  there would be invisible to every one of them. The bodies are all gone - what
+  remains is 109 lines of pre-existing field declarations and 31 typed entry
+  points averaging 13 lines. Getting under 500 needs the entry points DELETED
+  and their ~45 callers migrated, which is Rule B applied to `Settings`. That is
+  its own slice, it is filed as a FUTURE OPTIONAL slice in
+  `.claude/notes/backend-decomposition-plan.md` and in `.claude/TODO.md`, and it
+  is NOT SCHEDULED. (It was 632 lines when the ruling was made; re-measured
+  2026-09-12 at `b5de919` it is **620**. The ruling is about the file, not
+  about the number, and the number drifts - measure it rather than quoting
+  either figure.)
+- **`src/core/sessions/` holds the collaborators `SessionManager` composes**, one
+  mutable state cluster each, per
+  `.claude/notes/backend-decomposition-plan.md`. THE STATE MOVES, IT NEVER
+  COPIES: a collaborator holds the one and only copy of its cluster and the
+  facade keeps none, because two objects holding one logical state and kept in
+  sync by hand is the shape of the bug that produced 22 `/sessions/list` rows
+  for 21 live panes. `SessionManager()` still takes NO required arguments (104
+  test files construct it bare); a collaborator is an optional KEYWORD-ONLY
+  argument with a default-constructed value, so injection is available to a new
+  test and invisible to every old one. Two rules hold for every module in the
+  package and both are enforced by `tests/test_sessions_package_rules.py`
+  rather than remembered: nothing in there may import `session_manager`, and no
+  file exceeds 500 lines. `ProbeHealthRecorder` (slice S1) is the worked
+  example, and `ProbeHealth` is DEFINED there and re-exported from
+  `session_manager` so every existing import keeps resolving. `ThemeStore`
+  (S2, with `theme_accents` and `theme_dotfile` beside it) is the worked
+  example for a cluster of DICTS, and it carries two rules the scalar one
+  could not teach. **A moved attribute that anything REBINDS needs a
+  property SETTER that writes through to the collaborator**: several tests
+  assign `mgr.pinned_themes = {...}` wholesale, and a read-only property
+  raises while a plain instance attribute silently shadows the property and
+  forks the two objects while every value assertion still passes. **And a
+  collaborator that does file I/O takes its path as a zero-argument
+  CALLABLE, not a `settings` import.** Every theme test redirects state with
+  `monkeypatch.setattr("src.core.session_manager.settings", stub)`, which
+  patches the name in THAT module; a collaborator importing `settings`
+  itself does not see it and reads and WRITES the developer's real
+  `~/.cloude-sessions` during a pytest run. Resolving the path at call time
+  is also exactly what the loose methods did. `ToastInbox` (S3) adds the
+  third shape: **a moved container reached by a DEFENSIVE ACCESSOR in
+  another module needs its own proof leg.**
+  `src/core/toast_history.py` reads `getattr(manager, "_pending_toasts",
+  None)` and answers `{}` for anything that is not a Mapping, deliberately
+  and documented as such - so a facade that stopped exposing that name
+  would show an EMPTY toast history on every surface while raising nowhere
+  and failing no existing test. Whenever a slice moves a field, grep for a
+  `getattr` on its name before trusting a green suite; that shape is what
+  CLAUDE.md calls the characteristic failure of this refactor, and it has
+  now appeared in two of the first three slices. `SessionRegistry` (S4,
+  the log buffers and command counters, half the registry cluster with S7
+  bringing the rest) settles the SETTER POSTURE as evidence rather than
+  taste: **a write-through setter exists where a whole-map rebind is
+  MEASURED in the tree, and the property is read-only everywhere else**,
+  so a future assignment fails loudly instead of shadowing the property.
+  It also generalises S2's callable rule from paths to VALUES - the line
+  cap arrives as `lambda: settings.log_buffer_size`, because four test
+  modules install a stub `settings` on `session_manager` carrying their
+  own `log_buffer_size` and a collaborator that imported `settings` would
+  read the real one. And it names the case where the existing suite can
+  prove NOTHING: this cluster has zero readers outside `session_manager`
+  and had zero tests of its own, so no pre-existing test could redden for
+  any defect in the move and the structural legs carry the whole proof.
+  Measured on the aliasing mutation, where `__init__` holds the
+  collaborator's own dict as a plain attribute: leg (a), the `is` check,
+  stays GREEN and only leg (b) fails. `AttachmentSidecars` (S5, the idle
+  watchers, the adopt FIFO offsets and the pending terminal commands)
+  QUALIFIES the getattr rule above rather than repeating it. **A
+  defensive-accessor leg catches a REMOVED property, and it catches a
+  COPYING one only if it asserts identity on the container itself.**
+  `toast_history`'s leg does (`is` on the dict) and the websocket's
+  `getattr(sm, "idle_watchers", {}).get(session_id)` does not - measured
+  on the copying mutation, that leg passed while identity, cross-writes,
+  the rebind and injection all failed. And **a test that constructs the
+  manager with `SessionManager.__new__` bypasses `__init__`, so every
+  property a slice adds is unreachable there**: it has to install the
+  collaborator by hand the way it already installs `backends`. One file
+  does that today, `tests/test_terminal_commands.py`, and it was
+  repointed in the same commit. S5 also carries the one-shot rule for
+  the two sidecars that are consumed exactly once - `take_fifo_offset`
+  and `take_pending_command` POP, `peek_fifo_offset` does not, because
+  `adopt_fifo_start_offset` is a property and a getter that consumed
+  would let an unrelated read destroy the replay position of a session
+  nobody had attached to yet.
 - **No bare `except:` and no blanket `except Exception:`** that swallows. Catch
   the specific error, log it with structlog context, or re-raise. If you
   deliberately swallow, a comment says why (see the History-API guard in
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-11 on `master` at `ea2cbc9` with `-p no:randomly`,
-  is **6423 passed / 0 failed / 18 skipped**, and ZERO FAILED IS STILL THE
-  NUMBER TO HOLD: the two this file used to call permanently environmental
-  were diagnosed and fixed on `docs/6-meta-cluster` (see below), so a
-  failure here is a real signal rather than one you are meant to recognise
-  and ignore. The reading before it was
-  **5758 passed / 0 failed / 18 skipped**, re-measured 2026-09-10 on
-  `docs/6-meta-cluster` off `51f3489`. Before that it was
-  **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`. The same worktree read
-  **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
-  **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
-  this round added 15, with no new failures at either step. Note the SKIP COUNT MOVES BY ONE between
-  runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
-  22 is not a test that stopped being measured; the skip REASONS are what
-  to read, and `-p no:randomly` pins it at 21. Two failures this file used to name as
+  repo root. System python3 has no fastapi. **Current baseline, measured at
+  `b5de919` on `integration/1.3.0`: 7303 passed / 4 failed / 57 skipped, out
+  of 7364 collected. RE-MEASURED 2026-09-12 on the consolidated
+  `integration/1.3.0` with all four 1.4.0 branches merged, `-p no:randomly`:
+  7318 passed / 4 failed / 57 skipped in 284.81 s. The SAME four, so the
+  fifteen tests the state-dir round added all pass and this consolidation
+  introduced no new failure.** The four are environmental, they fail identically on
+  the other party's parent `6012467`, and they are named here so you can
+  recognise them rather than chase them:
+  `test_cold_socket_born_at_depth_real_tmux`,
+  `test_cold_socket_options_real_tmux`, `test_tmux_launch_batching_real_tmux`
+  and
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`.
+  **THREE OF THE FOUR ARE IN THE `real_tmux` GROUP, WHICH IS HOW YOU
+  REPRODUCE MOST OF THIS BASELINE WITHOUT CONTENDING FOR A SOCKET.** Measured
+  independently 2026-09-12 at `b5de919`, in a clean worktree with a
+  `config.json` copied in, `-p no:randomly -m "not real_tmux"` reads
+  **6957 passed / 1 failed / 57 skipped / 349 deselected in 193 s**, the one
+  failure being `test_home_write_guard`. The arithmetic closes exactly,
+  6957 + 1 + 57 + 349 = 7364, which is what makes those two runs ONE
+  measurement rather than two numbers that happen to land near each other; a
+  bare `--collect-only` on the same tree also answers 7364. `-m "not
+  real_tmux"` IS STILL NOT A VERIFICATION RUN - it is a fast loop and a
+  cross-check, and it cannot see three of the four failures it is being used
+  to account for.
+  ZERO FAILED WAS TRUE FOR ONE DAY AND IS NO LONGER THE NUMBER TO HOLD. The
+  reading before this one was **6423 passed / 0 failed / 18 skipped**,
+  re-measured 2026-09-11 on `master` at `ea2cbc9` with `-p no:randomly`, and
+  before that **5758 passed / 0 failed / 18 skipped**,
+  re-measured 2026-09-10 on `docs/6-meta-cluster` off `51f3489`, and the two
+  it fixed by diagnosis are still fixed - what came back is a DIFFERENT set
+  that arrived with the 1.4.0 fold and fails on his side too, so a failure
+  here is still a real signal as long as it is not one of the four named
+  above. Earlier readings, kept because the DRIFT is the lesson:
+  **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`, **5641 / 2 / 19**
+  at the bare merge of `adamdev/master` 2b1fcb9, and
+  **5628 / 2 / 19** at `release/1.2`. Note the SKIP COUNT MOVES between
+  runs purely on `pytest-randomly`'s ordering, so a lone off-by-one is not a
+  test that stopped being measured; the skip REASONS are what
+  to read, and `-p no:randomly` pins it. Two failures this file used to name as
   permanently environmental are FIXED as of 2026-09-10, by diagnosis rather
   than by a skip, and the precondition behind each is written down because
   nobody had ever recorded it:
@@ -1736,7 +2798,25 @@ per server process and no subprocess at all.
   failure this file used to name, is FIXED and now passes. Re-measured
   2026-09-10 on the navigation-token branch: **206 tracked suites, all
   206 passing**, against 202 on its base commit in the same worktree -
-  four added, no new failures. Note `test_terminal_layout.node.mjs`
+  four added, no new failures. Measured 2026-09-12 by running the
+  CI loop's own `for suite in tests/*.node.mjs` at `b5de919`: 195 tracked
+  suites, all 195 passing, none failing. **CURRENT, re-measured 2026-09-12
+  on the consolidated `integration/1.3.0` (the four-branch 1.4.0 round
+  merged): 198 tracked suites, all 198 passing, none failing.** The three
+  added are the client round's own
+  `test_away_bar_containing_block.node.mjs`,
+  `test_settings_panels_mount.node.mjs` and
+  `test_write_failure_is_visible.node.mjs`. THE COUNT WENT DOWN AT
+  `b5de919` AND THAT WAS THE MIGRATION, NOT A LOSS OF COVERAGE: the svelte slices retired node
+  suites whose subject they deleted and re-asserted them in vitest under
+  `web/src`, which the `tests/*.node.mjs` glob cannot see. Two numbers are
+  needed to describe this tree now, and the vitest half was NOT re-measured
+  by the `b5de919` pass - it carried `1340/1340` from `.claude/TODO.md` as a
+  reading taken by an earlier round. **The consolidation round DID measure
+  it: vitest `1342/1342` across 47 files, `svelte-check` 0 errors and 0
+  warnings over 402 files, on the merged tree.** The two added cases are the
+  shim's new `showError` and `selectProject` members. Note
+  `test_terminal_layout.node.mjs`
   flaked ONCE in that base run and passed in isolation seconds later on
   the same tree, so a lone failure there without a code change is not a
   regression; re-run before chasing it. Re-measured 2026-09-11 on `master`
@@ -2162,8 +3242,8 @@ poison every downstream reader, and until 2026-09-08 it did.
 | Piece | File |
 |---|---|
 | Compose, validate and create the directory | `src/core/project_directory.py` |
-| The folder step, and the pure rules behind it | `client/js/project-create-folder.js` |
-| Where it is wired in | `src/api/routes.py` (`create_session`), `client/js/launchpad.js` (`_createNewSessionInner`) |
+| The folder step, and the pure rules behind it | `web/src/lib/launchpad/project-folder.ts` and `project-folder.test.ts` (slice 6 moved it out of `client/js/project-create-folder.js`, which is DELETED) |
+| Where it is wired in | `src/api/session_crud_routes.py` (`create_session`), `web/src/lib/launchpad/create-flow.ts` (slice 6 moved it out of `launchpad.js::_createNewSessionInner`) |
 
 **"START EMPTY" HAD NO FOLDER STEP AT ALL.** The chain was "+" > new
 claude project > start empty > provider > name this project > create
@@ -2213,7 +3293,8 @@ folder the user did not ask for and cannot find. An existing EMPTY target
 directory is fine; a non-empty one refuses.
 
 "clone from github" does NOT have this defect: it has collected a parent
-directory since it shipped (`launchpad.js`, `modal-clone-parent`).
+directory since it shipped (`web/src/lib/launchpad/CloneModal.svelte`,
+`modal-clone-parent`; it was `launchpad.js` until slice 6).
 
 ## A session's theme, and the two stores that hold one
 
@@ -2361,7 +3442,8 @@ overridden by no state, and the glow is a RADIAL GRADIENT rather than a
 spread shadow - a gradient fades out AT the box edge, so the halo's
 painted extent IS its declared box and can be held to a number; a spread
 shadow paints beyond the element by definition and never could.
-`scripts/verify_status_led_geometry.py` measures the whole matrix in a
+`scripts/archive/verify/verify_status_led_geometry.py` measures the whole
+matrix in a
 real Chromium across three themes and two viewports, because the
 divergence was in what the box RESOLVES to once a per-state override and
 a pseudo-element's own shadow are composed, and no CSS read composes
@@ -2390,8 +3472,8 @@ PLACEMENTS IT APPEARS IN.** `client/js/version-footer.js` renders a
 small grey `<span class="version">` and both surfaces call it: the
 sidebar footer (right after the status key, its own `.version-footer`
 block) and the home screen's bottom bar chip
-(`renderHomeBarVersion()` in `launchpad.js`, which now only owns a mount
-point). It reads `<meta name="cloude-app-version">`, stamped once at
+(`renderHomeBarVersion()` in `web/src/lib/launchpad/home-chrome.ts` since
+slice 7, which only owns a mount point). It reads `<meta name="cloude-app-version">`, stamped once at
 serve time by `src/main.py` from the SAME resolver `GET /api/v1/version`
 calls (`src/core/version.py::resolve_version()`) - not a second fetch of
 that endpoint, because the value cannot change while the page is open
@@ -2905,7 +3987,68 @@ minute, forever, which is why it was rejected.
 | Read the verdict and decide what may be said | `src/core/db_integrity_status.py` |
 | The background loop | `src/core/db_integrity_task.py` |
 | The cheap per-request probe | `src/core/db_health.py` |
+| May boot stand on the cached verdict | `src/core/db_integrity_gate.py` |
 | Atomic write / tolerant read, shared with the ingester | `src/core/json_artifact.py` |
+
+**AND BOOT WAS DOING THE SAME THING THE REQUEST PATH USED TO, FOR LONGER.**
+`ensure_db_migrated` ran the identical pragma unconditionally at
+`db_migration.py:280`, BEFORE the schema-version gate, so it ran whether or not
+a migration was pending. Measured 2026-09-11 on the owner's 5.4 GB cloude.db:
+**51.8 s of a 55 s startup window**, after which the entire rest of the lifespan
+took 200 ms. Warm cache floor about 21 s, cold about 54 s. That is 20 to 50
+seconds of CLOSED PORT on every restart, six hours after the daily checker had
+walked the same file in 19.767 s and written `ok`.
+
+`src/core/db_integrity_gate.py` is the ladder. **ONLY A POSITIVE, FRESH, `ok`
+VERDICT TAKEN ON THIS DATABASE MAY SKIP THE PRAGMA**; ten named rungs refuse and
+every one of them runs it. The freshness window is NOT picked here: it is
+`resolve_stale_after_seconds()`, two check intervals, and more than the number
+the gate reuses the REDUCTION - `db_integrity_status.classify_record` is now one
+public function and `GET /api/v1/version` calls it too, so the boot gate and the
+status block cannot disagree about whether the database has been verified.
+
+**A CACHED FAILURE RUNS THE LIVE PRAGMA; IT DOES NOT SHORT-CIRCUIT.** Returning
+the degraded state straight from the recorded complaint looks stricter and is
+worse: it makes a stale failure permanent, so a user who restored a verified
+backup after a corruption would boot read-only forever, with a cached verdict
+outranking a live one. Running the pragma cannot be softer than the old
+behaviour because it IS the old behaviour.
+
+**THE ARTIFACT NOW SAYS WHICH DATABASE IT DESCRIBES.** It recorded only
+`db_path`, which is derived from the state directory on both sides and therefore
+always matches and proves nearly nothing, because a restored file lands at the
+same path. It now also carries `meta.install_id` and `db_size_bytes`, following
+`corpus_ingest_scan.py`, which already invalidates its own cache on a changed
+`install_id`. A file SMALLER than when it was verified has been replaced,
+restored, truncated or VACUUMed, because SQLite does not shrink in normal
+operation; a VACUUM is the one false positive and costs exactly one slow boot.
+An artifact predating the binding carries no `install_id` and is REFUSED, so the
+first boot after this ships still walks the file and only the second is fast.
+
+**WHAT IT CANNOT DETECT IS SAID OUT LOUD RATHER THAN IMPLIED AWAY.** An in-place
+restore of a same-size-or-larger backup of the SAME install is invisible to all
+three identity facts, and so is bit rot arising between the check and the boot.
+An unclean shutdown is not detectable either: in WAL mode a `-wal` file is
+present whenever a connection is open and routinely survives a clean exit, and
+this is a menubar app that is killed constantly, so any crash heuristic built on
+it would refuse always or never. For all three the freshness window is the only
+control, which is the same control the daily check has always rested on.
+
+**THE OUTCOME ON THE LIVE RESTART, REPORTED AND NOT RE-MEASURED HERE.**
+The owner's reading after the deploy, 2026-09-11: startup **21.4 s to
+1.867 s**, with the skip logged rather than inferred from the clock. That
+21.4 s is the WARM-CACHE floor the commit message names, so it is the cheap
+end of the range this replaced and not the 51.8 s worst case. This
+documentation pass did not touch the live host and did not reproduce either
+number; the commit's own measurements (51.8 s of a 55 s window, the daily
+checker's 19.767 s walk) are what the ladder was built against.
+
+**A BOOT-RUN CHECK PUBLISHES**, tagged `source: boot` beside the scheduled
+sweep's `source: scheduled`. It is a real completed check and withholding it
+would make the next boot walk a file verified moments earlier, which on a box
+that restarts more often than the daily schedule fires is the whole fix not
+happening. The tag is what keeps a dead daily loop diagnosable now that the
+artifact's age alone cannot separate the two producers.
 
 **The request path is now one connect plus one small SELECT**, plus one read of
 a small JSON file. Measured at 0.46 ms median against a 310 MB database where
@@ -3194,6 +4337,91 @@ tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
 
+## The string layer, and the one catalog rule
+
+Every user-visible string comes from ONE catalog that BOTH clients read. Full
+model in `.claude/notes/i18n-design.md`; the rule is that there is no second
+table, ever, for any reason.
+
+| Piece | File |
+|---|---|
+| The default catalog, data only | `client/js/i18n/catalog.en.js` |
+| Plural selection and interpolation, PURE | `client/js/i18n/format.js` |
+| The pseudo-locale, derived from en | `client/js/i18n/pseudo.js` |
+| The locale registry, where a second locale is added | `client/js/i18n/catalogs.js` |
+| Locale ladder, `t()`, missing-key behaviour | `client/js/i18n/runtime.js` |
+| Publishes `window.CloudeI18n` and `window.CloudeLabels` | `client/js/i18n/boot.js` |
+| Shared sentence assembly, one per screen | `client/js/labels/` |
+| The reactive accessor for Svelte | `web/src/lib/i18n/index.svelte.ts` |
+
+**THE CATALOG IS DATA, NOT CODE, AND THAT IS LOAD-BEARING.** No functions in
+values, no template literals, no TypeScript in the file. It is read by the
+legacy browser client, the Svelte bundle, vitest and the node suite, so a value
+that can RUN is a value that can reach for something one of those four does not
+have. It also has to convert to a Python dict by inspection, because the server
+emits user-visible prose too and bringing it into this same key namespace later
+is only cheap while that stays true. Server strings are OUT of scope today for a
+reason that is about data rather than effort: toast bodies are STORED, so
+translating at write time is wrong and translating at read time is a schema
+change.
+
+**KEYS NAME WHAT A STRING MEANS, NEVER WHERE IT APPEARS.**
+`session.summary.none`, never `sidebar.groupheader.emptylabel`. Slices 2 to 7 of
+the Svelte migration rewrite the screens these strings sit on, and a key that
+names a screen dies with it. Keys are FLAT and dotted so `grep -rn` finds every
+use across both trees, and because a nested catalog invites
+`t('session.status.' + key)`, which makes the extraction guard impossible to
+write.
+
+**NO LIBRARY, AND CSP IS WHY, NOT TASTE.** Every ICU MessageFormat runtime
+compiles a message into a function and `script-src 'self'` refuses
+`new Function` and `eval`. `Intl.PluralRules` and `Intl.NumberFormat` are
+already in the browser and already correct for every locale CLDR covers. A
+plural message is an object keyed by CLDR category with `other` mandatory;
+interpolation is `{name}` and one replace pass, with no expressions inside the
+braces, because a mini-language in a message is the road back to a compiler.
+**THE ZERO CASE IS CHOSEN BY THE CALLER, NOT BY THE PLURAL RULE**:
+`Intl.PluralRules('en').select(0)` is `other`, so a plural set alone renders
+"0 sessions", which is grammatical and is still the wrong copy. "no sessions" is
+a DIFFERENT message.
+
+**A MISSING KEY RENDERS THE KEY ITSELF, LOUDLY, AND NEVER THROWS.** An empty
+string is invisible and loses a label for a release; `???` is visible and
+unattributable; the key names itself, so a screenshot of the bug is the fix. It
+is reported on `console.error` in production too, deduped so a key missing on a
+two-hundred-row list logs once. The same rule covers a missing runtime: a legacy
+caller with no `globalThis.CloudeI18n` gets keys back and NEVER a second copy of
+the strings, because a fallback table is the dual path this exists to prevent
+and a fallback that works is one nobody notices is being used.
+
+**ORDERING IS GUARANTEED BY THE SPEC, NOT BY LUCK.** `boot.js` is a same-origin
+`<script type="module">` in `client/index.html`, above the bundle's tag. Module
+scripts are deferred and run in document order, so `window.CloudeI18n` exists
+before `app.js` evaluates and before `DOMContentLoaded`. The classic scripts
+above both run FIRST, which is why every legacy consumer reaches for `t()` at
+RENDER time and never while it is being defined. It is kept out of the Svelte
+bundle deliberately: copy must not depend on the newest thing, and nothing about
+the legacy tree's strings changes on the day slice 7 deletes `launchpad.js`.
+The Svelte tree ADOPTS that instance rather than building one, because two
+instances are two current locales.
+
+**LOCALE IS BROWSER-LOCAL, THROUGH A LADDER, AND THAT IS A DECISION.**
+`localStorage['cloude.locale']`, then `navigator.languages` prefix-matched, then
+`en`. Not a server setting, because it must resolve SYNCHRONOUSLY at first paint
+and a setting arriving on an async config fetch paints the wrong language and
+then flips. The ladder is the seam: a server preference later is one rung at the
+top plus a `setLocale()` when config lands.
+
+**TWO GUARDS, BECAUSE NEITHER COVERS THE OTHER'S GAP, AND IT WAS MEASURED.**
+The pseudo-locale (derived from en, so it cannot go stale) wraps and LENGTHENS
+every string; `coverage.test.ts` requires each rendered sentence to be a
+balanced bracketed span AND to be built from an exact count of catalog messages,
+and separately scans the ported sources for literals that read like sentences.
+Mutation-proven 2026-09-10: a literal returned at the top level fails all three
+checks, but **a literal interpolated INTO another message passes the span check**
+because the outer message wraps it, and is caught only by the count assertion
+and the source scan. `PORTED_FILES` in that test is the list a slice APPENDS TO;
+a file not on it is not covered.
 ## One navigation generation, and what a completion is allowed to write
 
 **A COMPLETION MAY ONLY WRITE TO SHARED UI STATE WHILE ITS NAVIGATION IS
@@ -3599,7 +4827,8 @@ load can move.
    sessions.** `build_backend` with no `session_name` rebuilds
    `cloude_<slug(session_id)>`, which for an adopted id yields
    `cloude_adopted_cloude_Foo` - a name no socket has ever carried. It then fails
-   the liveness test and `_clear_stale_metadata` throws the pointer away. Pass the
+   the liveness test and `_clear_stale_metadata` throws the pointer away (it
+   keeps the owned set; see `OwnedTmuxLedger.drop_session_pointer`). Pass the
    STORED `tmux_session`, and keep the derivation as the fallback for pre-field
    metadata.
 5. **A uuid on the row is not evidence a transcript exists, and a missing
@@ -3661,3 +4890,49 @@ load can move.
     asked of it: can this id and the pane's own id ever diverge, and if
     they do, is there a way back to ground truth that does not depend on
     either id being the right one.
+
+11. **A CHECK THAT PASSES BECAUSE IT LOOKED AT NOTHING. SIX OF THESE IN TWO
+    DAYS, 2026-09-11 and 2026-09-12, which makes it the single most repeated
+    failure shape in this project.** They are all one mechanism: the thing
+    being measured went absent, and absent compared equal, or the tool that
+    was meant to complain had its complaint routed somewhere nobody reads.
+    A `dist/` line in `.gitignore` with no leading slash swallowed
+    `client/dist`, so a deploy would have shipped no bundle and every hash
+    check in `deploy-mini.sh` would have compared an absent file against an
+    absent file and read green. A docs drift guard's citation regexes matched
+    only `src|client|tests|macOS` roots and `.py|.js`, so every citation
+    repointed at `web/src` `.ts` would have become invisible prose and the
+    guard would have passed forever holding nothing. `rsync --no-compress` is
+    rejected by macOS openrsync, which prints usage, copies zero bytes and
+    exits 0, and the usage text went to a pipe into `tail`. `deploy-mini.sh`'s
+    up-check curls `/` and nothing else, so it passed against the DYING OLD
+    PROCESS, a 200 from the outgoing pid milliseconds before its SIGTERM -
+    and on another run printed "up" and exited 0 with nothing listening at
+    all. And `tmux -L cloude list-sessions` over a NON-INTERACTIVE ssh shell
+    finds no tmux on PATH, and with stderr suppressed its "command not found"
+    renders as "zero sessions".
+    **THE GENERAL RULE THIS PROJECT NOW HOLDS: A GREEN CHECK MUST FIRST PROVE
+    IT CAN GO RED.** Every one of these would have been caught by a negative
+    control costing one line - plant the thing the check exists to catch and
+    watch it fail. Ask of any check you write or trust: what does it do when
+    its subject is ABSENT, when its tool is MISSING, and when its output goes
+    to a pipe. And never read exit 0 from a command whose stderr you
+    discarded. The worked examples in this codebase are `StatusMap.complete`,
+    the recreate gate's `gone` versus `unknown`, `db_integrity`'s
+    `cannot_determine` versus `failed`, and `InstanceIndex.complete`: in every
+    one of them, a reading that did not happen is kept apart from a reading of
+    nothing. Full write-up with each mechanism in
+    `.claude/notes/troubleshooting.md`.
+
+12. **A NAME THAT MOVED, REACHED THROUGH `getattr` OR `hasattr`, MERGES WITH
+    ZERO CONFLICTS AND ANSWERS FALSY.** This is what made the 1.4.0 fold
+    dangerous and it kept producing defects after the merge round closed: see
+    "Where the 1.4.0 integration moved things" for the four found by the sweep
+    and the two that reached production in `websocket.py` and
+    `session_change_notice.py`. The defensive accessor is usually right and
+    usually deliberate - it exists so a hook path cannot raise - which is
+    exactly why it cannot be removed as the fix and exactly why nothing goes
+    red. `setattr` on a name an object does not carry SUCCEEDS too, which is
+    how a test tripwire wrapped four decoys and passed while measuring two of
+    six. When a refactor moves a member, grep for a `getattr`, a `hasattr` and
+    a `setattr` on its OLD name before you trust a green suite.

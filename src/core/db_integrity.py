@@ -76,8 +76,10 @@ from src.core.db import (
     DatastoreUnreadableError,
     connect,
     db_path_for,
+    get_meta,
     integrity_check,
 )
+from src.core.db_models import META_INSTALL_ID
 from src.core.json_artifact import atomic_write_json, read_json_object
 
 logger = structlog.get_logger()
@@ -125,6 +127,14 @@ RUN_OK = "ok"
 RUN_FAILED = "failed"
 RUN_CANNOT_DETERMINE = "cannot_determine"
 RUN_CANCELLED = "cancelled"
+
+#: Which producer wrote a record. Both are real completed checks and the
+#: verdict means the same thing either way; the field exists so a reader
+#: diagnosing a dead daily loop can still tell a scheduled sweep from a
+#: check the boot gate was forced to run, which the artifact's age alone
+#: can no longer distinguish now that boot publishes too.
+SOURCE_SCHEDULED = "scheduled"
+SOURCE_BOOT = "boot"
 
 _FALSEY = frozenset({"0", "false", "off", "no"})
 _TRUTHY = frozenset({"1", "true", "on", "yes"})
@@ -222,6 +232,31 @@ def resolve_stale_after_seconds(interval_seconds: Optional[int] = None) -> int:
     return int(interval) * STALE_INTERVAL_MULTIPLIER
 
 
+def db_size_bytes(db_path: Path) -> Optional[int]:
+    """Return the database file's size in bytes, or None if it cannot be read.
+
+    Description: recorded on every verdict so a later reader can tell
+      whether the file it is about to trust the verdict for is the same
+      file, or a smaller one that replaced it. A SQLite database does not
+      shrink in normal operation - it grows, or it reuses free pages at
+      the same size - so a file SMALLER than it was when it was verified
+      has been replaced, restored from an older backup, truncated or
+      VACUUMed, and the verdict no longer describes it. None means the
+      stat failed, which every reader must treat as "cannot tell", never
+      as "unchanged".
+    Inputs: db_path (Path).
+    Output: int | None - bytes.
+    Example: db_size_bytes(Path("/nonexistent")) -> None
+    """
+    try:
+        return Path(db_path).stat().st_size
+    except OSError:
+        # A size that cannot be measured is published as None rather than
+        # as 0: a 0 would read as "the file is empty", which is a claim,
+        # and it would make the shrink guard refuse every later boot.
+        return None
+
+
 def read_verdict(state_dir: Path) -> Optional[Dict[str, Any]]:
     """Read the cached verdict artifact from disk.
 
@@ -276,16 +311,23 @@ def run_integrity_check_once(
     """
     db_path = db_path_for(state_dir)
     started = time.monotonic()
+    install_id: Optional[str] = None
     if cancel is not None and cancel.is_set():
-        return _publish(
+        return publish_run(
             state_dir, RUN_CANCELLED, db_path, started,
             "the check was asked to stop before it opened the database",
         )
     try:
         with closing(connect(db_path, create=False)) as conn:
+            # Read BEFORE the pragma: it is the identity of the file about
+            # to be verified, and a reader of this record has to be able to
+            # tell whether the verdict describes the database in front of
+            # it. get_meta answers None on a pre-v1 file rather than
+            # raising, and None is published as None.
+            install_id = get_meta(conn, META_INSTALL_ID)
             verdict = integrity_check(conn)
     except DatastoreUnreadableError as exc:
-        return _publish(
+        return publish_run(
             state_dir, RUN_CANNOT_DETERMINE, db_path, started, str(exc),
         )
     except Exception as exc:  # noqa: BLE001 - see docstring: never raises
@@ -295,29 +337,42 @@ def run_integrity_check_once(
         # convert becomes a NAMED cannot_determine with the exception on
         # the record, because a checker that dies mid-run and publishes
         # nothing is indistinguishable from one that found no problem.
-        return _publish(
+        return publish_run(
             state_dir, RUN_CANNOT_DETERMINE, db_path, started,
             f"{type(exc).__name__}: {exc}",
         )
     if verdict == "ok":
-        return _publish(state_dir, RUN_OK, db_path, started, None)
-    return _publish(state_dir, RUN_FAILED, db_path, started, verdict)
+        return publish_run(
+            state_dir, RUN_OK, db_path, started, None, install_id=install_id,
+        )
+    return publish_run(
+        state_dir, RUN_FAILED, db_path, started, verdict,
+        install_id=install_id,
+    )
 
 
-def _publish(
+def publish_run(
     state_dir: Path, status: str, db_path: Path, started: float,
-    detail: Optional[str],
+    detail: Optional[str], *, install_id: Optional[str] = None,
+    source: str = SOURCE_SCHEDULED,
 ) -> Dict[str, Any]:
     """Build one run record, write it, and return it.
 
     Description: the single exit point of :func:`run_integrity_check_once`
-      so that no terminating path can forget to stamp the artifact.
+      AND of the boot gate's own forced run, so that no terminating path
+      can forget to stamp the artifact. It is public for exactly that
+      second caller: a check that boot was obliged to run is a real
+      completed check, and a record it did not publish would leave the
+      next boot re-walking a file that was verified moments ago.
     Inputs: state_dir (Path), status (str - one of the RUN_* constants),
       db_path (Path), started (float - a time.monotonic() reading from
       before the work), detail (str | None - the pragma's complaint or
-      the failure text).
+      the failure text), install_id (str | None - meta.install_id of the
+      database that was checked, so a later reader can tell whether the
+      verdict describes the file in front of it), source (str - one of
+      SOURCE_SCHEDULED or SOURCE_BOOT).
     Output: dict - the record, whether or not the write succeeded.
-    Example: _publish(Path("/s"), RUN_OK, p, 0.0, None)["status"] -> 'ok'
+    Example: publish_run(Path("/s"), RUN_OK, p, 0.0, None)["status"] -> 'ok'
     """
     record: Dict[str, Any] = {
         "status": status,
@@ -325,11 +380,15 @@ def _publish(
         "duration_seconds": round(time.monotonic() - started, 3),
         "detail": detail,
         "db_path": str(db_path),
+        "install_id": install_id,
+        "db_size_bytes": db_size_bytes(db_path),
+        "source": source,
     }
     written = write_verdict(state_dir, record)
     logger.info(
         "db_integrity_check_finished",
         status=status,
+        source=source,
         duration_seconds=record["duration_seconds"],
         artifact_written=written,
     )
@@ -371,9 +430,13 @@ __all__ = [
     "RUN_CANNOT_DETERMINE",
     "RUN_FAILED",
     "RUN_OK",
+    "SOURCE_BOOT",
+    "SOURCE_SCHEDULED",
     "FRESHNESS_CURRENT",
     "artifact_dir",
+    "db_size_bytes",
     "integrity_check_enabled",
+    "publish_run",
     "latest_path",
     "read_verdict",
     "resolve_interval_seconds",

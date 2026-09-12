@@ -239,7 +239,8 @@ archived items are not visible unless the checkbox is checked." The project
 row used to carry two destructive-shaped controls side by side - a trash
 button calling `deleteProject()` (`DELETE /projects/project_name`, the hard
 delete above) and a separate archive/unarchive toggle. The trash button is
-gone from `client/js/launchpad.js`, the `deleteProject` wrapper it called is
+gone with the legacy launchpad module itself, which the svelte migration
+deleted; the `deleteProject` wrapper it called is
 gone from `client/js/api.js` (its only caller), and archive/unarchive (already
 reversible, already correctly labelled) is now the row's only destructive
 control. `DELETE /projects/project_name` and
@@ -298,8 +299,8 @@ graph LR
 
 ```mermaid
 graph TD
-    U["user clicks fork on a running session<br/>client/js/launchpad.js::_forkSession"]
-    U --> R["POST /sessions/{session_name}/fork<br/>src/api/routes.py::fork_session"]
+    U["user clicks fork on a running session<br/>web/src/lib/launchpad/recent-actions.ts::forkSession"]
+    U --> R["POST /sessions/{session_name}/fork<br/>src/api/session_fork_routes.py::fork_session"]
     R --> S["resolve the parent's LIVE anchor<br/>src/core/session_fork.py::resolve_fork_source"]
 
     S --> OK["READY - the row carries a claude_session_uuid"]
@@ -322,7 +323,7 @@ reverse lookup - `src/core/session_fork.py::children_of` - which costs nothing
 and cannot go stale.
 
 The fork arguments travel THROUGH the user's own wrapper rather than around
-it (`src/config.py::Settings.get_agent_command`, `extra_args`), because the
+it (`src/config/settings.py::Settings.get_agent_command`, `extra_args`), because the
 wrapper is where their auth is set up. They are deliberately not gated on
 `accepts_model`: that flag is about consuming an OpenRouter model id, and
 gating the fork flags on it would make a fork through a modelless wrapper
@@ -403,15 +404,15 @@ The same word means different things on different paths. This table is why.
 
 | Operation | Web UI | Tray - macOS Electron | HTTP route | Hook | Reconcile |
 |---|---|---|---|---|---|
-| create | `client/js/launchpad.js`, `client/js/terminal.js` via `client/js/api.js::createSession` | none | `POST /sessions` | - | - |
-| adopt a SESSION | `client/js/session-sidebar-clicks.js`, `client/js/launchpad.js` via `client/js/api.js::adoptSession` | none | `POST /sessions/adopt` | - | sighting row can be written by import |
+| create | `web/src/lib/launchpad/navigation.ts::selectProject`, `client/js/terminal.js` via `client/js/api.js::createSession` | none | `POST /sessions` | - | - |
+| adopt a SESSION | `client/js/session-sidebar-clicks.js`, `web/src/lib/launchpad/navigation.ts::attachRunningSession` via `client/js/api.js::adoptSession` | none | `POST /sessions/adopt` | - | sighting row can be written by import |
 | adopt a SERVER | - | `macOS/adoption-decision.js` - **different object entirely**, decides whether this bundle may take over a server already on the port | - | - | - |
-| respawn | `client/js/session-sidebar-clicks.js`, `client/js/launchpad.js` via `client/js/api.js::respawnSession` | none | `POST /sessions/respawn` | - | - |
-| rename - label | three controls, all on one shared validator `client/js/session-label.js`: `client/js/session-sidebar-rename.js`, `client/js/launchpad.js`, `client/js/terminal.js` | none | `PATCH /sessions/session_id/name` | - | - |
+| respawn | `client/js/session-sidebar-clicks.js`, `web/src/lib/launchpad/running-host.ts::respawnSession` via `client/js/api.js::respawnSession` | none | `POST /sessions/respawn` | - | - |
+| rename - label | three controls, all on one shared validator `client/js/session-label.js`: `client/js/session-sidebar-rename.js`, `web/src/lib/launchpad/running-host.ts::renameSession`, `client/js/terminal.js` | none | `PATCH /sessions/session_id/name` | - | - |
 | rename - external | - | - | - | - | `src/core/session_lifecycle.py::_reap_absent_instances` moves `tmux_name` |
 | close / end | `client/js/api.js::destroySession`, `client/js/api.js::destroyExternalSession` | none | `DELETE /sessions`, `DELETE /sessions/external/name` | - | reaper stamps `stopped` |
-| delete a record | `client/js/launchpad.js` via `client/js/api.js::deleteSessionRecord` | none | `DELETE /sessions/records/session_uuid` | - | - |
-| fork - GUI | `client/js/launchpad.js::_forkSession` via `client/js/api.js::forkSession` | none | `POST /sessions/session_name/fork` | - | parent untouched by construction; `src/core/session_fork.py::children_of` derives the relationship |
+| delete a record | `web/src/lib/launchpad/recent-actions.ts::archiveSessionRecord` via `client/js/api.js::deleteSessionRecord` | none | `DELETE /sessions/records/session_uuid` | - | - |
+| fork - GUI | `web/src/lib/launchpad/recent-actions.ts::forkSession` via `client/js/api.js::forkSession` | none | `POST /sessions/session_name/fork` | - | parent untouched by construction; `src/core/session_fork.py::children_of` derives the relationship |
 | fork - CLI | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | lineage rows are written by `POST /hooks/claude-event` | - |
 | project create / edit / archive | `client/js/api.js::createProject`, `client/js/api.js::updateProject`, `client/js/api.js::archiveProject`, `client/js/api.js::unarchiveProject` | none | `POST /projects`, `PATCH /projects/project_name`, `POST /projects/project_name/archive`, `POST /projects/project_name/unarchive` | - | `src/core/project_reconcile.py` re-reads config.json on start |
 | group assign | `client/js/session-sidebar-group-actions.js` - drag, menu and keyboard picker all land on one write | none | `POST /session-groups/assign` | - | `src/core/session_group_membership.py::prune_missing` |
@@ -458,7 +459,7 @@ chart.
    in this pane" from the anchor gets the previous one.
 
 4. **Two client rename controls still handle a 409 the server can no longer
-   produce.** `client/js/launchpad.js` and `client/js/terminal.js` both branch
+   produce.** `web/src/lib/launchpad/running-host.ts` and `client/js/terminal.js` both branch
    on `/409/` and "already in use". The rename surface stopped renaming tmux,
    so duplicate labels are legal and no 409 exists on that path - see the
    docstring of `rename_session_endpoint`. Dead branch, not a defect with a

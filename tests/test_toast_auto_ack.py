@@ -60,7 +60,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
 import src.api.toast_routes as toast_routes_mod
+from src.core.composition import build_services
+
 from src.api.auth import require_auth
 from src.core import toast_auto_ack, toast_history
 from src.core.session_manager import SessionManager
@@ -116,8 +119,8 @@ def _session(mgr: SessionManager, sid: str, work: Path) -> Session:
         status=SessionStatus.RUNNING,
         tmux_session=f"cloude_{sid}",
     )
-    mgr.sessions[sid] = sess
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.subscribers.setdefault(sid, [])
     return sess
 
 
@@ -292,7 +295,7 @@ def test_auto_ack_stamps_answered_and_is_a_no_op_on_replay(monkeypatch, tmp_path
 
     changed = mgr.auto_ack_toasts("ses_a", "UserPromptSubmit", datetime.utcnow())
     assert changed == [perm.id]
-    stored = mgr.get_toasts("ses_a")[0]
+    stored = mgr._toast_inbox.get("ses_a")[0]
     assert stored.acknowledged is True
     assert stored.ack_reason == ANSWERED
 
@@ -310,12 +313,12 @@ def test_a_human_dismissal_still_records_dismissed(monkeypatch, tmp_path):
     _session(mgr, "ses_a", tmp_path / "a")
     t = mgr.record_toast("ses_a", "Notification", "look at this")
 
-    assert mgr.ack_toast("ses_a", t.id) is True
-    assert mgr.get_toasts("ses_a")[0].ack_reason == DISMISSED
+    assert mgr._toast_inbox.ack("ses_a", t.id, toast_auto_ack.ACK_REASON_DISMISSED) is True
+    assert mgr._toast_inbox.get("ses_a")[0].ack_reason == DISMISSED
     # Idempotent, and a replay may not rewrite the reason on a record the
     # user acted on.
-    assert mgr.ack_toast("ses_a", t.id, reason=ANSWERED) is False
-    assert mgr.get_toasts("ses_a")[0].ack_reason == DISMISSED
+    assert mgr._toast_inbox.ack("ses_a", t.id, reason=ANSWERED) is False
+    assert mgr._toast_inbox.get("ses_a")[0].ack_reason == DISMISSED
 
 
 def test_auto_ack_is_scoped_to_its_own_session(monkeypatch, tmp_path):
@@ -328,8 +331,8 @@ def test_auto_ack_is_scoped_to_its_own_session(monkeypatch, tmp_path):
     b = mgr.record_toast("ses_b", "PermissionRequest", "b's decision")
 
     assert mgr.auto_ack_toasts("ses_a", "UserPromptSubmit", datetime.utcnow()) == [a.id]
-    assert mgr.get_toasts("ses_b")[0].id == b.id
-    assert mgr.get_toasts("ses_b")[0].acknowledged is False
+    assert mgr._toast_inbox.get("ses_b")[0].id == b.id
+    assert mgr._toast_inbox.get("ses_b")[0].acknowledged is False
 
 
 def test_history_summary_reports_answered_beside_dismissed(monkeypatch, tmp_path):
@@ -341,17 +344,17 @@ def test_history_summary_reports_answered_beside_dismissed(monkeypatch, tmp_path
     clicked = mgr.record_toast("ses_a", "Notification", "clicked away")
     auto = mgr.record_toast("ses_a", "PermissionRequest", "answered in the pane")
     mgr.record_toast("ses_a", "Notification", "still open")
-    mgr.ack_toast("ses_a", clicked.id)
+    mgr._toast_inbox.ack("ses_a", clicked.id, toast_auto_ack.ACK_REASON_DISMISSED)
     mgr.auto_ack_toasts("ses_a", "PreToolUse", datetime.utcnow())
 
-    summary = toast_history.summarize(mgr.get_toasts("ses_a"))
+    summary = toast_history.summarize(mgr._toast_inbox.get("ses_a"))
     assert summary["total"] == 3
     assert summary["open"] == 1
     assert summary["dismissed"] == 2
     assert summary["answered"] == 1
-    assert mgr.get_toasts("ses_a")
+    assert mgr._toast_inbox.get("ses_a")
     assert any(t.id == auto.id and t.ack_reason == ANSWERED
-               for t in mgr.get_toasts("ses_a"))
+               for t in mgr._toast_inbox.get("ses_a"))
 
 
 def test_a_record_acked_without_a_reason_is_not_counted_as_answered():
@@ -382,10 +385,11 @@ def _hook_app(monkeypatch, tmp_path):
     mgr = _manager(monkeypatch, tmp_path)
     _session(mgr, "ses_hook", tmp_path / "hook")
     _session(mgr, "ses_other", tmp_path / "other")
-    mgr._mint_hook_token("ses_hook")
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
+    app.state.services = build_services(session_manager=mgr)
     app.include_router(routes_mod.router, prefix="/api/v1")
     app.include_router(toast_routes_mod.router, prefix="/api/v1")
     app.dependency_overrides[require_auth] = lambda: True
@@ -400,7 +404,7 @@ def _post_hook(client, mgr, event: str, payload=None):
         "/api/v1/hooks/claude-event",
         headers={
             "X-Cloudecode-Session": "ses_hook",
-            "X-Cloudecode-Token": mgr.get_hook_token("ses_hook"),
+            "X-Cloudecode-Token": mgr.hook_tokens.get("ses_hook"),
             "X-Cloudecode-Event": event,
             "Content-Type": "application/json",
         },
@@ -430,7 +434,7 @@ def test_a_prompt_hook_clears_the_sessions_toasts_from_the_read_route(
     assert {waiting.id, notice.id, elsewhere.id} <= before
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as bcast:
         resp = _post_hook(client, mgr, "UserPromptSubmit", {"prompt": "say ok"})
@@ -458,7 +462,7 @@ def test_a_stop_hook_does_not_eat_the_toast_it_just_raised(monkeypatch, tmp_path
     perm = mgr.record_toast("ses_hook", "PermissionRequest", "needs your permission")
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         resp = _post_hook(client, mgr, "Stop", {})
@@ -477,14 +481,14 @@ def test_two_stops_in_a_row_leave_one_open_your_turn(monkeypatch, tmp_path):
     client, mgr = _hook_app(monkeypatch, tmp_path)
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         first = _post_hook(client, mgr, "Stop", {}).json()["toast_id"]
         second = _post_hook(client, mgr, "Stop", {}).json()["toast_id"]
 
     assert first == second, "supersession keeps the id the browser is holding"
-    open_stops = [t for t in mgr.get_toasts("ses_hook") if not t.acknowledged]
+    open_stops = [t for t in mgr._toast_inbox.get("ses_hook") if not t.acknowledged]
     assert len(open_stops) == 1
     assert all(t.ack_reason is None for t in open_stops)
 
@@ -497,7 +501,7 @@ def test_a_tool_call_clears_a_permission_but_leaves_a_notice(monkeypatch, tmp_pa
     notice = mgr.record_toast("ses_hook", "Notification", "wants your attention")
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         assert _post_hook(client, mgr, "PreToolUse", {"tool_name": "Bash"}).status_code == 200
@@ -523,7 +527,7 @@ def test_the_flags_behind_the_led_agree_with_the_toasts(monkeypatch, tmp_path, e
     assert mgr._activity_tracker.resolve("ses_hook", "running") == "question"
 
     with patch.object(
-        routes_mod.connection_manager, "broadcast_to_session",
+        hook_routes_mod.connection_manager, "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ):
         assert _post_hook(client, mgr, event, {}).status_code == 200

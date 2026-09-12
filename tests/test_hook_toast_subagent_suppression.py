@@ -1,5 +1,12 @@
 """A session waiting on its own sub-agents is not waiting on the user.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 claude fires ``Stop`` when the MAIN turn ends, whether or not the
 background agents it launched are still running, and it fires
 ``Notification`` asking to be looked at in that same state. Both raised a
@@ -54,6 +61,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
+import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
 from src.core.session_activity import (
     SUBAGENT_WAIT_LATCH_SECONDS,
@@ -111,16 +119,16 @@ def _build_hook_app(monkeypatch, tmp_path):
 
     work = tmp_path / "hook_proj"
     work.mkdir()
-    mgr.sessions["ses_hook"] = Session(
+    mgr._registry.sessions["ses_hook"] = Session(
         id="ses_hook",
         pty_pid=None,
         working_dir=str(work),
         status=SessionStatus.RUNNING,
         tmux_session="cloude_hook_proj",
     )
-    mgr.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
-    mgr._subscribers.setdefault("ses_hook", [])
-    mgr._mint_hook_token("ses_hook")
+    mgr._registry.backends["ses_hook"] = _FakeBackend("cloude_hook_proj")
+    mgr._registry.subscribers.setdefault("ses_hook", [])
+    mgr.hook_tokens.mint("ses_hook")
 
     app = FastAPI()
     app.state.session_manager = mgr
@@ -138,7 +146,7 @@ def _post_event(app, mgr, event: str):
     """
     client = TestClient(app, client=("127.0.0.1", 12345))
     with patch.object(
-        routes_mod.connection_manager,
+        hook_routes_mod.connection_manager,
         "broadcast_to_session",
         new=AsyncMock(return_value=None),
     ) as mock_bcast:
@@ -146,7 +154,7 @@ def _post_event(app, mgr, event: str):
             "/api/v1/hooks/claude-event",
             headers={
                 "X-Cloudecode-Session": "ses_hook",
-                "X-Cloudecode-Token": mgr.get_hook_token("ses_hook"),
+                "X-Cloudecode-Token": mgr.hook_tokens.get("ses_hook"),
                 "X-Cloudecode-Event": event,
                 "Content-Type": "application/json",
             },
@@ -245,7 +253,7 @@ def test_toast_is_suppressed_while_subagents_are_running(
     assert payload["ok"] is True
     assert "toast_id" not in payload
     assert payload["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     mock_bcast.assert_not_called()
 
 
@@ -257,7 +265,7 @@ def test_suppression_holds_at_a_depth_greater_than_one(monkeypatch, tmp_path):
     resp, _ = _post_event(app, mgr, "Notification")
 
     assert resp.json()["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
 
 
 def test_a_suppressed_stop_still_records_its_activity(monkeypatch, tmp_path):
@@ -297,7 +305,7 @@ def test_toast_still_raised_when_no_subagents_are_running(
     payload = resp.json()
     assert "toast_id" in payload
     assert "toast_suppressed" not in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -311,7 +319,7 @@ def test_toast_returns_after_the_last_subagent_finishes(monkeypatch, tmp_path):
     resp, _ = _post_event(app, mgr, "Stop")
 
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
 
 
 # =========================================================================== #
@@ -338,7 +346,7 @@ def test_permission_request_always_raises_a_toast(monkeypatch, tmp_path, depth):
     payload = resp.json()
     assert "toast_id" in payload
     assert "toast_suppressed" not in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -365,7 +373,7 @@ def test_an_unreadable_depth_still_notifies(monkeypatch, tmp_path):
 
     assert resp.status_code == 200, resp.text
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -408,7 +416,7 @@ def test_a_subagent_stop_arriving_after_stop_does_not_suppress_it(
 
     # The straggler lands afterwards and changes nothing already decided.
     mgr.record_hook_event("ses_hook", "SubagentStop", {})
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     assert mgr.subagent_depth("ses_hook") == 0
 
 
@@ -474,7 +482,7 @@ def test_the_notification_after_a_suppressed_stop_is_suppressed(
     payload = resp.json()
     assert "toast_id" not in payload
     assert payload["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     mock_bcast.assert_not_called()
 
 
@@ -491,7 +499,7 @@ def test_a_second_stop_after_a_suppressed_stop_is_suppressed(
     resp, mock_bcast = _post_event(app, mgr, "Stop")
 
     assert resp.json()["toast_suppressed"] == "subagents_running"
-    assert mgr.get_toasts("ses_hook") == []
+    assert mgr._toast_inbox.get("ses_hook") == []
     mock_bcast.assert_not_called()
 
 
@@ -522,7 +530,7 @@ def test_the_latch_expires_and_the_notification_is_raised(
 
     assert "toast_id" in resp.json()
     assert "toast_suppressed" not in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -567,7 +575,7 @@ def test_an_opening_event_clears_the_latch(monkeypatch, tmp_path, opening):
     resp, mock_bcast = _post_event(app, mgr, "Stop")
 
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -630,7 +638,7 @@ def test_permission_request_raises_with_the_latch_stamped(
     payload = resp.json()
     assert "toast_id" in payload
     assert "toast_suppressed" not in payload
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
     mock_bcast.assert_called_once()
 
 
@@ -652,7 +660,7 @@ def test_an_unreadable_latch_still_notifies(monkeypatch, tmp_path):
     resp, _ = _post_event(app, mgr, "Notification")
 
     assert "toast_id" in resp.json()
-    assert len(mgr.get_toasts("ses_hook")) == 1
+    assert len(mgr._toast_inbox.get("ses_hook")) == 1
 
 
 # =========================================================================== #

@@ -121,7 +121,7 @@ async def test_created_session_badges_owned_from_the_datastore_alone(env, tmp_pa
         assert tmux_name, "the created session must carry a tmux name"
 
         fresh = SessionManager()
-        fresh.owned_tmux_sessions.clear()
+        fresh._owned.names.clear()
         listing = fresh.list_attachable_sessions()
         assert listing.ok, f"tmux listing did not run: {listing.reason}"
 
@@ -325,7 +325,7 @@ async def test_a_restart_and_reconcile_leave_a_created_session_ours(env, tmp_pat
 
         # The restart: a brand-new manager with an empty owned set.
         fresh = SessionManager()
-        fresh.owned_tmux_sessions.clear()
+        fresh._owned.names.clear()
 
         listing = fresh.list_attachable_sessions()
         assert listing.ok, f"tmux listing did not run: {listing.reason}"
@@ -342,7 +342,7 @@ async def test_a_restart_and_reconcile_leave_a_created_session_ours(env, tmp_pat
         )
 
         after = SessionManager()
-        after.owned_tmux_sessions.clear()
+        after._owned.names.clear()
         relisting = after.list_attachable_sessions()
         assert relisting.ok
         row = next(

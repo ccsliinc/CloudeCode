@@ -169,25 +169,46 @@ class TestDefaultsTableTracksTheLoader:
     """The table cannot silently drift back out of date."""
 
     def test_every_loader_key_is_declared(self):
-        """Read src/config.py and demand the table covers what it reads.
+        """Read the loader and demand the table covers what it reads.
 
         This is the guard that makes the fix durable. The original defect was
         a second list going stale; a fix that adds a THIRD list with no check
         would just reschedule it.
-        """
-        source = (REPO_ROOT / "src" / "config.py").read_text()
-        loader_start = source.index("def load_auth_config")
-        loader_end = source.index("\n    def ", loader_start + 1)
-        loader = source[loader_start:loader_end]
 
-        read_keys = set(re.findall(r'data\.get\(\s*"([a-z_]+)"', loader))
+        Decomposition slice S5 moved the loader out of the flat
+        ``src/config.py`` and into ``src/config/auth_loader.py``, where it
+        is a module-level function rather than a method. The claim this
+        guards is unchanged; what it reads is sliced by AST rather than
+        by ``source.index("\n    def ")``, which is both sturdier and
+        narrower - reading the whole MODULE picked a key out of a
+        docstring example and reported it as drift.
+
+        NOTE THE KNOWN HOLE, which predates this move and is not closed
+        here: the four blocks read through a CONSTANT rather than a
+        string literal (``ui``, ``workspace``, ``server_prefs``,
+        ``message_archive``) are invisible to this regex and are absent
+        from ``supported_keys()`` too, so the two agree by both being
+        blind rather than by both being right.
+        """
+        import ast
+
+        module = (REPO_ROOT / "src" / "config" / "auth_loader.py").read_text()
+        tree = ast.parse(module)
+        loader = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "load"
+        )
+        source = ast.unparse(loader)
+
+        read_keys = set(re.findall(r'data\.get\(\s*\'([a-z_]+)\'', source))
         # TERMINAL_COMMANDS_KEY is read via the constant, not a literal.
         read_keys.add("terminal_commands")
 
         declared = supported_keys()
         missing = sorted(read_keys - declared)
         assert not missing, (
-            "src/config.py's loader reads these keys but "
+            "the auth_loader reads these keys but "
             "src/core/config_defaults.py does not declare them, which is "
             f"exactly the drift that caused the original defect: {missing}"
         )

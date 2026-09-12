@@ -1,0 +1,44 @@
+/*
+ * Tailwind entry for the web/ bundle.
+ *
+ * PREFLIGHT IS DELIBERATELY NOT IMPORTED. Preflight is a global reset -
+ * it zeroes margins, unstyles headings and lists, and changes the default
+ * border colour on every element in the document. This bundle loads into
+ * client/index.html ALONGSIDE the whole legacy stylesheet set, so a
+ * global reset would restyle the running app on the first deploy.
+ * Tailwind documents importing the three files individually for exactly
+ * this case; omitting the preflight line is the supported way to leave it
+ * out.
+ *
+ * EVERY UTILITY IS PREFIXED `tw:`, AND THAT IS NOT COSMETIC. Tailwind
+ * finds class names by scanning text, and it scans ALL text - prose in a
+ * comment included. The first build of this file emitted `.container`,
+ * `.block`, `.inline` and `.ring` because those four words appear in the
+ * COMMENTS of the TypeScript beside it. Three of the four are generic
+ * enough that a legacy file could plausibly use them as class names one
+ * day, and then a global stylesheet would be styling a legacy element
+ * because of a word in a comment in another tree. Measured on this repo
+ * 2026-09-09: no legacy element carries any of the four today (the five
+ * `container` hits are all `*-container` compounds), so this is a
+ * landmine that has not gone off rather than a bug being fixed. A prefix
+ * retires the whole class of it for the rest of the migration: `tw:flex`
+ * cannot collide with anything the legacy tree writes.
+ *
+ * THE LAYER IS THE SECOND GUARD, and it works the other way round. Every
+ * rule here sits in `@layer utilities`, and for normal declarations an
+ * UNLAYERED rule beats a layered one whatever the specificity. Every
+ * legacy stylesheet in this app is unlayered. So even a prefixed utility
+ * that somehow landed on a legacy element could not win against the rule
+ * already styling it.
+ *
+ * SOURCE DETECTION IS DISABLED AND THEN NARROWED BY HAND. Tailwind v4
+ * scans automatically, walking up from this file, which would sweep
+ * client/js and client/css. `source(none)` switches that off and the
+ * `@source` below names the only tree that may contribute class names.
+ */
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" layer(utilities) source(none) prefix(tw);
+
+@source "./";

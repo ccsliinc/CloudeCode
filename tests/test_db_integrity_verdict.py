@@ -109,10 +109,28 @@ def _stamp(seconds_ago: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _forget_verdict(state_dir: Path) -> None:
+    """Move any published verdict aside so "never ran" is really arranged.
+
+    Description: since the boot gate landed, ``ensure_db_migrated`` runs
+      the pragma itself when it cannot trust the cache and PUBLISHES the
+      result (see src/core/db_integrity_gate.py), so simply booting a
+      fresh state directory no longer leaves one without an artifact. A
+      test about the never-checked state has to arrange it rather than
+      assume it; the assertions below are unchanged.
+    Inputs: state_dir (Path).
+    Output: None.
+    """
+    path = db_integrity.latest_path(state_dir)
+    if path.exists():
+        os.replace(path, path.with_suffix(".moved-aside"))
+
+
 def test_never_run_is_not_healthy(client) -> None:
     """No artifact at all: cannot_determine and never_ran, never ok."""
     test_client, state_dir = client
     version_routes.set_datastore_state(ensure_db_migrated(state_dir, 4, "0.8.2"))
+    _forget_verdict(state_dir)
 
     integrity = _data(test_client)["integrity"]
 
@@ -179,6 +197,7 @@ def test_never_run_is_distinguishable_from_healthy(client) -> None:
     """
     test_client, state_dir = client
     version_routes.set_datastore_state(ensure_db_migrated(state_dir, 4, "0.8.2"))
+    _forget_verdict(state_dir)
     never = _data(test_client)["integrity"]
 
     db_integrity.write_verdict(state_dir, {

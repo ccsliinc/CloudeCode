@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { glyphSvg } from '../client/js/icons/glyphs.js';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
@@ -51,11 +52,21 @@ async function runQueue() {
 }
 
 /**
- * Load session-status-ui.js in a bare sandbox. The module has no
- * dependencies and its escaper is pure string work, so no document stub is
- * needed at all - which is itself part of the fix: the previous
+ * Load session-status-ui.js in a bare sandbox.
+ *
+ * NO DOCUMENT STUB IS NEEDED, and that is part of the fix this file was
+ * written for: the escaper is pure string work, where the
  * `textContent`/`innerHTML` idiom used elsewhere in the client does not
- * escape quotes and would have been wrong here.
+ * escape quotes and would have been wrong.
+ *
+ * THE GLYPH DATA IS INJECTED, THOUGH, AND SLICE 5 IS WHY. Every icon in
+ * that module now reads its coordinates from `client/js/icons/glyphs.js`
+ * through `globalThis.CloudeGlyphs`, published in the browser by
+ * `client/js/i18n/boot.js` - one set of coordinates, two renderers, so a
+ * Svelte component and this classic script cannot draw the same button
+ * two different shapes. Without the injection every icon answers the
+ * empty string and says so on the console, which is the module behaving
+ * correctly about a missing dependency rather than a test failure.
  * Inputs: none. Output: object - window.SessionStatusUI.
  */
 function loadStatusUI() {
@@ -65,7 +76,8 @@ function loadStatusUI() {
     );
     const fakeWindow = {};
     fakeWindow.window = fakeWindow;
-    const context = { window: fakeWindow, console };
+    const context = { window: fakeWindow, console, CloudeGlyphs: { glyphSvg } };
+    context.globalThis = context;
     vm.createContext(context);
     vm.runInContext(src, context);
     return fakeWindow.SessionStatusUI;
@@ -87,7 +99,8 @@ function loadStatusUIWithFlags(uiFlags) {
     );
     const fakeWindow = {};
     fakeWindow.window = fakeWindow;
-    const context = { window: fakeWindow, console };
+    const context = { window: fakeWindow, console, CloudeGlyphs: { glyphSvg } };
+    context.globalThis = context;
     if (uiFlags !== undefined) context.UIFlags = uiFlags;
     vm.createContext(context);
     vm.runInContext(src, context);
@@ -189,8 +202,8 @@ test('escaping does not disturb the rest of the toggle markup', () => {
     assert.ok(on.includes('aria-pressed="true"') && on.includes('data-unread-current="true"'));
     assert.ok(on.includes('mark-unread-toggle--active'));
     assert.ok(!off.includes('mark-unread-toggle--active'));
-    assert.ok(off.includes('mark unread for followup'));
-    assert.ok(on.includes('clear unread flag'));
+    assert.ok(off.includes('mark unread'));
+    assert.ok(on.includes('clear unread'));
     assert.ok(off.includes('<svg') && on.includes('<svg'), 'envelope glyph still rendered');
 });
 

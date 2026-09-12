@@ -1,5 +1,12 @@
 """A permission flag stuck at the moment its pane died must be retirable.
 
+RETARGETED AT THE 1.4.0 INTEGRATION. This line's SessionManager does not
+own the live tables or the toast bucket: the registry owns sessions,
+backends and the per-viewer subscriber lists, ToastInbox owns the
+records, and HookTokenAuthority owns the tokens and the tmux-name map.
+The BEHAVIOUR asserted below is unchanged.
+
+
 THE FAILURE MODE. ``should_capture_permission_tail`` refused to capture a
 tail whenever ``pane_alive is not True`` - which is correct for the COST
 GATE (there is nothing to capture-pane on a dead pane, and a genuinely
@@ -268,15 +275,15 @@ def _register_with_open_permission(
     Output: datetime - the instant the claim was opened, for the assert.
     Example: _register_with_open_permission(m, 'ses_1', 'cloude_a', tmp)
     """
-    manager.sessions[sid] = Session(
+    manager._registry.sessions[sid] = Session(
         id=sid,
         pty_pid=None,
         working_dir=str(wd),
         status=SessionStatus.RUNNING,
         tmux_session=tmux_name,
     )
-    manager.backends[sid] = _SocketBackend(tmux_name, exists=exists)
-    manager._subscribers.setdefault(sid, [])
+    manager._registry.backends[sid] = _SocketBackend(tmux_name, exists=exists)
+    manager._registry.subscribers.setdefault(sid, [])
     opened_at = datetime(2026, 9, 11, 12, 0, 0)
     manager._activity_tracker.record_event(
         sid, EVENT_PERMISSION_REQUEST, now=opened_at

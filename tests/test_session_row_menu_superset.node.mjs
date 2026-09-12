@@ -33,6 +33,8 @@ import assert from 'node:assert/strict';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientJs = (f) => fs.readFileSync(
     path.join(__dirname, '..', 'client', 'js', f), 'utf8');
+const bundleJs = () => fs.readFileSync(
+    path.join(__dirname, '..', 'client', 'dist', 'app.js'), 'utf8');
 
 let passes = 0;
 let failures = 0;
@@ -79,15 +81,25 @@ function sandbox(opts = {}) {
     vm.runInContext(clientJs('session-status-ui.js'), context);
     vm.runInContext(clientJs('session-row-actions-confirm.js'), context);
     vm.runInContext(clientJs('session-row-actions.js'), context);
-    // THE ONE GATE. markUnreadHtml returns '' when the operator turned the
-    // control off, and the menu asks it rather than reading the flag a
-    // second time - so overriding it here is overriding the real gate.
-    const realMarkUnread = win.SessionStatusUI.markUnreadHtml;
-    win.SessionStatusUI.markUnreadHtml = (name, unread) => (
-        showMarkUnread ? realMarkUnread.call(null, name, unread) : '');
+    // THE ONE GATE, and it is now reached the way the browser reaches it.
+    // `ui.show_mark_unread_control` is cached by client/js/ui-flags.js and
+    // read by the mark-unread CONTRIBUTION's `enabled`; the menu asks the
+    // registry rather than reading the flag a second time, so setting the
+    // flag here is setting the real gate. It used to be reached by
+    // overriding SessionStatusUI.markUnreadHtml, which the menu no longer
+    // calls at all - that item is a plugin now.
+    win.UIFlags = { showMarkUnreadControl: () => showMarkUnread };
     if (opts.groupActions !== false) win.SessionSidebarGroupActions = { openPickerFor() {} };
     vm.runInContext(clientJs('session-row-menu-items.js'), context);
+    vm.runInContext(clientJs('session-row-menu-plugins.js'), context);
     vm.runInContext(clientJs('session-row-menu.js'), context);
+    // THE REAL COMPILED BUNDLE, not a stand-in. client/dist/app.js is
+    // emitted with no import or export statement, so it runs in this same
+    // sandbox and publishes the real `window.CloudeWeb` - which is what
+    // makes the mark-unread cases below a test of the shipped path rather
+    // than of a fixture that agrees with whatever it was built to agree
+    // with. scripts/web-build-check.sh keeps that artifact current.
+    vm.runInContext(bundleJs(), context);
     return { Menu: win.SessionRowMenu, RowActions: win.SessionRowActions, win };
 }
 
@@ -111,6 +123,10 @@ function idsFor(env, row, opts = {}) {
 // =====================================================================
 
 test('a live row offers all eight items, in the ruled order', () => {
+    // Seven come from client/js/session-row-menu-items.js and mark-unread
+    // comes from the compiled plugin registry, merged by itemsFor and
+    // sorted on `order`. The ruling is unchanged; only the list the item
+    // comes from moved, and this is the case that says so.
     const env = sandbox();
     assert.deepEqual(idsFor(env, liveRow()), [
         'rename', 'mark-unread', 'move-to-group', 'fork',
@@ -136,7 +152,11 @@ test('every shortcut letter is distinct', () => {
     // A shared letter renders two identical hints and only ever reaches
     // the first item, silently.
     const env = sandbox();
-    assert.ok(env.Menu.uniqueShortcuts());
+    // OVER THE MERGED LIST, not the native table alone: a contribution
+    // taking a letter the table already binds would render two identical
+    // hints and the key would only ever reach the first.
+    assert.ok(env.Menu.uniqueShortcuts(
+        env.Menu.contextFromRow(liveRow(), { surface: 'sidebar', renameable: true })));
 });
 
 // =====================================================================
@@ -286,8 +306,11 @@ test('the context round-trips through the trigger unchanged', () => {
         return m ? m[1] : null;
     } };
     const back = env.Menu.contextFromTrigger(stub);
+    // `pluginItems` replaced `markUnreadAvailable` when mark unread became
+    // a contribution: it is the same fact - which optional items this row
+    // offers - captured for ALL of them rather than for one by name.
     for (const field of ['name', 'status', 'unread', 'restartable',
-        'markUnreadAvailable', 'groupable', 'renameable', 'muted']) {
+        'pluginItems', 'groupable', 'renameable', 'muted']) {
         assert.equal(back[field], ctx[field], `${field} did not survive the trigger`);
     }
     assert.deepEqual(Array.from(env.Menu.itemsFor(back).map((i) => i.id)),

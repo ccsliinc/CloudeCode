@@ -58,7 +58,11 @@ function read(...parts) {
 }
 
 const HTML = read('client', 'index.html');
-const LAUNCHPAD = read('client', 'js', 'launchpad.js');
+// SLICE 7: `client/js/launchpad.js` is gone; the home screen's body is
+// the Svelte shell and the modules beside it. The claim - the archive
+// costs the body no space and has exactly one entry point, the header
+// icon - is unchanged.
+const { HOME_ALL_SRC: LAUNCHPAD } = await import('./lib-home-source.mjs');
 const HEADER = read('client', 'js', 'header-menu.js');
 
 /**
@@ -100,7 +104,7 @@ function loadEntry(opts) {
 // inside the file that catches it.
 
 test('POSITIVE CONTROL: all three source files loaded and are non-empty', () => {
-    for (const [name, src] of [['index.html', HTML], ['launchpad.js', LAUNCHPAD],
+    for (const [name, src] of [['index.html', HTML], ['the home screen', LAUNCHPAD],
                                ['header-menu.js', HEADER]]) {
         assert.ok(src.length > 1000, `${name} did not load; every check below is vacuous`);
     }
@@ -201,8 +205,14 @@ test('the entry point routes through window.ArchiveEntry', () => {
     assert.ok(/window\.ArchiveEntry/.test(HEADER),
         'the header navigates to the archive by some other means');
     // Neither may call showArchive or pushState itself.
-    for (const [name, src] of [['launchpad.js', LAUNCHPAD], ['header-menu.js', HEADER]]) {
-        assert.ok(!/showArchive/.test(src),
+    for (const [name, src] of [['the home screen', LAUNCHPAD], ['header-menu.js', HEADER]]) {
+        // TIGHTENED IN SLICE 7, AND IT WAS A REAL FALSE POSITIVE. The
+        // bare substring also matches `showArchived`, which is the
+        // RECENT and PROJECTS filter label - a different word for a
+        // different thing that has always been on this screen. The claim
+        // is about a CALL to `App.showArchive`, so the match is on the
+        // call.
+        assert.ok(!/\bshowArchive\s*\(/.test(src),
             `${name} calls App.showArchive directly, bypassing the one entry point`);
     }
 });

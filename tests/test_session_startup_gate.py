@@ -535,15 +535,15 @@ def _manager(monkeypatch, tmp_path: Path) -> SessionManager:
 
 
 def _register(mgr: SessionManager, sid: str, name: str, tmp_path: Path) -> None:
-    mgr.sessions[sid] = Session(
+    mgr._registry.sessions[sid] = Session(
         id=sid,
         pty_pid=None,
         working_dir=str(tmp_path),
         status=SessionStatus.RUNNING,
         tmux_session=name,
     )
-    mgr.backends[sid] = _FakeBackend(name)
-    mgr._subscribers.setdefault(sid, [])
+    mgr._registry.backends[sid] = _FakeBackend(name)
+    mgr._registry.subscribers.setdefault(sid, [])
 
 
 def _stub_tail(monkeypatch, text):
@@ -574,7 +574,7 @@ def test_manager_reports_awaiting_and_toasts_exactly_once(
         verdicts.append(
             mgr._startup_gate_for(
                 session_id="ses1",
-                backend=mgr.backends["ses1"],
+                backend=mgr._registry.backends["ses1"],
                 tmux_name="cloude_proj",
                 row=row,
                 liveness=LIVENESS_LIVE,
@@ -584,9 +584,9 @@ def test_manager_reports_awaiting_and_toasts_exactly_once(
     assert verdicts == [GATE_AWAITING, GATE_AWAITING, GATE_AWAITING]
     # Three detections, ONE toast. The detection repeats for as long as
     # the user leaves the prompt unanswered; the toast must not.
-    assert len(mgr._pending_startup_toasts) == 1
-    assert len(mgr.get_toasts("ses1")) == 1
-    assert mgr.get_toasts("ses1")[0].title == "needs a keypress"
+    assert len(mgr._toast_inbox.pending_startup) == 1
+    assert len(mgr._toast_inbox.get("ses1")) == 1
+    assert mgr._toast_inbox.get("ses1")[0].title == "needs a keypress"
 
 
 def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
@@ -604,14 +604,14 @@ def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
     assert (
         mgr._startup_gate_for(
             session_id="ses1",
-            backend=mgr.backends["ses1"],
+            backend=mgr._registry.backends["ses1"],
             tmux_name="cloude_proj",
             row=row,
             liveness=LIVENESS_LIVE,
         )
         == GATE_READY
     )
-    assert mgr._pending_startup_toasts == []
+    assert mgr._toast_inbox.pending_startup == []
 
 
 def test_manager_refuses_to_guess_when_liveness_is_unknown(
@@ -629,15 +629,15 @@ def test_manager_refuses_to_guess_when_liveness_is_unknown(
     assert (
         mgr._startup_gate_for(
             session_id="ses1",
-            backend=mgr.backends["ses1"],
+            backend=mgr._registry.backends["ses1"],
             tmux_name="cloude_proj",
             row=row,
             liveness=LIVENESS_UNKNOWN,
         )
         == GATE_UNKNOWN
     )
-    assert mgr._pending_startup_toasts == []
-    assert mgr.get_toasts("ses1") == []
+    assert mgr._toast_inbox.pending_startup == []
+    assert mgr._toast_inbox.get("ses1") == []
 
 
 def test_manager_never_captures_a_tail_for_a_session_with_a_hook(
@@ -664,7 +664,7 @@ def test_manager_never_captures_a_tail_for_a_session_with_a_hook(
     }
     mgr._startup_gate_for(
         session_id="ses1",
-        backend=mgr.backends["ses1"],
+        backend=mgr._registry.backends["ses1"],
         tmux_name="cloude_proj",
         row=row,
         liveness=LIVENESS_LIVE,

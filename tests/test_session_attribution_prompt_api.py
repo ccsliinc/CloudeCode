@@ -45,8 +45,9 @@ class _Manager:
 
 def _routes_settings():
     from src.api import routes
+    from src.api import session_attribution_routes
 
-    return routes.settings
+    return session_attribution_routes.settings
 
 
 def _client(tmp_path, monkeypatch):

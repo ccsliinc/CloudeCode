@@ -16,6 +16,39 @@
  * project's 500-line budget.
  */
 
+/* THE PANE IS THE CONTAINING BLOCK, AND IT HAS TO BE SAID HERE.
+ * ----------------------------------------------------------------------
+ * `.terminal-container` had no `position` at all, so the bar's nearest
+ * positioned ancestor was `#terminal-screen` (`.screen`, which IS
+ * `position: relative`). An absolutely positioned box resolves `left` and
+ * `right` against its containing block's PADDING box, and
+ * `body.session-sidebar-pinned .screen` puts `padding-left:
+ * var(--sidebar-dock-w)` on that very element - so `left: 15px` measured
+ * from the viewport edge, BEHIND the docked sidebar, rather than from the
+ * terminal the bar is asking about.
+ *
+ * MEASURED in a real engine at 1357px with the sidebar docked, before:
+ * the bar's box was x=15 w=1327 while `.terminal-container` was x=320
+ * w=1037 - 290px wider than the pane it overlays and starting 305px to
+ * the left of it, i.e. straight across the sidebar column (which paints
+ * over it at z-index 1100 against this bar's 30). After: x=335 w=1007,
+ * exactly 15px inside the pane. That is the owner's "the idle bar is wide
+ * when the sidebar is out and its overlapping".
+ *
+ * SAFE BECAUSE IT WAS COUNTED, not because it looks safe. With a real
+ * xterm mounted there are SEVEN absolutely positioned descendants of
+ * `.terminal-container`; making this a containing block moved exactly ONE
+ * of them, the bar. The other six are xterm's, and `.xterm` is itself
+ * `position: relative` (client/vendor/xterm/xterm.css), so they were
+ * never resolving against anything above it.
+ *
+ * It lives in this file rather than beside the rule in styles.css because
+ * styles.css is past the project's line budget, and because this single
+ * declaration exists for this overlay and nothing else. */
+.terminal-container {
+    position: relative;
+}
+
 .away-bar {
     position: absolute;
     top: 15px;

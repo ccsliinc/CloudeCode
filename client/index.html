@@ -114,6 +114,9 @@
     <!-- The launch-wrapper pill on a running-session row. After
          styles.css so it inherits --color-border / --color-fg-faint and
          sits on the same baseline as .badge and .family-pill next to it. -->
+    <!-- The wrapper pill's styling. The module that used to build its
+         markup was deleted in slice 5; the class names are unchanged and
+         web/src/lib/launchpad/WrapperPill.svelte renders them now. -->
     <link rel="stylesheet" href="/static/css/launchpad-wrapper-pill.css" />
     <!-- The "needs a keypress" badge on a session parked at an unanswered
          startup prompt. After styles.css so it inherits the theme
@@ -258,9 +261,23 @@
          an ESC[2J that erases the alternate screen. See
          client/css/terminal-away-bar.css. -->
     <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
+
     <!-- Item 9's notice banner - calm info tokens, not the alarm-red
          inline style it shipped with. See client/css/deep-link-notice.css. -->
     <link rel="stylesheet" href="/static/css/deep-link-notice.css" />
+
+    <!-- THE COMPILED TREE'S STYLESHEET (see web/ and CLAUDE.md, "The web/
+         build"). Built by vite from web/src into client/dist with a FIXED
+         name, so this line never has to be rewritten per build.
+
+         It carries Tailwind UTILITIES ONLY - no preflight, so nothing here
+         resets a margin, a heading or a border on the legacy app - and
+         every utility is prefixed `tw:` and sits in `@layer utilities`, so
+         it can neither collide with a legacy class name nor outrank a
+         legacy rule. It is LAST on purpose for the same reason it is
+         harmless anywhere: a layered rule loses to every unlayered one in
+         this file regardless of order. -->
+    <link rel="stylesheet" href="/static/dist/app.css" />
 </head>
 <body>
     <!-- Item 9: deep-link / navigation notice banner. Populated by
@@ -932,6 +949,14 @@
          that defines what one means. clipboard.js raises it and
          terminal.js retires it, both at runtime, both behind a guard. -->
     <script src="/static/js/attachment-toast.js"></script>
+    <!-- The visible half of a failed write. A refusal used to reach
+         `#session-sidebar-live` only, which the stylesheet clips to a 1px
+         box, so a screen reader heard it and nobody else did. This raises
+         the app's own toast for the same sentence. Must load AFTER
+         toast.js (it reads ToastManager.WRITE_FAILED_KIND back off the
+         registry) and BEFORE session-sidebar-group-actions.js, which is
+         its first caller. -->
+    <script src="/static/js/write-failure-notice.js"></script>
     <!-- The status LED component. Pure, no dependencies, no DOM access -
          it only builds a string. MUST load BEFORE session-status-ui.js,
          which renders every light in the app through it. -->
@@ -1005,36 +1030,39 @@
          session-sidebar-rows.js, both of which call
          window.SessionStartupGate. No dependencies of its own. -->
     <script src="/static/js/session-startup-gate.js"></script>
-    <!-- Folder picker modal, extracted from launchpad.js. Must load BEFORE
-         launchpad.js, whose showFolderPickerModal() is now a delegate to
-         window.FolderPickerModal.open(). It reads no controller state -
-         the escaper is passed in - so it has no ordering constraint on
-         anything else. -->
+    <!-- Folder picker modal, extracted from launchpad.js. It is NOT
+         migrated by the svelte slices and stays a classic script; the
+         compiled tree opens it through window.FolderPickerModal.open()
+         from the project folder step. SLICE 6 STOPPED INJECTING AN
+         ESCAPER into it - it has carried its own default since it was
+         extracted, and the launchpad copy that used to be passed in is
+         gone - so it now reads no state from anything and has no ordering
+         constraint beyond being present before the bundle runs a flow. -->
     <script src="/static/js/folder-picker-modal.js"></script>
-    <!-- The folder step for a NEW project ("start empty"), which had none
-         and so let every project land at ".../ses_<hex>". Must load AFTER
-         folder-picker-modal.js, whose picker its browse button opens, and
-         BEFORE launchpad.js, which calls window.ProjectCreateFolder
-         .validateName / .choose during the create flow. -->
-    <script src="/static/js/project-create-folder.js"></script>
-    <!-- Which stored RECENT rows survive the "already running" guard.
-         Must load BEFORE launchpad.js, whose renderRecentSessions() calls
-         window.SessionRecentVisibility.visibleRecentRows while painting.
-         Pure - two arrays in, one array out, no state and no events - so
-         this is its only ordering constraint. -->
-    <script src="/static/js/session-recent-visibility.js"></script>
-    <!-- The launch-wrapper pill on a running-session row. Must load
-         BEFORE launchpad.js, which calls window.LaunchpadWrapperPill.html
-         while painting the row. Pure string rendering, no state, no
-         events - it reads nothing else, so this is its only constraint. -->
-    <script src="/static/js/launchpad-wrapper-pill.js"></script>
-    <!-- Whether a repaint of the project tree is worth doing at all. Must
-         load BEFORE launchpad.js, whose renderProjectList() and
-         renderRunningSessions() both consult it on every 5s poll tick.
-         Pure decision logic - markup and screen state in, a verdict out -
-         so this is its only ordering constraint. -->
-    <script src="/static/js/project-list-render-guard.js"></script>
-    <script src="/static/js/launchpad.js"></script>
+    <!-- SLICE 6 DELETED project-create-folder.js, which used to load
+         here. It held two pure rules and a modal that drew itself with
+         innerHTML: the rules are web/src/lib/launchpad/project-folder.ts
+         and the modal is ProjectFolderModal.svelte. The folder step
+         itself did not go anywhere and must never go anywhere - without
+         it "start empty" asks for no folder and every project lands at
+         ".../ses_<hex>". -->
+    <!-- SLICE 5 DELETED TWO SCRIPTS THAT USED TO LOAD HERE, and both are
+         worth naming so nobody re-adds them. launchpad-wrapper-pill.js
+         drew the launch-wrapper pill and had exactly one caller, so it
+         moved into the bundle with the row it belongs to. And
+         session-list-busy-guard.js answered "is the user mid-edit inside
+         the list we are about to wipe", which only had an answer while
+         this list was rebuilt with innerHTML; a component's rows are not
+         rebuilt, so there is no repaint to guard. -->
+    <!-- `client/js/launchpad.js` WAS LOADED HERE AND NO LONGER EXISTS.
+         Slice 7 of the Svelte migration deleted it: the home screen is
+         web/src/lib/launchpad/HomeScreen.svelte, mounted into the empty
+         #launchpad-screen div above by client/dist/app.js at the bottom
+         of this file. What is left of `window.Launchpad` is a shim that
+         bundle publishes - eight members, each with a named caller in
+         this tree - so the scripts below that still address it keep
+         working unchanged. Do not re-add a script tag here: there is no
+         file behind it. -->
     <!-- Provider selector modal (new project / open-folder / clone-github /
          existing-project launch gate). Must load AFTER launchpad.js — it
          attaches showProviderModal() onto the window.Launchpad instance. -->
@@ -1378,11 +1406,14 @@
          load AFTER it: reuses its showMenu/announce/repaint rather than
          a second copy of any of the three. -->
     <script src="/static/js/session-sidebar-band-menu.js"></script>
-    <!-- The row's action menu, and the gestures that open it. Three
-         modules: session-row-menu.js is the item table and the captured
-         context, -actions.js runs a chosen item, -open.js owns the panel,
-         focus and the keyboard. -actions.js delegates into
-         session-sidebar-clicks.js (restart, mark unread),
+    <!-- The row's action menu, and the gestures that open it. Four
+         modules plus the item table: session-row-menu.js is the captured
+         context and the resolved item list, -actions.js runs a chosen
+         item, -open.js owns the panel, focus and the keyboard, and
+         -plugins.js is the ONE bridge to the compiled plugin registry
+         (mark unread is a contribution on it, not a hardcoded entry), so
+         it must load BEFORE session-row-menu.js. -actions.js delegates
+         into session-sidebar-clicks.js (restart),
          session-sidebar-group-actions.js (move to group) and
          session-sidebar-rename.js (rename), so it must load after all of
          them; -open.js calls -actions.js and places itself with
@@ -1393,8 +1424,13 @@
          (the shared builder for each item's prefix glyph, same pattern as
          kebab-icon.js) already loaded earlier, above, for
          session-sidebar-group-actions.js; it is also required here, since
-         session-row-menu.js calls it too. -->
+         session-row-menu.js calls it too.
+
+         The plugin bridge only READS window.CloudeWeb, which the deferred
+         module at the bottom of this file publishes; nothing here runs at
+         parse time, and the first row is painted long after that. -->
     <script src="/static/js/session-row-menu-items.js"></script>
+    <script src="/static/js/session-row-menu-plugins.js"></script>
     <script src="/static/js/session-row-menu.js"></script>
     <script src="/static/js/session-row-menu-actions.js"></script>
     <script src="/static/js/session-row-menu-open.js"></script>
@@ -1534,6 +1570,46 @@
     <script src="/static/js/archive-loader.js"></script>
 
     <script src="/static/js/app.js"></script>
+
+    <!-- THE STRING LAYER. One catalog, read by the legacy tree here and
+         by the compiled tree below, so a label cannot exist in two
+         languages in one app. See client/js/i18n/ and
+         .claude/notes/i18n-design.md.
+
+         A MODULE, AND ABOVE THE BUNDLE ON PURPOSE. Module scripts are
+         deferred and run in document order, so this publishes
+         window.CloudeI18n before app.js evaluates and before
+         DOMContentLoaded, which is before any legacy render. The classic
+         scripts above run FIRST, which is why every legacy consumer
+         reaches for t() at render time and never while it is being
+         defined.
+
+         IT IS SEPARATE FROM THE BUNDLE SO COPY DOES NOT DEPEND ON THE
+         NEWEST THING. It imports no Svelte and no Tailwind; a failure in
+         the compiled tree must not take every label in the legacy client
+         with it. Same origin, no inline script: `script-src 'self'`
+         permits exactly this. -->
+    <script type="module" src="/static/js/i18n/boot.js"></script>
+
+    <!-- THE COMPILED TREE (see web/ and CLAUDE.md, "The web/ build").
+         Svelte 5 + TypeScript, bundled by vite into client/dist/app.js
+         with a FIXED name so this line never has to be rewritten.
+
+         LAST, AND A MODULE. Last because the legacy IIFEs above publish
+         the globals this bundle will progressively take over, and a
+         module because that is how the bundle is built - `type="module"`
+         also makes it deferred, so it runs after the document is parsed
+         whatever its position. Loaded with a plain `src` from this app's
+         own origin: `script-src 'self'` permits exactly that and forbids
+         inline script and eval, and the vite config is arranged so no
+         inline script is ever emitted (tests/test_no_remote_assets.py
+         fails the build if one appears).
+
+         AS OF THIS ROUND IT CHANGES NOTHING ON SCREEN. It publishes
+         window.CloudeWeb and returns; it mounts no component into the
+         document and overwrites no existing global. Screens move over one
+         at a time in later rounds. -->
+    <script type="module" src="/static/dist/app.js"></script>
 
     <!-- v0.7.0 Part 2 — toast notifications container. Fixed top-right via
          CSS (toast.css). aria-live=polite so screen readers announce new

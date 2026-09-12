@@ -92,6 +92,31 @@
     }
 
     /**
+     * HTML-escape a value for interpolation into this file's own
+     * `innerHTML` markup.
+     *
+     * SLICE 7 GAVE THIS FILE ITS OWN. It used to delegate to
+     * `window.Launchpad._escapeHtml`, and `client/js/launchpad.js` no
+     * longer exists. The one-line body is deliberately the TEXT-NODE
+     * form rather than a chain of five `replace` calls: the browser's
+     * own serialiser is the implementation, so it cannot miss a
+     * character the chain forgot. Seven other screens keep their own
+     * copies for the same reason - see the escaping note in
+     * .claude/notes/svelte-migration-launchpad.md section 4 - and this
+     * is the eighth, not a ninth copy of the old one.
+     *
+     * Inputs: value (any) - stringified first; null and undefined
+     *   become the empty string.
+     * Output: string - safe to interpolate into markup as TEXT.
+     * Example: escapeForMarkup('a<b')   // 'a&lt;b'
+     */
+    function escapeForMarkup(value) {
+        const holder = document.createElement('div');
+        holder.textContent = value == null ? '' : String(value);
+        return holder.innerHTML;
+    }
+
+    /**
      * Show the provider selector modal.
      * @returns {Promise<{model: string|null, wrapperId?: string}|null>}
      *   null = cancelled (abort the launch). {model: null} = the legacy
@@ -104,7 +129,7 @@
      */
     function showProviderModal() {
         return new Promise((resolve) => {
-            const escapeHtml = (s) => window.Launchpad._escapeHtml(s);
+            const escapeHtml = escapeForMarkup;
 
             const overlay = document.createElement('div');
             overlay.className = 'modal-overlay';
@@ -497,7 +522,13 @@
 
             const removeModel = async (model) => {
                 confirmPending = true;
-                const ok = await window.Launchpad.showConfirmModal(
+                // SLICE 7: STRAIGHT TO THE OWNER. This used to go
+                // through `Launchpad.showConfirmModal`, which was itself
+                // a one-line forward to `App.showConfirmModal` - the
+                // modal has never lived anywhere else. One hop fewer,
+                // and one fewer member on a shim that only exists to be
+                // deleted. Cancel is ALWAYS a no-op.
+                const ok = await window.App.showConfirmModal(
                     'remove model',
                     `remove "${model}" from the provider list?`,
                     null,
@@ -670,5 +701,14 @@
         });
     }
 
+    // PUBLISHED DEFENSIVELY, AND THE ORDER IS WHY. This file is a
+    // classic script and runs BEFORE `client/dist/app.js`, which is a
+    // deferred module - so since slice 7 deleted `client/js/launchpad.js`
+    // there is no object here yet at this point. The bundle's shim MERGES
+    // into whatever it finds rather than assigning over it, so this
+    // publication survives; assigning a fresh object on either side would
+    // silently drop the other's members and the first "new project" would
+    // open a picker that resolves null.
+    window.Launchpad = window.Launchpad || {};
     window.Launchpad.showProviderModal = showProviderModal;
 })();

@@ -131,7 +131,9 @@ const styles = client('css', 'styles.css');
 const homeBar = client('css', 'home-bar.css');
 const html = client('index.html');
 const appJs = client('js', 'app.js');
-const launchpadJs = client('js', 'launchpad.js');
+// SLICE 7: the home bar is rendered by HomeScreen.svelte now. The
+// three assertions below are about that markup and are unchanged.
+const { HOME_SCREEN_SRC: launchpadJs } = await import('./lib-home-source.mjs');
 
 /* ---------------------------------------------------------------------------
  * 1. Icon and title share one line box

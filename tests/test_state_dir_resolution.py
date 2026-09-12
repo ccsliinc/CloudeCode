@@ -41,6 +41,7 @@ if str(ROOT) not in sys.path:
 
 # ruff: noqa: E402
 from src.config import settings, StateDirUnavailableError
+from src.config import state_paths
 
 
 @pytest.fixture(autouse=True)
@@ -334,8 +335,9 @@ def test_state_file_no_old_log_directory_configured(tmp_path, monkeypatch):
 # LOG_DIRECTORY is populated from the install's own .env, so it is set
 # for an operator who never chose it. That made CLOUDE_STATE_DIR alone
 # insufficient to isolate an instance: a throwaway server resolved, held
-# open and in one case WROTE the live user's real state files. A stated
-# location must outrank an inferred one.
+# open and in one measured case WROTE the live user's real state files.
+# A stated location must outrank an inferred one. Ported from Adam's
+# issue #113 (5d86205, 81505bd, c860f87).
 # ---------------------------------------------------------------------- #
 
 PINNED_STATE_FILES = [
@@ -386,7 +388,7 @@ def test_legacy_pin_still_fires_when_no_state_dir_was_named(tmp_path, monkeypatc
     ``test_explicit_state_dir_suppresses_the_legacy_pin`` perfectly and
     silently orphan a real user's refresh tokens and pinned themes on
     their next upgrade, which is a far worse defect than the one being
-    fixed here. Mutate ``_state_file_pin`` to drop the rung whatever the
+    fixed here. Mutate ``state_file_pin`` to drop the rung whatever the
     state dir says and this is the test that goes red.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -436,34 +438,34 @@ def test_explicit_state_dir_never_resolves_under_the_real_legacy_default(
 
 
 # ---------------------------------------------------------------------- #
-# The memoization key on _state_file_pin() must include state_dir_explicit.
+# The memoization key on state_file_pin() must include state_dir_explicit.
 #
-# Both production callers (get_state_file_location, _resolve_state_file)
-# always pass settings.state_dir_is_explicit() for this filename /
-# state_dir_override / log_directory combination, so this defect cannot
-# fire from them today. It is reachable the moment a second caller
-# passes its OWN flag for the same combination - which is exactly what a
-# cache key is supposed to make impossible.
+# Both production callers reach it through Settings._state_file_pin,
+# which always passes settings.state_dir_is_explicit() for this
+# filename / state_dir_override / log_directory combination, so the
+# defect cannot fire from them today. It is reachable the moment a
+# second caller passes its OWN flag for the same combination - which is
+# exactly what a cache key is supposed to make impossible.
+#
+# Driven against the PURE function rather than the Settings method,
+# because on this line state_paths.state_file_pin is the layer that owns
+# the key and already takes the flag from outside. That is the same
+# property Adam's version buys by making the method take a parameter: a
+# guard whose only caller sets the condition it reads has never been
+# tested.
 # ---------------------------------------------------------------------- #
 
-def test_pin_cache_key_must_include_state_dir_explicit(tmp_path, monkeypatch):
-    """Driving ``_state_file_pin`` with the flag both ways, for the SAME
-    filename/state_dir_override/log_directory, must yield two DIFFERENT
-    answers - not the first call's answer replayed.
-
-    This calls the private method directly, on purpose: its own
-    docstring says the flag is "passed in rather than read here so the
-    legacy rung can be driven both ways by a test". Driving it both ways
-    on ONE Settings instance, with everything else held constant, is the
-    only way to exercise the cache key rather than the resolution logic
-    beside it.
+def test_pin_cache_key_must_include_state_dir_explicit(tmp_path):
+    """Driving ``state_file_pin`` with the flag both ways, for the SAME
+    filename/state_dir_override/log_directory AND the same pins dict,
+    must yield two DIFFERENT answers - not the first call's answer
+    replayed.
 
     If the cache key regresses to ``(filename, state_key, log_key)``
     (dropping ``state_dir_explicit``), the second call below returns the
     FIRST call's cached ``"log_directory"`` decision and this test goes
     red.
     """
-    monkeypatch.setattr(settings, "_state_file_pins", None)
     state_dir = tmp_path / "state"
     legacy_dir = tmp_path / "legacy"
     state_dir.mkdir()
@@ -471,19 +473,28 @@ def test_pin_cache_key_must_include_state_dir_explicit(tmp_path, monkeypatch):
     filename = "pinned_themes.json"
     (legacy_dir / filename).write_text("legacy data")
 
-    monkeypatch.setattr(settings, "state_dir_override", str(state_dir))
-    monkeypatch.setattr(settings, "log_directory", str(legacy_dir))
+    pins: dict = {}
+    common = dict(
+        pins=pins,
+        resolved_state_dir=state_dir,
+        state_dir_override=str(state_dir),
+        log_directory=str(legacy_dir),
+    )
 
     # explicit=False: the legacy rung is allowed to fire, and since only
     # the legacy copy exists, it wins.
-    path_a, location_a = settings._state_file_pin(filename, False)
+    path_a, location_a = state_paths.state_file_pin(
+        filename, state_dir_explicit=False, **common
+    )
     assert location_a == "log_directory"
     assert path_a == legacy_dir / filename
 
-    # explicit=True, everything else UNCHANGED: an explicit state dir
-    # must suppress the legacy rung and resolve fresh into the state
-    # dir, not replay the previous call's cached legacy answer.
-    path_b, location_b = settings._state_file_pin(filename, True)
+    # explicit=True, everything else UNCHANGED including the cache: an
+    # explicit state dir must suppress the legacy rung and resolve fresh
+    # into the state dir, not replay the previous call's cached answer.
+    path_b, location_b = state_paths.state_file_pin(
+        filename, state_dir_explicit=True, **common
+    )
     assert location_b == "state_dir", (
         "the cached pin from the state_dir_explicit=False call leaked "
         "into the state_dir_explicit=True call - the cache key is "

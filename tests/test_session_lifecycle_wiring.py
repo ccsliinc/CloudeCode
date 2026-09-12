@@ -195,7 +195,7 @@ def test_the_home_screen_listing_does_not_reap_on_a_failed_probe(
     )
     result = mgr.list_attachable_sessions()
     assert result.ok is False
-    assert mgr.last_probe_health().ok is False
+    assert mgr._probe_health.health.ok is False
 
     with closing(connect(db_path_for(tmp_path), create=False)) as c:
         row = row_by_uuid(c, "u-live")

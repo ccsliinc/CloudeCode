@@ -463,7 +463,10 @@ def test_creating_and_destroying_a_session_publish_the_structural_notice():
     watch two one-line calls."""
     import inspect
 
-    from src.api import routes
+    # THE HANDLERS LIVE IN THE SIBLING THAT OWNS THE RESOURCE on this
+    # line; src/api/routes.py is the assembly and the registration order
+    # and re-exports nothing but ``router``, deliberately.
+    from src.api import session_crud_routes as routes
 
     create_src = inspect.getsource(routes.create_session)
     destroy_src = inspect.getsource(routes.destroy_session)

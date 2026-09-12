@@ -285,7 +285,7 @@ test('no em-dash, en-dash or emoji reaches the user', () => {
         assert.ok(!/[–—]/.test(all), `dash in copy for ${conv}`);
         assert.ok(
             // eslint-disable-next-line no-control-regex
-            !/[^ -]/.test(all),
+            !/[^\x00-]/.test(all),
             `non-ascii in copy for ${conv}: ${all}`,
         );
     }
