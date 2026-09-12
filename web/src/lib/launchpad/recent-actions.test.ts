@@ -87,7 +87,6 @@ function recorder(overrides: {
         async refreshRecent() { r.refreshed.push('recent'); },
         async refreshRunningSessions() { r.refreshed.push('running'); },
         async refreshAttribution() { r.refreshed.push('attribution'); },
-        refreshProjectList() { r.refreshed.push('projects'); },
         liveSessions() { return []; },
         deriveDisplayName(name) { return name; },
     };
@@ -163,7 +162,13 @@ describe('archiving is a soft archive and refreshes BOTH surfaces', () => {
         expect(r.archived).toEqual(['a1b2-c3']);
         // Archiving from RECENT while the project tree still showed the
         // row would recreate the contradiction this area was repaired for.
-        expect(r.refreshed).toEqual(['attribution', 'recent', 'projects']);
+        // THE ATTRIBUTION REFRESH IS THE REPAINT NOW. There used to be a
+        // third call, `refreshProjectList()`, forwarding to the legacy
+        // `renderProjectList()`. The tree is `ProjectTree.svelte` and
+        // derives its groups from `sessionStore`, so re-reading the
+        // records IS what redraws it; an imperative repaint would be a
+        // second way to ask for something that already happened.
+        expect(r.refreshed).toEqual(['attribution', 'recent']);
         expect(r.errors).toEqual([]);
     });
 

@@ -84,9 +84,16 @@ export interface RecentHost {
     refreshRunningSessions(): Promise<void>;
     /** Re-read the attribution join behind the project tree. */
     refreshAttribution(): Promise<void>;
-    /** Repaint the project tree, which draws the same records. */
-    refreshProjectList(): void;
-    /** The live sessions, for the one-list-only rule. */
+    /**
+     * The live sessions, for the one-list-only rule.
+     *
+     * ANSWERING `[]` IS NOT A HARMLESS DEGRADE, which is what made this
+     * worth chasing. `visibleRecentRows` short-circuits on
+     * `if (!live.length) return rows.slice()`, so an empty answer does
+     * not filter conservatively - it switches the de-duplication OFF
+     * entirely and paints every running session a second time under
+     * RECENT.
+     */
     liveSessions(): LiveSession[];
     /** The legacy tmux-name-to-display-name mapping (slice 5 moves it). */
     deriveDisplayName(tmuxName: string): string | null;
@@ -124,7 +131,6 @@ export async function archiveSessionRecord(
     }
     await host.refreshAttribution();
     await host.refreshRecent();
-    host.refreshProjectList();
 }
 
 /**
@@ -170,7 +176,6 @@ export async function forkSession(
     }
     await host.refreshAttribution();
     await host.refreshRecent();
-    host.refreshProjectList();
 }
 
 /**
@@ -228,11 +233,24 @@ interface LegacyApi {
 /** The launchpad singleton, as much of it as this section reaches. */
 interface LegacyLaunchpad {
     showError?(message: string): void;
-    loadSessionAttribution?(): Promise<void>;
     loadRunningSessions?(): Promise<void>;
-    renderProjectList?(): void;
-    runningSessions?: LiveSession[];
     _deriveRunningSessionDisplayName?(tmuxName: string): string | null;
+}
+
+/**
+ * This bundle's own namespace, as much of it as this section reaches.
+ *
+ * READ RATHER THAN IMPORTED, and that is this module's stated invariant
+ * rather than an oversight: "this module never imports the store and the
+ * store never imports this". `nav-host.ts` reaches the same two fields
+ * the same way, so this is the established shape on this screen and not
+ * a new one.
+ */
+interface WebNamespace {
+    launchpad?: {
+        sessions?: { runningSessions?: LiveSession[] };
+        loadSessionAttribution?: () => Promise<unknown>;
+    };
 }
 
 /**
@@ -258,6 +276,8 @@ export function browserHost(refreshRecent: () => Promise<void>): RecentHost {
     const api = (): LegacyApi => (window as unknown as { API: LegacyApi }).API;
     const lp = (): LegacyLaunchpad =>
         (window as unknown as { Launchpad?: LegacyLaunchpad }).Launchpad || {};
+    const web = (): WebNamespace =>
+        (window as unknown as { CloudeWeb?: WebNamespace }).CloudeWeb || {};
     return {
         fetchRecent: (includeArchived) => api().listRecentSessions(includeArchived),
         archiveRecord: (uuid) => api().deleteSessionRecord(uuid),
@@ -283,18 +303,29 @@ export function browserHost(refreshRecent: () => Promise<void>): RecentHost {
                 await target.loadRunningSessions();
             }
         },
+        // THE COMPILED PATH, NOT THE RETIRED LEGACY METHOD. This asked
+        // `window.Launchpad.loadSessionAttribution`, which `shim.ts`
+        // never republished, so the guard always refused and the project
+        // tree kept rendering the `sessionRecords` it already had after
+        // an archive or a fork. `main.ts` publishes the real one on
+        // `CloudeWeb.launchpad` for exactly this caller.
         async refreshAttribution(): Promise<void> {
-            const target = lp();
-            if (typeof target.loadSessionAttribution === 'function') {
-                await target.loadSessionAttribution();
-            }
+            const load = web().launchpad?.loadSessionAttribution;
+            if (typeof load === 'function') await load();
         },
-        refreshProjectList(): void {
-            const target = lp();
-            if (typeof target.renderProjectList === 'function') target.renderProjectList();
-        },
+        // `refreshProjectList` IS GONE, AND THE PAINT IS NOT MISSING -
+        // IT IS AUTOMATIC. `renderProjectList()` was the legacy
+        // imperative repaint, and the tree it repainted is now
+        // `ProjectTree.svelte`, whose groups are a `$derived` over seven
+        // `sessionStore` accessors ("one `$derived` subscribing to all of
+        // them rather than a render call somebody has to remember to
+        // make"). So the store assignment inside `refreshAttribution`
+        // above IS the repaint, and a forwarder would be a second way to
+        // ask for something that already happened. This deletion is only
+        // correct BECAUSE that data refresh survives: the paint follows
+        // the data, and dropping both would have left the tree stale.
         liveSessions(): LiveSession[] {
-            const rows = lp().runningSessions;
+            const rows = web().launchpad?.sessions?.runningSessions;
             return Array.isArray(rows) ? rows : [];
         },
         deriveDisplayName(tmuxName: string): string | null {

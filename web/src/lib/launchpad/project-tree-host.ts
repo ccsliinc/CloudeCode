@@ -37,13 +37,13 @@ import {
 } from './project-actions';
 import { attachRunningSession, returnToActiveSession } from './navigation';
 import { browserNavHost } from './nav-host';
+import { explainRefusedProject, type PresenceRow } from './status-report';
+import { presenceFor } from './project-node';
+import { sessionStore } from '../sessions/store.svelte';
 
 /** The legacy launchpad singleton, as this file uses it. */
 interface LegacyLaunchpad {
     selectProject?: (project: ProjectRow) => unknown;
-    _explainRefusedProject?: (project: ProjectRow, el: Element | null) => unknown;
-    _returnToActiveRunningSession?: (sessionId: string | null) => Promise<unknown>;
-    _handleAttachRunningSession?: (name: string) => Promise<unknown>;
     loadProjects?: () => Promise<unknown>;
 }
 
@@ -143,13 +143,37 @@ export function browserProjectTreeHost(): ProjectTreeHost {
             }
             lp.selectProject(project);
         },
+        // THE COMPILED PATH, NOT THE DELETED LEGACY METHOD. This reached
+        // for `window.Launchpad._explainRefusedProject` until now. Slice 7
+        // deleted that method with client/js/launchpad.js and `shim.ts`
+        // republished ten members that do not include it, so the guard
+        // below always took its `missing()` branch and CLICKING A REFUSED
+        // PROJECT ROW SAID NOTHING AT ALL - logged, never thrown, and
+        // invisible to every unit test because the tree's tests hand in a
+        // recorder and assert what the row ASKED FOR. Identical to the two
+        // `running-host.ts` already rewired for the same reason, one file
+        // over; it survived that round because the shim's scanner could
+        // not see a member reached through `legacy()`.
+        //
+        // `el` IS UNUSED AND THE PARAMETER STAYS. The legacy method
+        // anchored its bubble to the row; `explainRefusedProject` reports
+        // through the launchpad's one inline error line instead. Dropping
+        // the parameter would change this seam's shape for every caller
+        // and every test double to delete an argument, which is not what
+        // this fix is.
         explainRefused(project: ProjectRow, el: Element | null): void {
-            const lp = legacy();
-            if (!lp || typeof lp._explainRefusedProject !== 'function') {
-                missing('_explainRefusedProject');
-                return;
-            }
-            lp._explainRefusedProject(project, el);
+            void el;
+            // `ProjectPresenceRow` declares only `raw_path` and `root`
+            // plus an index signature, so `presence` / `presence_detail`
+            // reach it through that signature and TS sees no overlap with
+            // `PresenceRow`. Narrowed HERE, at the seam, which is what
+            // `project-node.ts` already does for the same two fields off
+            // the same row; widening either interface to make this
+            // implicit would stop the checker objecting the next time the
+            // wrong row is passed.
+            const presence = presenceFor(project, sessionStore.projectPresence) as
+                PresenceRow | null;
+            explainRefusedProject(project, presence, t);
         },
         // SLICE 6 MOVED THESE THREE INTO THIS TREE. They used to be
         // methods on the legacy singleton and are now

@@ -25,6 +25,9 @@
  * in a recorder. This is a seam, not an adapter layer: no response is
  * reshaped and no endpoint is wrapped.
  */
+import { t as reactiveT } from '../i18n/index.svelte';
+import { relativeAge } from '../../../../client/js/labels/running-session.js';
+
 
 /** One live tmux session the evidence ladder could not attribute. */
 export interface UnattributedSession {
@@ -356,7 +359,6 @@ interface LegacyApi {
 interface LegacyLaunchpad {
     showError(message: string): void;
     loadRunningSessions(): unknown;
-    _formatRelativeTime(epochSeconds: number): string;
 }
 
 /** The one resolver for a session's displayed name. */
@@ -412,15 +414,25 @@ export function browserHost(): AttributionHost {
         refreshRunningSessions: () => {
             launchpad().loadRunningSessions();
         },
-        // ONE implementation of the age string, and it is still the
-        // legacy one. Slice 5 moves `_formatRelativeTime` into this tree;
-        // copying it here first would mean two of them for the length of
-        // the migration, and two of them is how they drift.
-        formatRelativeTime: (epochSeconds) => {
-            const lp = window.Launchpad;
-            if (!lp || typeof lp._formatRelativeTime !== 'function') return 'unknown';
-            return lp._formatRelativeTime(epochSeconds);
-        },
+        // ONE implementation of the age string, AND SLICE 5 ALREADY
+        // MOVED IT. This asked `window.Launchpad._formatRelativeTime`
+        // and answered the literal 'unknown' when it was absent - which
+        // it has been since slice 7 deleted client/js/launchpad.js,
+        // because `shim.ts` never republished it. So EVERY dated row on
+        // this card read `unknown`, on every load, and the refusal
+        // branch was indistinguishable from a session with no timestamp.
+        //
+        // The note this replaces said slice 5 WOULD move the
+        // implementation and that forwarding first would mean two of
+        // them. Both halves were right and the premise expired: slice 5
+        // shipped `relativeAge`, `RunningSessionRow.svelte` already
+        // renders with it, and the second copy this warns about is what
+        // a shim forwarder would now create. It is also FOUR TRANSLATED
+        // MESSAGES AND A REFUSAL rather than the legacy `${n}s ago`
+        // concatenation, so the card gains a translated age by being
+        // pointed at it.
+        formatRelativeTime: (epochSeconds) =>
+            relativeAge(epochSeconds, reactiveT),
         // stripPrefix:false is deliberate and this is the ONE surface
         // that asks for it. See describeRow().
         resolveLabel: (session) => {

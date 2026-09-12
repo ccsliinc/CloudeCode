@@ -118,6 +118,84 @@ function legacyUses(): Map<string, string[]> {
 }
 
 /**
+ * The balanced `{...}` body belonging to a binding at `from`.
+ *
+ * Description: A FIXED CHARACTER WINDOW WAS TRIED FIRST AND IT WAS
+ *   WRONG, loudly enough to be worth recording. 600 characters starting
+ *   at `function win` runs straight past that function's body and into
+ *   the `function legacy` beneath it, whose return DOES read
+ *   `.Launchpad` - so `win` was registered as an alias and the scan then
+ *   reported members literally named `Launchpad`, `CloudeWeb` and
+ *   `launchpad`. An over-matching resolver is the same failure as a
+ *   blind one wearing the opposite face.
+ *
+ *   So the body is BRACE MATCHED. Candidate opening braces are tried in
+ *   order and the first balanced block containing a `return` is the
+ *   body, which steps over an object TYPE in the signature
+ *   (`function f(o: { a: number })`) rather than mistaking it for the
+ *   body. Braces inside strings and template literals are not tracked;
+ *   that is a stated limit, and it can only ever end the body EARLY,
+ *   which drops an alias rather than inventing one.
+ * Inputs: src - file text. from - index of the binding's match.
+ * Output: the body text, or '' when none balances.
+ * Example: bodyAt('function f() { return 1; }', 0)  // '{ return 1; }'
+ */
+function bodyAt(src: string, from: number): string {
+    let search = from;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const open = src.indexOf('{', search);
+        if (open === -1) return '';
+        let depth = 0;
+        for (let i = open; i < src.length; i += 1) {
+            const ch = src[i];
+            if (ch === '{') depth += 1;
+            else if (ch === '}') {
+                depth -= 1;
+                if (depth === 0) {
+                    const block = src.slice(open, i + 1);
+                    if (/\breturn\b/.test(block)) return block;
+                    search = i + 1;
+                    break;
+                }
+            }
+        }
+        if (depth !== 0) return '';
+    }
+    return '';
+}
+
+/**
+ * Does this function body hand its caller the shim.
+ *
+ * Description: keyed on the RETURN EXPRESSION, never on the body as a
+ *   whole, and that is the whole precision of it. `running-host.ts` has
+ *   `function legacy(): LegacyWindow { return hostWindow() ... }` which
+ *   returns the WINDOW and is reached as `legacy().Launchpad.showError`;
+ *   treating it as an alias would report a member literally named
+ *   `Launchpad`. `project-tree-host.ts` has
+ *   `function legacy() { ... return (w && w.Launchpad) || null; }` which
+ *   returns the shim itself. Only the second reads `.Launchpad` INSIDE a
+ *   return, so only the second is an alias.
+ * Inputs: body - the balanced function body.
+ *   aliases - names already known to stand for the shim.
+ * Output: true when a return expression yields the shim.
+ * Example: returnsTheShim('{ return w.Launchpad || null; }', new Set())
+ */
+function returnsTheShim(body: string, aliases: ReadonlySet<string>): boolean {
+    const ret = /\breturn\b([^;]{0,300})/g;
+    let m: RegExpExecArray | null;
+    while ((m = ret.exec(body)) !== null) {
+        const expr = m[1] ?? '';
+        if (/\.Launchpad\b/.test(expr)) return true;
+        for (const a of aliases) {
+            if (a.includes('.')) continue;
+            if (new RegExp(`\\b${a}\\s*\\(`).test(expr)) return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Local names that stand for `window.Launchpad` in one file.
  *
  * Description: resolved to a FIXPOINT, because the real shapes are two
@@ -133,11 +211,34 @@ function legacyUses(): Map<string, string[]> {
  *   dot is what keeps `LegacyLaunchpad` (a TYPE name, in every one of
  *   these files) from being mistaken for the object.
  *
- * STATED LIMIT: a FUNCTION that returns the shim is not followed.
- *   `project-tree-host.ts` has `function legacy() { ... return w.Launchpad }`
- *   and calls `legacy().selectProject`, which this does not see. It is
- *   recorded here rather than papered over; closing it needs a real
- *   parser, and the shapes above are the ones that hid a member.
+ * A FUNCTION THAT RETURNS THE SHIM IS NOW FOLLOWED, AND CLOSING THAT
+ *   FOUND A REAL DEFECT THE SAME HOUR. This resolver used to stop at
+ *   declarations, and recorded the gap in prose: "a FUNCTION that returns
+ *   the shim is not followed. `project-tree-host.ts` has
+ *   `function legacy() { ... return w.Launchpad }` and calls
+ *   `legacy().selectProject`, which this does not see." That file also
+ *   calls `legacy()._explainRefusedProject`, which NOTHING implements -
+ *   not `launchpad.js`, which is deleted, and not the shim. So clicking a
+ *   REFUSED project row logged a line and explained nothing on screen,
+ *   and the guard reported the shim complete throughout. It is the same
+ *   defect `running-host.ts` documents for the two methods it already
+ *   rewired, one file over.
+ *
+ *   A FUNCTION BINDING IS MATCHED, NOT A CALL. `function name`,
+ *   `const name = function` and `const name = (...) =>` all bind, and the
+ *   `return` scan above decides. The arrow-with-expression-body form is
+ *   already caught by the declaration rule, because its right-hand side
+ *   IS the expression.
+ *
+ * STATED LIMIT, AND IT CANNOT BE CLOSED BY A MATCHER. Computed access
+ *   (`lp[name]`, `lp['showError']`) is not resolved. For a literal key it
+ *   could be; for a VARIABLE key no static rule can be, because the name
+ *   is not in the file. Rather than close half of it and read as closed,
+ *   neither half is claimed - and the measurement that makes that
+ *   acceptable is that the codebase contains ZERO bracket accesses on the
+ *   shim today. `noComputedShimAccess` below is the test that keeps that
+ *   true, which is a stronger guarantee than a resolver: it refuses the
+ *   form outright instead of chasing it.
  *
  * Inputs: src - file text, comments already stripped.
  * Output: the set of names standing for the shim, dotted literals first.
@@ -145,6 +246,12 @@ function legacyUses(): Map<string, string[]> {
 function aliasesIn(src: string): Set<string> {
     const aliases = new Set<string>(['window.Launchpad', 'globalThis.Launchpad']);
     const decl = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]{0,160})?=\s*([\s\S]{0,300}?);/g;
+    const fn = new RegExp(
+        '(?:function\\s+([A-Za-z_$][\\w$]*)'
+        + '|(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=;]{0,160})?=\\s*'
+        + '(?:async\\s*)?(?:function\\b|\\([^)]{0,160}\\)\\s*(?::[^=>;]{0,160})?=>\\s*\\{))',
+        'g',
+    );
     for (let changed = true, guard = 0; changed && guard < 8; guard++) {
         changed = false;
         decl.lastIndex = 0;
@@ -159,8 +266,49 @@ function aliasesIn(src: string): Set<string> {
             );
             if (direct || viaAlias) { aliases.add(name); changed = true; }
         }
+        fn.lastIndex = 0;
+        while ((m = fn.exec(src)) !== null) {
+            const name = m[1] || m[2] || '';
+            if (!name || aliases.has(name)) continue;
+            const body = bodyAt(src, m.index + (m[0] ?? '').length);
+            if (returnsTheShim(body, aliases)) { aliases.add(name); changed = true; }
+        }
     }
     return aliases;
+}
+
+/**
+ * Every shim member one file reaches by DESTRUCTURING it.
+ *
+ * Description: `const { showError } = window.Launchpad` reaches
+ *   `showError` just as surely as `lp.showError` does, and the dotted
+ *   matcher cannot see it. There is no such call in this codebase today -
+ *   measured, zero - so this is written for the one somebody adds next,
+ *   which is precisely the case a guard exists to catch. The KEY is what
+ *   counts: `{ showError: report }` reaches `showError`, and `{ a = 1 }`
+ *   reaches `a`.
+ * Inputs: src - file text, comments stripped. aliases - from `aliasesIn`.
+ * Output: member names.
+ * Example: destructuredMembersIn('const {showError} = window.Launchpad;', a)
+ */
+function destructuredMembersIn(src: string, aliases: ReadonlySet<string>): Set<string> {
+    const found = new Set<string>();
+    const re = /(?:const|let|var)\s*\{([^}]{1,300})\}\s*(?::[^=;]{0,160})?=\s*([^;]{0,300});/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+        const keys = m[1] ?? '';
+        const rhs = m[2] ?? '';
+        const direct = /\.Launchpad\b/.test(rhs);
+        const viaAlias = [...aliases].some(
+            (a) => !a.includes('.') && new RegExp(`\\b${a}\\b`).test(rhs),
+        );
+        if (!direct && !viaAlias) continue;
+        for (const part of keys.split(',')) {
+            const key = part.split(':')[0]?.split('=')[0]?.trim() ?? '';
+            if (/^[A-Za-z_$][\w$]*$/.test(key)) found.add(key);
+        }
+    }
+    return found;
 }
 
 /**
@@ -171,7 +319,8 @@ function aliasesIn(src: string): Set<string> {
  */
 function membersReachedIn(src: string): Set<string> {
     const found = new Set<string>();
-    for (const alias of aliasesIn(src)) {
+    const aliases = aliasesIn(src);
+    for (const alias of aliases) {
         const base = alias.replace(/\./g, '\\.');
         // `lp.member`, `lp().member` and `lp()?.member` all count.
         const re = new RegExp(`\\b${base}\\s*(?:\\(\\s*\\))?\\??\\.([A-Za-z_][\\w]*)`, 'g');
@@ -181,43 +330,42 @@ function membersReachedIn(src: string): Set<string> {
             if (member) found.add(member);
         }
     }
+    for (const member of destructuredMembersIn(src, aliases)) found.add(member);
     return found;
 }
 
 /**
  * Members the tree reaches that the shim deliberately does NOT carry.
  *
- * A NAMED GAP, NOT A SILENCED ONE. Each entry is a real call that
+ * A NAMED GAP, NOT A SILENCED ONE. Each entry would be a real call that
  * returns a degraded answer today, kept here so the guard stays loud
  * about everything else while these are visible rather than forgotten.
+ *
+ * IT IS EMPTY, AND KEEPING IT EMPTY IS THE POINT. It held four, and all
+ * four are now resolved AT THE CALLER rather than forwarded: none of
+ * them became a shim member, because in every case the tree had already
+ * grown the real thing and the caller was simply still pointed at the
+ * retired global.
+ *
+ *   - `_formatRelativeTime` -> `relativeAge`, slice 5's four translated
+ *     messages plus a refusal. The entry claimed slice 5 "moves the
+ *     implementation into this tree" as future work; slice 5 had already
+ *     landed it, so the note was waiting for something that had arrived.
+ *   - `loadSessionAttribution` -> `CloudeWeb.launchpad`, which `main.ts`
+ *     publishes for this exact caller.
+ *   - `runningSessions` -> `CloudeWeb.launchpad.sessions`. The entry
+ *     read this as a tidy degrade to `[]`; it is not. `visibleRecentRows`
+ *     short-circuits on an empty live list, so `[]` disabled the
+ *     de-duplication and painted running sessions twice.
+ *   - `renderProjectList` -> DELETED at the caller. The tree is a
+ *     `$derived` now, so the imperative repaint is retired rather than
+ *     missing.
+ *
+ * ADDING AN ENTRY HERE IS A REAL DECISION AND COSTS THE USER SOMETHING.
+ * Three of the four above were recorded as harmless and two were not.
+ * If you add one, say what the user sees, not what the code does.
  */
-const KNOWN_GAPS: ReadonlyMap<string, string> = new Map([
-    [
-        'loadSessionAttribution',
-        'web/src/lib/launchpad/recent-actions.ts repaints the attribution card after '
-        + 'an archive or a fork. Optional on its own interface and guarded with a '
-        + 'typeof check, so it degrades to "no repaint" rather than throwing. The '
-        + 'store already owns this data; wiring a forwarder is a migration decision, '
-        + 'not a bug fix.',
-    ],
-    [
-        'renderProjectList',
-        'Same file, same shape: repaint the project tree after a recent-session '
-        + 'action. Guarded and optional, degrades to "no repaint".',
-    ],
-    [
-        'runningSessions',
-        'Same file: the legacy array of live rows, read through a guard that answers '
-        + '[] when it is absent. `sessionStore` is the live source now.',
-    ],
-    [
-        '_formatRelativeTime',
-        'web/src/lib/launchpad/attribution.ts asks the legacy singleton for the '
-        + 'attribution card\'s age string and renders "unknown" without it. Its own '
-        + 'comment says slice 5 moves the implementation into this tree; adding a '
-        + 'forwarder here would just be a second place to look until it does.',
-    ],
-]);
+const KNOWN_GAPS: ReadonlyMap<string, string> = new Map([]);
 
 describe('client/js/launchpad.js is gone', () => {
     test('the file does not exist', () => {
@@ -310,6 +458,118 @@ describe('the shim and its callers agree, in both directions', () => {
         // find every member everywhere and pass vacuously.
         const decoy = 'const notTheShim = window.SomethingElse; notTheShim.totallyMadeUpMember();';
         expect([...membersReachedIn(decoy)]).not.toContain('totallyMadeUpMember');
+    });
+});
+
+/**
+ * Every alias in a file that is reached with a COMPUTED key.
+ *
+ * Description: the one form the resolver cannot follow, so it is
+ *   REFUSED rather than chased. `lp['showError']` could be read; `lp[k]`
+ *   cannot, because `k` is not in the file, and a resolver that closed
+ *   only the literal half would report itself complete while the other
+ *   half walked past it. Measured: zero such accesses exist today, so
+ *   refusing the form costs nothing and keeps the scanner's claim honest.
+ * Inputs: src - file text, comments stripped.
+ * Output: the alias names reached with a bracket.
+ */
+function computedAccessIn(src: string): string[] {
+    const hits: string[] = [];
+    for (const alias of aliasesIn(src)) {
+        const base = alias.replace(/\./g, '\\.');
+        const re = new RegExp(`\\b${base}\\s*(?:\\(\\s*\\))?\\??\\[`);
+        if (re.test(src)) hits.push(alias);
+    }
+    return hits;
+}
+
+describe('the scanner resolves what callers actually write', () => {
+    test('NEGATIVE CONTROL: a function that RETURNS the shim is followed', () => {
+        // THE BLIND SPOT THAT HID A REAL DEFECT. Until this was closed
+        // the resolver stopped at declarations, and `project-tree-host.ts`
+        // reaches the shim through `function legacy()`. It calls
+        // `legacy()._explainRefusedProject`, which nothing implements, so
+        // clicking a refused project row explained nothing - and the
+        // guard reported the shim complete the whole time. Asserted on a
+        // fixture rather than on that file, so this keeps testing the
+        // RESOLVER after the caller is fixed.
+        const src = [
+            'function legacy() {',
+            '    const w = win();',
+            '    return (w && w.Launchpad) || null;',
+            '}',
+            'legacy().someMember();',
+        ].join('\n');
+        expect([...membersReachedIn(src)]).toContain('someMember');
+    });
+
+    test('NEGATIVE CONTROL: a function returning the WINDOW is not the shim', () => {
+        // THE OVER-MATCH THAT WAS ACTUALLY HIT while closing the above. A
+        // fixed character window starting at one function ran into the
+        // NEXT function's body, so `running-host.ts`'s `legacy()` - which
+        // returns the WINDOW and is read as `legacy().Launchpad.showError`
+        // - registered as an alias and the scan reported members called
+        // `Launchpad`, `CloudeWeb` and `launchpad`. An over-matching guard
+        // is the same failure as a blind one, wearing the other face.
+        const src = [
+            'function win() {',
+            '    return globalThis;',
+            '}',
+            'function legacy() {',
+            '    const w = win();',
+            '    return (w && w.Launchpad) || null;',
+            '}',
+            'win().notAShimMember();',
+        ].join('\n');
+        const found = [...membersReachedIn(src)];
+        expect(found).not.toContain('notAShimMember');
+        expect(found).not.toContain('Launchpad');
+    });
+
+    test('NEGATIVE CONTROL: a DESTRUCTURED member is reached', () => {
+        // No caller writes this today - measured, zero - so this is
+        // written for the one somebody adds next, which is exactly the
+        // case a guard exists to catch rather than to discover later.
+        const src = 'const { showError, selectProject } = window.Launchpad;';
+        const found = [...membersReachedIn(src)];
+        expect(found).toContain('showError');
+        expect(found).toContain('selectProject');
+    });
+
+    test('a destructure of something else is not a destructure of the shim', () => {
+        const src = 'const { totallyMadeUpMember } = window.SomethingElse;';
+        expect([...membersReachedIn(src)]).not.toContain('totallyMadeUpMember');
+    });
+
+    test('NOBODY reaches the shim with a computed key, which is the form the scanner refuses', () => {
+        // THE STATED LIMIT, ENFORCED RATHER THAN DOCUMENTED. `lp[k]`
+        // cannot be resolved by any static rule, because `k` is not in the
+        // file. So instead of pretending to follow it, the form is banned
+        // while it is still unused: a member reached this way would be
+        // invisible to every assertion above, which is precisely the
+        // "green while measuring nothing" this guard exists to prevent.
+        const offenders: string[] = [];
+        const files = [
+            ...legacyFiles(path.join(repoRoot, 'client', 'js')),
+            ...compiledFiles(path.join(repoRoot, 'web', 'src')),
+        ];
+        for (const file of files) {
+            const src = code(fs.readFileSync(file, 'utf8'));
+            for (const alias of computedAccessIn(src)) {
+                offenders.push(`${path.relative(repoRoot, file)} via ${alias}`);
+            }
+        }
+        expect(
+            offenders,
+            'computed access on the shim cannot be scanned; reach the member by name',
+        ).toEqual([]);
+    });
+
+    test('NEGATIVE CONTROL: the computed-access detector really does detect', () => {
+        // Without this, the test above passes whether the detector works
+        // or is a function that returns an empty array.
+        expect(computedAccessIn("const lp = window.Launchpad; lp['showError']();"))
+            .toContain('lp');
     });
 });
 
