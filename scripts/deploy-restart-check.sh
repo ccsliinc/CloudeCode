@@ -163,6 +163,8 @@ dl_etime_seconds() {
 #          and that is precisely how a check comes to measure nothing.
 dl_probe_port() {
     local host="$1" port="$2" dest="$3" oldpids="$4"
+    # shellcheck disable=SC2016  # deliberately single-quoted: $PORT, $DEST
+    # and $p below are the REMOTE shell's variables, read from piped stdin.
     printf '%s\n%s\n%s\n' "$port" "$dest" "$oldpids" | dl_run_on "$host" '
         IFS= read -r PORT
         IFS= read -r DEST
@@ -285,6 +287,7 @@ print(val)
 #          available" rather than as a failure.
 dl_remote_version_file() {
     local host="$1" dest="$2"
+    # shellcheck disable=SC2016  # $DEST is the REMOTE shell's variable.
     printf '%s\n' "$dest" | dl_run_on "$host" '
         IFS= read -r DEST
         [ -f "$DEST/VERSION" ] || exit 0

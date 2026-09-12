@@ -100,12 +100,12 @@ PY
 #         test that times anything against an unbound port measures its
 #         own startup race.
 start_server() {
-    local port="$1" code="$2" ver="$3" dir="$4" pid i
+    local port="$1" code="$2" ver="$3" dir="$4" pid _
     mkdir -p "$dir"
     ( cd "$dir" && exec python3 "$WORK/fakeserver.py" "$port" "$code" "$ver" ) &
     pid=$!
     SERVERS="$SERVERS $pid"
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$port/" 2>/dev/null; then
             echo "$pid"; return 0
         fi
