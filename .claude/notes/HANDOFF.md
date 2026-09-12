@@ -58,6 +58,32 @@ says so in those words.
   lost.
 - **vitest 1340/1340 with `svelte-check` at 0 errors** is the 1.4.0 merge
   round's reading and was NOT re-measured by this pass.
+
+### The consolidated `integration/1.3.0`, measured 2026-09-12
+
+The four 1.4.0 branches (`port/113-state-dir-isolation`,
+`fix/deploy-upcheck-identity`, `fix/client-four-defects`,
+`docs/steward-1.4.0-round`) are merged. Every figure below was taken on that
+merged tree, not carried from a branch:
+
+- **pytest 7318 passed / 4 failed / 57 skipped in 284.81 s** (`-p no:randomly`).
+  The four are the SAME four named above, so the round added no new failure.
+- **node 198 suites, 198 pass**, three added by the client round.
+- **vitest 1342/1342 across 47 files; `svelte-check` 0 errors, 0 warnings,
+  402 files.**
+- **`scripts/web-build-check.sh` reads BUNDLE CURRENT**, and a rebuild of
+  `web/src` reproduced the committed `client/dist` byte for byte, so the
+  committed bundle does reflect the combined tree rather than one branch's
+  half.
+- **`tests/test_deploy_restart_check.sh` 26 assertions, 0 failed**, its
+  positive control included.
+- **Secrets: `b5de919..HEAD` adds zero gitleaks findings**, and
+  `scripts/scan_secrets.py` reads clean over 1787 files. The 4 findings in
+  history reachable from HEAD are the same 4 reachable from `b5de919`.
+- The four branches had DISJOINT file ownership, so all four merges were
+  textually clean. That is a property of the partition, NOT evidence of
+  correctness, which is why the cross-boundary checks above were run rather
+  than assumed.
 - **A FRESH WORKTREE WITH NO `config.json` MANUFACTURES A LARGE FAKE FAILURE
   SET** - 19 failed plus 26 errored, every one an app that could not start.
   `config.json` is gitignored. Copy one in before you measure anything.

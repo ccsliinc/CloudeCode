@@ -10504,3 +10504,39 @@ was true at `b5de919` and the next entries record what changed.
       not. Give a worktree a distinctive name that identifies whose it is, and
       never sweep a path you did not create. This pass committed after every
       file.
+
+## 2026-09-12 - consolidation of the four 1.4.0 branches onto integration/1.3.0
+
+- [x] Merged, in this order and for this reason: `port/113-state-dir-isolation`
+      (src), `fix/deploy-upcheck-identity` (scripts), `fix/client-four-defects`
+      (client/web), `docs/steward-1.4.0-round` (docs last, so the docs describe
+      the final state). The four branches own DISJOINT FILE SETS - no two touch
+      the same file - so the order cannot change the resulting tree at all and
+      every merge was textually clean. Order was chosen for bisectability, not
+      for correctness, and a clean merge was treated as proof of nothing.
+- [x] The named cross-boundary hazard, the committed bundle: CLEARED BY
+      MEASUREMENT. Only `fix/client-four-defects` touches `web/src`, so the
+      bundle it committed was already built from the final merged sources. A
+      rebuild on the merged tree reproduced `client/dist/app.js` and `app.css`
+      byte for byte (`git diff -- client/dist/` empty) and
+      `scripts/web-build-check.sh` reads BUNDLE CURRENT.
+- [x] The hazard NOT named in the brief, and the one that mattered: the state
+      dir change makes an explicit `CLOUDE_STATE_DIR` SUPPRESS the legacy
+      `LOG_DIRECTORY` pin. On a box where state files sat at the legacy
+      location that would silently repoint `session_metadata.json`,
+      `hook_tokens.json` and the unread store on next boot, which is the
+      410-and-token-storm failure this project has already paid for. MEASURED
+      ON LIVE BEFORE DEPLOYING: `CLOUDE_STATE_DIR=` is set but EMPTY, so
+      `state_dir_is_explicit` returns False and the legacy rung fires exactly
+      as before; and the legacy directory holds no state files at all, every
+      one of them being in the default state dir. Provable no-op on live.
+- [x] Verification on the merged tree: pytest 7318 passed / 4 failed / 57
+      skipped, the four being the known environmental four; node 198/198;
+      vitest 1342/1342; `svelte-check` 0 errors over 402 files;
+      `tests/test_deploy_restart_check.sh` 26/26; `test_cross_boundary_references.py`
+      and `test_client_cross_references.node.mjs` both green;
+      `import src.main` succeeds.
+- [x] Docs figures that MOVED were corrected rather than left standing:
+      CLAUDE.md and HANDOFF.md carried 195 node suites, 1340 vitest and 7303
+      pytest, all correctly dated to `b5de919`. The consolidated readings are
+      now recorded beside them, dated, rather than overwriting the base's.

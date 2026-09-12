@@ -2685,7 +2685,11 @@ is the kind of claim that decays quietly.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
   repo root. System python3 has no fastapi. **Current baseline, measured at
   `b5de919` on `integration/1.3.0`: 7303 passed / 4 failed / 57 skipped, out
-  of 7364 collected.** The four are environmental, they fail identically on
+  of 7364 collected. RE-MEASURED 2026-09-12 on the consolidated
+  `integration/1.3.0` with all four 1.4.0 branches merged, `-p no:randomly`:
+  7318 passed / 4 failed / 57 skipped in 284.81 s. The SAME four, so the
+  fifteen tests the state-dir round added all pass and this consolidation
+  introduced no new failure.** The four are environmental, they fail identically on
   the other party's parent `6012467`, and they are named here so you can
   recognise them rather than chase them:
   `test_cold_socket_born_at_depth_real_tmux`,
@@ -2791,16 +2795,24 @@ is the kind of claim that decays quietly.
   failure this file used to name, is FIXED and now passes. Re-measured
   2026-09-10 on the navigation-token branch: **206 tracked suites, all
   206 passing**, against 202 on its base commit in the same worktree -
-  four added, no new failures. **CURRENT, measured 2026-09-12 by running the
+  four added, no new failures. Measured 2026-09-12 by running the
   CI loop's own `for suite in tests/*.node.mjs` at `b5de919`: 195 tracked
-  suites, all 195 passing, none failing.** THE COUNT WENT DOWN AND THAT IS
-  THE MIGRATION, NOT A LOSS OF COVERAGE: the svelte slices retired node
+  suites, all 195 passing, none failing. **CURRENT, re-measured 2026-09-12
+  on the consolidated `integration/1.3.0` (the four-branch 1.4.0 round
+  merged): 198 tracked suites, all 198 passing, none failing.** The three
+  added are the client round's own
+  `test_away_bar_containing_block.node.mjs`,
+  `test_settings_panels_mount.node.mjs` and
+  `test_write_failure_is_visible.node.mjs`. THE COUNT WENT DOWN AT
+  `b5de919` AND THAT WAS THE MIGRATION, NOT A LOSS OF COVERAGE: the svelte slices retired node
   suites whose subject they deleted and re-asserted them in vitest under
   `web/src`, which the `tests/*.node.mjs` glob cannot see. Two numbers are
-  needed to describe this tree now, and the vitest half is the one this pass
-  did NOT re-measure - `1340/1340` with `svelte-check` at 0 errors is the
-  figure recorded in `.claude/TODO.md` for the 1.4.0 merge round, carried
-  here as a reading taken by that round rather than by this one. Note
+  needed to describe this tree now, and the vitest half was NOT re-measured
+  by the `b5de919` pass - it carried `1340/1340` from `.claude/TODO.md` as a
+  reading taken by an earlier round. **The consolidation round DID measure
+  it: vitest `1342/1342` across 47 files, `svelte-check` 0 errors and 0
+  warnings over 402 files, on the merged tree.** The two added cases are the
+  shim's new `showError` and `selectProject` members. Note
   `test_terminal_layout.node.mjs`
   flaked ONCE in that base run and passed in isolation seconds later on
   the same tree, so a lone failure there without a code change is not a
