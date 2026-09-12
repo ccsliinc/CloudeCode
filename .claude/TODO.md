@@ -10596,9 +10596,7 @@ APPEND ONLY. Nothing above is deleted.
       `node --print "require('./macOS/package.json').version"` before pushing.
 - [x] Published on `origin` only, marked Latest:
       https://github.com/ccsliinc/CloudeCode/releases/tag/v1.4.1
-      `adamdev` gets no published release, per the standing rule. Note the tag
-      push DOES fire adamdev's copy of the workflow, which leaves a DRAFT
-      there; a draft is not a publication.
+      `adamdev` gets no published release, per the standing rule.
 
 ### The artifact was verified, not assumed
 
@@ -10642,5 +10640,14 @@ APPEND ONLY. Nothing above is deleted.
       stamped at install time. NOT deployed and NOT restarted, on the owner's
       explicit instruction, with 19 sessions live on the box. Correcting it is
       an install, not a code change, and needs his go-ahead.
-- [ ] `adamdev` will have a DRAFT `v1.4.1` release from its own workflow run.
-      Harmless and unpublished. Leave it or delete it, his call.
+- [x] **CORRECTED, and the correction is the lesson.** This entry first said
+      the tag push would fire adamdev's copy of `release.yml` and leave a draft
+      there. That was an INFERENCE stated as a measurement and it is FALSE.
+      Measured afterwards via `gh api repos/Adoom666/CloudeCodeDev/actions/
+      workflows`: on `adamdev`, `release`, `tests` and `secret scan` are all
+      `disabled_manually`, and only the two Claude workflows are active. The
+      tag push fired NOTHING there and `gh release list` on adamdev shows no
+      `v1.4.1` at all, draft or otherwise. Its published Latest is still
+      `v0.8.1` from August, with 1.2.0 and 1.0.3x sitting as drafts, exactly as
+      HANDOFF already recorded. **Only `origin` builds a DMG**, which also
+      means origin is the only place a tag push can be verified by a build.
