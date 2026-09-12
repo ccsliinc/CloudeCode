@@ -506,3 +506,53 @@ about who may work on the issue.
 It lives in `.claude/skills/work/SKILL.md` and `.claude/skills/work/work.sh`.
 There is no `docs/adopt-adam-grab-order` file; that path has been referred to
 in passing and does not exist.
+
+## A deploy that ships commits past the tag gets a version before it ships
+**2026-09-12, scope: all repos**
+
+`v1.4.0` is an annotated tag naming `7da2901`. We then deployed twice more and
+never renumbered, so on 2026-09-12 the live install was running `2898b26`,
+**26 commits past the tag**, while `macOS/package.json` still read `1.4.0` at
+both commits. Verified before writing this: `git rev-list --count
+v1.4.0..2898b26` answers 26, and `git show <ref>:macOS/package.json` answers
+`1.4.0` at `v1.4.0` and at `2898b26` alike.
+
+Nothing was corrupted by that, and the cost was still real. The number stopped
+describing the thing it labelled, which is the same class of fault this project
+has now recorded three times. Its sharpest edge here was a cross-party one:
+pull request #108 was asking the other party to merge a branch whose version
+declaration said 1.4.0 while carrying 26 commits that 1.4.0 does not contain.
+A reviewer reading only the declaration would have been reading a false
+statement about what they were merging.
+
+### The rule
+
+**A DEPLOY THAT SHIPS COMMITS PAST THE CURRENT TAG GETS A VERSION BEFORE IT
+SHIPS, NOT AFTER.** The order is: bump the declaration, commit, tag, push the
+tag, then deploy. Not deploy first and reconcile the number later, because the
+window between the two is a window in which every surface that reads a version
+is lying, and nothing in the system can detect that it is.
+
+This is the other half of the announce rule recorded above under "Two lines
+declared 1.3.0 on the same morning". That rule stops two lines TAKING one
+number. This one stops one line SHIPPING without taking a number at all. They
+fail in opposite directions and neither catches the other's case.
+
+**The check is one command and it is cheap.** Before any deploy:
+
+```
+git describe --tags --exact-match HEAD
+```
+
+An exact match means the tree being deployed is a release and its number is
+honest. Anything else means commits have accumulated past the tag and the
+version must be cut first. It is deliberately the same question
+`src/core/version.py` asks at resolution step 3, so the deploy gate and the
+resolver cannot disagree about what "at a release" means.
+
+### What this ruling produced
+
+`v1.4.1`, a PATCH, tagged at `2898b26`: the same tree that was already
+deployed, now carrying an honest number. It renumbers and contains no code
+change of its own. `v1.4.0`, `v1.2.1` and `v1.2.0` all stand untouched as the
+documented downgrade path.
