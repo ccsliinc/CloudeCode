@@ -771,3 +771,190 @@ event name that recurs every boot.
 Suite: 3 failed / 5177 passed / 12 skipped - the 3 are the environmental
 failures CLAUDE.md already names. Node: 182/183, only the pre-existing
 `test_archive_full_page_mode.node.mjs`.
+
+## 2026-09-11 / 2026-09-12 - SIX CHECKS THAT WERE GREEN WHILE MEASURING NOTHING
+
+Six of these in two days, across the 1.4.0 release, the deploy and the
+integration round. They are collected here rather than filed one per incident
+because **the mechanism is what transfers and the mechanism is the same every
+time**: the thing being measured went ABSENT, and absent compared equal - or
+the complaint the tool did make was routed somewhere nothing was reading.
+
+Each entry below gives the mechanism, then what was measured, then the control
+that would have caught it. Every measurement in this section was re-taken on
+2026-09-12 in a throwaway directory or against `b5de919` in a clean worktree,
+not quoted from the original report. Where a claim could NOT be reproduced,
+that is said in the entry rather than smoothed over.
+
+**THE RULE UNDERNEATH ALL SIX: A GREEN CHECK MUST FIRST PROVE IT CAN GO RED.**
+Plant the thing the check exists to catch, watch it fail, then remove the
+plant. A check that has never been observed failing is unmeasured, not proven.
+This is the same discipline `StatusMap.complete`, the recreate gate's `gone`
+versus `unknown`, `db_integrity`'s `cannot_determine` versus `failed` and
+`InstanceIndex.complete` already encode in the product: a reading that did not
+happen is kept apart from a reading of nothing.
+
+### 1. A bare `dist/` in `.gitignore` swallowed the committed bundle
+
+**Mechanism.** A `.gitignore` pattern with no leading slash matches at ANY
+depth. `dist/` sits in the Python section at the top of the file, aimed at
+setuptools output, and it therefore also matched `client/dist` - the vite
+bundle that `scripts/deploy-mini.sh` ships by tar and that the mini, which
+runs no build, has no other way to obtain. An ignored bundle is not in the
+tracked file list, so it is not in the tar, so it is not on the mini. **And
+every hash check in the deploy would still have read green, because the file
+was absent on BOTH sides and absent compares equal to absent.**
+
+**Measured 2026-09-12**, in a throwaway `git init` with one file:
+
+    .gitignore = "dist/"            -> git check-ignore -v client/dist/app.js
+                                       answers .gitignore:1:dist/  (exit 0)
+    .gitignore = "dist/\n!client/dist/"
+                                    -> no output, exit 1
+
+At `b5de919` the negation is present and `git check-ignore -v
+client/dist/app.js` exits 1, so this is closed. `.gitignore` itself now
+carries a comment block recording the 2026-09-09 measurement.
+
+**The control.** `dl_remote_hashes` already had it and it is the shape to
+copy: a file it cannot hash becomes an explicit `MISSING <path>` line rather
+than vanishing from the comparison, "because absent on both sides compares
+equal and that is how a verification step silently checks nothing". The
+bundle check needed the same posture one level up - assert the file is IN the
+tracked list before comparing hashes of it.
+
+### 2. A docs drift guard whose grammar could not express its own subject
+
+**Mechanism.** `tests/test_docs_operations_chart_drift.py` holds
+`docs/session-project-operations.md` to its citations: every
+`path::symbol` in the chart must resolve. Both of its regexes matched only
+the `src|client|tests|macOS` roots and the `.py|.js` extensions. Svelte slice
+7 then deleted `client/js/launchpad.js` and moved those actions into
+`web/src/**/*.ts`. **A citation repointed at the new home would have stopped
+matching the citation grammar entirely, which does not fail - it reclassifies
+the line as ordinary prose.** The guard would have gone on passing while
+holding nothing, forever, and the document it guards would have become fiction
+with a green suite behind it.
+
+Same commit, same shape, a second guard: `test_client_called_routes_exist.py`
+scanned `client/js` only, so it went SILENT on the entire Svelte client the
+moment slice 7 landed.
+
+**Fixed in `882073e`.** Both now accept the `web` root and `.ts` / `.svelte`.
+
+**The control, and it is the load-bearing part.** Both of those assertions are
+"nothing was found", which is the exact shape that passes when the collector
+is broken. So the fix added `test_the_web_src_arm_actually_fires`, which
+plants a call in a stand-in tree and proves the arm REPORTS it, and proves a
+commented path and a test file are NOT reported. The commit records that the
+control itself was watched failing with the arm disabled. A planted bogus
+`web/` symbol and a planted bogus `web/` module were each watched turning the
+drift guard red.
+
+### 3. `rsync --no-compress` on macOS: zero bytes copied, and the failure eaten by a pipe
+
+**Mechanism, and the summary of this one that circulated was WRONG in a way
+worth correcting.** macOS ships Apple openrsync ("protocol version 29, rsync
+2.6.9 compatible"), not GNU rsync 3.x, and it does not have `--no-compress`.
+Measured 2026-09-12 on this box:
+
+    rsync --no-compress /dev/null /tmp/x
+      -> exit 1, 0 bytes on stdout, 1392 bytes on STDERR
+         ("rsync: unrecognized option `--no-compress'" plus usage)
+      -> /tmp/x does not exist. Nothing was copied.
+
+So **rsync itself did NOT exit 0 and did NOT print to stdout**; it failed
+correctly and loudly. What made it green was the PIPELINE:
+
+    rsync --no-compress ... 2>&1 | tail -1   -> exit 0
+    ( set -o pipefail; same command )        -> exit 1
+
+Without `pipefail`, a shell reports the exit status of the LAST element of a
+pipeline, which is `tail`, which always succeeds. The `2>&1 | tail` that was
+there to keep the log short is what discarded both the complaint and the exit
+code.
+
+**The control.** `set -o pipefail` in any script that pipes a command whose
+failure matters, and never read exit 0 from a command whose stderr you
+redirected into a truncating filter. Note this is also why `deploy-lib.sh`
+uses tar over ssh rather than rsync at all - see its header for the separate
+spaces-in-remote-path reason.
+
+### 4. The deploy up-check passed against the DYING OLD PROCESS
+
+**Mechanism.** `scripts/deploy-mini.sh` restarts the live server with a plain
+`kill` of the pid that owns the port, and `kill` sends SIGTERM and RETURNS
+IMMEDIATELY. The very next statement is the up-check loop:
+
+    curl -s -o /dev/null --max-time 2 "http://$HEALTH_HOST:$PORT/"
+
+That curl succeeds against ANY process answering on that host and port. For
+the milliseconds or seconds between the SIGTERM and the old process actually
+closing its listener, **the process answering is the one being killed**, so
+the check reports the deploy up while the new code has not started. The
+up-check has NO IDENTITY IN IT: it proves something answered, never that what
+answered is what was just deployed.
+
+Verified by reading `scripts/deploy-mini.sh` at `b5de919`, lines 394 to 421.
+It is the only up-check in the script and it is unchanged there.
+
+**The control.** Ask the server WHICH BUILD it is, not whether it is up: the
+app already exposes `GET /api/v1/version`, and a check that compares the
+version or a deployed-commit marker against what was just shipped cannot pass
+against the outgoing process. The same discipline the deploy already applies
+to files - it re-hashes the server dir AFTER the restart rather than trusting
+the pre-restart hash - simply was not applied to the process.
+
+### 5. The same check reported "up" with nothing listening - MECHANISM NOT ESTABLISHED
+
+Reported from the same round: the up-check printed `- up` and exited 0 while
+nothing was listening on the port.
+
+**THIS ONE IS RECORDED AS UNRESOLVED RATHER THAN EXPLAINED, DELIBERATELY.**
+The script as committed at `b5de919` cannot produce that from a closed port:
+`curl` against a closed TCP port exits 7, the `if` fails, the loop retries,
+and after 30 attempts `UP=0` takes the `say_failed` branch and `exit 1`. So
+one of the following is true and this pass could not tell which:
+
+- something OTHER than the freshly deployed server was answering
+  `http://10.0.1.150:8000/` at that moment (the Electron supervisor
+  relaunching it, or a stale process), which would make it entry 4 again
+  rather than a distinct defect, or
+- the observation came from a different check than this loop.
+
+Do not write a mechanism for this one until it has been reproduced. An
+invented explanation here would be worse than the gap, because it would close
+an investigation that has not happened. **The agent working
+`fix/deploy-upcheck-identity` owns this; fold their finding in here when it
+lands.**
+
+### 6. `tmux list-sessions` over a non-interactive ssh: "not found" read as "zero sessions"
+
+**Mechanism.** A non-interactive `ssh host 'command'` does not run the login
+shell's profile, so it gets a minimal PATH. Homebrew's `tmux` is not on it.
+With stderr suppressed, `command not found` produces empty stdout, and code
+that counts lines of output reads that as zero sessions - a positive,
+confident, wrong answer about the live host.
+
+**Measured 2026-09-12 against mac-mini-m4:**
+
+    ssh mac-mini-m4 'echo $PATH'
+      -> /usr/bin:/bin:/usr/sbin:/sbin
+    ssh mac-mini-m4 'command -v tmux'
+      -> nothing (not found)
+    ssh mac-mini-m4 'zsh -lc "command -v tmux"'
+      -> /opt/homebrew/bin/tmux
+
+**The control.** Address the binary absolutely (`/opt/homebrew/bin/tmux`) or
+force a login shell (`ssh host 'zsh -lc "..."'`), and NEVER discard stderr on
+a remote command whose empty output you intend to interpret. An empty result
+from a remote command has three causes - it worked and found nothing, the
+command does not exist, or the connection failed - and they must not collapse
+into one.
+
+### What to do with this section
+
+Two of these six were in DEPLOY tooling and two were in TEST tooling, which is
+the uncomfortable half: the checks that exist to catch mistakes are themselves
+the least-checked code in the tree, because nothing checks a checker. When you
+write or touch one, the first thing you owe it is a run in which it FAILS.
