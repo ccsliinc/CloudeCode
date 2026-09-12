@@ -14,20 +14,60 @@
 #   C. the CONSUMERS - the reconciler, the route and the client stop
 #      honouring ok=False even though the type still reports it honestly
 #
+# THE CLIENT HALF MOVED, IT DID NOT GO AWAY. Slice 7 deleted
+# `client/js/launchpad.js`, which armed this script with a file that no
+# longer exists and made it abort at mutate_arm_trap before a single
+# mutant ran. All five client claims survived the port essentially line
+# for line: `_noteListingUnknown` and `_listingReasonFromError` are now
+# `web/src/lib/sessions/listing.ts` (which says so in its own header),
+# the two fetch guards are `web/src/lib/sessions/running.ts`, and the
+# attention block and its count badge are
+# `web/src/lib/launchpad/RunningSessions.svelte`. So they are repointed
+# rather than dropped, and they are scored against VITEST files instead
+# of the deleted `tests/test_running_sessions_unknown.node.mjs`.
+#
 # Every mutated file is restored on exit, including on failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+source "$ROOT/scripts/ci/lib/mutate-web.sh"
 LISTING="$ROOT/src/core/tmux_listing.py"
 BACKEND="$ROOT/src/core/tmux_backend.py"
 MANAGER="$ROOT/src/core/session_manager.py"
-ROUTES="$ROOT/src/api/routes.py"
-LAUNCHPAD="$ROOT/client/js/launchpad.js"
+# THE ATTACHABLE ROUTE MOVED in the backend decomposition: it is no
+# longer in src/api/routes.py, which is why this mutant read
+# CANNOT_DETERMINE rather than survived. It is src/api/session_attach_routes.py now.
+ROUTES="$ROOT/src/api/session_attach_routes.py"
+WEB_LISTING="$ROOT/web/src/lib/sessions/listing.ts"
+WEB_RUNNING="$ROOT/web/src/lib/sessions/running.ts"
+WEB_SECTION="$ROOT/web/src/lib/launchpad/RunningSessions.svelte"
 
 STDERR="$ROOT/src/core/tmux_stderr.py"
 
-FILES=("$LISTING" "$STDERR" "$BACKEND" "$MANAGER" "$ROUTES" "$LAUNCHPAD")
+# The vitest files the client mutants are scored against. Named here so
+# mutate_web_files_exist can prove they are real BEFORE anything is
+# mutated: vitest exits 1 when a filter matches no file (measured), and
+# a mutation script reads non-zero as "killed", so a renamed suite would
+# silently turn every client mutant into a free pass.
+# MEASURED, NOT GUESSED. Each file below was confirmed to go RED for at
+# least one mutant here by applying the mutation and running it alone;
+# the first draft of this list named running-host.test.ts and four
+# mutants SURVIVED, which is how the list was corrected.
+# RunningSessions.behaviour.test.ts is the direct successor to the
+# deleted tests/test_running_sessions_unknown.node.mjs and says so in its
+# own header.
+WEB_TESTS=(
+  "web/src/lib/sessions/listing.test.ts"
+  "web/src/lib/sessions/running.test.ts"
+  "web/src/lib/sessions/store.test.ts"
+  "web/src/lib/launchpad/RunningSessions.behaviour.test.ts"
+)
+
+FILES=("$LISTING" "$STDERR" "$BACKEND" "$MANAGER" "$ROUTES" \
+       "$WEB_LISTING" "$WEB_RUNNING" "$WEB_SECTION")
 mutate_arm_trap "$ROOT" "${FILES[@]}"
+mutate_web_require "$ROOT"
+mutate_web_files_exist "$ROOT" "${WEB_TESTS[@]}"
 
 PY="$ROOT/venv/bin/python3"
 if [ ! -x "$PY" ]; then PY="/Users/jsugamele/Development/CloudeCode/venv/bin/python3"; fi
@@ -50,7 +90,10 @@ restore_all() {
 run_suites() {
   mutate_run "$PY" -m pytest "$ROOT/tests/test_tmux_listing.py" \
     "$ROOT/tests/test_tmux_listing_consumers.py" -q >/dev/null 2>&1 || return 1
-  mutate_run node "$ROOT/tests/test_running_sessions_unknown.node.mjs" >/dev/null 2>&1 || return 1
+  local wt
+  for wt in "${WEB_TESTS[@]}"; do
+    mutate_web_run "$ROOT" "$wt" || return 1
+  done
   return 0
 }
 
@@ -94,7 +137,9 @@ mutate "classify_listing_failure always answers zero" "$LISTING" \
 # --- A2. the backend's own could-not-evaluate branches -----------------
 mutate "missing tmux binary reports zero sessions" "$BACKEND" \
   "                TmuxListing.unavailable(
-                    REASON_TMUX_MISSING, detail=\"tmux not found on PATH\"
+                    REASON_TMUX_MISSING,
+                    detail=\"tmux not found on PATH or at any well-known \"
+                           \"install location\",
                 ),||=>||                TmuxListing.answered([]),"
 
 mutate "a timed-out probe reports zero sessions" "$BACKEND" \
@@ -117,22 +162,32 @@ mutate "the attachable route answers 200 [] on a failed probe" "$ROUTES" \
     if not listing.ok:||=>||    listing = coerce_listing(session_manager.list_attachable_sessions())
     if False:"
 
-mutate "the client latches the listing back to ok" "$LAUNCHPAD" \
-  "        st.ok = false;||=>||        st.ok = true;"
+mutate "the client latches the listing back to ok" "$WEB_LISTING" \
+  "    state.ok = false;||=>||    state.ok = true;"
 
-mutate "the attention block is never rendered" "$LAUNCHPAD" \
-  "        if (!st || st.ok) return '';||=>||        if (st || !st.ok) return '';"
+mutate "a second probe failure overwrites the first reason" "$WEB_LISTING" \
+  "    if (!state.reason) state.reason = reason || DEFAULT_REASON;||=>||    state.reason = reason || DEFAULT_REASON;"
 
-mutate "the heading reports a count it never measured" "$LAUNCHPAD" \
-  "            el.textContent = 'count could not be determined';||=>||            el.textContent = \`\${(this.runningSessions || []).length} running\`;"
+mutate "the attention block is never rendered" "$WEB_SECTION" \
+  "    const listingOk = \$derived(!listing || listing.ok !== false);||=>||    const listingOk = \$derived(true);"
 
-mutate "the failed fetch falls back to an empty list again" "$LAUNCHPAD" \
-  "            this.runningSessions = [];
-            this._noteListingUnknown('attachable',||=>||            this.runningSessions = [];
-            if (false) this._noteListingUnknown('attachable',"
+mutate "the heading reports a count it never measured" "$WEB_SECTION" \
+  "        listingOk
+            ? runningCountLabel(rows.length, t)
+            : runningCountUnavailableLabel(t),||=>||        runningCountLabel(rows.length, t),"
 
-mutate "the failed live merge is swallowed again" "$LAUNCHPAD" \
-  "            if (status !== 404) {||=>||            if (false) {"
+mutate "the failed fetch falls back to an empty list again" "$WEB_RUNNING" \
+  "        rows = [];
+        noteListingUnknown(
+            listing, 'attachable',||=>||        rows = [];
+        if (false) noteListingUnknown(
+            listing, 'attachable',"
+
+mutate "a malformed attachable body is read as an empty list" "$WEB_RUNNING" \
+  "    noteListingUnknown(listing, 'attachable', 'malformed_response', malformedDetail);||=>||    void malformedDetail;"
+
+mutate "the failed live merge is swallowed again" "$WEB_RUNNING" \
+  "        if (status !== 404) {||=>||        if (false) {"
 
 restore_all
 echo
