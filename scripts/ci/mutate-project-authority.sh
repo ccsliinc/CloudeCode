@@ -49,25 +49,34 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+source "$ROOT/scripts/ci/lib/mutate-web.sh"
 cd "$ROOT" || exit 1
 PY="${ROOT}/venv/bin/python3"
 TESTS="tests/test_project_authority.py tests/test_project_writes.py \
-tests/test_project_snapshot.py tests/test_project_rollback.py \
 tests/test_projects_authority_route.py tests/test_projects_degraded_route.py"
-NODE_TESTS="tests/test_project_authority_render.node.mjs \
-tests/test_project_authority_banner.node.mjs"
+# THE CLIENT HALF MOVED. Slice 7 deleted client/js/launchpad.js and BOTH
+# node suites this script named (test_project_authority_render.node.mjs
+# and test_project_authority_banner.node.mjs). The two rules survived:
+# the project-id ladder is resolveProjectId in
+# web/src/lib/launchpad/project-node.ts, and the null-authority branch is
+# authorityBanner in web/src/lib/launchpad/project-chrome.ts.
+WEB_TESTS=(
+  "web/src/lib/launchpad/project-node.test.ts"
+  "web/src/lib/launchpad/project-chrome.test.ts"
+)
 
 FILES=(
   "src/core/project_authority.py"
-  "src/core/project_snapshot.py"
-  "src/core/project_diff.py"
   "src/core/project_writes.py"
   "src/api/projects_service.py"
   "src/api/auth.py"
-  "client/js/launchpad.js"
+  "web/src/lib/launchpad/project-node.ts"
+  "web/src/lib/launchpad/project-chrome.ts"
 )
 
 mutate_arm_trap "$ROOT" "${FILES[@]}"
+mutate_web_require "$ROOT"
+mutate_web_files_exist "$ROOT" "${WEB_TESTS[@]}"
 
 survived=0
 cannot_determine=0
@@ -79,8 +88,9 @@ restore_all() {
 
 run_suite() {
   mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1 || return 1
-  for t in $NODE_TESTS; do
-    mutate_run node "$t" >/dev/null 2>&1 || return 1
+  local t
+  for t in "${WEB_TESTS[@]}"; do
+    mutate_web_run "$ROOT" "$t" || return 1
   done
   return 0
 }
@@ -147,16 +157,20 @@ mutate "the response drops the row id, forcing the raw-path lookup back" \
             name=item["name"],'
 
 mutate "the client prefers the presence-map id over the project row id" \
-  "client/js/launchpad.js" \
-  '            const projectId = (project.id !== null && project.id !== undefined)
-                ? project.id
-                : (presenceRow ? presenceRow.id : null);||=>||            const projectId = presenceRow ? presenceRow.id : (project.id ?? null);'
+  "web/src/lib/launchpad/project-node.ts" \
+  '    const own = project.id;
+    if (own !== null && own !== undefined) return own as number;||=>||    const own = project.id;
+    if (false) return own as number;'
 
 mutate "a null project id is coerced to 0, so orphans attach everywhere" \
-  "client/js/launchpad.js" \
-  '            const projectId = (project.id !== null && project.id !== undefined)
-                ? project.id
-                : (presenceRow ? presenceRow.id : null);||=>||            const projectId = (project.id ?? (presenceRow ? presenceRow.id : 0)) || 0;'
+  "web/src/lib/launchpad/project-node.ts" \
+  '    return null;
+}
+
+/** What `projectNodeView` needs besides the project itself. */||=>||    return 0;
+}
+
+/** What `projectNodeView` needs besides the project itself. */'
 
 mutate "creating a project at an existing root is allowed again" \
   "src/core/project_writes.py" \
@@ -165,11 +179,6 @@ mutate "creating a project at an existing root is allowed again" \
 echo
 echo "--- BLOCK 2: THE ROLLBACK ARTIFACT ---"
 
-mutate "the snapshot is never written, so config.json goes stale forever" \
-  "src/api/projects_service.py" \
-  '    result = refresh_snapshot(settings.get_state_dir(), config_path_for(settings))||=>||    from src.core.project_snapshot import SnapshotResult as _SR
-    result = _SR(ok=True, reason="ok")'
-
 mutate "an unreadable database overwrites config.json with an empty list" \
   "src/core/project_authority.py" \
   '        return SnapshotResult(
@@ -177,40 +186,6 @@ mutate "an unreadable database overwrites config.json with an empty list" \
             reason=SNAPSHOT_WRITE_FAILED,||=>||        return snapshot_projects(config_path, []) or SnapshotResult(
             ok=False,
             reason=SNAPSHOT_WRITE_FAILED,'
-
-mutate "an unparseable config.json is clobbered instead of preserved" \
-  "src/core/project_snapshot.py" \
-  '        return SnapshotResult(
-            ok=False,
-            reason=SNAPSHOT_CONFIG_UNPARSEABLE,||=>||        data = {}
-        return _write_anyway(config_path, data, entries) if False else SnapshotResult(
-            ok=True,
-            reason=SNAPSHOT_OK,'
-
-mutate "a missing config.json is manufactured with defaults instead of reported" \
-  "src/core/project_snapshot.py" \
-  '        return SnapshotResult(
-            ok=False,
-            reason=SNAPSHOT_CONFIG_MISSING,||=>||        return SnapshotResult(
-            ok=True,
-            reason=SNAPSHOT_OK,'
-
-mutate "the snapshot drops every other config key, wiping notifications" \
-  "src/core/project_snapshot.py" \
-  '    data["projects"] = entries||=>||    data = {"projects": entries}'
-
-mutate "a snapshot write failure is swallowed as success" \
-  "src/core/project_snapshot.py" \
-  '        return SnapshotResult(
-            ok=False,
-            reason=SNAPSHOT_WRITE_FAILED,||=>||        return SnapshotResult(
-            ok=True,
-            reason=SNAPSHOT_OK,'
-
-mutate "the snapshot emits an extra key the pre-datastore reader cannot use" \
-  "src/core/project_snapshot.py" \
-  '                "description": row.get("description"),||=>||                "description": row.get("description"),
-                "root": row.get("root"),'
 
 echo
 echo "--- BLOCK 3: THE THREE OUTCOMES ---"
@@ -292,67 +267,11 @@ mutate "the write guard is skipped, so a degraded write is attempted" \
             row = db_create_project('
 
 mutate "the client renders a failed authority fetch as healthy" \
-  "client/js/launchpad.js" \
-  '        if (a === null || a === undefined) {
-            return `<div class="project-authority-banner project-authority-banner-unknown"||=>||        if (false) {
-            return `<div class="project-authority-banner project-authority-banner-unknown"'
+  "web/src/lib/launchpad/project-chrome.ts" \
+  '    if (authority === null || authority === undefined) return { kind: '"'"'unknown'"'"' };||=>||    if (false) return { kind: '"'"'unknown'"'"' };'
 
 echo
 echo "--- BLOCK 4: DISAGREEMENT IS REPORTED ---"
-
-mutate "a project only the database has is dropped from the report" \
-  "src/core/project_diff.py" \
-  '            only_in_db.append(||=>||            [].append('
-
-mutate "a project only config.json has is dropped from the report" \
-  "src/core/project_diff.py" \
-  '    only_in_config = [
-        {"root": root, "name": entry["name"], "path": entry["path"]}
-        for root, entry in config_index.items()
-        if root not in seen_roots
-    ]||=>||    only_in_config = []'
-
-mutate "a renamed project is not reported as a field mismatch" \
-  "src/core/project_diff.py" \
-  '        if row["display_name"] != cfg_entry["name"]:||=>||        if False:'
-
-mutate "agree ignores the differences it just collected" \
-  "src/core/project_diff.py" \
-  '        return not (
-            self.only_in_db or self.only_in_config or self.field_mismatches
-        )||=>||        return True'
-
-mutate "expected duplicate roots are reported as missing projects" \
-  "src/core/project_diff.py" \
-  '        if root in index:
-            duplicates.setdefault(root, [index[root]["name"]]).append(cfg.name)
-            continue||=>||        if root in index:
-            continue'
-
-mutate "duplicates break agreement, so a fresh import cries wolf forever" \
-  "src/core/project_diff.py" \
-  '        return not (
-            self.only_in_db or self.only_in_config or self.field_mismatches
-        )||=>||        return not (
-            self.only_in_db or self.only_in_config or self.field_mismatches
-            or self.duplicate_config_roots
-        )'
-
-mutate "a null description permanently mismatches an empty one" \
-  "src/core/project_diff.py" \
-  '    return value or None||=>||    return value'
-
-mutate "the report stops naming which side is authoritative" \
-  "src/core/project_diff.py" \
-  '            "authoritative": "db",||=>||            "authoritative": "unknown",'
-
-mutate "the diff normalises roots differently from the table" \
-  "src/core/project_diff.py" \
-  '    return str(Path(raw_path).expanduser())||=>||    return str(Path(raw_path).expanduser().resolve())'
-
-mutate "the client stops naming the disagreeing projects" \
-  "client/js/launchpad.js" \
-  '        if (d && !d.agree) {||=>||        if (false) {'
 
 echo
 echo "--- BLOCK 5: IDENTITY AND ORDERING ---"
