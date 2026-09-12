@@ -43,6 +43,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+source "$ROOT/scripts/ci/lib/mutate-web.sh"
 cd "$ROOT" || exit 1
 PY="${ROOT}/venv/bin/python3"
 TESTS="tests/test_transcript_content_dedupe.py \
@@ -60,16 +61,26 @@ tests/test_transcript_prefix_dedupe.py"
 # `cannot_determine` rather than a false `killed`, which is the honest
 # outcome and is what that counter is for. Rebuilding this script against
 # the vitest suite is its own job.
-NODE_TESTS="tests/test_recent_sessions.node.mjs"
+# SLICE 7 took client/js/launchpad.js AND tests/test_recent_sessions.node.mjs.
+# The restart plan is web/src/lib/launchpad/recent.ts, the action is
+# recent-actions.ts, and the three conversation verdicts live in
+# client/js/labels/recent-session.js, which BOTH clients import.
+WEB_TESTS=(
+  "web/src/lib/launchpad/recent.test.ts"
+  "web/src/lib/launchpad/recent-actions.test.ts"
+)
 
 FILES=(
   "src/core/transcript_corpus_ingest.py"
   "src/core/transcript_content_dedupe.py"
   "src/core/session_restart.py"
-  "client/js/launchpad.js"
+  "web/src/lib/launchpad/recent.ts"
+  "client/js/labels/recent-session.js"
 )
 
 mutate_arm_trap "$ROOT" "${FILES[@]}"
+mutate_web_require "$ROOT"
+mutate_web_files_exist "$ROOT" "${WEB_TESTS[@]}"
 
 survived=0
 cannot_determine=0
@@ -83,8 +94,8 @@ if ! mutate_run "$PY" -m pytest $TESTS -q -p no:randomly >/dev/null 2>&1; then
   echo "BASELINE IS RED (python). Every mutant would read as killed. Refusing to run."
   exit 2
 fi
-for nt in $NODE_TESTS; do
-  if ! mutate_run node "$nt" >/dev/null 2>&1; then
+for nt in "${WEB_TESTS[@]}"; do
+  if ! mutate_web_run "$ROOT" "$nt"; then
     echo "BASELINE IS RED ($nt). Refusing to run."
     exit 2
   fi
@@ -124,8 +135,8 @@ PYEOF
     echo "killed   $name"
     return
   fi
-  for nt in $NODE_TESTS; do
-    if ! mutate_run node "$nt" >/dev/null 2>&1; then
+  for nt in "${WEB_TESTS[@]}"; do
+    if ! mutate_web_run "$ROOT" "$nt"; then
       killed=$((killed + 1))
       echo "killed   $name"
       return
@@ -135,65 +146,59 @@ PYEOF
   survived=$((survived + 1))
 }
 
+# SIX MUTANTS ARE GONE WITH THEIR MECHANISM, NOT WITH THEIR CLAIM. The
+# "RECENT/TREE button drops data-title" and "handler never reads
+# data-uuid/data-title" pairs each described a DOM ROUND TRIP: the
+# renderer wrote an attribute, a delegated click handler read it back,
+# and the two could disagree. There is no round trip now.
+# RecentSessions.svelte calls restartRecentSession(row.restart, ...) with
+# the object itself, and EndedSessionRow.svelte calls
+# host.restartEnded(row) - which is also why the ended button has no
+# data-title left to drop. The attributes that remain REPORT the value;
+# they do not carry it.
+#
+# THAT WAS CONFIRMED RATHER THAN ASSUMED: removing data-title from the
+# RECENT restart button was tried as a mutant of its own and SURVIVED the
+# whole vitest suite, which is the correct answer for an attribute
+# nothing reads, not a coverage gap. The CLAIM those six protected - the
+# uuid and the title must reach the restart - is decided in restartPlan,
+# and three of the mutants below hit it exactly there.
+
 echo "--- BLOCK 1: the identity a RESTART carries ---"
 
-mutate "the RECENT button drops data-title (the original defect, verbatim)" \
-  "client/js/launchpad.js" \
-  'class="recent-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((row.title && String(row.title).trim()) || '"'"''"'"')}"||=>||class="recent-session-restart" data-uuid="${uuid}"'
-
-mutate "the TREE ended button drops data-title" \
-  "client/js/launchpad.js" \
-  'class="ended-session-restart" data-uuid="${uuid}" data-title="${this._escapeHtml((s.title && String(s.title).trim()) || '"'"''"'"')}"||=>||class="ended-session-restart" data-uuid="${uuid}"'
-
-mutate "the RECENT handler never reads data-uuid (it was in the dataset all along)" \
-  "client/js/launchpad.js" \
-  '                sessionUuid: btn.getAttribute('"'"'data-uuid'"'"'),||=>||                sessionUuid: null,'
-
-mutate "the TREE handler never reads data-uuid" \
-  "client/js/launchpad.js" \
-  '                        sessionUuid: restart.getAttribute('"'"'data-uuid'"'"'),||=>||                        sessionUuid: null,'
-
-mutate "the RECENT handler never reads data-title" \
-  "client/js/launchpad.js" \
-  '                title: btn.getAttribute('"'"'data-title'"'"'),||=>||                title: null,'
-
-mutate "the TREE handler never reads data-title" \
-  "client/js/launchpad.js" \
-  '                        title: restart.getAttribute('"'"'data-title'"'"'),||=>||                        title: null,'
-
 mutate "the title is dropped from the unidentified-restart payload" \
-  "client/js/launchpad.js" \
-  '        if (title) payload.project_name = title;||=>||        if (false) payload.project_name = title;'
+  "web/src/lib/launchpad/recent.ts" \
+  '    if (title) payload.project_name = title;||=>||    if (false) payload.project_name = title;'
 
 echo "--- BLOCK 2: the three outcomes of a RESTART must not collapse ---"
 
 mutate "a known uuid falls through to a blank create anyway" \
-  "client/js/launchpad.js" \
-  '        if (sessionUuid) {
-            return { mode: '"'"'restart'"'"', sessionUuid, payload: null, notice: null };
-        }||=>||        if (false) {
-            return { mode: '"'"'restart'"'"', sessionUuid, payload: null, notice: null };
-        }'
+  "web/src/lib/launchpad/recent.ts" \
+  '    if (sessionUuid) {
+        return { mode: '"'"'restart'"'"', sessionUuid, payload: null, mustExplain: false };
+    }||=>||    if (false) {
+        return { mode: '"'"'restart'"'"', sessionUuid, payload: null, mustExplain: false };
+    }'
 
 mutate "a row with NO session_uuid starts a blank session in SILENCE" \
-  "client/js/launchpad.js" \
-  '                if (plan.notice) this.showError(plan.notice);||=>||                if (false) this.showError(plan.notice);'
+  "web/src/lib/launchpad/recent.ts" \
+  '    return { mode: '"'"'create_unidentified'"'"', sessionUuid: '"'"''"'"', payload, mustExplain: true };||=>||    return { mode: '"'"'create_unidentified'"'"', sessionUuid: '"'"''"'"', payload, mustExplain: false };'
 
 mutate "'none_recorded' is reported exactly like a clean resume" \
-  "client/js/launchpad.js" \
-  '        if (kind === '"'"'none_recorded'"'"') {||=>||        if (false) {'
+  "client/js/labels/recent-session.js" \
+  '    if (kind === '"'"'none_recorded'"'"') {||=>||    if (false) {'
 
 mutate "an UNKNOWN conversation verdict is treated as a resume" \
-  "client/js/launchpad.js" \
-  '        if (kind !== '"'"'resumed'"'"') {||=>||        if (false) {'
+  "client/js/labels/recent-session.js" \
+  '    if (kind !== '"'"'resumed'"'"') {||=>||    if (false) {'
 
 mutate "a missing response body reads as a clean pass" \
-  "client/js/launchpad.js" \
-  '        if (!result) {||=>||        if (false) {'
+  "client/js/labels/recent-session.js" \
+  '    if (!result) return t(RECENT_KEYS.restartUnsaid);||=>||    if (!result) return null;'
 
 mutate "a resumed restart whose lineage failed is reported as clean" \
-  "client/js/launchpad.js" \
-  '        if (result.lineage_recorded === false) {||=>||        if (false) {'
+  "client/js/labels/recent-session.js" \
+  '    if (result.row_reused === false) {||=>||    if (false) {'
 
 echo "--- BLOCK 3: the server must resolve the RIGHT row, and say which case it is ---"
 
