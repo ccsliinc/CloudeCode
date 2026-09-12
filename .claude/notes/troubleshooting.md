@@ -958,3 +958,49 @@ Two of these six were in DEPLOY tooling and two were in TEST tooling, which is
 the uncomfortable half: the checks that exist to catch mistakes are themselves
 the least-checked code in the tree, because nothing checks a checker. When you
 write or touch one, the first thing you owe it is a run in which it FAILS.
+
+## The new deploy up-check refuses on leg D with no retry (2026-09-12)
+
+**Symptom.** The first real use of `scripts/deploy-restart-check.sh`, deploying
+the consolidated `integration/1.3.0` to live, exited **3 (CANNOT DETERMINE)**:
+
+```
+confirming the old process exited - gone (was 38309)
+waiting for a new process on :8000 ...- pid 19708, 5s old (restart was 11s ago)
+  CANNOT DETERMINE: could not resolve the working directory of pid 19708.
+```
+
+**The deploy itself was fine.** Legs A, B and C all PASSED: the old pid was
+gone, a new pid held the listener, and it was 5s old against an 11s-old
+restart. Only leg D, the working directory, failed to read. Checked by hand
+about a minute later, `lsof -a -p 19708 -d cwd -Fn` resolved immediately to
+`/Users/jsugamele/Library/Application Support/cloude-code-menubar/server`,
+which is exactly `DEST_SERVER`, so leg D would have passed on a retry.
+
+**Root cause: leg D is read ONCE, inside the same probe that found the pid.**
+`dl_probe_port` emits `CWD <pid> <dir>` in the same pass that emits `PIDS` and
+`AGE`, and the caller polls only until a NEW LISTENER APPEARS. The moment a pid
+is seen the polling stops, so the cwd is read at the earliest possible instant
+in the new process's life, which is precisely when `lsof` is most likely to
+come back empty for it. The 300s `DL_NEW_LISTENER_TIMEOUT` budget is spent
+waiting for the pid and then not used for anything else.
+
+**This is the check behaving correctly and still being wrong.** Refusing rather
+than guessing is the right instinct and is why this file exists. But a refusal
+that a two second retry would have cleared is a FALSE red, and the script's own
+header argues at length that a false red on a live box is dangerous because it
+"invites a human to start re-deploying or killing processes underneath 19
+running sessions". That is the exact situation it created on its first run.
+
+**The fix is to poll legs D, E and F within the remaining budget** rather than
+taking one reading at the instant of discovery, and to distinguish "read and
+came back empty" from "could not read" the way `__OK__` already distinguishes a
+dead ssh from an empty port. NOT DONE HERE: this round only measured it. Do not
+"fix" it by dropping leg D or by treating an unresolved cwd as a pass, which
+would delete the only leg that catches a server started from the wrong
+directory.
+
+**Do not read a rc=3 here as a failed deploy.** Verify by hand in this order:
+the listener pid, its `etime`, its cwd, then `curl --fail /api/v1/health`. If
+the old pid is gone and the new one is young and in the destination, the deploy
+landed and only the check could not say so.
