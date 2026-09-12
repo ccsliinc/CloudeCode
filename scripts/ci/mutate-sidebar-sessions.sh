@@ -22,7 +22,15 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/scripts/ci/lib/mutate-trap.sh"
+source "$ROOT/scripts/ci/lib/mutate-web.sh"
 cd "$ROOT" || exit 1
+# The home screen's family pill is web/src/lib/launchpad/agent-family-pill.ts
+# since slice 7 deleted client/js/launchpad.js. Every OTHER file this
+# script arms is still a real client/js file, so only that one line moved.
+WEB_TESTS=(
+  "web/src/lib/launchpad/agent-family-pill.test.ts"
+)
+
 NODE_TESTS=(
   "tests/test_sidebar_sessions.node.mjs"
   "tests/test_session_sidebar_rows.node.mjs"
@@ -45,7 +53,7 @@ FILES=(
   "client/js/session-sidebar-fetch.js"
   "client/js/session-listing-state.js"
   "client/js/app.js"
-  "client/js/launchpad.js"
+  "web/src/lib/launchpad/agent-family-pill.ts"
   "client/css/session-sidebar.css"
   "client/css/session-sidebar-density.css"
   "client/css/styles.css"
@@ -53,6 +61,8 @@ FILES=(
 )
 
 mutate_arm_trap "$ROOT" "${FILES[@]}"
+mutate_web_require "$ROOT"
+mutate_web_files_exist "$ROOT" "${WEB_TESTS[@]}"
 
 survived=0
 cannot_determine=0
@@ -63,6 +73,9 @@ run_suites() {
   local t
   for t in "${NODE_TESTS[@]}"; do
     mutate_run node "$t" >/dev/null 2>&1 || return 1
+  done
+  for t in "${WEB_TESTS[@]}"; do
+    mutate_web_run "$ROOT" "$t" || return 1
   done
   return 0
 }
@@ -333,8 +346,10 @@ mutate "detailed's second line loses the badge, so the line is about nothing" \
                 + ''"
 
 mutate "the home screen's pill builder adds a literal tilde back, rendering ~~claude" \
-  "client/js/launchpad.js" \
-  "        const label = known ? agentFamily : 'unknown family';||=>||        const label = known ? \`~\${agentFamily}\` : 'unknown family';"
+  "web/src/lib/launchpad/agent-family-pill.ts" \
+  "        label: agentFamily as string,
+            titleKey: source === 'inferred_process'||=>||        label: \`~\${agentFamily}\` as string,
+            titleKey: source === 'inferred_process'"
 
 mutate "the stylesheet drops the guess tilde, so a guess and a fact read alike" \
   "client/css/styles.css" \
