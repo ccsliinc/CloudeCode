@@ -254,34 +254,52 @@ def _resolve_state_file_bash(install_dir: Path, filename: str, env: dict) -> str
     return result.stdout.rstrip("\n")
 
 
-def _file_case_setup(tmp_path, monkeypatch, name):
-    """Build an install whose .env declares BOTH state locations.
+def _file_case_setup(tmp_path, monkeypatch, name, declare_state_dir=True):
+    """Build an install declaring LOG_DIRECTORY, and optionally a state dir.
 
-    Description: writes a .env carrying CLOUDE_STATE_DIR and LOG_DIRECTORY
-      so the bash resolver reads them from the file exactly as it would on
-      a real install, and returns a matching Python Settings plus the
+    Description: writes a .env the bash resolver reads exactly as it would
+      on a real install, and returns a matching Python Settings plus the
       child env for bash.
+
+      ``declare_state_dir=False`` is the PRE-feat/state-directory install,
+      and it is the only shape in which the legacy fallback is still
+      supposed to fire. Naming a state directory is the operator saying
+      where state lives and it suppresses the legacy rung on the Python
+      side (``Settings.state_dir_is_explicit()``), so a case that asserts
+      the fallback MUST NOT declare one - an install that predates the
+      variable cannot have set it. Both sides then resolve the default
+      state dir from $HOME, which is tmp_path for python and for the bash
+      child alike.
     Inputs: tmp_path (Path), monkeypatch, name (str) - unique case name.
+      declare_state_dir (bool) - whether the install declares
+      CLOUDE_STATE_DIR at all.
     Output: (Settings, Path install_dir, Path new_dir, Path old_dir, dict env).
     """
     install_dir = tmp_path / f"install_{name}"
     install_dir.mkdir()
-    new_dir = tmp_path / f"new_{name}"
     old_dir = tmp_path / f"old_{name}"
-    new_dir.mkdir()
     old_dir.mkdir()
-    (install_dir / ".env").write_text(
-        f"CLOUDE_STATE_DIR={new_dir}\nLOG_DIRECTORY={old_dir}\n"
-    )
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLOUDE_STATE_DIR", raising=False)
+    kwargs = {}
+    if declare_state_dir:
+        new_dir = tmp_path / f"new_{name}"
+        new_dir.mkdir()
+        (install_dir / ".env").write_text(
+            f"CLOUDE_STATE_DIR={new_dir}\nLOG_DIRECTORY={old_dir}\n"
+        )
+        kwargs["CLOUDE_STATE_DIR"] = str(new_dir)
+    else:
+        new_dir = tmp_path / "Library" / "Application Support" / "CloudeCode"
+        new_dir.mkdir(parents=True, exist_ok=True)
+        (install_dir / ".env").write_text(f"LOG_DIRECTORY={old_dir}\n")
     settings_obj = Settings(
         _env_file=None,
         DEFAULT_WORKING_DIR=str(tmp_path / "wd"),
         LOG_DIRECTORY=str(old_dir),
-        CLOUDE_STATE_DIR=str(new_dir),
         TOTP_SECRET="testsecretnotreal",
         JWT_SECRET="testjwtnotreal",
+        **kwargs,
     )
     env = _minimal_child_env(tmp_path, os.environ.get("PATH", "/usr/bin:/bin"))
     return settings_obj, install_dir, new_dir, old_dir, env
@@ -318,7 +336,8 @@ def test_drift_state_file_only_old(tmp_path, monkeypatch, filename):
     the bash side reported the file missing and scripts/upgrade.sh aborted
     on an install whose data was perfectly fine."""
     s, install_dir, new_dir, old_dir, env = _file_case_setup(
-        tmp_path, monkeypatch, "old" + filename.replace(".", "")
+        tmp_path, monkeypatch, "old" + filename.replace(".", ""),
+        declare_state_dir=False,
     )
     (old_dir / filename).write_text("x")
     py = str(s._resolve_state_file(filename))
@@ -335,7 +354,8 @@ def test_drift_state_file_in_both(tmp_path, monkeypatch, filename):
     """Case 1: present in both - ambiguous, the NEW path wins in both
     resolvers, and the old file is left on disk untouched."""
     s, install_dir, new_dir, old_dir, env = _file_case_setup(
-        tmp_path, monkeypatch, "both" + filename.replace(".", "")
+        tmp_path, monkeypatch, "both" + filename.replace(".", ""),
+        declare_state_dir=False,
     )
     (new_dir / filename).write_text("new")
     (old_dir / filename).write_text("old")
@@ -353,7 +373,7 @@ def test_refresh_tokens_path_uses_the_fallback(tmp_path, monkeypatch):
     silently starts an EMPTY refresh_tokens.db at the new location and
     abandons every token in the old one."""
     s, _install, new_dir, old_dir, _env = _file_case_setup(
-        tmp_path, monkeypatch, "refreshfallback"
+        tmp_path, monkeypatch, "refreshfallback", declare_state_dir=False
     )
     (old_dir / "refresh_tokens.db").write_text("existing tokens")
     assert str(s.get_refresh_tokens_path()) == str(old_dir / "refresh_tokens.db")

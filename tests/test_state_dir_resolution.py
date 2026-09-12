@@ -208,17 +208,26 @@ def test_get_state_dir_uncreatable_does_not_touch_tmp(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------- #
 
 def _configure_dirs(monkeypatch, tmp_path):
-    """Point the new state dir and the old log_directory at two distinct,
-    empty tmp directories, returning both.
+    """Wire an install that NEVER named a state directory, plus an old
+    log_directory, and return both locations.
 
+    Description: the state dir is redirected by patching ``Path.home()``
+      rather than by setting ``state_dir_override``, and that is
+      load-bearing rather than stylistic. Setting ``CLOUDE_STATE_DIR`` IS
+      the operator saying where state lives, and it suppresses the legacy
+      rung - see ``Settings.state_dir_is_explicit()``. Every case below
+      describes an install that PREDATES ``CLOUDE_STATE_DIR`` and is
+      therefore incapable of having set it; declaring one here would have
+      the fixture contradict the scenario each test names.
     Inputs: monkeypatch, tmp_path (pytest fixtures).
-    Output: (new_dir, old_dir) tuple of Path.
+    Output: (new_dir, old_dir) tuple of Path - the default state dir and
+      the legacy log_directory.
     """
-    new_dir = tmp_path / "new_state"
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    new_dir = tmp_path / "Library" / "Application Support" / "CloudeCode"
     old_dir = tmp_path / "old_log_directory"
-    new_dir.mkdir()
+    new_dir.mkdir(parents=True)
     old_dir.mkdir()
-    monkeypatch.setattr(settings, "state_dir_override", str(new_dir))
     monkeypatch.setattr(settings, "log_directory", str(old_dir))
     return new_dir, old_dir
 
