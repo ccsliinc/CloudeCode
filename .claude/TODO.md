@@ -10433,8 +10433,8 @@ NOTHING`. Promoted into `CLAUDE.md` as **gotcha 11**. In brief:
       `a20091e` re-measuring their own stale test baselines.
 - [ ] **#113 MUST BE PORTED, NOT MERGED.** It edits `src/config.py` as a
       single flat file; on our line that is the 23-module `src/config/`
-      package. Confirmed from the commits: `81505bd` touches `src/config.py`
-      (+46/-?), `c860f87` touches it again. A merge would re-inflate the
+      package. Confirmed from the commits: `81505bd` changes 46 lines of
+      `src/config.py` and `c860f87` changes 12 more. A merge would re-inflate the
       package the same way `src/api/routes.py` was re-inflated.
       **Owned by the `port/113-state-dir-isolation` branch.**
 - [ ] **PROCESS NOTE, recorded factually and without accusation.** They
