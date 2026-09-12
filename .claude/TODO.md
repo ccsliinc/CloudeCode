@@ -10540,3 +10540,107 @@ was true at `b5de919` and the next entries record what changed.
       CLAUDE.md and HANDOFF.md carried 195 node suites, 1340 vitest and 7303
       pytest, all correctly dated to `b5de919`. The consolidated readings are
       now recorded beside them, dated, rather than overwriting the base's.
+
+## DONE - cut v1.4.1, 2026-09-12
+
+APPEND ONLY. Nothing above is deleted.
+
+### Why the number moved, measured before acting
+
+- [x] `v1.4.0` is an annotated tag naming `7da2901`. Live and deployed was
+      `2898b26`. `git rev-list --count v1.4.0..2898b26` answers **26**, and
+      `git show <ref>:macOS/package.json` answers `1.4.0` at BOTH refs. Every
+      figure in the brief reproduced exactly; nothing in it was wrong.
+- [x] The cross-party cost is what made it urgent rather than tidy: **PR #108
+      was asking the other party to merge a branch whose version declaration
+      said 1.4.0 while carrying 26 commits that 1.4.0 does not contain.**
+- [x] `macOS/package.json` re-confirmed as the ONLY hand-written declaration of
+      the release version, checked rather than assumed. The two other tracked
+      `package.json` files are private build workspaces carrying their own
+      independent numbers that deliberately do not track the release:
+      `web/package.json` at `0.1.0` and
+      `scripts/codemirror-vendor/package.json` at `1.0.0`. The `VERSION` file
+      is GENERATED from the tag at release time and carries a header saying so.
+      Do not "fix" either workspace to match a release number.
+
+### The classification, argued rather than assumed
+
+- [x] **PATCH.** `src/api/` is untouched across the entire range: `git diff`
+      over `src/api/` produced zero added or removed route decorators, so no
+      endpoint was added, removed or reshaped. 33 files, +5375 / -133.
+- [x] Steelmanned the MINOR case and rejected it. The boot gate adds no
+      capability a user can invoke, configure or observe as a new thing: no
+      config key, no flag, no endpoint, and all ten refusal rungs fall back to
+      the pre-1.4.0 behaviour. The restored shim members REPAIR controls 1.4.0
+      already advertised and silently broke; restoring an advertised control is
+      a fix, not a feature.
+- [x] This line's own precedent is MORE permissive, not less: `v1.2.1` was a
+      patch and carried a new user-visible feature (durable mute), a large
+      performance change and a removed gesture (double-click rename). 1.4.1's
+      surface is strictly smaller.
+
+### What was cut
+
+- [x] `d4f76d4` on `integration/1.3.0`: `macOS/package.json` 1.4.0 to 1.4.1,
+      plus one appended `docs/DECISIONS.md` entry. Staged by name, gitleaks
+      pre-commit hook ran clean, no `--no-verify`.
+- [x] Pushed **adamdev first, then origin**, each verified by its own
+      `git ls-remote` rather than by the push printing success. Both read
+      `d4f76d406372a09e636731329786196e726fe899`.
+- [x] Annotated tag `v1.4.1`, object `42d3f5f`, naming `d4f76d4`. Pushed to
+      both, verified per remote with `git ls-remote --tags`.
+      `v1.4.0` (`4936413`), `v1.2.1` (`54d95d1`) and `v1.2.0` (`f4ede4c`) all
+      re-read after the push and UNCHANGED.
+- [x] `.github/workflows/release.yml` run **34699953914**, success in 95 s.
+      Its tag-versus-package.json guard passed, which was pre-run locally with
+      `node --print "require('./macOS/package.json').version"` before pushing.
+- [x] Published on `origin` only, marked Latest:
+      https://github.com/ccsliinc/CloudeCode/releases/tag/v1.4.1
+      `adamdev` gets no published release, per the standing rule. Note the tag
+      push DOES fire adamdev's copy of the workflow, which leaves a DRAFT
+      there; a draft is not a publication.
+
+### The artifact was verified, not assumed
+
+- [x] Downloaded the published asset and computed its hash here rather than
+      quoting the API's own `digest` field: sha256
+      `4fc72fe86ebbc037c74253539cd0164c2474fe231ecccfb86ef78ab1399a6199`,
+      126,619,457 bytes. The two agree.
+- [x] Mounted the DMG: `CFBundleShortVersionString` and `CFBundleVersion` both
+      read **1.4.1**, `codesign --verify --deep --strict` passes, signature
+      ad-hoc, identifier `com.cloudecode.menubar`. **The workflow's own guard
+      compares the tag to package.json at SOURCE and never opens the built
+      bundle, so this is a check it does not make.**
+
+### The notes for his agent, which is the half that mattered
+
+- [x] **PR #108 description rewritten** for 1.4.1 with a "read this first if you
+      saw this PR before 2026-09-12" block at the top explaining the renumber,
+      that the contents did not change, and the patch reasoning.
+- [x] **The six-path conflict table survived, and that was PROVEN twice.**
+      Fingerprinted its sha256 before editing, re-fingerprinted after, then
+      read the body BACK FROM GITHUB and fingerprinted the live copy:
+      `c47f2ac382d0d632cc31ec82238602ed5430a4f71eddc791c6646692312bc17b` all
+      three times.
+- [x] **The conflict SET was re-measured against his `master` at `f1732d5`
+      after the version commit**, with `git merge-tree --write-tree
+      --name-only`, and is byte for byte identical to the pre-commit baseline.
+      `src/config.py` is still the modify/delete whose default leaves HIS file
+      in the tree. `macOS/package.json` does NOT become a seventh conflict: he
+      last touched it at the merge base `6012467`, so git takes ours, and
+      resolving the merge tree shows the merged blob reads `"version": "1.4.1"`.
+- [x] **#107 comment posted**, short and self-contained, assuming zero relay:
+      https://github.com/Adoom666/CloudeCodeDev/issues/107#issuecomment-5646589751
+- [x] **`docs/DECISIONS.md`** appended (never rewritten) with the dated ruling.
+
+### Open, deliberately not acted on
+
+- [ ] **The version string on live still reads 1.4.0.** `2898b26` is `d4f76d4`
+      minus the version bump, so live's SERVER code is 1.4.1's and no behaviour
+      is missing; what is stale is the string, because the installed Electron
+      bundle is the 1.4.0 DMG and `resolve_version` reads the `VERSION` file
+      stamped at install time. NOT deployed and NOT restarted, on the owner's
+      explicit instruction, with 19 sessions live on the box. Correcting it is
+      an install, not a code change, and needs his go-ahead.
+- [ ] `adamdev` will have a DRAFT `v1.4.1` release from its own workflow run.
+      Harmless and unpublished. Leave it or delete it, his call.

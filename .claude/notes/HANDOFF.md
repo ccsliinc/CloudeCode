@@ -27,15 +27,15 @@ operational half: where things run, how to deploy, and what will lie to you.
 ## 0. STATE AS OF 2026-09-12 - read this before section 8
 
 Measured on 2026-09-12 against git, the GitHub API and the code at `b5de919`,
-in a clean worktree. Where something is REPORTED rather than measured here it
-says so in those words.
+in a clean worktree, then UPDATED LATER THE SAME DAY for the 1.4.1 cut. Where
+something is REPORTED rather than measured here it says so in those words.
 
 ### The tree
 
 | Thing | Value |
 |---|---|
-| Working branch | `integration/1.3.0`, tip `b5de919` on `origin` AND `adamdev` |
-| Released tag | `v1.4.0`, an ANNOTATED tag naming `7da2901`, one commit BEFORE the tip |
+| Working branch | `integration/1.3.0`, tip `d4f76d4` on `origin` AND `adamdev`, verified by `git ls-remote` on each separately |
+| Released tag | `v1.4.1`, an ANNOTATED tag (object `42d3f5f`) naming `d4f76d4`, which IS the tip. `v1.4.0` names `7da2901`, 27 commits back. |
 | Backend | `src/config.py` and `src/models.py` are GONE. `src/config/` is 23 modules, `src/models/` is 17, `src/api/routes.py` is 106 lines across 62 modules under `src/api`. 378 python files under `src/`. |
 | Frontend | HYBRID, and it is not close to finished. 137 files under `web/src` (26 `.svelte`, 110 `.ts`, `app.css`) against 221 under `client/js`, all of them `.js`. `client/index.html` still loads 155 `<script>` tags by hand. `client/js/launchpad.js` is deleted. `client/dist/app.js` and `app.css` are COMMITTED. |
 | Still vanilla | the terminal, the toasts, the sidebar row menus, the restart picker, the settings panels, the archive screens |
@@ -90,9 +90,27 @@ merged tree, not carried from a branch:
 
 ### The release
 
-Published on `origin` (ccsliinc/CloudeCode), marked Latest, 2026-09-11T22:29:38Z,
-one asset `Cloude.Code-1.4.0-arm64.dmg` at 126,619,315 bytes with its sha256 in
-the body. `v1.2.0` and `v1.2.1` remain published as the downgrade path.
+**CURRENT: `v1.4.1`, published on `origin` (ccsliinc/CloudeCode), marked Latest,
+2026-09-12T14:43:36Z.** One asset `Cloude.Code-1.4.1-arm64.dmg` at 126,619,457
+bytes, sha256 `4fc72fe86ebbc037c74253539cd0164c2474fe231ecccfb86ef78ab1399a6199`
+in the body. That hash was computed here by downloading the published asset and
+running `shasum -a 256` on it, not copied from the API's own digest field, and
+the mounted bundle reports `CFBundleShortVersionString` 1.4.1 with a valid
+ad-hoc signature. Built by `.github/workflows/release.yml` run `34699953914`,
+success in 95 s, tag-versus-package guard included.
+
+**WHY 1.4.1 EXISTS.** `v1.4.0` names `7da2901`; we deployed twice after tagging
+and never renumbered, so `2898b26` was live while `macOS/package.json` still
+read 1.4.0 twenty six commits later, and PR #108 was asking the other party to
+merge a branch declaring a version it did not contain. `d4f76d4` bumps the
+declaration and appends the ruling to `docs/DECISIONS.md`; it changes no code.
+The rule now on record: A DEPLOY THAT SHIPS COMMITS PAST THE CURRENT TAG GETS A
+VERSION BEFORE IT SHIPS, NOT AFTER. Check is
+`git describe --tags --exact-match HEAD` before any deploy.
+
+PRIOR: `v1.4.0` published 2026-09-11T22:29:38Z, one asset
+`Cloude.Code-1.4.0-arm64.dmg` at 126,619,315 bytes. It, `v1.2.0` and `v1.2.1`
+all remain published and untouched as the downgrade path.
 `adamdev` has NO PUBLISHED RELEASE ON THIS LINE - its 1.2.0 and 1.0.3x are
 drafts and the published Latest there is still `v0.8.1` from August. The
 published body carries one wrong figure, `routes.py` "1160 lines to 303",
@@ -106,6 +124,17 @@ v1.2.0 onward live in the GitHub release body. Do not start a second copy.
 REPORTED by the owner 2026-09-11: deployed to the live mini, running, 19
 sessions intact through four restarts. NOT re-verified by the documentation
 pass, which does not touch the live host.
+
+**LIVE IS AT `2898b26`, WHICH IS `d4f76d4` MINUS THE VERSION BUMP, SO ITS SERVER
+CODE IS 1.4.1's AND ITS REPORTED VERSION IS NOT.** `d4f76d4` edits only
+`macOS/package.json` and `docs/DECISIONS.md`, neither of which the running
+python server executes, so nothing on live is missing any 1.4.1 behaviour. What
+IS stale is the string: the installed Electron bundle is the 1.4.0 DMG, and
+`resolve_version` reads the generated `VERSION` file stamped at install time, so
+`GET /api/v1/version` on live will answer `1.4.0` until the 1.4.1 DMG is
+installed. The 1.4.1 cut was made WITHOUT deploying, on the owner's explicit
+instruction, because 19 sessions were live on the box. Correcting that string is
+an install, not a code change.
 `./scripts/deploy-mini.sh --verify-only --target live` is what re-checks it,
 and note the trap in that flag which section 8 already records: a bare
 `--verify-only` checks the v11 staging target and is not a verification of
@@ -113,12 +142,22 @@ live at all.
 
 ### What will lie to you right now
 
-- **The deploy up-check has no identity in it.** `deploy-mini.sh` kills the
-  old pid and then curls `http://10.0.1.150:8000/`, which succeeds against ANY
-  process answering there. `kill` returns immediately, so the first curl can
-  land on the DYING OLD PROCESS. It proves something answered, never that the
-  build you just shipped is what answered. Being fixed on
-  `fix/deploy-upcheck-identity`.
+- **FIXED, and kept here so nobody re-reports it.** The deploy up-check used
+  to have no identity in it: `deploy-mini.sh` killed the old pid then curled
+  `http://10.0.1.150:8000/`, which succeeds against ANY process answering
+  there, and `kill` returns immediately so the first curl could land on the
+  DYING OLD PROCESS. `fix/deploy-upcheck-identity` merged as `b0fb9f0` and
+  shipped in `v1.4.1`. It now records the port holders BEFORE the kill and
+  proves the old pids are gone, a new pid holds the port, that process is
+  younger than the restart on the REMOTE clock and running in the directory the
+  deploy verified, it answers `/api/v1/health` 2xx, and the listener is
+  unchanged across that request. An expired budget is a failure, never a fall
+  through. `tests/test_deploy_restart_check.sh` drives it against real
+  listeners, 26 assertions with a positive control.
+- **`GET /api/v1/version` on live answers `1.4.0` and the code there is
+  `v1.4.1`.** See the Deployed block above. The bundle is what carries the
+  string, and the bundle has not been swapped. Do not read that as a failed
+  deploy.
 - **`tmux -L cloude list-sessions` over a plain `ssh host 'cmd'` reports zero
   sessions on a box with nineteen.** A non-interactive ssh gets
   `PATH=/usr/bin:/bin:/usr/sbin:/sbin` (measured 2026-09-12 against the mini),
