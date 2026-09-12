@@ -2,7 +2,13 @@
 
 Written 2026-09-07, UPDATED 2026-09-08 (late round, `07bbbb8..54731f9`,
 closed out and confirmed live), UPDATED AGAIN 2026-09-09 (status-light and
-housekeeping round, `922e400..dfddbdc`, closed out and confirmed live).
+housekeeping round, `922e400..dfddbdc`, closed out and confirmed live), and
+UPDATED AGAIN 2026-09-12 for the 1.4.0 release, deploy and integration round.
+
+**READ SECTION 0 FIRST. IT SUPERSEDES SECTION 8.** Section 8 describes the
+tree as it stood on 2026-09-09 at `dfddbdc`, which is four days and one
+release out of date; it is kept below because its commit tables are history,
+not because its "CURRENT GIT STATE" heading is still true.
 Re-scoped from
 `Infrastructure/.claude/notes/handoff-2026-09-06-cloudecode-migration.md`, which
 was written for someone continuing the MacBook-to-mini MIGRATION. This one is
@@ -18,18 +24,115 @@ operational half: where things run, how to deploy, and what will lie to you.
 
 ---
 
+## 0. STATE AS OF 2026-09-12 - read this before section 8
+
+Measured on 2026-09-12 against git, the GitHub API and the code at `b5de919`,
+in a clean worktree. Where something is REPORTED rather than measured here it
+says so in those words.
+
+### The tree
+
+| Thing | Value |
+|---|---|
+| Working branch | `integration/1.3.0`, tip `b5de919` on `origin` AND `adamdev` |
+| Released tag | `v1.4.0`, an ANNOTATED tag naming `7da2901`, one commit BEFORE the tip |
+| Backend | `src/config.py` and `src/models.py` are GONE. `src/config/` is 23 modules, `src/models/` is 17, `src/api/routes.py` is 106 lines across 62 modules under `src/api`. 378 python files under `src/`. |
+| Frontend | HYBRID, and it is not close to finished. 137 files under `web/src` (26 `.svelte`, 110 `.ts`, `app.css`) against 221 under `client/js`, all of them `.js`. `client/index.html` still loads 155 `<script>` tags by hand. `client/js/launchpad.js` is deleted. `client/dist/app.js` and `app.css` are COMMITTED. |
+| Still vanilla | the terminal, the toasts, the sidebar row menus, the restart picker, the settings panels, the archive screens |
+| DB schema | v26 (`src/core/db_models.py:53`) |
+| Big files, re-measured | `session_manager.py` 7,662, `tmux_backend.py` 3,076, `terminal.js` 2,763, `app.js` 1,586, `src/config/settings.py` 620 |
+
+### The baselines you should be able to reproduce
+
+- **pytest at `b5de919`: 7303 passed / 4 failed / 57 skipped, of 7364
+  collected.** The four are environmental and fail identically on the other
+  party's parent `6012467`: `test_cold_socket_born_at_depth_real_tmux`,
+  `test_cold_socket_options_real_tmux`, `test_tmux_launch_batching_real_tmux`,
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`.
+- **Without a tmux socket**, `-p no:randomly -m "not real_tmux"` reads
+  **6957 passed / 1 failed / 57 skipped / 349 deselected in 193 s**, measured
+  by this pass. 6957 + 1 + 57 + 349 = 7364.
+- **node: 195 suites, 195 pass**, measured by this pass with the CI loop's own
+  `for suite in tests/*.node.mjs`. It was 206 on 2026-09-10; the count fell
+  because svelte slices moved suites into vitest, not because coverage was
+  lost.
+- **vitest 1340/1340 with `svelte-check` at 0 errors** is the 1.4.0 merge
+  round's reading and was NOT re-measured by this pass.
+- **A FRESH WORKTREE WITH NO `config.json` MANUFACTURES A LARGE FAKE FAILURE
+  SET** - 19 failed plus 26 errored, every one an app that could not start.
+  `config.json` is gitignored. Copy one in before you measure anything.
+
+### The release
+
+Published on `origin` (ccsliinc/CloudeCode), marked Latest, 2026-09-11T22:29:38Z,
+one asset `Cloude.Code-1.4.0-arm64.dmg` at 126,619,315 bytes with its sha256 in
+the body. `v1.2.0` and `v1.2.1` remain published as the downgrade path.
+`adamdev` has NO PUBLISHED RELEASE ON THIS LINE - its 1.2.0 and 1.0.3x are
+drafts and the published Latest there is still `v0.8.1` from August. The
+published body carries one wrong figure, `routes.py` "1160 lines to 303",
+which is neither tag's count of that file; everything else in it reproduces.
+
+**`RELEASE-NOTES.md` in this repo stops at `## v1.0.9`.** Release notes for
+v1.2.0 onward live in the GitHub release body. Do not start a second copy.
+
+### Deployed
+
+REPORTED by the owner 2026-09-11: deployed to the live mini, running, 19
+sessions intact through four restarts. NOT re-verified by the documentation
+pass, which does not touch the live host.
+`./scripts/deploy-mini.sh --verify-only --target live` is what re-checks it,
+and note the trap in that flag which section 8 already records: a bare
+`--verify-only` checks the v11 staging target and is not a verification of
+live at all.
+
+### What will lie to you right now
+
+- **The deploy up-check has no identity in it.** `deploy-mini.sh` kills the
+  old pid and then curls `http://10.0.1.150:8000/`, which succeeds against ANY
+  process answering there. `kill` returns immediately, so the first curl can
+  land on the DYING OLD PROCESS. It proves something answered, never that the
+  build you just shipped is what answered. Being fixed on
+  `fix/deploy-upcheck-identity`.
+- **`tmux -L cloude list-sessions` over a plain `ssh host 'cmd'` reports zero
+  sessions on a box with nineteen.** A non-interactive ssh gets
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin` (measured 2026-09-12 against the mini),
+  which has no tmux; `zsh -lc` finds `/opt/homebrew/bin/tmux`. With stderr
+  suppressed, "command not found" is indistinguishable from an empty list.
+- **Five more of that family**, with their mechanisms and their controls, are
+  in `.claude/notes/troubleshooting.md` under the 2026-09-11 / 2026-09-12
+  section, and the rule they produced is gotcha 11 in `CLAUDE.md`: A GREEN
+  CHECK MUST FIRST PROVE IT CAN GO RED.
+- **A merged name that moved answers falsy rather than raising.** Four found
+  by the sweep before the release, two more found on live after it
+  (`websocket.py`, `session_change_notice.py`, both fixed in `c725905`). That
+  is gotcha 12.
+
+### Working alongside other agents
+
+- **Two agents sharing one session scratchpad, and one deleted the other's git
+  worktree mid-task.** Uncommitted work in it was gone. COMMIT EARLY AND
+  OFTEN; do not hold work in a worktree. Name a worktree distinctively so it
+  is obvious whose it is, and never sweep a path you did not create.
+- As of this writing three agents work `src/**`, `client/**` + `web/**` and
+  `scripts/**` in parallel with this one, which owns `CLAUDE.md`, `docs/**`
+  and `.claude/**`. `.gitignore` contains `.claude/*`, so anything under
+  `.claude/notes/` must be `git add -f` to be tracked. That is the existing
+  convention, not a workaround.
+- Push order is `adamdev` then `origin`. **NEVER `upstream`.** Verify each
+  with `git ls-remote` rather than trusting the push output.
+
 ## 1. WHERE THINGS PHYSICALLY ARE
 
 | Thing | Location |
 |---|---|
-| Source checkout (authoritative) | `/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development/CloudeCode`, branch `v1.1` |
+| Source checkout (authoritative) | `/Users/jsugamele/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development/CloudeCode`. The working branch is `integration/1.3.0`, tip `b5de919` on both remotes as of 2026-09-12. `v1.1` was the branch this table named on 2026-09-09 and it is not where work happens any more. FETCH BEFORE YOU READ THE LOCAL BRANCH: on 2026-09-12 the local `integration/1.3.0` was still at `57d1c32` while both remotes were at `b5de919`. |
 | Live production server dir | mini: `~/Library/Application Support/cloude-code-menubar/server` |
 | Live production app bundle | mini: `/Applications/Cloude Code.app/Contents/Resources` |
 | Live URL | `http://10.0.1.150:8000` |
 | Staging (v1.1) | port 8001, state `~/Library/.../CloudeCode-v1.1`, tmux socket `cloude-v11`. Disposable. |
 | Deploy script | `scripts/deploy-mini.sh`; `--target live` is REQUIRED, the default target is v11 |
 | Live tmux socket | `cloude` |
-| Database | `~/Library/Application Support/CloudeCode/cloude.db`, schema v23, ~4.5 GB (4.68 GB with a 195 MB WAL as measured 2026-09-05) |
+| Database | `~/Library/Application Support/CloudeCode/cloude.db`. Schema is **v26** in the code at `b5de919` (`src/core/db_models.py:53`); this table said v23 on 2026-09-09. Size was ~4.5 GB measured 2026-09-05 and **5.4 GB measured 2026-09-11** by the boot integrity work, so it is growing about a gigabyte a week - re-measure rather than quoting either. |
 | Archive corpus database | mini: `/Users/jsugamele/ClaudeArchive/`, 21 GB, NOT readable by the production app |
 | Wrapper scripts (rendered) | `~/Library/Application Support/CloudeCode/agent_wrapper_scripts/<id>.zsh` |
 
@@ -618,7 +721,16 @@ collection errors that look exactly like pre-existing code bugs - seed it from
 
 ---
 
-## 8. CURRENT GIT STATE
+## 8. GIT STATE AS OF 2026-09-09 - SUPERSEDED BY SECTION 0, KEPT AS HISTORY
+
+**Everything in this section is a true record of 2026-09-09 and a false
+description of today.** The branch, the HEAD, the file sizes in its open list
+and the "what to do first next session" order were all overtaken by the 1.4.0
+release. Read section 0 for the current state and use this section only for
+its commit tables. Two of its file-size figures are worth naming because they
+are the ones most likely to be quoted by accident: `routes.py` is 106 lines
+now, not 4,022, and `launchpad.js` DOES NOT EXIST - the svelte migration
+deleted it.
 
 Branch `v1.1`, pushed to `origin/v1.1` (git-workflow protocol followed:
 `git pull --rebase` then push, no force). HEAD is `dfddbdc`, CONFIRMED
