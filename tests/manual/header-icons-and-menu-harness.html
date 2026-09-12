@@ -5,6 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>header icons and menu harness</title>
 <!--
+  SLICE 7 REWRITE. `client/js/launchpad.js` is gone and there is no
+  `Launchpad` constructor to `new`. The shell is a Svelte component now
+  and this harness drives it through the SAME two entry points the app
+  itself uses, which is the whole reason this file can still be trusted:
+  `CloudeWeb.launchpad.mountHomeScreen()` is what `Launchpad.init()`
+  became, and `CloudeWeb.launchpad.loadHomeScreen()` is what
+  `Launchpad.loadProjects()` became. Nothing here reimplements a
+  renderer, exactly as before.
+
+  THE READINESS SIGNAL HAD TO CHANGE, AND THAT IS THE REAL HAZARD.
+  `await lp.loadProjects()` resolved AFTER the render, because the render
+  was a synchronous innerHTML write inside it. The bundle is a DEFERRED
+  module, the mount functions return void, and each component fetches its
+  own data as it mounts - so awaiting the load no longer proves anything
+  was painted. A harness that measured at that point would race the thing
+  it measures.
+
+  Worse, it would race it SILENTLY IN ONE DIRECTION. A pixel assertion of
+  the shape "the collapsed element has height 0" PASSES against a page
+  that rendered nothing at all, which is the false green this whole
+  family of harnesses exists to prevent. So readiness is a POSITIVE
+  signal - a real node, painted, with a non-zero box - and a timeout is
+  reported as `__homeReadyError` rather than left to look like a clean
+  zero. The consumer asserts `__homeReady === true` before it trusts a
+  single number below it.
+-->
+<!--
   fix/header-icons-and-menu - MEASURE IT, DO NOT ASSERT IT.
 
   Same pattern as tests/manual/home-mechanics-geometry-harness.html: loads
@@ -34,6 +61,7 @@
   Poll window.__headerReady before measuring.
 -->
 <link rel="stylesheet" href="../../client/css/styles.css" />
+<link rel="stylesheet" href="../../client/dist/app.css" />
 <link rel="stylesheet" href="../../client/css/home-bar.css" />
 <link rel="stylesheet" href="../../client/css/session-sidebar.css" />
 <link rel="stylesheet" href="../../client/css/session-theme-tint.css" />
@@ -51,7 +79,9 @@
 <script src="../../client/js/session-status-ui.js"></script>
 <script src="../../client/js/session-row-actions.js"></script>
 <script src="../../client/js/session-theme-tint.js"></script>
-<script src="../../client/js/launchpad.js"></script>
+<!-- The Svelte bundle. A COMMITTED build artifact, so this harness
+     needs no build step; see scripts/web-build-check.sh. -->
+<script type="module" src="../../client/dist/app.js"></script>
 <script>
 /**
  * The fixture: four running sessions covering every (ownership,
@@ -251,6 +281,56 @@ window.__setDocked = function (on) {
     document.body.classList.toggle('session-sidebar-pinned', !!on);
 };
 
+
+/**
+ * Wait until a predicate is true, or give up and say so.
+ *
+ * Description: polls on rAF where the tab is painting and on a timer
+ *   where it is not, so a backgrounded tab cannot hang this forever -
+ *   the bare-rAF-await trap this codebase already paid for once.
+ * Inputs: predicate (function) - returns truthy when ready.
+ *   timeoutMs (number) - how long to wait before refusing.
+ * Outputs: Promise<boolean> - true when the predicate passed, false on
+ *   timeout. NEVER throws, so a caller records a refusal rather than
+ *   dying half way through building its report.
+ * Example: await waitUntil(() => !!window.CloudeWeb, 5000)
+ */
+function waitUntil(predicate, timeoutMs) {
+    return new Promise((resolve) => {
+        const deadline = Date.now() + timeoutMs;
+        const tick = () => {
+            let ok = false;
+            try { ok = !!predicate(); } catch (err) { ok = false; }
+            if (ok) { resolve(true); return; }
+            if (Date.now() > deadline) { resolve(false); return; }
+            setTimeout(tick, 25);
+        };
+        tick();
+    });
+}
+
+/**
+ * Has a container actually PAINTED something, not merely been mounted.
+ *
+ * Description: a mounted component with no rows and a component that
+ *   never mounted are the same empty container to `querySelector`, and
+ *   they are not the same fact. This asks for a real child with a real
+ *   box, which is the only form of the question a pixel harness may
+ *   trust.
+ * Inputs: selector (string) - the container. childSelector (string) -
+ *   what a painted container must contain.
+ * Outputs: boolean.
+ * Example: hasPainted('#project-list', '.project-node')
+ */
+function hasPainted(selector, childSelector) {
+    const host = document.querySelector(selector);
+    if (!host) return false;
+    const child = host.querySelector(childSelector);
+    if (!child) return false;
+    const r = child.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+}
+
 (async () => {
     const html = await (await fetch('../../client/index.html')).text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -284,11 +364,25 @@ window.__setDocked = function (on) {
         const cfg = document.getElementById('configEditorBtn');
         if (cfg) cfg.classList.remove('hidden');
     }
-    const lp = new Launchpad();
+    const bundled = await waitUntil(() => window.CloudeWeb
+        && window.CloudeWeb.launchpad
+        && typeof window.CloudeWeb.launchpad.mountHomeScreen === 'function', 10000);
+    window.__bundleLoaded = bundled;
+    if (!bundled) {
+        window.__homeReadyError = 'client/dist/app.js never exposed CloudeWeb.launchpad';
+        window.__headerReady = false;
+        return;
+    }
+    const lp = window.CloudeWeb.launchpad;
     window.__lp = lp;
-    lp.init();
-    await lp.loadProjects();
-    await new Promise((r) => setTimeout(r, 60));
+    lp.mountHomeScreen();
+    await lp.loadHomeScreen();
+    const painted = await waitUntil(() => hasPainted('#launchpad-screen', '.launchpad-container'), 10000);
+    if (!painted) {
+        window.__homeReadyError = 'nothing painted within 10s: the home screen never mounted a container';
+        window.__headerReady = false;
+        return;
+    }
     window.__headerReady = true;
 })();
 </script>
