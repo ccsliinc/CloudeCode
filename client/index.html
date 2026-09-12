@@ -949,6 +949,14 @@
          that defines what one means. clipboard.js raises it and
          terminal.js retires it, both at runtime, both behind a guard. -->
     <script src="/static/js/attachment-toast.js"></script>
+    <!-- The visible half of a failed write. A refusal used to reach
+         `#session-sidebar-live` only, which the stylesheet clips to a 1px
+         box, so a screen reader heard it and nobody else did. This raises
+         the app's own toast for the same sentence. Must load AFTER
+         toast.js (it reads ToastManager.WRITE_FAILED_KIND back off the
+         registry) and BEFORE session-sidebar-group-actions.js, which is
+         its first caller. -->
+    <script src="/static/js/write-failure-notice.js"></script>
     <!-- The status LED component. Pure, no dependencies, no DOM access -
          it only builds a string. MUST load BEFORE session-status-ui.js,
          which renders every light in the app through it. -->

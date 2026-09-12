@@ -28,6 +28,7 @@
  * slices. The shim is the honest size of what is left.
  */
 import { derivedDisplayName } from '../sessions/session-label';
+import type { ProjectRow } from '../sessions/types';
 import { sessionStore } from '../sessions/store.svelte';
 import { hostWindow } from '../sessions/env';
 import type { SessionRecord } from '../sessions/types';
@@ -54,6 +55,35 @@ export interface LaunchpadShim {
     /** `client/js/session-sidebar-clicks.js:320` - the stored rows. */
     readonly sessionRecords: SessionRecord[];
     /**
+     * THE ONE MEMBER THE FIRST DERIVATION MISSED, and it went unnoticed
+     * because every reader of it degrades QUIETLY.
+     * `web/src/lib/launchpad/recent-actions.ts` (archive, fork and
+     * restart), `web/src/lib/launchpad/running-host.ts` and
+     * `client/js/session-row-menu-actions.js` all reach for
+     * `window.Launchpad.showError`, and all three fall back to
+     * `console.error` when it is absent. Measured in a real browser
+     * against the shipped bundle: a refused archive produced
+     * "CloudeWeb: no error surface for: failed to archive session: ..."
+     * in the console and ZERO cards, ZERO toasts and nothing in any live
+     * region. A write that failed looked exactly like a click that did
+     * nothing.
+     *
+     * It forwards to the same `status-report.showError` the compiled
+     * tree uses, so there is one error card component and the legacy
+     * global cannot drift from it.
+     */
+    showError(message: string): void;
+    /**
+     * THE SECOND MEMBER THE FIRST DERIVATION MISSED, found the same way
+     * and by the same widened guard. `client/js/session-row-menu-actions.js`
+     * (`runNewInFolder`, the row menu's "new session in this folder")
+     * bails outright without it: `typeof lp.selectProject !== 'function'`
+     * was true on every open, so that action did nothing at all and said
+     * "the launcher did not load" - through `showError`, which was also
+     * missing, so even the refusal went to the console.
+     */
+    selectProject(project: ProjectRow, choice?: Record<string, unknown> | null): Promise<void>;
+    /**
      * `client/js/providers.js:649` WRITES this and
      * `web/src/lib/launchpad/nav-host.ts` reads it. The launch picker is
      * the one piece of this screen still living in a classic script, and
@@ -70,6 +100,8 @@ export interface ShimBackends {
     loadProjects(): Promise<void>;
     loadRunningSessions(): Promise<void>;
     openProjectByName(name: string): Promise<void>;
+    showError(message: string): void;
+    selectProject(project: ProjectRow, choice?: Record<string, unknown> | null): Promise<void>;
 }
 
 /**
@@ -103,6 +135,9 @@ export function publishLaunchpadShim(backends: ShimBackends): LaunchpadShim {
         loadProjects: () => backends.loadProjects(),
         loadRunningSessions: () => backends.loadRunningSessions(),
         openProjectByName: (name: string) => backends.openProjectByName(name),
+        showError: (message: string) => backends.showError(message),
+        selectProject: (project: ProjectRow, choice?: Record<string, unknown> | null) =>
+            backends.selectProject(project, choice),
         _deriveRunningSessionDisplayName: (tmuxName: string | null) =>
             derivedDisplayName(tmuxName),
     });
@@ -125,6 +160,8 @@ export const SHIM_MEMBERS: readonly string[] = [
     'loadProjects',
     'loadRunningSessions',
     'openProjectByName',
+    'showError',
+    'selectProject',
     '_deriveRunningSessionDisplayName',
     'sessionRecords',
     'showProviderModal',

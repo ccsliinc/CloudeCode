@@ -131,6 +131,17 @@ console.log('[Toast Module] Loading...');
 const ATTACHMENT_KIND = 'Attachment';
 
 /**
+ * The OTHER client-raised kind: a write the server refused.
+ *
+ * Raised by client/js/write-failure-notice.js, which reads the name back
+ * off `ToastManager.WRITE_FAILED_KIND` rather than repeating the string.
+ * It is declared here for the same reason the attachment kind is - this
+ * file is the registry of what a kind MEANS, and its severity and
+ * coalescing rules live in the two tables below.
+ */
+const WRITE_FAILED_KIND = 'WriteFailed';
+
+/**
  * Kinds that a keystroke must NOT clear. See
  * `dismissForSessionActivity`, which is where the reasoning lives.
  */
@@ -154,6 +165,14 @@ const TOAST_SEVERITY = {
   // overflow row rather than burying a permission prompt - which is the
   // exact failure the tiering exists to prevent.
   [ATTACHMENT_KIND]: 1,
+  // HIGH, and therefore CAP-EXEMPT, which is the whole point of the
+  // number. This card is the only visible trace of an action the user
+  // took that did NOT happen; the live region says it too, but that is
+  // clipped and silent to a sighted user. A failure pushed behind
+  // "+2 more" is invisible again, which is the defect returning wearing
+  // a card. It is not blocking the way a PermissionRequest is - it
+  // shares the tier because it shares the "must not be hidden" property.
+  [WRITE_FAILED_KIND]: 3,
 };
 const SEVERITY_DEFAULT = 2; // an unknown future kind is not assumed harmless
 
@@ -197,6 +216,8 @@ class ToastManager {
     this.containerId = containerId;
     /** The client-raised kind, read by client/js/attachment-toast.js. */
     this.ATTACHMENT_KIND = ATTACHMENT_KIND;
+    /** The other one, read by client/js/write-failure-notice.js. */
+    this.WRITE_FAILED_KIND = WRITE_FAILED_KIND;
     /** id -> server-shape toast. Insertion-ordered = arrival-ordered. */
     this._byId = new Map();
     /**

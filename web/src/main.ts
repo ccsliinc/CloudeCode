@@ -883,4 +883,7 @@ publishLaunchpadShim({
     loadProjects: loadHomeScreen,
     loadRunningSessions: () => sessionStore.loadRunningSessions(t),
     openProjectByName: (name: string) => openProjectByNameFlow(name, browserNavHost(), t),
+    showError: (message: string) => showHomeError(message, t),
+    selectProject: (project: ProjectRow, choice?: Record<string, unknown> | null) =>
+        selectProjectFlow(project, browserNavHost(), t, choice),
 });
