@@ -354,7 +354,9 @@ Verbatim, on being shown the one open question left by decomposition slice S5:
 `src/config.py` was 2,112 lines and became the 23-module `src/config/` package.
 Every method BODY moved out. What `settings.py` still holds is 109 lines of
 pre-existing field declarations plus 31 typed entry points averaging 13 lines,
-which lands at 632 and over the 500-line guideline.
+which lands at 632 and over the 500-line guideline. (Re-measured 2026-09-12
+at `b5de919`: 620. Still over the guideline, so the ruling is untouched; the
+figure is recorded because it moves.)
 
 It stays there. This is a RULING, not an observation, and nobody on either side
 is to "fix" it. The class keeps those 31 public names because 111 modules import
@@ -479,3 +481,28 @@ It ships in this release rather than being tracked. The merge is the one moment
 both halves are in one tree, and deferring it means publishing 1.4.0 with a guard
 that is present, dispatched, and waived - which is the false-green shape this
 project keeps paying for.
+
+## Free issues are taken author first, then priority
+**2026-09-11, scope: both parties**
+
+Adoom666 ruled that free issues, the ones with no linked PR, are taken author
+first and priority second: everything `Adoom666` filed in p0, p1, p2 order,
+then everything `ccsliinc` filed in that same order. ccsliinc adopted it
+verbatim in `2ac476a`, merged as `50cf9dc`, so both parties' agents queue the
+same list.
+
+Three details of the rule as their file actually states it, kept because they
+are the parts a paraphrase drops. An issue with **no priority label sorts
+after p2 inside its own author's group**, because it is work nobody has ranked
+rather than unranked work, and putting it first would let filing an unlabelled
+issue jump the queue. An issue from **any other author sorts after both**
+groups. Inside one bucket the **lowest issue number goes first**, the same
+created-ascending tie-break the free list used before.
+
+**AUTHORSHIP SETS ORDER, NEVER OWNERSHIP**, and that half is stated on its own
+because it is the half an agent drops. Taking a turn in a queue claims nothing
+about who may work on the issue.
+
+It lives in `.claude/skills/work/SKILL.md` and `.claude/skills/work/work.sh`.
+There is no `docs/adopt-adam-grab-order` file; that path has been referred to
+in passing and does not exist.

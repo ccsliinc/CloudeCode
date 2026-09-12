@@ -2580,7 +2580,7 @@ is the kind of claim that decays quietly.
   `agent_command`, `config_file`, `config_writes`, `summary`, `wrappers`,
   `provider_models`). `__init__.py` re-exports every public name the flat module
   had, so `from src.config import settings` is unchanged.
-  **`settings.py` IS OVER THE 500-LINE GUIDELINE AT 632 AND THE OWNER HAS RULED
+  **`settings.py` IS OVER THE 500-LINE GUIDELINE AND THE OWNER HAS RULED
   THAT IT STAYS THERE.** His words, 2026-09-10, on being shown the one open
   question S5 left: "Leave it it's ok". This is a RULING, recorded in
   `docs/DECISIONS.md` under "`src/config/settings.py` stays over 500 lines", and
@@ -2594,7 +2594,10 @@ is the kind of claim that decays quietly.
   and their ~45 callers migrated, which is Rule B applied to `Settings`. That is
   its own slice, it is filed as a FUTURE OPTIONAL slice in
   `.claude/notes/backend-decomposition-plan.md` and in `.claude/TODO.md`, and it
-  is NOT SCHEDULED.
+  is NOT SCHEDULED. (It was 632 lines when the ruling was made; re-measured
+  2026-09-12 at `b5de919` it is **620**. The ruling is about the file, not
+  about the number, and the number drifts - measure it rather than quoting
+  either figure.)
 - **`src/core/sessions/` holds the collaborators `SessionManager` composes**, one
   mutable state cluster each, per
   `.claude/notes/backend-decomposition-plan.md`. THE STATE MOVES, IT NEVER
