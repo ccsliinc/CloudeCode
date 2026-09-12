@@ -2531,9 +2531,10 @@ is the kind of claim that decays quietly.
   LINE**, which is not the same as having none at all - a claim worth saying
   precisely because the loose version gets repeated. Its `v1.2.0`, `v1.0.36`
   and `v1.0.35` are DRAFTS; the newest thing actually published there is
-  `v0.8.1` from 2026-08-04, and it still wears the Latest badge. Releases
-  live on ours by the ruling in `docs/DECISIONS.md`, "Adam's repo is the
-  primary, ours is the backup, releases stay on ours".
+  `v0.8.1` from 2026-08-04, and it still wears the Latest badge. That ruling
+  is SUPERSEDED: from `v1.4.3` releases are published on
+  `Adoom666/CloudeCodeDev` only, per "One repository: Adoom666/CloudeCodeDev"
+  in `docs/DECISIONS.md`.
 - **THE PUBLISHED RELEASE BODY CARRIES ONE WRONG NUMBER AND IT HAS NOT BEEN
   CORRECTED.** It says `src/api/routes.py` "drops from 1160 lines to 303".
   Measured, it is 4,387 at `v1.2.1` and 106 at `v1.4.0`; neither 1160 nor 303
@@ -2859,7 +2860,7 @@ is the kind of claim that decays quietly.
 - **Stage files by name** when committing. No `git add -A`.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
-- **Push only to `origin` (ccsliinc/CloudeCode) or `adamdev` (Adoom666/CloudeCodeDev). NEVER to `upstream` (Adoom666/CloudeCode).** Owner's rule, 2026-09-08. The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
+- **Push only to `Adoom666/CloudeCodeDev`. It is the only repository: nothing is pushed, mirrored or released anywhere else. NEVER to `upstream` (Adoom666/CloudeCode).** Owner's ruling 2026-09-12, "One repository: Adoom666/CloudeCodeDev" in `docs/DECISIONS.md`, which supersedes the earlier mirror to ccsliinc/CloudeCode. On Adam's clone that remote is `origin`; check `git remote -v` before a push, because other clones name it differently. The `upstream` push URL is set to `DISABLED_do_not_push_to_Adoom666_CloudeCode` on the owner's clone so a push there fails by construction; re-apply that with `git remote set-url --push upstream DISABLED...` on any fresh clone.
 - **`gh`'s active account is GLOBAL TO THE MACHINE, and it does not hold
   still.** Other agents on this box run `gh` under other accounts, so the
   active one is not a fact you can check once and carry. Measured

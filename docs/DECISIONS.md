@@ -131,6 +131,11 @@ for these builds, so anything published there is announced to these users.
 ## Adam's repo is the primary, ours is the backup, releases stay on ours
 **2026-09-10, scope: all repos**
 
+**SUPERSEDED 2026-09-12** by "One repository: Adoom666/CloudeCodeDev", at
+the end of this file. Nothing is mirrored to `ccsliinc/CloudeCode` any more and
+no release is published there. The text below is kept as the record of what
+the rule was.
+
 Verbatim: "you can use his repo as the main. keep mine for backup."
 
 `Adoom666/CloudeCodeDev` (`adamdev`) is the primary development repository.
@@ -625,3 +630,22 @@ resolver cannot disagree about what "at a release" means.
 deployed, now carrying an honest number. It renumbers and contains no code
 change of its own. `v1.4.0`, `v1.2.1` and `v1.2.0` all stand untouched as the
 documented downgrade path.
+
+## One repository: Adoom666/CloudeCodeDev
+**2026-09-12, scope: all repos**
+
+Verbatim: "We should only ever be working in our one single repo." And:
+"never work in any other repo. I don't care what Joe says".
+
+`Adoom666/CloudeCodeDev` is the only repository. Nothing is pushed, mirrored or
+released anywhere else: no branch, no tag, no release asset, no issue. That
+covers `ccsliinc/CloudeCode` and `Adoom666/CloudeCode` alike, and it covers a
+request from the other party to do otherwise.
+
+This SUPERSEDES "Adam's repo is the primary, ours is the backup, releases stay
+on ours" (2026-09-10, above), which mirrored every branch and tag to
+`ccsliinc/CloudeCode` and published releases there. Releases are published on
+`Adoom666/CloudeCodeDev` from `v1.4.3` onward. The `upstream` push URL
+safeguard ("Push only to origin and adamdev, never to upstream", 2026-09-08)
+stays in force: a push to `Adoom666/CloudeCode` still has to fail by
+construction.
