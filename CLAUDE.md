@@ -297,6 +297,39 @@ compiled, never half of each.
   `web/src/lib/launchpad/HomeScreen.svelte` and the modules beside it. See
   "The home screen shell, and the shim that replaced launchpad.js" below.
 
+**SEVEN SLICES DONE IS NOT A FINISHED MIGRATION, AND READING IT THAT WAY IS
+THE MISTAKE THIS PARAGRAPH EXISTS TO STOP.** What those seven slices finished
+is the LAUNCHPAD: the home screen, the launcher, the project tree and the
+session lists. The rest of the app is still the hand-written tree, and it is
+the larger half. Measured at `v1.4.0` and again at `b5de919`, identical at
+both: **137 files under `web/src`** (26 `.svelte`, 110 `.ts`, and `app.css`) against
+**221 files under `client/js`**, every one of them `.js` (205 at the top
+level, 16 in `labels/`, `icons/`, `i18n/` and `themes/` - a bare
+`ls client/js/*.js` answers 205 and silently misses the subdirectories), and
+`client/index.html`
+still loads **155 `<script>` tags** by hand beside the one
+`<script type="module" src="/static/dist/app.js">` at the bottom of it.
+`client/js/launchpad.js` is gone; `client/dist/app.js` and `client/dist/app.css`
+are committed.
+
+**STILL VANILLA, AND NOT SCHEDULED**: the terminal and everything around it
+(`client/js/terminal.js` and its family), the toasts
+(`client/js/toast.js` and the modules beside it), the sidebar row menus
+(`client/js/session-row-menu.js`), the restart picker
+(`client/js/session-restart-picker.js`), the settings panels
+(`client/js/settings-panel.js`, `settings-sections.js`) and the archive
+screens. So the answer to "is the client Svelte now" is NO - it is BOTH, and
+the first question about any client change is which tree owns that screen.
+
+**THE STATUS LED IS THE ONE THING THAT LIVES IN BOTH TREES AT ONCE, ON
+PURPOSE, AND IT IS NOT A DUPLICATION BUG.** `client/js/status-led.js` is still
+loaded by `client/index.html` and still paints every legacy surface, while
+`web/src/lib/led.ts` paints the compiled rows, and the contract between them
+is BYTE-IDENTICAL OUTPUT proven by `web/src/lib/StatusLed.test.ts` against the
+real legacy file in a `vm` sandbox. Delete or edit one of them alone and half
+the app's lights change while the other half does not, which the parity test
+is there to make loud. See "The `web/` build" above.
+
 ## The home screen shell, and the shim that replaced launchpad.js
 
 `client/js/launchpad.js` DOES NOT EXIST. Slice 7 deleted it. The home screen
@@ -2366,7 +2399,20 @@ per server process and no subprocess at all.
 ## Where the 1.4.0 integration moved things
 
 `integration/1.4.0` folded the other party's `adamdev/master` at `6012467`
-into this line in full: 89 of his non-merge commits, 245 files. Most of it
+into this line in full. **RE-MEASURED 2026-09-12, BECAUSE THIS FILE AND
+`.claude/TODO.md` BOTH CARRIED A WRONG PAIR OF NUMBERS.** The range
+`4d8aa76..6012467` holds **89** non-merge commits, of which **87 are his**
+(84 `psyance`, 3 `Adoom666`) and **2 are ours**, carried back in by the two
+merges of our line he took inside his own. So 87 and 89 are both right about
+different questions and neither is a correction of the other; say which one
+you mean. The tree diff over that range is **244 files, +48172 / -3761**
+(`git diff --shortstat 4d8aa76 6012467`). The 245 files and +50446 this file
+and the TODO both used to state are not reproducible by any spelling of that
+diff; the per-commit sum, the one derivation that does run higher, reads
++49306 / -4297 over the same 244 files. The release-wide frame is different
+again and is the one the published notes use: **87 of the 171 non-merge
+commits between `v1.2.1` and `v1.4.0`**, 198 commits across 27 merges, 704
+files changed. Most of it
 merged with no conflict, and the interesting part of the round was the code
 that merged CLEANLY AND WAS WRONG, because his tree reaches for seams this
 line's decomposition had already moved. If you are porting anything else
@@ -2403,13 +2449,25 @@ existence check beats reading diffs here, because the whole point is that
 the diff looks fine.
 
 **AND `src/api/routes.py` IS THE ONE TO WATCH ON A MERGE.** This line carved
-it from 4,387 lines to 106 - the assembly and the registration order, which
-is the route table's matching order - while his line kept editing the flat
-file. The merge resolved that to his file plus his additions, 4,593 lines,
-ZERO conflicts reported, the decomposition silently reverted and every route
-declared twice. Nothing would have thrown; FastAPI takes the first match, so
-which handler answered would have depended on include order. If a future
-merge touches that file, check its LINE COUNT before you check anything else.
+it from 4,397 lines to 106 in `e859106`, slice S6 - the assembly and the
+registration order, which is the route table's matching order - while his
+line kept editing the flat file. The merge resolved that to his file plus his
+additions, 4,593 lines, ZERO conflicts reported, the decomposition silently
+reverted and every route declared twice: **51 route decorators in that one
+file**, every one of them already declared by a sibling. Nothing would have
+thrown; FastAPI takes the first match, so which handler answered would have
+depended on include order. If a future merge touches that file, check its
+LINE COUNT before you check anything else.
+
+This paragraph said **4,387** until 2026-09-12 while "How we work here" next
+door said **4,397**, so the file disagreed with itself about the one number
+it tells you to check. 4,387 is the count at `release/1.2.1` and at the merge
+base `4d8aa76`; the file grew ten lines before S6 ran. Measured:
+`git show e859106^:src/api/routes.py | wc -l` is 4397 and
+`git show e859106:src/api/routes.py | wc -l` is 106. **A number quoted in two
+places drifts in one of them**, which is the general form of this and of the
+commit counts above, and the only defence is to measure both when you touch
+either.
 
 ## How we work here
 
@@ -2540,20 +2598,40 @@ merge touches that file, check its LINE COUNT before you check anything else.
   `client/js/router.js` for the shape).
 - **Production ready.** No mocks, no placeholders, no test endpoints left behind.
 - **`python3`, never `python`.** Tests: `venv/bin/python3 -m pytest -q` from the
-  repo root. System python3 has no fastapi. Current baseline, re-measured
-  2026-09-10 on `docs/6-meta-cluster` off `51f3489` with `-p no:randomly`,
-  is **5758 passed / 0 failed / 18 skipped**, and ZERO FAILED IS THE NEW
-  NUMBER TO HOLD: the two this file used to call permanently environmental
-  were diagnosed and fixed on that branch (see below), so a failure here is
-  now a real signal rather than one you are meant to recognise and ignore.
-  The reading before it was
-  **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`. The same worktree read
-  **5641 / 2 / 19** at the bare merge of `adamdev/master` 2b1fcb9 and
-  **5628 / 2 / 19** at `release/1.2`, so his commits added 13 tests and
-  this round added 15, with no new failures at either step. Note the SKIP COUNT MOVES BY ONE between
-  runs (21 or 22) purely on `pytest-randomly`'s ordering, so a lone
-  22 is not a test that stopped being measured; the skip REASONS are what
-  to read, and `-p no:randomly` pins it at 21. Two failures this file used to name as
+  repo root. System python3 has no fastapi. **Current baseline, measured at
+  `b5de919` on `integration/1.3.0`: 7303 passed / 4 failed / 57 skipped, out
+  of 7364 collected.** The four are environmental, they fail identically on
+  the other party's parent `6012467`, and they are named here so you can
+  recognise them rather than chase them:
+  `test_cold_socket_born_at_depth_real_tmux`,
+  `test_cold_socket_options_real_tmux`, `test_tmux_launch_batching_real_tmux`
+  and
+  `test_home_write_guard.py::test_guard_refuses_the_real_claude_settings_path_by_name`.
+  **THREE OF THE FOUR ARE IN THE `real_tmux` GROUP, WHICH IS HOW YOU
+  REPRODUCE MOST OF THIS BASELINE WITHOUT CONTENDING FOR A SOCKET.** Measured
+  independently 2026-09-12 at `b5de919`, in a clean worktree with a
+  `config.json` copied in, `-p no:randomly -m "not real_tmux"` reads
+  **6957 passed / 1 failed / 57 skipped / 349 deselected in 193 s**, the one
+  failure being `test_home_write_guard`. The arithmetic closes exactly,
+  6957 + 1 + 57 + 349 = 7364, which is what makes those two runs ONE
+  measurement rather than two numbers that happen to land near each other; a
+  bare `--collect-only` on the same tree also answers 7364. `-m "not
+  real_tmux"` IS STILL NOT A VERIFICATION RUN - it is a fast loop and a
+  cross-check, and it cannot see three of the four failures it is being used
+  to account for.
+  ZERO FAILED WAS TRUE FOR ONE DAY AND IS NO LONGER THE NUMBER TO HOLD. The
+  reading before this one was **5758 passed / 0 failed / 18 skipped**,
+  re-measured 2026-09-10 on `docs/6-meta-cluster` off `51f3489`, and the two
+  it fixed by diagnosis are still fixed - what came back is a DIFFERENT set
+  that arrived with the 1.4.0 fold and fails on his side too, so a failure
+  here is still a real signal as long as it is not one of the four named
+  above. Earlier readings, kept because the DRIFT is the lesson:
+  **5656 passed / 2 failed / 19 skipped** on `release/1.2.1`, **5641 / 2 / 19**
+  at the bare merge of `adamdev/master` 2b1fcb9, and
+  **5628 / 2 / 19** at `release/1.2`. Note the SKIP COUNT MOVES between
+  runs purely on `pytest-randomly`'s ordering, so a lone off-by-one is not a
+  test that stopped being measured; the skip REASONS are what
+  to read, and `-p no:randomly` pins it. Two failures this file used to name as
   permanently environmental are FIXED as of 2026-09-10, by diagnosis rather
   than by a skip, and the precondition behind each is written down because
   nobody had ever recorded it:
