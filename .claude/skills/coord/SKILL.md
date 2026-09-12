@@ -7,11 +7,19 @@ description: Cross-party coordination for the two teams shipping into this codeb
 > with a GitHub issue and a draft PR, not with a claim file on an orphan
 > branch. Do not file anything new here.
 >
+> **THE LESSONS HAVE MOVED. They are `docs/LESSONS.md`, on the normal read
+> path, and that is the only copy to read or add to.** All six of the lesson
+> files that were on this branch are folded in there as of 2026-09-12,
+> alongside eight further findings from the ccsliinc side. Two of the six sat
+> unmigrated here for two days after this skill was superseded, which is the
+> thing `docs/LESSONS.md` now opens by recording: a record that lives inside a
+> mechanism dies when the mechanism is replaced.
+>
 > This skill stays only to READ the `coord` branch, which still holds the
-> other developer's four claims, their log and their lessons until they
-> migrate. `coord.py read` and `coord.py lessons` still work. The lessons in
-> particular are worth reading; they are the accumulated fixes for collisions
-> that already happened.
+> other developer's four claims and their log until they migrate, plus the
+> original lesson files as evidence. `coord.py read` still works;
+> `coord.py lessons` now prints superseded material and you want
+> `docs/LESSONS.md` instead.
 
 # Coordination between two parties on one codebase
 
