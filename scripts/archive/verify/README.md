@@ -87,3 +87,38 @@ reasons below. They still live in `scripts/`.
   pseudo-element at all. Re-read it before trusting a run. The rule it was
   proving - one lit diameter for every state - did ship, and is asserted
   statically in `tests/test_status_led.node.mjs`.
+
+## Five manual harnesses retired with these drivers, 2026-09-12
+
+`tests/manual/*.html` harnesses are the pages the scripts above drive. Three
+of the ones listed in the table had already lost their driver to this
+directory and were left behind in `tests/manual/`; two more were driven by
+nothing at all. Slice 7 of the Svelte migration then deleted
+`client/js/launchpad.js`, and every one of them opened with
+`<script src="../../client/js/launchpad.js">` and booted with
+`new Launchpad()`, which no longer exists. They were removed rather than
+rewritten, and the reason is different for each group.
+
+| Harness | Its driver | Why it was retired rather than rewritten |
+|---|---|---|
+| `attribution-adopt-harness.html` | `verify_adopt_clears_prompt.py` (archived) | The driver was archived here as a closed one-off; the harness merely outlived it. Retiring it finishes a decision this directory already records. |
+| `attribution-prompt-harness.html` | `verify_attribution_prompt.py` (archived) | Same. Note the table above says it is covered by `tests/test_home_screen_mechanics.node.mjs`, which slice 7 also deleted; the card itself is now `web/src/lib/launchpad/AttributionPrompt.svelte`. |
+| `ended-sessions-harness.html` | `verify_ended_session_marking.py` (archived) | Same. The row is `web/src/lib/launchpad/EndedSessionRow.svelte` now. |
+| `project-tree-geometry-harness.html` | none, ever | Nothing drove it. The three sibling harnesses that name it only say "same pattern as" in a comment. |
+| `project-authority-geometry-harness.html` | none, ever | Nothing drove it. |
+
+**A HARNESS NOBODY DRIVES CANNOT BE VERIFIED, WHICH IS THE WHOLE ARGUMENT.**
+Rewriting one of these onto `CloudeWeb.launchpad.mountHomeScreen()` is easy
+and is exactly what was done for the two that a live script still drives
+(`home-mechanics-geometry-harness.html` and
+`header-icons-and-menu-harness.html`, both rewritten and both RUN). For
+these five there is no consumer, so there would have been no way to tell a
+correct rewrite from one that loads and proves nothing - and a page that
+loads and proves nothing is worse than no page, because it looks like
+coverage. That is this project's most expensive recurring defect and it is
+not worth re-creating five times over.
+
+The files were moved to `~/.Trash/`, not deleted, and their full content is
+in git history at `18ed433`. If one of these surfaces needs a pixel proof
+again, restore it from there and rewrite the bootstrap the way the two
+surviving harnesses now do - **and write the driver in the same change.**
