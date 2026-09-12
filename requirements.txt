@@ -1,5 +1,5 @@
 # Core Framework
-fastapi>=0.115.0
+fastapi>=0.141
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.9
 

@@ -50,17 +50,6 @@ status_router = APIRouter()
 
 router = APIRouter()
 
-# The include order is the order these routes were declared in the flat
-# 1,674-line auth.py, so the assembled table is unchanged, route for
-# route and position for position. It is not to be tidied alphabetically.
-router.include_router(pairing_router)
-router.include_router(projects_routes.router)
-router.include_router(project_clone_routes.router)
-router.include_router(status_router)
-router.include_router(config_routes.router)
-router.include_router(workspace_settings_routes.router)
-
-
 @pairing_router.post("/auth/verify", response_model=AuthTokenResponse)
 @limiter.limit(_totp_rate_limit)
 async def verify_totp(request: Request, response: Response, body: VerifyTOTPRequest):
@@ -399,3 +388,22 @@ async def check_auth_status():
         HTTPException: If not authenticated
     """
     return SuccessResponse(message="Authenticated")
+
+
+# THE INCLUDES SIT BELOW EVERY HANDLER, AND THAT IS NOT STYLE. FastAPI
+# before about 0.141 COPIES a sub-router's routes at include time, so an
+# include above the decorators copies an empty router and every /auth/*
+# route is silently missing (1.4.2 shipped that: login 404ed on any
+# install whose venv held an older FastAPI, while the test venv, newer,
+# resolved includes lazily and passed). tests/test_include_router_order.py
+# fails the build if an include moves above its router's handlers again.
+#
+# The include order is the order these routes were declared in the flat
+# 1,674-line auth.py, so the assembled table is unchanged, route for
+# route and position for position. It is not to be tidied alphabetically.
+router.include_router(pairing_router)
+router.include_router(projects_routes.router)
+router.include_router(project_clone_routes.router)
+router.include_router(status_router)
+router.include_router(config_routes.router)
+router.include_router(workspace_settings_routes.router)
