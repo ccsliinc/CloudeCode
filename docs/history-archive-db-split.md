@@ -264,6 +264,27 @@ raises `IntegrityError` afterwards.
 `content_sha256`: **400/400 before the split reading `main`, 400/400
 after reading the separate archive database, identical results.**
 
+### Resumability, measured by actually killing a copy
+
+A 443 MB copy was SIGKILLed mid-flight. It had finished
+`transcript_archives` (400/400, progress row stamped) and had not begun
+`transcript_records`.
+
+- **the source was intact**: 400 / 234,446 / 458 still in `cloude.db`
+- **the destination held a clean partial**: 400 archives, 0 records
+- the re-run **resumed**, skipped the completed table, finished
+  400 / 234,446 / 458, verified 200 content samples, dropped 21 objects,
+  and left `cloude.db` holding exactly the eight app tables
+
+That kill found a real bug, and it is the only way it surfaces: the DDL
+comes out of `sqlite_master` verbatim and so carries no
+`IF NOT EXISTS`, which made the second run die with `table
+archive_project_overlay already exists` on its first object. Not
+dangerous (the source was intact) but permanently STUCK, which defeats
+the one thing the design promises. `create_archive_schema` now skips
+objects the archive already holds. Every clean run creates the schema
+exactly once, which is why no ordinary test could have caught it.
+
 ### A bug the real data caught
 
 The first drop order was alphabetical with a special case for
