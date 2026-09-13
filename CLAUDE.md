@@ -67,6 +67,8 @@ not read all 27.
 | `docs/notifications.md` | Anything about toasts. Raising is global, dismissing is per session, and those are independent axes. Also the external push channels: the queue stays sequential, the three channels inside one entry go out at once under a per-channel bound. |
 | `docs/alert-state-model.md` | You are designing alerting. DESIGN ONLY, nothing in it is built, and it deliberately disagrees with `docs/session-status-model.md` in two places. Read that one first. |
 | `docs/session-project-operations.md` | You need to know what an operation does to a session row, a project row and the tmux session underneath. Every node cites the symbol it came from. |
+| `docs/history-archive-scope.md` | Before you touch the history and archive browser. The inventory of what already exists there, what is missing, and the fifth plugin surface it is the first consumer of. Its section 2.0 is the two-store split. |
+| `docs/history-archive-join.md` | The archive browser renders nothing, or you are about to change how the archive reaches the message model. The column map that ruled out repointing the readers, how growth is answered without weakening the model's refusal, and the measured cost of a first run. |
 | `docs/project-reconcile.md` | The project list looks wrong after an upgrade. Written after a round trip actually lost rows. |
 | `docs/session-attribution-import.md` | Sessions are reported as external that the launcher itself created. DESIGN ONLY, not implemented. |
 | `docs/reconnect.md` | The terminal repaints wrong after sleep, wake or a dropped socket. Names the two re-attach paths, which behave differently. |
