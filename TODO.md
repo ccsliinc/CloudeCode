@@ -1222,3 +1222,52 @@ Nothing is started. Claim a track by draft PR per docs/DECISIONS.md first.
 Note for anyone picking up a UI item: Adam is rebuilding the entire front end
 in Svelte (style, design and layout only; architecture, server contracts,
 WebSocket and xterm all unchanged). Build no new surface against client/js.
+
+## [PERF] 2026-09-13 - the "30 seconds to show sessions" report, diagnosed and fixed
+
+Adam signed in on a second computer on the LAN and waited 30+ seconds for the
+session list. Forensics on the server log found NO server stall and NO sign-in:
+the browser arrived at 11:56:23Z already holding a valid token, and the 37.5
+seconds was three full page reloads at 4.4 to 5.0 s each. Reload two was 100
+percent 304 Not Modified and still cost 4.4 s. Every page load revalidated 220
+subresources through the 6-connection HTTP/1.1 cap. Login was never involved
+and costs about 2 ms. The database integrity walk never ran; cloude.db on the
+dev box is 224 KB.
+
+Shipped, uncommitted at the time of writing:
+
+- Content-keyed static asset URLs plus real cache headers
+  (src/core/static_asset_keys.py, wired through src/main.py's static region
+  and src/core/static_serving.py). Measured warm reload: 218 revalidations to
+  7, 65,400 bytes to 2,100. The 7 are ES module imports inside
+  client/js/i18n/boot.js, specifiers inside JavaScript and therefore
+  unreachable by an HTML rewrite. Cold load unchanged at 218 requests.
+- Launchpad first paint: five serial round trips to ONE, pinned by a test that
+  measures DEPTH rather than count (a count would have passed pre-fix).
+- GET /themes moved off the event loop (themes_routes.py::_scan_both_roots),
+  structural loop-blocking test with its negative control.
+- Per-request access logging (src/api/request_log.py): one http_request event
+  carrying method, path without the query string, status, client_ip and
+  duration_ms. Static paths at debug, everything else at info. This exists
+  because today's diagnosis had to be reconstructed from the nearest structlog
+  timestamp.
+- Adopting a MEASURED-dead tmux husk now answers 409 session_gone with
+  refresh, not a bare 500. cloude_cloudecode-4 produced seven identical 500s
+  in ninety minutes because the listing kept offering a husk that
+  remain-on-exit keeps alive. A probe that could not RUN still answers 500.
+- The duplicate "project .claude" root is gone from the file editor drawer;
+  the project's .claude is reachable through "project files" as before.
+- Terminal search panel: 560 px wide, anchored top right, toast stack pushed
+  below it while open, and autofocus fixed. ROOT CAUSE of the autofocus bug,
+  worth keeping: `opened` is a rune, so the .is-open class lands on a
+  microtask, and until it does the panel is display:none, where
+  HTMLElement.focus() is a specified no-op that throws nothing and logs
+  nothing. One flushSync between the assignment and the focus call.
+
+CANCELLED THE SAME DAY, deliberately: a serve-time bundle concatenating the
+159 legacy script tags. It was built and then removed because Adam is
+rebuilding the front end in Svelte, so it would have been deleted on arrival.
+The cold-load cost of 218 requests is therefore accepted until client/js goes.
+
+STILL OPEN: nothing from this round. The 7 unreachable module imports are a
+known residual, not a defect.

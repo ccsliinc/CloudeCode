@@ -71,7 +71,7 @@ This table is the routing layer. Read the one that answers your question.
 | `docs/ui-preferences-inventory.md` | You are building the typed `ui_preferences` sync (or its partial-update or import step). Every durable browser-stored preference, classified as shared / per-viewer-only / already server-owned / secret, with the exact key, composition, writer and reader. |
 | `docs/ui-inventory.md` | A designer or a newcomer needs the complete inventory of every screen, region and control in the app: what each one is for from the user's point of view, what states it can be in, and whether it appears on desktop, on a phone, or on both. Written for someone who does not read code. It is DESCRIPTIVE, not normative: it records what shipped, it does not rule on what should. Where it and the code disagree, the code wins and this file is the thing to fix. |
 | `docs/ROADMAP.md` | You are picking the next feature to build, or asking whether an idea has already been thought about. The full 2026-09-13 brainstorm: 91 unconstrained ideas, the top 50 with a "probably possible" twin each, Adam's 17 fleshed out, the locked decisions (brand, catalog hosting, signing, cheap-model seam, TUI stack, mobile, remote hosts) and the three-tier roadmap. It is a PLAN, not a record of what shipped. |
-| `docs/web-build-history.md` | You need the evidence behind a `web/` rule: the StatusLed parity proof, the slice measurements, mount-path traps, plugin mutation tests, static-asset keys and the serve-time legacy bundle, the first-paint fan-out, the string-layer guards. |
+| `docs/web-build-history.md` | You need the evidence behind a `web/` rule: the StatusLed parity proof, the slice measurements, mount-path traps, plugin mutation tests, static-asset keys and why the serve-time bundle was cut, the first-paint fan-out, the string-layer guards. |
 | `docs/tmux-launch-history.md` | You are changing how a pane is launched or respawned: batching, the cold-socket `-f` config, env-write ordering, the boot re-adopt, the `ensure_pipe_pane` guard. |
 | `docs/session-identity-history.md` | Session identity: adoption id resolution, hook token mint / keep / recovery, the owned ledger, project binding, agent evidence and inference, the conversation uuid, naming, the project folder, the two theme stores. |
 | `docs/listing-performance-history.md` | The numbers behind `/sessions/list`, `GET /themes`, the attach path and the pipe reader: the off-the-loop gather, per-row readers, the instance index, the startup-gate tail, socket scope, the file drawer, kqueue, attach settle, cursor capture. |
@@ -131,11 +131,11 @@ panels and archive screens are still vanilla and are not scheduled.
   `public, max-age=31536000, immutable` ONLY while that key matches. Everything
   else, a stale key included, keeps `no-cache, must-revalidate`, and
   `index.html` is never immutable.
-- **WHAT MAY NOT BE CONCATENATED IS A REFUSAL IN CODE**: a top-level
-  `'use strict'`, `import()`, `import.meta`, `document.currentScript`, any
-  `type="module"` / `defer` / `async` / `nomodule`, and CSS outside
-  `/static/css/` or with relative `url()`, `@import` or `@charset`. Files join
-  with `\n;\n`, and a refusal SPLITS THE RUN IN PLACE, never hoisted past.
+- **A SERVE-TIME BUNDLE WAS BUILT AND CUT SAME DAY**, since `client/js` is
+  being rebuilt in Svelte and a bundle for it is throwaway; nothing under
+  `/static-bundle/` exists. The keying above is FRONTEND-AGNOSTIC: each key
+  comes from a file's content, memoised, so an edit serves fresh with no
+  restart.
 - **`client/dist` IS COMMITTED** and the `.gitignore` negation is load bearing,
   because `deploy-mini.sh` ships committed files and the mini runs no build;
   `scripts/web-build-check.sh` proves it current and its exit 2 means CANNOT
@@ -209,6 +209,10 @@ treat `client/js` as code on its way out and put every new surface in `web/`.
 - **A RECOVERED ID MUST NOT BE RE-MINTED A TOKEN**, since `_mint_hook_token`
   REPLACES and revokes what the running agent holds; a re-keyed adoption calls
   `_keep_hook_token`, and `hook_token_recovery.py` is in memory and NEVER MINTS.
+- **`PaneDeadError` MEANS A MEASURED DEATH**: a `#{pane_dead}` probe that
+  RUNS and reads `"1"` raises it, becoming `AdoptTargetGoneError` - 409
+  `session_gone`, not 500. A probe that could NOT run stays `RuntimeError`,
+  a 500: unmeasured is not dead.
 - **A RESTART IS THE ONE MOMENT A LIVE PANE'S ENV CAN BE CORRECTED**, so
   `respawn` issues `set-environment` BEFORE `respawn-pane`, batched
   (`tmux_command_batch.py`) but never inside the spawn.

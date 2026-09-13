@@ -887,7 +887,17 @@ These paragraphs were written into CLAUDE.md by another session while this
 carve-out was in progress. They are kept here verbatim; CLAUDE.md carries the
 rule in short form.
 
-### Static asset keys, and the serve-time legacy bundle
+### Static asset keys, and the cancelled serve-time bundle
+
+Two halves were planned 2026-09-13. **Half 2 - concatenating the legacy
+`<script>` and `<link>` tags into serve-time bundles - was built and then CUT
+the same day, because the owner is rebuilding the front end from scratch in
+Svelte and a bundle whose only value dies with the current `client/js` tag
+soup is throwaway.** The code was removed cleanly. Nothing under
+`/static-bundle/` exists in the tree, and no rule anywhere should describe it
+as shipped. **Half 1 shipped: content-keyed URLs and the cache headers.** It
+survives the front-end rewrite untouched, because it keys whatever the served
+HTML references and holds no opinion about what that HTML looks like.
 
 - **OUTPUT NAMES ARE FIXED, `app.js` and `app.css`, no content hash**, because
   `client/index.html` is hand-maintained and names them. The cache correctness
@@ -903,46 +913,58 @@ rule in short form.
   that no longer matches - a bookmarked URL from an older build REVALIDATES
   rather than being told a year-long lie nobody can retract from the field.
   `index.html` itself is never immutable, because it is what hands out every
-  other key. The measured defect this closed: a fully warm cache was still
-  paying **218 conditional GETs answered 304**, every page load.
-- **THE LEGACY SCRIPT AND STYLESHEET RUNS ARE BUNDLED AT SERVE TIME, AND THE
-  BUNDLE IS NOT A COMMITTED ARTIFACT.** Same module, same rewrite: the classic
-  `/static/js/**` scripts are concatenated in the exact order the shell lists
-  them and served from `/static-bundle/legacy-N.js` under their own content
-  key, and the `/static/css/*.css` sheets the same way. **Nothing is committed
-  and there is no build step** - the bundle is derived from the files on disk
-  and memoised on their `(size, mtime_ns)`, so editing a file and reloading
-  rebuilds it under a new key with no restart, exactly the discipline
-  `src/core/static_cache.py` already uses because `client/` must not acquire a
-  build step. Measured 2026-09-13: **159 script tags and 52 stylesheet links
-  become 12 and 3; a warm load's 218 revalidations become 7**, the seven being
-  the ES module graph `client/js/i18n/boot.js` imports, which are specifiers
-  inside JavaScript rather than `src` attributes and so cannot be reached by an
-  HTML rewrite. Numbers and method in
+  other key. **Nothing is committed and there is no build step**: a key is
+  derived from the file on disk and memoised on its `(size, mtime_ns)`, so
+  editing a file and reloading serves it under a new URL with no restart.
+- **THE MEASURED RESULT, IN HEADLESS CHROMIUM, 2026-09-13**: a fully warm
+  cache was paying **218 conditional GETs answered 304** on every page load -
+  65,400 bytes of pure header traffic for content already on the machine.
+  After, **211 of the 218 assets are reused with zero bytes and no round
+  trip**, and only **7 still revalidate**. A COLD load is unchanged at 218
+  requests, by design - that was half 2's job and half 2 was cut. The seven
+  that remain are the ES module graph `client/js/i18n/boot.js` imports
+  (`i18n/runtime.js`, `i18n/format.js`, `i18n/catalogs.js`,
+  `i18n/catalog.en.js`, `i18n/pseudo.js`, `labels/session-summary.js`,
+  `icons/glyphs.js`), which are `import` specifiers INSIDE a JavaScript module
+  rather than `src` attributes in HTML, so a serve-time HTML rewrite cannot see
+  them - they are correct as they stand, since they always revalidate and can
+  never go stale. Full method, the before/after servers, the CDP-versus-
+  `transferSize` negative control and the cold-load table are in
   `/Users/Adam/Dropbox/llmScratch/perf-audit/static-assets.md`.
-- **WHAT MAY NOT BE CONCATENATED IS A REFUSAL IN CODE, NOT A MEASUREMENT
-  SOMEBODY REMEMBERED.** A file carrying a top-level `'use strict'` DIRECTIVE
-  PROLOGUE is excluded and keeps its own tag: per spec that directive makes the
-  WHOLE Script strict, so first in a bundle it silently switches every file
-  behind it into strict mode and later in one it silently loses strict mode
-  itself. Measured on this tree, ZERO of the 152 candidates carry one - every
-  `'use strict'` in `client/js` sits inside an IIFE, which is function-level and
-  unaffected - and the check stays because that is a fact about today's files.
-  Also refused: any file containing `import()`, `import.meta` or
-  `document.currentScript`, all three of which resolve against the SCRIPT's own
-  URL; and any `type="module"`, `defer`, `async` or `nomodule` tag. Files are
-  joined with `\n;\n`, an EMPTY STATEMENT, so a file ending without a semicolon
-  cannot swallow the next one's opening paren. **A CSS FILE IS BUNDLED ONLY
-  FROM `/static/css/` AND ONLY IF IT CARRIES NO RELATIVE `url()`, NO `@import`
-  AND NO `@charset`**, because each of those resolves or applies against the
-  stylesheet's own URL; `vendor/xterm/xterm.css` and `dist/app.css` live
-  elsewhere and stay separate. The vendored xterm scripts would concatenate
-  cleanly and are kept out anyway, because folding a stable 280 KB into a
-  volatile bundle re-downloads it on every app edit. **A refusal SPLITS THE RUN
-  IN PLACE and is never hoisted past**, which is what makes execution order and
-  cascade order identical to the unbundled shell. The one behaviour that
-  genuinely changes: a top-level throw now aborts the rest of its bundle
-  instead of only its own file.
+- **THE REWRITE'S OWN COST WAS PROFILED, NOT ASSUMED**, because it runs inside
+  the `/` handler and its cost is terminal latency for everyone - the same
+  defect class this file already records for the integrity pragma and the
+  config-tree walk. `resolve()` is a `realpath` syscall walk done once per
+  referenced URL; memoising it on `(url, client_dir)` took the median `/`
+  request from **16.66 ms to 1.38 ms**. The first request of a process would
+  still pay 27.6 ms to hash every referenced file, so
+  `static_asset_keys.warm()` runs at import time in `src/main.py`, beside the
+  existing `warm_static_gzip_cache()`, fail-soft: an unreadable shell costs the
+  optimisation and never the boot.
+- **WHY HALF 2 WAS CUT RATHER THAN SHIPPED.** It concatenated `/static/js/**`
+  in shell order into `/static-bundle/legacy-N.js` and `/static/css/*.css` the
+  same way, dropping 159 script tags and 52 stylesheet links to 12 and 3,
+  refusing to fold in a file carrying a top-level `'use strict'` directive
+  prologue, `import()`, `import.meta`, `document.currentScript`, or a
+  `type="module"` / `defer` / `async` / `nomodule` tag, and refusing a CSS
+  file outside `/static/css/` or carrying a relative `url()`, `@import` or
+  `@charset`. All of that measured cleanly and worked. It was cancelled
+  anyway, the same day, because the owner is rebuilding the entire front end
+  in Svelte: every one of those 159 tags is `client/js`, which is on its way
+  out, so a bundle for it is a bundle for code that will be deleted. The code
+  was removed rather than left disabled, so this paragraph is the only record
+  of it - a cancelled approach written down with its reason is useful, and a
+  doc describing shipped code that is not in the tree is worse than no doc.
+- **FILES**: `src/core/static_asset_keys.py` (the keys, the two memos, the
+  HTML rewrite, the boot warm); `tests/test_static_asset_keys.py` (28 cases,
+  every positive paired with a negative control); `src/main.py`
+  (`NoCacheStaticFiles` asks that module for the header, `_render_index_html`
+  runs the rewrite, the gzip cache keys on the rendered bytes rather than the
+  template's stat); `src/core/static_serving.py` (an optional `fingerprint`
+  argument so the precompression cache keys on the rendered output, not
+  `index.html`'s mtime - without it, editing any asset serves a gzip of the
+  PREVIOUS shell pointing at keys that no longer exist). `client/index.html`
+  and everything under `client/js` and `web/` are UNCHANGED.
 
 ### The launchpad first paint fans out
 
