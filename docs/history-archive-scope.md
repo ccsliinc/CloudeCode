@@ -667,6 +667,22 @@ outcome. This app applies `PRAGMA foreign_keys=ON` to **every connection it
 hands out** (`src/core/db.py`, `CONNECTION_PRAGMAS`), so these are enforced
 constraints today and not documentation.
 
+> **CORRECTED 2026-09-13, and the correction matters more than the claim.**
+> The second line above is WRONG, and wrong in the dangerous direction. The
+> unqualified form is **ACCEPTED at DDL time**; `no such table: arch.sessions`
+> is raised at **DML time**, on every INSERT, forever. The reference binds to
+> `arch.sessions`, which was proven rather than inferred: after creating an
+> `arch.sessions`, a value present only there was accepted and a value present
+> only in `main.sessions` was refused with FOREIGN KEY constraint failed. And
+> `PRAGMA arch.foreign_key_check` returns EMPTY on such a table.
+>
+> So the reassurance in the paragraph below it does not hold: the constraint
+> CAN be expressed, and what you get is a table that accepts DDL, passes every
+> integrity check, and can never be written to. A migration copying the DDL
+> verbatim would report success and leave a dead archive. Only a real write
+> detects it. See `docs/history-archive-db-split.md` and
+> `src/core/archive_db_ddl.py`.
+
 Three cross, all pointing from the archive side into the app side:
 
 | constraint | rows populated |
