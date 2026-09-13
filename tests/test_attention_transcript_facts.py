@@ -18,12 +18,21 @@ window and a missing file are both asserted to REFUSE, and asserted to
 refuse in DIFFERENT ways, right next to the positives that prove the
 reader fires at all.
 
-AND "ABSENT" AND "NULL" ARE TESTED APART. The pending-agent field being
-missing means the count is unknown; the field being present and JSON null
-means the count is zero. A suite that only checked the number would pass
-against an implementation that collapsed them, and each collapse breaks a
-different half of the product: one suppresses every real done toast, the
-other raises every false one back again.
+THREE WAYS OF HAVING NO NUMBER ARE TESTED APART, BECAUSE THEY MEAN THREE
+DIFFERENT THINGS. Measured over 300 turn-end records in 40 recent
+transcripts on claude 2.1.266: 236 carry a POSITIVE count, 64 OMIT the
+key, and not one carries a literal null or a literal 0. So (1) an
+omitted field on a record whose OWN version is 2.1.241 or newer is a
+measured ZERO, the ordinary shape of a finished turn; (2) an omitted
+field below that floor, or on a record naming no readable version, is
+UNKNOWN, because the harness never wrote the field at all; (3) no
+turn-end record in the window is UNKNOWN as well, and for a third
+reason: the turn may still be running. A suite that only checked the
+number would pass against an implementation that collapsed any two of
+them, and each collapse breaks a different half of the product. Collapse
+(1) into (2) and every real done toast is suppressed, which is what
+happened: all 83 legitimate ones in the ground-truth corpus were lost.
+Collapse (3) into (1) and every false one comes back.
 """
 
 from __future__ import annotations
@@ -46,14 +55,20 @@ SESSION_UUID = "9160010b-90b4-4267-b31e-4ce4d4a6dcd6"
 CWD = "/Users/Adam/cloude-projects/ses_3da07dde"
 
 
-def _turn_end(timestamp: str, pending: Any = "omit") -> Dict[str, Any]:
+def _turn_end(
+    timestamp: str, pending: Any = "omit", version: Optional[str] = "2.1.266"
+) -> Dict[str, Any]:
     """One ``system`` / ``turn_duration`` record.
 
     Description: the real key set. ``pending`` defaults to the sentinel
       ``"omit"`` so a test can ask for the field to be ABSENT, which is a
-      different fixture from the field being present and null.
+      different fixture from the field being present and null. ``version``
+      is the one the harness stamps on THIS record, and it is what says
+      whether an absent field is a zero or an unknown, so a test can move
+      it below the floor or take it away entirely.
     Inputs: timestamp (str) - ISO with the trailing Z the harness writes.
       pending (Any) - the count, None for JSON null, or "omit".
+      version (str | None) - the record's own version, None to omit it.
     Output: dict - one record.
     Example: _turn_end('2026-09-13T18:30:58.233Z', pending=3)
     """
@@ -77,6 +92,10 @@ def _turn_end(timestamp: str, pending: Any = "omit") -> Dict[str, Any]:
     }
     if pending != "omit":
         record["pendingBackgroundAgentCount"] = pending
+    if version is None:
+        del record["version"]
+    else:
+        record["version"] = version
     return record
 
 
@@ -306,22 +325,95 @@ def test_turn_end_with_three_pending_agents_reports_three():
     assert facts.pending_field_present is True
 
 
-def test_pending_count_of_json_null_is_zero_and_the_field_is_present():
+def test_pending_count_of_json_null_is_unknown_because_none_was_ever_written():
+    # 300 turn-end records on 2.1.266 carry no literal null at all, so
+    # nothing may claim to know what one would mean. The earlier reading
+    # of "null is zero" came from jq printing a MISSING key as null.
     facts = classify_transcript_records(
         [_turn_end("2026-09-13T18:30:58.233Z", pending=None)]
     )
     assert facts.verdict == FACTS_FOUND
-    assert facts.pending_background_agents == 0
+    assert facts.pending_background_agents is None
     assert facts.pending_field_present is True
 
 
-def test_absent_pending_field_is_unknown_and_never_zero():
+def test_an_omitted_pending_field_at_or_above_the_version_floor_is_zero():
+    # THE MEASURED RULE, and the one that makes done_idle reachable at
+    # all: 64 of 300 records omit the key and every one of them is a
+    # finished turn with nothing pending.
     facts = classify_transcript_records(
-        [_turn_end("2026-09-13T18:30:58.233Z")]
+        [_turn_end("2026-09-13T18:30:58.233Z", version="2.1.266")]
+    )
+    assert facts.verdict == FACTS_FOUND
+    assert facts.pending_background_agents == 0
+    # The KEY really was absent; the zero is read off the version, not
+    # off a field that was there all along.
+    assert facts.pending_field_present is False
+
+
+def test_an_omitted_pending_field_at_the_version_floor_itself_is_zero():
+    facts = classify_transcript_records(
+        [_turn_end("2026-09-13T18:30:58.233Z", version="2.1.241")]
+    )
+    assert facts.pending_background_agents == 0
+
+
+def test_an_omitted_pending_field_below_the_version_floor_is_unknown():
+    # One release earlier the field did not exist, so its absence there
+    # says nothing whatever about how many agents were running.
+    facts = classify_transcript_records(
+        [_turn_end("2026-09-13T18:30:58.233Z", version="2.1.240")]
     )
     assert facts.verdict == FACTS_FOUND
     assert facts.pending_background_agents is None
     assert facts.pending_field_present is False
+
+
+def test_an_omitted_pending_field_with_no_readable_version_is_unknown():
+    for version in (None, "2.1.266-beta.1"):
+        facts = classify_transcript_records(
+            [_turn_end("2026-09-13T18:30:58.233Z", version=version)]
+        )
+        assert facts.pending_background_agents is None, version
+
+
+def test_the_version_that_counts_is_the_one_on_the_turn_end_record():
+    # A newer record later in the window must not lend its version to an
+    # older one, and an older record must not take the newer one's away:
+    # the count is read off the SAME record the version is read off.
+    facts = classify_transcript_records(
+        [
+            _turn_end("2026-09-13T18:00:00.000Z", version="2.1.266"),
+            _turn_end("2026-09-13T18:10:00.000Z", version="2.1.240"),
+        ]
+    )
+    assert facts.pending_background_agents is None
+
+    facts = classify_transcript_records(
+        [
+            _turn_end("2026-09-13T18:00:00.000Z", version="2.1.240"),
+            _turn_end("2026-09-13T18:10:00.000Z", version="2.1.266"),
+        ]
+    )
+    assert facts.pending_background_agents == 0
+
+
+def test_an_omitted_count_and_a_missing_record_are_not_the_same_answer():
+    # THE PAIR THAT MUST NEVER COLLAPSE. One is a turn that ended with
+    # nothing pending; the other is a window that holds no turn end at
+    # all, which may simply be a turn still running.
+    omitted = classify_transcript_records(
+        [_turn_end("2026-09-13T18:30:58.233Z", version="2.1.266")]
+    )
+    none_at_all = classify_transcript_records(
+        [_assistant_tool_use("2026-09-13T18:30:58.233Z", "Bash", "toolu_a")]
+    )
+
+    assert omitted.verdict == FACTS_FOUND
+    assert omitted.pending_background_agents == 0
+    assert none_at_all.verdict == FACTS_NO_RECORD
+    assert none_at_all.pending_background_agents is None
+    assert none_at_all.turn_end_at is None
 
 
 def test_a_pending_count_that_is_not_a_number_is_unknown_and_says_so():
@@ -350,7 +442,7 @@ def test_the_newest_turn_end_record_in_the_window_is_the_one_that_counts():
         [
             _turn_end("2026-09-13T18:00:00.000Z", pending=3),
             _user_prompt("2026-09-13T18:05:00.000Z"),
-            _turn_end("2026-09-13T18:10:00.000Z", pending=None),
+            _turn_end("2026-09-13T18:10:00.000Z"),
         ]
     )
     assert facts.pending_background_agents == 0

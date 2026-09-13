@@ -16,12 +16,27 @@ not read the file at all, which measures nothing. Collapse any two and
 the product tells somebody their session is done in the middle of its
 work. Same discipline as ``session_status_seed_records``.
 
-``pendingBackgroundAgentCount`` HAS THREE STATES TOO. ABSENT means this
-claude version never wrote it, so the count is unknown (present False,
-count None). PRESENT AND JSON ``null`` means it was written and NONE are
-pending, the binary emitting null rather than 0 for an empty set
-(present True, count 0). Reading null as unknown suppresses every real
-done toast; reading an absent key as 0 raises every false one back.
+``pendingBackgroundAgentCount`` IS OMITTED WHEN THE COUNT IS ZERO, AND
+THE VERSION ON THE RECORD ITSELF IS WHAT TELLS THAT APART FROM A HARNESS
+THAT NEVER WROTE THE FIELD. Measured over 300 turn-end records in 40
+recent transcripts on claude 2.1.266: 236 carry a POSITIVE count, 64
+OMIT the key, and NOT ONE carries a literal null or a literal 0. So the
+harness writes the field only when something is pending. At or above
+2.1.241 (:data:`MIN_PENDING_VERSION`) an absent key therefore means ZERO
+agents were pending and the turn genuinely finished; below that floor the
+field did not exist yet, so an absent key there means UNKNOWN. The
+version read is the one stamped ON THE TURN-END RECORD, written by the
+process that wrote that record, never a version from anywhere else.
+
+AN EARLIER NOTE IN THIS FILE CLAIMED NULL MEANT ZERO. It was wrong: it
+came from jq printing a MISSING key as null, and the corpus holds no
+literal null at all. A field that is present but is not a number is
+therefore UNKNOWN and not zero, because nothing has ever been observed
+that says what it would mean.
+
+ONLY AN ABSENT FIELD ON A RECORD THAT EXISTS MAY BE READ AS ZERO. A
+window holding no turn-end record at all keeps the count None, because
+the turn may simply still be running.
 
 THE WINDOW IS 256 KB HERE AND 64 KB EVERYWHERE ELSE, ON PURPOSE. The
 shared reader ``claude_title_sync.read_tail_records`` keeps its 64 KB
@@ -43,6 +58,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Set
 
+from src.core.attention.registry_read import MIN_PENDING_VERSION, parse_version
 from src.core.claude_title_sync import read_tail_records
 from src.core.session_status_seed_records import parse_timestamp
 
@@ -81,8 +97,15 @@ BLOCKING_TOOL_NAMES: frozenset = frozenset({"AskUserQuestion", "ExitPlanMode"})
 #: The ``system`` subtype claude writes when a turn completes.
 TURN_END_SUBTYPE: str = "turn_duration"
 
-#: The field on that record holding the background agent count.
+#: The field on that record holding the background agent count. Written
+#: only when the count is POSITIVE; see the module docstring for the 300
+#: record measurement behind that sentence.
 PENDING_AGENTS_FIELD: str = "pendingBackgroundAgentCount"
+
+#: The claude version stamped on every record, including the turn-end
+#: one. The version on THAT record is the process that wrote it, which is
+#: the only authority on whether an absent count means zero.
+RECORD_VERSION_FIELD: str = "version"
 
 #: The ``queue-operation`` that ADDS a message to the input queue. Its
 #: siblings ``dequeue`` and ``remove`` carry no ``content``, so only the
@@ -118,11 +141,17 @@ class TranscriptFacts:
         same window whatever the verdict is, so a window holding an
         unanswered question but no turn end answers
         :data:`FACTS_NO_RECORD` and still names the tool.
-      - ``pending_background_agents``: the count off the newest turn-end
-        record, or None when it could not be determined. NOT zero.
-      - ``pending_field_present``: whether the field was written at all.
-        False plus None means this version never wrote one; True plus 0
-        means it wrote one and there are none.
+      - ``pending_background_agents``: how many background agents were
+        pending when the turn ended, or None when that could not be
+        determined. A None is never a substituted zero, and a zero is
+        never a substituted None: on claude 2.1.241 and up an OMITTED
+        field on a turn-end record is a measured zero, which is what a
+        finished turn looks like.
+      - ``pending_field_present``: whether the key was LITERALLY in the
+        record. It is the raw fact, not a trust gate: False beside a
+        count of 0 is the ordinary shape of a finished turn on 2.1.241
+        and up, and False beside None is a record whose own version is
+        too old, or too unparseable, to have written one.
       - ``turn_end_at``: timestamp of the newest turn-end record.
       - ``newest_assistant_at``: the newest ``assistant`` record, so a
         caller can ask whether the turn end is newer than it.
@@ -180,6 +209,19 @@ def _later(left: Optional[datetime], right: Optional[datetime]) -> Optional[date
     if right is None:
         return left
     return right if right > left else left
+
+
+def _version_text(version: Sequence[int]) -> str:
+    """A parsed version tuple back as the dotted string it came from.
+
+    Description: PURE. Used only to name the version inside a ``detail``
+      sentence, so a log line says which harness the reading was made
+      against instead of leaving the reader to guess.
+    Inputs: version (Sequence[int]) - for example ``(2, 1, 266)``.
+    Output: str.
+    Example: _version_text((2, 1, 266)) -> '2.1.266'
+    """
+    return ".".join(str(part) for part in version)
 
 
 def _record_text(record: Dict[str, Any]) -> str:
@@ -331,7 +373,10 @@ def classify_transcript_records(
       because the only thing worse than a wrong status is a watcher that
       stops ticking. The verdict describes the TURN-END record: found, or
       read the window and there is none, in which case
-      ``pending_background_agents`` is None and NEVER 0.
+      ``pending_background_agents`` is None and NEVER 0. That is a
+      DIFFERENT case from a record that EXISTS and omits the count,
+      which on claude 2.1.241 and up is a measured zero; the two are
+      never spelled the same way here.
 
       ``now`` is accepted so one clock threads through the whole evidence
       gather and the signature matches this package's other readers.
@@ -413,14 +458,14 @@ def classify_transcript_records(
     turn_end_at: Optional[datetime] = None
     if turn_end is not None:
         turn_end_at = parse_timestamp(turn_end.get("timestamp"))
+        record_version = parse_version(turn_end.get(RECORD_VERSION_FIELD))
         if PENDING_AGENTS_FIELD in turn_end:
             pending_present = True
             raw = turn_end.get(PENDING_AGENTS_FIELD)
-            if raw is None:
-                # PRESENT AND NULL MEANS NONE PENDING. The harness writes
-                # null rather than 0 for an empty set; see the docstring.
-                pending = 0
-            elif isinstance(raw, bool) or not isinstance(raw, int):
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                # Written, but not as a count. A literal null lands here
+                # too: the corpus holds none, so nothing may claim to
+                # know what one would mean. UNKNOWN, never zero.
                 pending = None
                 notes.append(
                     "the turn-end record carries a pending-agent count "
@@ -428,10 +473,27 @@ def classify_transcript_records(
                 )
             else:
                 pending = max(0, raw)
-        else:
+        elif record_version is not None and record_version >= MIN_PENDING_VERSION:
+            # OMITTED BY A HARNESS THAT WRITES THE FIELD MEANS ZERO. The
+            # version gating this is the one on THIS record, which is
+            # authoritative for it. Without this branch every genuinely
+            # finished turn reads as unknown and no done toast is ever
+            # raised: 83 of 83 legitimate ones were lost that way.
+            pending = 0
             notes.append(
-                "the turn-end record carries no pending-agent field, so "
-                "this claude version never wrote the count"
+                "the turn-end record on claude "
+                + _version_text(record_version)
+                + " omits the pending-agent field, which that harness "
+                "does only when the count is zero, so no background "
+                "agents were pending when the turn ended"
+            )
+        else:
+            pending = None
+            notes.append(
+                "the turn-end record carries no pending-agent field and "
+                "names no claude version at or above "
+                + _version_text(MIN_PENDING_VERSION)
+                + ", so the count is unknown rather than zero"
             )
 
     blocked_on_tool: Optional[str] = None

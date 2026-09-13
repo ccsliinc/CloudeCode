@@ -315,10 +315,12 @@ def _epoch_millis_to_datetime(value: Any) -> Optional[datetime]:
         return None
 
 
-def _parse_version(value: Any) -> Optional[Tuple[int, ...]]:
+def parse_version(value: Any) -> Optional[Tuple[int, ...]]:
     """Turn ``"2.1.266"`` into ``(2, 1, 266)``.
 
-    Description: strict on purpose. Every segment must be all digits, so
+    Description: PUBLIC because ``transcript_facts`` reads the same
+        version off the turn-end record and there is one parser for it,
+        not two. Strict on purpose. Every segment must be all digits, so
         a pre-release or a shape we have not seen answers None rather
         than a tuple that sorts somewhere arbitrary, and None is a
         refusal the version gate already knows how to handle.
@@ -328,9 +330,9 @@ def _parse_version(value: Any) -> Optional[Tuple[int, ...]]:
         tuple[int, ...] | None - None when missing, not a string, empty,
         or carrying a non-numeric segment.
     Example:
-        >>> _parse_version("2.1.266")
+        >>> parse_version("2.1.266")
         (2, 1, 266)
-        >>> _parse_version("2.1.266-beta.1") is None
+        >>> parse_version("2.1.266-beta.1") is None
         True
     """
     if not isinstance(value, str):
@@ -440,7 +442,7 @@ def parse_registry_record(raw: Any, *, path_pid: Optional[int]) -> RegistryRecor
         cwd=_optional_text(raw.get("cwd")),
         status_updated_at=_epoch_millis_to_datetime(raw.get("statusUpdatedAt")),
         started_at=_epoch_millis_to_datetime(raw.get("startedAt")),
-        version=_parse_version(raw.get("version")),
+        version=parse_version(raw.get("version")),
         detail=pid_note,
     )
 
