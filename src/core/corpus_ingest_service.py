@@ -42,15 +42,33 @@ adds nothing else - the storage decisions are all inherited:
 
 WHAT THIS DOES NOT DO, STATED SO THE ABSENCE IS NOT MISREAD. It does not
 populate the v16 message model (``message_transcripts`` /
-``message_bodies`` / ``message_appearances``). That model has no
-re-ingest path for a file that GREW - ``ingest_lines`` refuses a
-``source_ref`` it has already seen, deliberately, so that nothing is
-ever silently overwritten - which makes it the wrong layer for a live
-corpus whose transcripts grow while the app watches them. The archive
-layer used here is the one built for exactly that case. The status
-surface still REPORTS the message model's gate findings, read-only, and
-says out loud when that model holds nothing on this datastore rather
-than rendering an empty table as a clean bill of health.
+``message_bodies`` / ``message_appearances``) ITSELF, and the reason is
+unchanged: that model has no re-ingest path for a file that GREW -
+``ingest_lines`` refuses a ``source_ref`` it has already seen,
+deliberately, so that nothing is ever silently overwritten - which makes
+it the wrong layer to point at a live corpus whose transcripts grow while
+the app watches them. The archive layer used here is the one built for
+exactly that case.
+
+THAT SENTENCE USED TO END THE STORY, AND IT LEFT THE HISTORY BROWSER
+BLANK. The browser reads the message model and nothing joined the two, so
+an install could hold 22,828 correctly ingested archives and render an
+empty rail (measured on the owner's box, 2026-09-13). The join now exists
+and is a SEPARATE pass - :mod:`src.core.message_projection`, run by this
+module's own scheduler right after an ingest, on its own thread, under
+its own budget, with its own liveness artifact. It reads the ARCHIVE
+rather than the filesystem, which is precisely what makes growth
+answerable: the archive layer has already versioned it. Do not move that
+work into this pass; the two have different costs, different failure
+modes, and must be able to fail independently.
+
+The status surface still REPORTS the message model's gate findings,
+read-only, and says out loud when that model holds nothing on this
+datastore rather than rendering an empty table as a clean bill of health.
+Beside it now sits ``projection`` (see
+:mod:`src.core.message_projection_status`), which is the half
+``model_not_populated`` could never say: whether the join has ever run
+here, and how much of the archive is still waiting.
 
 HOST ATTRIBUTION IS RECORDED, WITH ITS EVIDENCE NAMED. When the schema
 carries the v17 host dimension, each run interns this machine and this

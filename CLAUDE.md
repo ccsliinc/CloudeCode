@@ -4023,6 +4023,63 @@ it holds nothing.
 corpus. `CLOUDE_CORPUS_ROOT` relocates the corpus,
 `CLOUDE_CORPUS_INGEST_INTERVAL` the sleep between passes.
 
+## The history browser reads a DIFFERENT store from the one the ingester fills
+
+`transcript_archives` / `transcript_records` is what the corpus ingester
+writes. The archive browser reads the v16 message model - the sixteen
+`message_*` tables - and **22 of the 44 server archive modules read that side,
+and not one of them references the archive tables.** Nothing joined them until
+2026-09-13, so an install could hold a perfect archive and render an empty
+rail: measured on the owner's box, **22,828 archive rows / 3,703,771,340
+compressed bytes against 0 rows** in `message_transcripts`, `message_bodies`,
+`message_content_blocks` and `message_appearances`. Every statement in that
+system was individually true. `corpus_status.py` was already saying
+`model_not_populated` and meaning it. Nobody put two of them side by side.
+
+**THE JOIN GOES ONE WAY ONLY, AND THE COLUMN MAP IS WHY.** `transcript_records`
+holds `line_no`, `byte_offset`, `byte_length`, `status`, `record_type`,
+`record_uuid`, `parent_uuid`, `ts` and NO CONTENT - the bytes live inside one
+zlib blob per file. Search does `INSTR(b.body_json, ...)`, the chat view joins
+`message_roles` / `message_models` / `message_record_types` /
+`message_compact_subtypes` and reads `message_content_blocks`, the mask reads
+`message_secret_findings`, and the rail is built on
+`message_hosts`/`corpora`/`projects`. The archive can answer none of it.
+Repointing the readers is not a wiring fix, it is rebuilding the normalised
+layer as a query over blobs. See `docs/history-archive-join.md`.
+
+**IT READS THE ARCHIVE, NEVER THE FILESYSTEM, AND THAT IS WHAT ANSWERS THE
+GROWTH OBJECTION.** `ingest_lines` refuses a `source_ref` it already holds,
+deliberately, which is why every FILESYSTEM-driven entry point into the model
+breaks on a growing transcript. The archive layer already versioned growth:
+`growth_kind` is `initial` (21,979) or `append` (849), an older version is
+marked `superseded_by_archive_id` (3,427, blobs pruned to an 8-byte sentinel),
+and **among the 19,401 rows with no superseding row `source_path` is unique
+19,401 out of 19,401.** So the current set is already one row per file. The
+refusal is untouched; a changed file is replaced one level up by
+`src/core/message_projection_ledger.py`, which records the `content_sha256`
+each transcript was derived from and fires only when the archive layer measured
+a different one. A replace is DELETE plus ingest, never an in-place edit -
+bodies are interned so the grown file re-interns nothing, and the orphaned
+bodies a replace leaves are a named, uncollected cost.
+
+**IT IS BUDGETED, AND THE FIRST RUN IS A SCRIPT.** Measured on 300 real
+archives: **0.84 MB/s** (202.65s for 169,333,023 raw bytes, of which 0.23s was
+decompression) and **1.50x raw bytes on disk**. Extrapolated over the 10.25 GiB
+current set that is about **3.7 hours and about 15.4 GiB added** to a 5.2 GB
+database, which is why the background pass keeps up rather than catches up
+(`CLOUDE_MESSAGE_PROJECTION_MAX_ARCHIVES` 64, `..._MAX_SECONDS` 30, after each
+ingest, on `asyncio.to_thread`) and the drain is
+`scripts/project_archive_to_message_model.py`, DRY RUN BY DEFAULT, which prints
+both costs against the caller's own rows first. Measured off the loop rather
+than asserted: a 2389.4 ms threaded pass left a largest loop gap of 3.95 ms
+with 818 wakes, the same call on the loop gave a 2376.52 ms gap and ZERO wakes.
+
+`GET /corpus/status` gains a `projection` block
+(`src/core/message_projection_status.py`) reporting the backlog and the last
+pass. `model_not_populated` stays exactly as written; this is the half it could
+never say, which is whether the join has ever run here.
+
+
 ## The daily database integrity check
 
 `PRAGMA integrity_check` is a MAINTENANCE OPERATION, NOT A LIVENESS PROBE, and
