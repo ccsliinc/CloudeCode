@@ -105,7 +105,8 @@ Sixty signatures cover 78.5 percent of the corpus. The remaining 1,287 cover
 the rest, and 464 of those are rare.
 
 Rare signatures broken down by record type: `assistant` 298, `user` 112,
-`system` 34, `progress` 12, then single-digit counts for `frame-link`,
+`system` 34, `progress` 12 (see the 2026-09-13 addendum: `progress` is
+historical and 2.1.266 emits none), then single-digit counts for `frame-link`,
 `file-history-delta`, `artifact-comment-monitor`, `result`, `cost-state`, and
 one with a NULL record type.
 
@@ -289,6 +290,13 @@ the question of what the code should even do there is open.
 All 26 interned record types occur. The lookup table's own comment records 19
 distinct at an earlier measurement, so seven have been added since.
 
+**`progress` IS THE LARGEST TYPE IN THE ARCHIVE AND IS NO LONGER EMITTED.**
+Claude Code 2.1.266 writes none: verified 2026-09-13 by reading live transcripts
+on this Mac. The 917,436 bodies below are history, written by earlier versions
+and correctly preserved. A test that needs a `progress` exemplar can still fetch
+one; a test that expects to SEE one in a transcript written today will find
+nothing and must not read that as a failed read.
+
 | Type | Bodies | Type | Bodies |
 |---|---|---|---|
 | `progress` | 917,436 | `rate_limit_event` | 50 |
@@ -319,8 +327,9 @@ occur fewer than 50 times.
 
 **The prior measurement of roughly 44.9 percent NULL is confirmed exactly.**
 NULL is the plurality value, not an edge case: `role` lives inside the nested
-`message` object and the majority record type (`progress`) has no `message`
-object at all.
+`message` object and the majority record type in the archive (`progress`, no
+longer emitted - see above) has no `message` object at all. The share will drift
+as newer transcripts land.
 
 ### model
 
@@ -652,3 +661,130 @@ The two `APPEARANCE_KEYS` (`isSidechain`, `agentId`) are split into the
 envelope at ingest and put back at their original position by `reassemble`
 walking `key_order`, which is why the ordering is stored per appearance rather
 than derived.
+
+---
+
+## Addendum, 2026-09-13: the shapes the attention resolver reads
+
+**Different method, stated so the numbers are not mixed up with the ones
+above.** Everything in this section was read from LIVE transcripts under
+`~/.claude/projects/` on the owner's Mac against Claude Code **2.1.266**, not
+from the archive database and not under the 2026-08-31 watermark. Counts here
+are over the sampled window named in each row, not over the corpus. Structure
+and closed enum values only; the privacy rule at the top of this document
+applies unchanged.
+
+These are the shapes `src/core/attention/transcript_facts.py` depends on. A test
+against that module needs an exemplar of each.
+
+### `system` / `turn_duration` - the turn boundary, and the count
+
+Subtype `turn_duration` on a `system` record. Keys observed: `cwd`,
+`durationMs`, `entrypoint`, `gitBranch`, `isMeta`, `isSidechain`,
+`messageCount`, `parentUuid`, `pendingBackgroundAgentCount`, `sessionId`,
+`slug`, `subtype`, `timestamp`, `type`, `userType`, `uuid`, `version`.
+
+**THE COUNT KEY IS OMITTED WHEN IT IS ZERO. This is the single most important
+measurement in this addendum.** Across **300 turn ends on 2.1.266**:
+
+| `pendingBackgroundAgentCount` | Turn ends |
+|---|---|
+| present and greater than zero | **236** |
+| key ABSENT | **64** |
+| present and `null` | **0** |
+| present and `0` | **0** |
+
+So "no key" and "no agents" are the same bytes and different facts only by
+convention, and `count or 0` reads a missing key as a finished turn. That
+expression, one tier up, is what produced 410 false "your turn" toasts in 50.8
+measured hours (`docs/LESSONS.md`). A reader must carry `pending_field_present`
+beside the value, and a window with no `turn_duration` in it at all must answer
+NO RECORD rather than zero.
+
+**The window has to be big enough to contain one.** Measured mid-turn across 9
+live transcripts, 3 had their newest `turn_duration` beyond 64 KB from the end
+of the file, which is why this one reader takes a 256 KB tail where the rest of
+the codebase takes 64 KB.
+
+### `system` / `stop_hook_summary`
+
+A `system` record with subtype `stop_hook_summary`, written immediately BEFORE
+the `turn_duration` for the same turn. It is a turn boundary in its own right
+and the transcript seed ladder already treated it as one. Note the name is
+about Claude Code's own stop hooks, not this app's: it is still written on a
+machine where this app installs none.
+
+### `queue-operation`, all three operations
+
+One record type, three values of its operation field, and they do not carry the
+same information.
+
+| Operation | Carries the queued content | What it proves |
+|---|---|---|
+| `enqueue` | yes | something was put on the queue, and for a background-agent completion the content is the `<task-notification>` envelope below |
+| `dequeue` | **no** | something was taken off. WHICH one is not stated, so the only thing matchable is ORDER against the enqueues |
+| `remove` | yes | a specific queued item was withdrawn |
+
+That dequeue carries no content is the reason the reader keeps a BALANCE rather
+than a set: an enqueue newer than the newest turn end, with no dequeue behind
+it, means claude is about to be re-invoked with no human involved.
+
+### A `user` record whose `origin.kind` is `task-notification`
+
+`type` `user`, `promptSource` `system`, `origin` `{"kind":
+"task-notification"}`, and content carrying `<task-notification>` with
+`<task-id>`, the `<tool-use-id>` it answers, and a `<status>` drawn from
+`completed`, `failed`, `killed`, `stopped`.
+
+**It is a `user` record and it is NOT a user.** Anything that tests "did a human
+turn up" by looking for a `user` row has to exclude this shape, along with
+`isMeta` rows and rows carrying a `toolUseResult`. Reading one as a prompt
+dismisses the notification the human never saw.
+
+### `toolUseResult.isAsync` - a background agent was launched
+
+On the immediate `tool_result` for a background agent launch: `toolUseResult`
+carries `agentId`, `isAsync` `true`, `status` `async_launched`, and
+`outputFile`. The result is written AT LAUNCH, not at completion, so it is a
+launch record and not an outcome.
+
+Two consequences for a reader. The launch is matched to its completion by
+tool-use id against the `task-notification` above, and the unmatched remainder
+is the open-agent ledger. And the Task tool is named **`Agent`** in these
+records, with `input.run_in_background` observed `null` in every call, so the
+launch cannot be recognised from the tool name or that flag; `isAsync` is the
+discriminator.
+
+A sub-agent's own transcript is a separate file,
+`<session>/subagents/agent-<id>.jsonl`, with a `.meta.json` beside it carrying
+`toolUseId`, `agentType`, `spawnDepth`, `requestShape`, `parentAgentId`. **There
+is no terminal marker in the sub-agent file**: a live one was observed ending on
+`end_turn`, exactly as a finished one does, so that file cannot answer whether
+the agent is still running.
+
+### An unanswered `AskUserQuestion` at end of file
+
+The most useful negative-space shape in the format. When claude asks a question,
+**the file ENDS on the assistant `tool_use` record and nothing further is
+written until the human answers.** There is no separate "waiting" record to find.
+`ExitPlanMode` has the identical shape, and so does a permission prompt.
+
+The answer, when it comes, is a `tool_result` whose text begins `Your questions
+have been answered:` and echoes the questions object. A rejection instead
+carries `toolDenialKind` `interrupted` with `toolUseResult` `User rejected tool
+use`.
+
+So a test fixture for "blocked on a question" is a tail that simply STOPS after
+the tool_use, and a test fixture for "answered" is the same tail with one more
+record. A reader that requires a positive marker for waiting will never find
+one.
+
+### Other record types seen on 2.1.266
+
+`attachment`, `queue-operation`, `system` (subtypes `turn_duration`,
+`stop_hook_summary`, `local_command`, `informational`, `compact_boundary`,
+`bridge_status`), `bridge-session`, `mode`, `custom-title`, `agent-name`,
+`last-prompt`, `atis-latch`, `permission-mode`, `history-suppression`,
+`file-history-snapshot`, `file-history-delta`, `ai-title`. `progress` is absent,
+as recorded above. The TodoWrite store moved to `~/.claude/tasks/<uuid>/N.json`
+and `~/.claude/todos/` is gone.

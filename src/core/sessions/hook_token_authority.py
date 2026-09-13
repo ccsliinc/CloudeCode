@@ -65,7 +65,6 @@ NO TOKEN VALUE IS EVER LOGGED, by any path in this file.
 
 from __future__ import annotations
 
-import hmac
 import json
 import secrets
 from pathlib import Path
@@ -73,10 +72,7 @@ from typing import Callable, Optional
 
 import structlog
 
-from src.core.hook_token_recovery import (
-    RECOVERY_ACCEPTED,
-    SupersededHookTokens,
-)
+from src.core.hook_token_recovery import SupersededHookTokens
 
 logger = structlog.get_logger()
 
@@ -109,7 +105,7 @@ class HookTokenAuthority:
 
         authority = HookTokenAuthority(lambda: settings.get_state_dir())
         token = authority.mint("ses_ab12", tmux_name="cloude_x")
-        assert authority.validate("ses_ab12", token)
+        assert authority.get("ses_ab12") == token
     """
 
     def __init__(
@@ -322,64 +318,6 @@ class HookTokenAuthority:
         self.persist()
         return existing
 
-    def recover(self, session_id: str, token: str) -> str:
-        """Accept a token this server superseded under a still-running agent.
-
-        Description: the second chance for a hook POST that
-          :meth:`validate` has ALREADY rejected, so a healthy hook never
-          reaches it. It answers one question: is the presented value a
-          token THIS PROCESS minted for THIS id, on THIS pane, and then
-          replaced? If so the agent holds it because a mint revoked its
-          credential mid-flight with no way to tell it, and the honest
-          correction is to re-bind the store to what the running process
-          actually holds. Done ONCE: the ring entry is consumed, so the
-          next hook from the same agent validates through the ordinary
-          path.
-
-          IT NEVER MINTS. Minting is the defect being recovered from.
-
-          The pane binding is a REFUSAL and not a relaxation: an id whose
-          tmux name is unknown yields ``unavailable`` and stays rejected.
-        Inputs: session_id (str), token (str) - as presented on the hook.
-        Output: str - one of the ``RECOVERY_*`` outcomes from
-          ``src.core.hook_token_recovery``. Only ``accepted`` authorises
-          the caller to treat the request as authenticated.
-        Example: ``authority.recover('ses_ab12', presented) == 'accepted'``
-        """
-        decision = self.superseded.decide(
-            session_id,
-            token,
-            current_tmux_name=self.tmux_names.get(session_id),
-        )
-        if decision.outcome != RECOVERY_ACCEPTED or not decision.token:
-            return decision.outcome
-
-        # CONSUME FIRST. Two duplicate deliveries of the same hook can be
-        # in flight at once (hook events are duplicated by design), and
-        # ``consume`` returning False is how the second one learns it lost
-        # the race. Both are still ACCEPTED - the token is genuine either
-        # way - but only the winner re-binds and only the winner logs, so
-        # a duplicate cannot produce a second rebind event describing a
-        # change that already happened.
-        first = self.superseded.consume(session_id, decision.token)
-        if first:
-            self.tokens[session_id] = decision.token
-            self.persist()
-            logger.warning(
-                "hook_token_rebound_from_superseded",
-                session_id=session_id,
-                tmux_session=decision.tmux_name,
-                note=(
-                    "a mint replaced this pane's token while its agent "
-                    "was running; the store has been re-bound to the "
-                    "token the process actually holds and nothing was "
-                    "minted"
-                ),
-            )
-        return RECOVERY_ACCEPTED
-
-    # -- reads -----------------------------------------------------------
-
     def get(self, session_id: str) -> Optional[str]:
         """Return the active token for ``session_id``, or None.
 
@@ -400,31 +338,6 @@ class HookTokenAuthority:
         Example: ``env['CLOUDECODE_HOOK_TOKEN'] = a.token_for_spawn(sid)``
         """
         return self.tokens.get(session_id) or self.mint(session_id)
-
-    def validate(self, session_id: str, token: str) -> bool:
-        """Constant-time compare a presented token against the stored one.
-
-        Description: False when the session is unknown, no token has been
-          minted, or the value mismatches. ``hmac.compare_digest`` so a
-          timing-leak attack cannot enumerate tokens from response-time
-          deltas.
-        Inputs: session_id (str), token (str).
-        Output: bool.
-        Example: ``authority.validate('ses_ab12', presented)``
-        """
-        if not session_id or not token:
-            return False
-        expected = self.tokens.get(session_id)
-        if expected is None:
-            return False
-        # ``compare_digest`` requires equal-length byte/str inputs. The
-        # length check itself is short-circuit, but since token_urlsafe(32)
-        # always yields a 43-char string, length-mismatch from a forged
-        # input is an unconditional False anyway.
-        try:
-            return hmac.compare_digest(expected, token)
-        except (TypeError, ValueError):
-            return False
 
     def name_for(self, session_id: str) -> Optional[str]:
         """The tmux name a session's token is bound to, or None.

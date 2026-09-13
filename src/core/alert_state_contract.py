@@ -484,13 +484,13 @@ _SUBSCRIBED_WHY: Dict[str, str] = {
     "PreToolUse": "working heartbeat",
     "PostToolUse": "working heartbeat",
     "SubagentStart": (
-        "increments subagent_depth today (session_activity.py); design "
-        "doc section 2.3 proposes this become an edge into a CHILD "
-        "node's own state instead of a same-node counter"
+        "incremented a live sub-agent counter until that counter was "
+        "deleted on 2026-09-13; design doc section 2.3 proposes an edge "
+        "into a CHILD node's own state instead of a same-node counter"
     ),
     "SubagentStop": (
-        "terminal - floors subagent_depth at 0. Does NOT set the "
-        "durable unread flag - design doc section 4, gap 3"
+        "terminal - floored that same deleted counter at 0. Does NOT set "
+        "the durable unread flag - design doc section 4, gap 3"
     ),
     "Notification": (
         "sets notice_open = True - claude wants attention and is NOT "

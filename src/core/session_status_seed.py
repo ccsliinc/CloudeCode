@@ -43,13 +43,12 @@ refuses a seed whose claim has run out. That is RUNG ZERO below, owned by
 ``session_transcript_status``, and it is the only rung that may say
 ``working``. Everything else in this file is unchanged and still may not.
 
-A LIVE HOOK ALWAYS WINS, IMMEDIATELY. The seam consults a seed only while
-``SessionActivityTracker.hooks_seen`` is False, so the first hook event of
-this process retires the seed for good with no expiry to wait out and no
-value to clear. That is also what makes seeding idempotent: a seed is a
-cached READING of durable evidence, not an event applied to a state
-machine, so re-deriving it any number of times converges on the same
-answer and re-deriving it after a hook has landed changes nothing.
+A LIVE READING ALWAYS WINS, IMMEDIATELY. The seam consults a seed only
+while nothing better has been measured, so a real reading retires it with
+no expiry to wait out and no value to clear. That is also what makes
+seeding idempotent: a seed is a cached READING of durable evidence, not
+an event applied to a state machine, so re-deriving it any number of
+times converges on the same answer.
 
 THE RUNGS, IN ORDER. Each names what it MEASURED; none of them rounds a
 missing measurement up to an answer.

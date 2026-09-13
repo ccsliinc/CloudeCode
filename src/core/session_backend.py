@@ -51,12 +51,12 @@ class SessionBackend(ABC):
         on_output: Async or sync callback invoked with raw bytes as they stream
             from the backend. Backends MUST invoke this on every output chunk
             EXCEPT when `replay_in_progress` is True (scrollback replay - the
-            WebSocket handler replays those bytes manually and IdleWatcher must
+            WebSocket handler replays those bytes manually and a consumer must
             not see them as "new" output).
     """
 
     #: Set to True during scrollback replay so downstream consumers
-    #: (IdleWatcher, etc.) can skip pattern detection on replayed bytes.
+    #: (the log monitor, etc.) can skip pattern detection on replayed bytes.
     #: Item 7 will wire the callback-suppression logic; for now backends
     #: flip the flag around their replay path so the surface exists.
     replay_in_progress: bool = False

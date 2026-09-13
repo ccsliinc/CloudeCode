@@ -43,12 +43,14 @@ os.environ.setdefault("CLOUDE_STATE_DIR", tempfile.mkdtemp(prefix="cc_test_state
 # os.environ, so a child process inherits it and the guard survives a fork.
 #
 # CLOUDE_CLAUDE_SETTINGS_PATH points claude_hooks.default_settings_path()
-# at a throwaway file. Without it, src/main.py's lifespan merged
-# CloudeCode's managed hook block into the developer's REAL
-# ~/.claude/settings.json on every pytest run - silently, successfully,
-# returning True. The guard in test_write_guard.py would now REFUSE that
-# write, so this line is not the safety mechanism; it is what keeps the
-# ordinary startup path working instead of merely failing safe.
+# at a throwaway file. Without it, src/main.py's lifespan reached the
+# developer's REAL ~/.claude/settings.json on every pytest run -
+# silently, successfully, returning True. It used to MERGE a managed hook
+# block in; since 2026-09-13 it STRIPS one back out, which is the same
+# file and the same blast radius pointed the other way. The guard in
+# test_write_guard.py would now REFUSE that write, so this line is not
+# the safety mechanism; it is what keeps the ordinary startup path
+# working instead of merely failing safe.
 os.environ.setdefault("CLOUDE_TEST_MODE", "1")
 
 # feat/message-archive-flag - the message archive is OFF BY DEFAULT for real
@@ -443,7 +445,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
 #      exactly that purpose.
 #
 # IT MAY OVER-INCLUDE AND MUST NEVER UNDER-INCLUDE, and that asymmetry is
-# deliberate, the same way ``StatusMap.complete`` and ``hooks_seen`` are.
+# deliberate, the same way ``StatusMap.complete`` is.
 # Marking a fast test costs a little coverage in the ``-m "not real_tmux"``
 # loop, and that loop is not a full verification anyway. MISSING a real-tmux
 # test puts a load-sensitive flake back into the fast loop and defeats the

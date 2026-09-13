@@ -5,7 +5,8 @@ Three endpoints: backfill an attaching client, record a toast by hand
 targets only the sockets bound to the named session, so a toast for
 session A never leaks into a tab attached to session B.
 
-The HOOK-DRIVEN toast path is next door in ``hook_event_routes.py``.
+The toast path that RAISES a toast now lives in the attention watcher
+(``src/core/attention/``); this module only reads and acknowledges them.
 """
 
 import structlog

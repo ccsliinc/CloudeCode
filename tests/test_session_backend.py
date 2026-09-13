@@ -1821,7 +1821,6 @@ async def test_detach_current_session_keeps_tmux_alive(tmp_path, monkeypatch):
         # Python-side invariants.
         assert sm._registry.current_backend() is None, "detach must clear backend ref"
         assert sm._registry.current_session() is None, "detach must clear session ref"
-        assert sm.idle_watcher is None, "detach must stop idle watcher"
 
         # owned_tmux_sessions must persist so Adopt UI still flags the
         # detached session as cloude-owned.

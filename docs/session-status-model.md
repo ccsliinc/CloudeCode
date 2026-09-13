@@ -6,6 +6,11 @@ symbol it was read out of. If a citation and this prose disagree, the citation
 wins - and `tests/test_status_model_chart_drift.py` fails the build when the
 state names here and the constants in the code stop matching.
 
+**Charts 2, 2b and 2c were re-derived on 2026-09-13** against
+`src/core/attention/`, when the activity axis stopped being fed by Claude Code
+lifecycle hooks and started being read off disk. The other five charts are
+unchanged and still cite the branch above.
+
 ## There are FOUR state machines, not one
 
 They are independent. A session has a value in all four at once, and no value
@@ -13,7 +18,7 @@ in any one of them determines a value in another.
 
 | # | Axis | Where it lives | Who writes it | Survives a restart |
 |---|------|----------------|---------------|--------------------|
-| 1 | **Activity** | in-memory, recomputed per request | `src/core/session_activity.py::SessionActivityTracker.resolve` | no |
+| 1 | **Activity** | nothing durable: RE-READ from disk on every pass | `src/core/attention/resolve.py::resolve_attention`, projected by `attention/display.py::to_display` | n/a, it is a reading |
 | 2 | **Lifecycle** | `sessions.lifecycle` column | `src/core/session_lifecycle.py::reconcile_from_listing` and the create/adopt/import writers | yes |
 | 3 | **Origin** | `sessions.origin` column | `src/core/session_identity.py::claim_instance`, the create path, the import path | yes |
 | 4 | **Deleted** | `sessions.archived_at` column | `src/core/session_store.py::archive_session` - the ONLY writer | yes |
@@ -60,29 +65,107 @@ tcsh csh`.
 **What the code admits it cannot do.** The module docstring
 (`session_status.py:24-33`) refuses to derive "waiting for user input" from
 tmux, because a pane query cannot tell thinking from blocked. That refusal is
-why chart 2 exists.
+why chart 2 exists, and the four tiers in chart 2 are the evidence that answers
+the question tmux cannot.
 
 ---
 
-## Chart 2 - Activity, the unified hook + tmux vocabulary
+## Chart 2 - Activity, the four evidence tiers and the rungs that read them
 
-Source: `src/core/session_activity.py::SessionActivityTracker.resolve`.
-Every state string is still defined in `session_status.py` - `session_activity`
-owns the machine and no literals (`session_status.py:63-67`).
+Source: `src/core/attention/resolve.py::resolve_attention`, a PURE function
+that opens no file and reads no clock. Rewritten on 2026-09-13: the previous
+version of this chart was driven by Claude Code lifecycle hooks arriving at an
+in-memory tracker, and **the app now installs no hooks at all**
+(`docs/DECISIONS.md`, "Zero hooks"). Nothing announces a state any more;
+everything is READ.
+
+**The four tiers, and what each one is allowed to say.** Precedence is the
+order below, and no tier may say more than its column allows.
+
+| Tier | Source | May say | May NEVER say |
+|---|---|---|---|
+| registry | `~/.claude/sessions/<pid>.json`, claude's own record of itself, rewritten in place on every status change (`attention/registry_read.py`) | `busy`, `needs_user`, `done_idle` | anything about a pane it is not joined to |
+| transcript | the tail of `~/.claude/projects/<slug>/<uuid>.jsonl` (`attention/transcript_facts.py`, 256 KB window) | `busy`, `needs_user` | `done_idle` on its own |
+| pane | the last block of `capture-pane` text (`attention/pane_markers.py`) | `needs_user` | `done_idle`, ever, by any path |
+| tmux | `#{pane_dead}` (`session_pane_death.py`) | `dead` | anything about what the agent is doing |
+
+The registry is the only tier that may ORIGINATE rest, because it is the only
+one that carries claude's own statement that it has stopped. The pane can only
+ever confirm that a dialog is on screen: a screen with no dialog on it is not a
+finished turn, it is a screen with nothing on it.
 
 ```mermaid
 flowchart TD
-    R["resolve(session_id, tmux_status, unread, now)"]
+    E["Evidence: tmux_liveness, agent_family,<br/>registry, transcript, pane, now"]
+    E --> R0
+    R0{"rung 0: tmux measured the pane GONE"} -->|yes| VDEAD["unknown(pane_dead), tier tmux"]
+    R0 -->|no| R1
+    R1{"rung 1: two live registry records claim one pane"} -->|yes| VAMB["unknown(ambiguous_pane), raise nothing"]
+    R1 -->|no| RFAM
+    RFAM{"rule e: agent_family named and NOT claude"} -->|yes| VFAM["pane only; done_idle UNREACHABLE"]
+    RFAM -->|"claude, or family unknown"| R2
+    R2{"rung 2: transcript ends on an unanswered<br/>AskUserQuestion or ExitPlanMode"} -->|yes| VQ["needs_user(question / plan_approval), settle"]
+    R2 -->|no| R3
+    R3{"rung 3: a task-notification is queued<br/>newer than the last turn end"} -->|yes| VRE["busy(queued_reinvoke)"]
+    R3 -->|no| R4
+    R4{"rung 4: pending background agents > 0,<br/>or the async ledger is non-empty"} -->|yes| VSUB["busy(subagents)"]
+    R4 -->|no| R5
+    R5{"rungs 5 to 5d: registry status is waiting"} -->|"pane shows a dialog"| VPERM["needs_user(permission / question), settle"]
+    R5 -->|"pane unreadable, turn open at EOF"| VPERM
+    R5 -->|"waitingFor named, pane has not vetoed"| VIN["needs_user(permission / input)"]
+    R5 -->|"nothing corroborates it"| VDIS["unknown(evidence_disagrees)"]
+    R5 -->|"not waiting"| R6
+    R6{"rungs 6, 6a, 7: registry says busy or shell"} -->|"busy, turn open at EOF"| VTOOL["busy(tool)"]
+    R6 -->|"busy, quiet since the turn end"| VSTR["busy(streaming)"]
+    R6 -->|"busy, but a NEWER turn end is recorded"| VDIS
+    R6 -->|"shell"| VSH["busy(shell)"]
+    R6 -->|"idle"| R8
+    R8{"rung 8: turn end is the last word, count is 0,<br/>async ledger empty, nothing queued,<br/>transcript quiet 3s"} -->|yes| VDONE["done_idle(turn_ended)"]
+    R8 -->|"transcript still moving, no turn end after it"| VSTR
+    R8 -->|"stale stamp nothing corroborates"| VSTALE["unknown(registry_stale)"]
+    R8 -->|"any other gate refused"| VNOEV["unknown(no_evidence)"]
+    R6 -->|"no usable registry record"| R9
+    R9{"rung 9: registry absent, stale or unreadable"} -->|"pending count > 0"| VSUB
+    R9 -->|"otherwise"| VREG["unknown(registry_absent / registry_stale / registry_unreadable)"]
+```
 
-    R -->|"tmux_status == STATUS_DEAD"| dead
-    R -->|"no signal, or hook_seen False"| FB["map_tmux_fallback<br/>(chart 3)"]
-    R -->|"hook_seen, permission_open"| question
-    R -->|"hook_seen, notice_open"| notice
-    R -->|"hook_seen, heartbeat fresh, subagent_depth > 0"| wsub
-    R -->|"hook_seen, heartbeat fresh, depth 0"| working
-    R -->|"heartbeat stale, unread"| fin
-    R -->|"heartbeat stale, not unread, tmux unknown"| unknown
-    R -->|"heartbeat stale, not unread, otherwise"| idle
+**Four verdict states, and the fourth is an answer, not a failure.**
+`done_idle`, `needs_user`, `busy`, `unknown`. `unknown` carries its own named
+reasons, it raises nothing, and it is NEVER rendered as `idle`.
+
+**The order of rungs 2, 3 and 4 is the whole design, and it is not the order
+the plan proposed.** The plan put the unanswered-blocking-tool test below both
+background-agent rungs. A real `AskUserQuestion` tail was replayed carrying
+`pending_background_agents=1`, so under that order a session parked on a
+question while an agent ran answered `busy(subagents)` and the question was
+never raised. Background agents do not unblock a human dialog, so the direct
+record of the dialog outranks the count. The code's own numbering is what this
+chart draws; `resolve.py`'s docstring lists all five places it deviates from
+the plan and why.
+
+**No `or 0` appears anywhere in the resolver.** A count that was not written is
+None, None satisfies no rung, and the session lands on `unknown`. That single
+rule is what removes the 410 false "done" toasts measured over 50.8 hours: every
+one of them was a missing number read as zero.
+
+### Chart 2b - the projection onto the eight names
+
+Source: `src/core/attention/display.py::to_display`. **THE EIGHT STATE NAMES
+STAY EIGHT.** The resolver answers four states with a reason each; this module
+maps those pairs onto names `src/core/session_status.py` already defines and
+adds none of its own.
+
+```mermaid
+flowchart LR
+    V1["unknown(pane_dead), or tmux_status dead"] --> dead
+    V2["needs_user(question / permission / plan_approval)"] --> question
+    V3["needs_user(input)"] --> notice
+    V4["busy(subagents / queued_reinvoke)"] --> wsub
+    V5["busy(streaming / tool / shell)"] --> working
+    V6["done_idle"] --> RD["derive_read_state, session_status.py:177"]
+    RD -->|"unread flag set"| fin
+    RD -->|"already seen"| idle
+    V7["unknown, any other reason"] --> unknown
 
     dead["dead"]
     question["question"]
@@ -94,52 +177,61 @@ flowchart TD
     unknown["unknown"]
 ```
 
-"Heartbeat fresh" is `now - last_tool_event_ts <=
-WORKING_HEARTBEAT_TIMEOUT_SECONDS` (120s, `session_activity.py:100`).
-
 These eight are `ALL_ACTIVITY_STATUSES`. `ACTIVITY_STATUS_PRIORITY` lists the
 same eight in urgency order and is documented as consulted by no resolver in
 this codebase.
 
-`question` and `notice` were ONE state until 2026-09-08. `question` is now a
-`PermissionRequest` alone - the agent is STOPPED until a human answers a
-yes/no - and `notice` is a `Notification` - claude wants attention and is not
-blocked. `permission_open` is read before `notice_open`, so a session holding
-both resolves to `question`. See `docs/session-status.md`.
+`done_idle` does NOT pick between `idle` and `finished_unread` itself. Those are
+one session at rest seen through one flag, and `derive_read_state` is the single
+place that flag is applied; re-deriving it here would give the project a second
+half-rule.
+
+`question` and `notice` were ONE state until 2026-09-08. `question` is the agent
+STOPPED until a human answers; `notice` is claude wanting attention while not
+blocked. The split now comes from the verdict's REASON rather than from two
+hook flags: `question`, `permission` and `plan_approval` paint `question`, and
+`input` alone paints `notice`. A `needs_user` reason the table does not list
+paints `question`, which fails toward the human.
 
 **`running` is in `ALL_STATUSES` and NOT in `ALL_ACTIVITY_STATUSES`.** That is
 deliberate and documented at `session_status.py:98-102`: a raw tmux `running`
 is mapped onto `working` before it ever reaches a client.
 
-### Chart 2b - what moves the hook signal
+### Chart 2c - the edge detector, and where a toast comes from
 
-Source: `src/core/session_activity.py::SessionActivityTracker.record_event`,
-event constants `session_activity.py:60-67`, membership `KNOWN_EVENTS:73`.
+Source: `src/core/attention/ledger.py::AttentionLedger.observe`, raised by
+`src/core/attention/watcher.py`. The resolver answers every two seconds for
+every live session and almost every answer repeats. A toast is raised on the
+EDGE, and the ledger is the only thing in the package that remembers anything.
 
 ```mermaid
-flowchart LR
-    P["PermissionRequest"] -->|"permission_open = True"| S(("signal"))
-    N["Notification"] -->|"notice_open = True"| S
-    U["UserPromptSubmit"] -->|"permission_open = False<br/>notice_open = False"| S
-    PRE["PreToolUse"] -->|"permission_open = False<br/>notice_open = False<br/>last_tool_event_ts = now"| S
-    POST["PostToolUse"] -->|"last_tool_event_ts = now"| S
-    SS["SubagentStart"] -->|"depth += 1, ts = now"| S
-    SE["SubagentStop"] -->|"depth = max(0, depth-1), ts = now"| S
-    ST["Stop"] -->|"permission False, notice False,<br/>depth 0, ts = None, last_stop_ts = now"| S
-    X["any unknown kind"] -->|"ignored, no-op"| S
+flowchart TD
+    OBS["observe(key, verdict, now, last_append_at)"]
+    OBS -->|"first sight of this key"| BASE["record a baseline, raise NOTHING<br/>(this is what stops the restart toast storm)"]
+    OBS -->|"verdict state is unknown"| FREEZE["FREEZE: keep the last confirmed verdict,<br/>keep any settle in progress, raise NOTHING"]
+    OBS -->|"same (state, reason) already emitted"| NOEDGE["no edge: one ask is one ask"]
+    OBS -->|"settle_required and seen once"| WAIT["hold for SETTLE_SECONDS = 1.5,<br/>a different verdict resets it"]
+    OBS -->|"done_idle inside DONE_QUIET_SECONDS = 3"| WAIT
+    OBS -->|"a real change, settled"| EDGE["Transition(key, state, reason, verdict)"]
+    EDGE --> ACT["watcher._act"]
 ```
 
-Every update is idempotent last-write-wins on a boolean or a floored counter,
-so duplicate or out-of-order hook delivery converges
-(`session_activity.py:17-32`). A *missing* `Stop` is handled by the 120s
-heartbeat timeout, not by the event stream.
+The key is the INSTANCE, `UnreadStore.compose_key(tmux_name, epoch)`, not the
+session id. Gotcha 4b and gotcha 10 are both about the two diverging.
+
+Which toast each edge raises, and what else it does, is in
+`docs/notifications.md`. Nothing else in the app raises a status toast.
 
 ---
 
 ## Chart 3 - the graceful-degradation map
 
-Source: `src/core/session_activity.py::map_tmux_fallback`. Taken when a session
-has never fired a hook.
+Source: `src/core/session_activity.py::map_tmux_fallback`. It is no longer on
+the live status path: chart 2 owns that. What is left is
+`SessionManager.list_attachable_sessions` (`session_manager.py:6143`), whose
+rows have no running process bound to them, so there is no registry record and
+no live transcript to resolve. tmux plus the stored unread flag is genuinely all
+there is for such a row.
 
 ```mermaid
 flowchart LR
@@ -447,8 +539,9 @@ Found while deriving this. Each is a real inconsistency in the tree at
 `c8865c0`, not a stylistic preference.
 
 1. **`ALL_STATUSES` and `ALL_ACTIVITY_STATUSES` are not nested sets.**
-   `running` is in the first and not the second; the three hook states are in
-   the second and not the first. This is documented
+   `running` is in the first and not the second; `question`, `notice`,
+   `working_subagent` and `finished_unread` are in the second and not the
+   first. This is documented
    (`session_status.py:98-102`) and correct, but it means "a status" has no
    single membership test in this codebase and every validator has to say
    which vocabulary it means.

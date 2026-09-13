@@ -253,7 +253,7 @@ def ensure_config_migrated(config_path: Path) -> None:
     Description: wraps ``migrate_config_file`` so a migration failure of
       any kind (missing file, bad JSON, unexpected exception) NEVER
       blocks server startup - same fail-soft posture as
-      ``claude_hooks.ensure_hook_settings()`` in ``src/main.py``'s
+      ``claude_hooks.strip_managed_hooks()`` in ``src/main.py``'s
       lifespan. Errors are logged, not raised.
     Inputs: config_path (Path).
     Output: None.

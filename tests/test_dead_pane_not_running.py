@@ -91,7 +91,6 @@ def mgr(monkeypatch, tmp_path):
     m = SessionManager()
     # Never let a test touch the real durable store.
     monkeypatch.setattr(m, "_persist_settled_activity_state", lambda *a, **k: None)
-    monkeypatch.setattr(m, "_restored_activity_state", lambda *a, **k: None)
     return m
 
 
@@ -224,7 +223,6 @@ def test_persisted_idle_cannot_overwrite_a_measured_dead(mgr, tmp_path, monkeypa
     kept: this pins the user-visible behaviour, that one pins the guard.
     """
     _register(mgr, "husk", "cloude_ses_husk", tmp_path)
-    monkeypatch.setattr(mgr, "_restored_activity_state", lambda *a, **k: STATUS_IDLE)
 
     info = mgr._session_info_for(
         "husk", status_map=_row("cloude_ses_husk", STATUS_DEAD)
@@ -248,7 +246,6 @@ def test_a_persisted_state_no_longer_paints_a_live_pane_at_all(
     over a pane nothing could measure answers ``unknown``.
     """
     _register(mgr, "real", "cloude_ses_real", tmp_path)
-    monkeypatch.setattr(mgr, "_restored_activity_state", lambda *a, **k: "working")
 
     info = mgr._session_info_for(
         "real", status_map=_row("cloude_ses_real", STATUS_IDLE)
@@ -263,7 +260,6 @@ def test_persisted_state_does_not_manufacture_a_status_when_unmeasurable(
 ):
     """No measurement means no restore - not a confident stored answer."""
     _register(mgr, "murky", "cloude_ses_murky", tmp_path)
-    monkeypatch.setattr(mgr, "_restored_activity_state", lambda *a, **k: STATUS_IDLE)
 
     info = mgr._session_info_for("murky", status_map={})
     assert info is not None

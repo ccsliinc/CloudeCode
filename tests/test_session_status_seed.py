@@ -68,7 +68,7 @@ os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
 from src.core.activity_persist import utc_now_iso, write_state
 from src.core.claude_transcript_correlate import slugify_project_dir
 from src.core.db import connect, db_path_for
-from src.core.session_activity import EVENT_PRE_TOOL_USE
+from tests.attention_claim_helpers import open_claims
 from src.core.session_status import (
     STATUS_DEAD,
     STATUS_FINISHED_UNREAD,
@@ -785,11 +785,11 @@ async def test_a_session_with_live_hook_signal_is_still_seeded(
     assert seed_live_sessions(mgr) == (1, 1)
     assert seeds_for(mgr).get("ses_hooked").state == STATUS_IDLE
 
-    # AND A HOOK NO LONGER EXCLUDES IT. The warm-up used to skip any
-    # session whose hooks had spoken, because a hook outranked a seed.
-    # Nothing reads hook signal now, so that skip could only ever refuse
-    # to warm a session that needs warming.
-    mgr._activity_tracker.record_event("ses_hooked", EVENT_PRE_TOOL_USE)
+    # AND AN OPEN ATTENTION CLAIM NO LONGER EXCLUDES IT. The warm-up used
+    # to skip any session whose hooks had spoken, because a hook outranked
+    # a seed. Nothing reads that signal now, so the skip could only ever
+    # refuse to warm a session that needs warming.
+    open_claims(mgr, "ses_hooked", notice=True)
     assert seed_live_sessions(mgr) == (1, 1)
 
 

@@ -3,7 +3,7 @@
 WHY THIS LIVES IN ``src/`` AND NOT IN ``tests/``
 ------------------------------------------------
 The defect this exists to kill was a production code path
-(``src/main.py``'s lifespan calling ``ensure_hook_settings()`` with no
+(``src/main.py``'s lifespan calling the settings writer with no
 path) that fell back to the developer's real ``~/.claude/settings.json``
 and merged into it during a plain ``pytest`` run. It succeeded, returned
 ``True`` and logged an ``info`` line, so every signal was green while the

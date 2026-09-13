@@ -149,12 +149,20 @@ class AttentionSideEffects:
     # Identity, resolved exactly the way the hook path resolved it
     # -----------------------------------------------------------------
 
-    def _instance(self, session_id: str) -> Tuple[Optional[str], Optional[int]]:
+    def instance_for(
+        self, session_id: str
+    ) -> Tuple[Optional[str], Optional[int]]:
         """This session's tmux name and instance epoch, or None for each.
 
         Description: THE SAME TWO-RUNG LOOKUP ``record_hook_event`` USED,
-          copied rather than improved. The live backend knows the name
-          while the process that created it is running; after a restart
+          copied rather than improved. PUBLIC because it is also the
+          composition site's lookup (``src/core/attention_wiring.py``):
+          the watcher's target keys and these writes must name one pane
+          the same way, and two spellings of it is how a flag gets filed
+          under an instance the other half never reads.
+
+          The live backend knows the name while the process that created
+          it is running; after a restart
           the id is not in ``backends`` yet and the persisted hook-token
           map still holds it, which is the reason a surviving session
           keeps being recorded instead of silently stopping.
@@ -164,7 +172,7 @@ class AttentionSideEffects:
           epoch as "unmeasured" rather than as a new instance.
         Inputs: session_id (str) - the cloudecode row id.
         Output: (tmux name | None, epoch | None).
-        Example: effects._instance("ses_1") -> ("cloude_x", 1757000000)
+        Example: effects.instance_for("ses_1") -> ("cloude_x", 1757000000)
         """
         backend = self._manager._registry.backends.get(session_id)
         tmux_name = getattr(backend, "tmux_session", None) if backend else None
@@ -191,7 +199,7 @@ class AttentionSideEffects:
         Output: None.
         Example: effects.set_unread(target)
         """
-        tmux_name, _epoch = self._instance(target.session_id)
+        tmux_name, _epoch = self.instance_for(target.session_id)
         if not tmux_name:
             return
         self._manager._unread_store.set_flag(
@@ -222,7 +230,7 @@ class AttentionSideEffects:
         Example: effects.on_busy_edge(target, transition)
         """
         session_id = target.session_id
-        tmux_name, _epoch = self._instance(session_id)
+        tmux_name, _epoch = self.instance_for(session_id)
         self._guard(
             "attention_work_stamp_failed",
             session_id,
@@ -257,7 +265,7 @@ class AttentionSideEffects:
         Example: effects.on_observation(target, observation)
         """
         session_id = target.session_id
-        tmux_name, epoch = self._instance(session_id)
+        tmux_name, epoch = self.instance_for(session_id)
         registry_present = observation.evidence.registry.known
 
         self._guard(

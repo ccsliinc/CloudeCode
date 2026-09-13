@@ -40,9 +40,8 @@ each of them is a read-modify-write against in-memory state the event
 loop mutates concurrently from the hook route:
 
   - ``SessionActivityTracker`` signals (``permission_open`` beside
-    ``permission_opened_at``, ``notice_open``, ``subagent_depth``,
-    the heartbeat stamps). These are fields of a MUTABLE dataclass that
-    the hook endpoint writes, and the set-order and clear-order of the
+    ``permission_opened_at``, and ``notice_open``). These are fields of
+    a MUTABLE dataclass, and the set-order and clear-order of the
     permission pair are opposites, so a read taken from a thread can see
     half a transition. Nothing here reads or writes them.
   - ``_unread_epochs`` (``unread_identity.remember`` writes it).
@@ -151,8 +150,8 @@ class ListingReaders:
     Inputs: build_status_map (callable) - one bulk ``list-panes -a``.
       build_instance_index (callable taking socket and names) - one
       triple-keyed query on one connection.
-      label_for_name / identity_for_live_name / restored_activity_state
-      (callables taking a tmux name) - the three name-keyed row reads.
+      label_for_name / identity_for_live_name (callables taking a tmux
+      name) - the two name-keyed row reads.
       The ownership read is NOT here; see the module docstring for the
       adoption window that keeps it on the loop.
       read_registry_index (callable taking nothing) - ONE scandir of
@@ -168,7 +167,6 @@ class ListingReaders:
     build_instance_index: Callable[..., Any]
     label_for_name: Callable[[Optional[str]], Optional[str]]
     identity_for_live_name: Callable[[Optional[str]], Optional[dict]]
-    restored_activity_state: Callable[[Optional[str]], Optional[str]]
     #: DEFAULTED, so every pre-attention construction site - the tests
     #: that drive this bundle with lambdas included - keeps building a
     #: valid bundle, and degrades to "the registry said nothing" rather
@@ -260,7 +258,6 @@ def gather_listing_inputs(
         names=snapshot.decorated_names,
         label_for_name=readers.label_for_name,
         identity_for_live_name=readers.identity_for_live_name,
-        restored_activity_state=readers.restored_activity_state,
         attention_for_name=attention_for_name,
     )
     return ListingGather(

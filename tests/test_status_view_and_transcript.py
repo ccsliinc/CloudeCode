@@ -37,11 +37,11 @@ from pathlib import Path
 
 import pytest
 
+from src.core.session_manager import SessionManager
+from src.models import Session, SessionStatus
 from src.core.session_activity import (
-    EVENT_NOTIFICATION,
-    EVENT_PERMISSION_REQUEST,
-    EVENT_STOP,
     WORKING_HEARTBEAT_TIMEOUT_SECONDS,
+    SessionActivitySignal,
     SessionActivityTracker,
 )
 from src.core.attention.registry_read import (
@@ -95,12 +95,110 @@ from src.core.session_transcript_status_read import (
     transcript_status_for,
 )
 
-# The hook-driven-status suite already owns a bare SessionManager harness
-# with a fake tmux backend. Reused rather than rebuilt so the two files
-# cannot drift on what a registered session looks like.
-from tests.test_hook_driven_status import _bare_manager, _register_session
+# The bare SessionManager harness. It used to be imported from the
+# hook-driven-status suite; that file went with the hooks on 2026-09-13,
+# so the two helpers it owned live here now, unchanged.
+
+
+class _StubSettings:
+    """Just enough of ``Settings`` for ``SessionManager.__init__``."""
+
+    def __init__(self, pin_path: Path, log_dir: Path, port: int = 5001):
+        self._pin_path = pin_path
+        self._log_dir = log_dir
+        self.port = port
+
+    def get_pinned_themes_path(self) -> Path:
+        return self._pin_path
+
+    def get_unread_state_path(self) -> Path:
+        return self._pin_path.parent / "unread_state.json"
+
+    @property
+    def log_directory(self) -> str:
+        return str(self._log_dir)
+
+    def get_session_metadata_path(self) -> Path:
+        return self._log_dir / "session_metadata.json"
+
+
+class _FakeBackend:
+    """Bare enough of a SessionBackend for tmux_session lookups."""
+
+    def __init__(self, tmux_session: str):
+        self.tmux_session = tmux_session
+
+    def is_alive(self) -> bool:
+        return True
+
+
+def _bare_manager(monkeypatch, tmp_path: Path, port: int = 5001) -> SessionManager:
+    """A SessionManager with stubbed settings and no real state paths.
+
+    Inputs: monkeypatch; tmp_path (Path); port (int).
+    Output: SessionManager.
+    """
+    stub = _StubSettings(
+        pin_path=tmp_path / "pinned_themes.json",
+        log_dir=tmp_path / "logs",
+        port=port,
+    )
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr("src.core.session_manager.settings", stub)
+    return SessionManager()
+
+
+def _register_session(
+    mgr: SessionManager, sid: str, tmux_name: str, working_dir: Path
+) -> Session:
+    """Put one live-looking session into the registry.
+
+    Inputs: mgr (SessionManager); sid (str); tmux_name (str);
+      working_dir (Path).
+    Output: Session.
+    """
+    sess = Session(
+        id=sid,
+        pty_pid=None,
+        working_dir=str(working_dir),
+        status=SessionStatus.RUNNING,
+        tmux_session=tmux_name,
+    )
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = _FakeBackend(tmux_name)
+    mgr._registry.subscribers.setdefault(sid, [])
+    return sess
+
 
 NOW = datetime(2026, 9, 9, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def _open_claims(
+    tracker: SessionActivityTracker,
+    session_id: str,
+    *,
+    notice: bool = False,
+    permission: bool = False,
+    at: datetime = NOW,
+) -> None:
+    """Put one session's attention claims into the open state.
+
+    Description: the claims used to be opened by feeding the tracker a
+      ``Notification`` or ``PermissionRequest`` hook event. That writer
+      was deleted with the hook subsystem on 2026-09-13 and the store is
+      waiting on a passive replacement, so these tests install the state
+      directly. WHAT IS UNDER TEST IS UNCHANGED: which claim each clear
+      retires, and which it must leave alone.
+    Inputs: tracker; session_id (str); notice / permission (bool);
+      at (datetime) - the stamp dating an opened permission.
+    Output: None.
+    Example: _open_claims(tracker, "s1", notice=True)
+    """
+    tracker._signals[session_id] = SessionActivitySignal(
+        permission_open=permission,
+        permission_opened_at=at if permission else None,
+        notice_open=notice,
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -111,24 +209,19 @@ NOW = datetime(2026, 9, 9, 14, 0, 0, tzinfo=timezone.utc)
 def test_clear_notice_drops_an_open_notification():
     """The defect itself: a notice survived being looked at."""
     tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_NOTIFICATION, now=NOW)
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) == STATUS_NOTICE
+    _open_claims(tracker, "s1", notice=True)
 
     assert tracker.clear_notice("s1") is True
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) != STATUS_NOTICE
+    assert tracker._signals["s1"].notice_open is False
 
 
 def test_clear_notice_is_idempotent():
     """Applied twice it reaches the same state, and says so the second time."""
     tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_NOTIFICATION, now=NOW)
+    _open_claims(tracker, "s1", notice=True)
     assert tracker.clear_notice("s1") is True
     assert tracker.clear_notice("s1") is False
     assert tracker.clear_notice("never-seen") is False
-    # With the notice gone and no heartbeat, a hook-fed session at a live
-    # pane reads ``idle``: the tracker has signal, and nothing in it is
-    # claiming anything.
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) == STATUS_IDLE
 
 
 def test_clear_notice_never_clears_a_permission():
@@ -143,12 +236,13 @@ def test_clear_notice_never_clears_a_permission():
     contract and the 2026-09-09 measurement that changed it.
     """
     tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_PERMISSION_REQUEST, now=NOW)
-    tracker.record_event("s1", EVENT_NOTIFICATION, now=NOW)
+    _open_claims(tracker, "s1", notice=True, permission=True)
 
     tracker.clear_notice("s1")
 
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) == STATUS_QUESTION
+    assert tracker._signals["s1"].notice_open is False
+    assert tracker._signals["s1"].permission_open is True
+    assert tracker.permission_open_since("s1") == NOW
 
 
 def test_a_websocket_bind_clears_the_notice_and_the_unread_flag(
@@ -157,14 +251,14 @@ def test_a_websocket_bind_clears_the_notice_and_the_unread_flag(
     """End to end through the manager: what a view actually clears."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_NOTIFICATION, {})
-    mgr.record_hook_event("ses1", EVENT_STOP, {})
+    _open_claims(mgr._activity_tracker, "ses1", notice=True)
+    mgr.set_manual_unread("cloude_proj", True)
     assert mgr._is_unread("cloude_proj") is True
 
     mgr.mark_session_viewed("ses1")
 
     assert mgr._is_unread("cloude_proj") is False
-    assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) != STATUS_NOTICE
+    assert mgr._activity_tracker._signals["ses1"].notice_open is False
 
 
 def test_a_websocket_bind_clears_a_permission_prompt(monkeypatch, tmp_path):
@@ -185,16 +279,13 @@ def test_a_websocket_bind_clears_a_permission_prompt(monkeypatch, tmp_path):
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_PERMISSION_REQUEST, {})
-    assert mgr._activity_tracker.resolve(
-        "ses1", STATUS_RUNNING
-    ) == STATUS_QUESTION
+    _open_claims(mgr._activity_tracker, "ses1", permission=True)
+    assert mgr._activity_tracker.permission_open_since("ses1") == NOW
 
     mgr.mark_session_viewed("ses1")
 
-    assert mgr._activity_tracker.resolve(
-        "ses1", STATUS_RUNNING
-    ) != STATUS_QUESTION
+    assert mgr._activity_tracker._signals["ses1"].permission_open is False
+    assert mgr._activity_tracker.permission_open_since("ses1") is None
 
 
 def test_the_manual_mark_read_control_clears_the_notice_too(
@@ -203,13 +294,13 @@ def test_the_manual_mark_read_control_clears_the_notice_too(
     """"mark read" is a view. The two paths route through one seam."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_NOTIFICATION, {})
+    _open_claims(mgr._activity_tracker, "ses1", notice=True)
     mgr.set_manual_unread("cloude_proj", True)
 
     mgr.set_manual_unread("cloude_proj", False)
 
     assert mgr._is_unread("cloude_proj") is False
-    assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) != STATUS_NOTICE
+    assert mgr._activity_tracker._signals["ses1"].notice_open is False
 
 
 def test_marking_a_session_unread_does_not_clear_its_notice(
@@ -222,11 +313,11 @@ def test_marking_a_session_unread_does_not_clear_its_notice(
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_NOTIFICATION, {})
+    _open_claims(mgr._activity_tracker, "ses1", notice=True)
 
     mgr.set_manual_unread("cloude_proj", True)
 
-    assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) == STATUS_NOTICE
+    assert mgr._activity_tracker._signals["ses1"].notice_open is True
 
 
 # --------------------------------------------------------------------- #

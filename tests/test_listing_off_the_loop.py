@@ -194,7 +194,6 @@ def test_the_listing_gather_runs_off_the_event_loop(monkeypatch):
     )
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: None)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
     monkeypatch.setattr(manager._owned, "instances_from_db", lambda: set())
 
     async def scenario():
@@ -289,7 +288,6 @@ def test_the_prefetched_row_is_identical_to_the_per_row_read(
     )
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: label)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: identity)
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: restored)
     monkeypatch.setattr(manager._owned, "instances_from_db", lambda: owned)
 
     prefetched = asyncio.run(manager.list_session_infos())
@@ -332,7 +330,6 @@ def test_an_adopted_id_is_decorated_the_same_way(monkeypatch):
     )
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: "adopted")
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
     monkeypatch.setattr(manager._owned, "instances_from_db", lambda: set())
 
     prefetched = asyncio.run(manager.list_session_infos())
@@ -361,7 +358,6 @@ def test_an_incomplete_listing_produces_the_same_row_on_both_paths(monkeypatch):
     )
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: "x")
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
     monkeypatch.setattr(manager._owned, "instances_from_db", lambda: None)
 
     prefetched = asyncio.run(manager.list_session_infos())
@@ -405,7 +401,6 @@ def test_an_adoption_landing_during_the_gather_is_reported_owned(monkeypatch):
     )
     monkeypatch.setattr(manager, "_label_for_tmux_name", lambda _n: None)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
     monkeypatch.setattr(
         manager._owned, "instances_from_db", lambda: set(adopted)
     )
@@ -428,7 +423,6 @@ def test_ownership_is_never_answered_from_the_prefetch():
         names=["cloude_a"],
         label_for_name=lambda _n: None,
         identity_for_live_name=lambda _n: None,
-        restored_activity_state=lambda _n: None,
     )
     # ``hasattr`` on the CLASS cannot answer this: a dataclass field with
     # no default is not a class attribute, so it would read as absent
@@ -482,7 +476,6 @@ def test_a_session_registered_during_the_gather_falls_through_to_live_reads(
 
     monkeypatch.setattr(manager, "_label_for_tmux_name", label)
     monkeypatch.setattr(manager, "_identity_for_live_name", lambda _n: None)
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda _n: None)
     monkeypatch.setattr(manager._owned, "instances_from_db", lambda: set())
 
     infos = asyncio.run(manager.list_session_infos())
@@ -510,7 +503,6 @@ def test_names_are_deduplicated_and_falsy_names_are_skipped():
         names=["cloude_a", "cloude_a", None, "", "cloude_b"],
         label_for_name=label,
         identity_for_live_name=lambda _n: None,
-        restored_activity_state=lambda _n: None,
     )
     assert seen == ["cloude_a", "cloude_b"]
     assert prefetch.has("cloude_a") and prefetch.has("cloude_b")
@@ -543,7 +535,6 @@ def test_the_attention_reads_happen_in_the_gather_and_not_per_row():
         build_instance_index=lambda **kw: None,
         label_for_name=lambda n: None,
         identity_for_live_name=lambda _n: None,
-        restored_activity_state=lambda _n: None,
         read_registry_index=lambda: scans.append(1) or {},
         transcript_facts_for=lambda uuid, wd, **kw: tails.append(uuid) or "FACTS",
     )
@@ -584,7 +575,6 @@ def test_a_prefetch_built_without_the_attention_readers_reports_them_absent():
         names=["cloude_a"],
         label_for_name=lambda n: n,
         identity_for_live_name=lambda _n: None,
-        restored_activity_state=lambda _n: None,
     )
     assert prefetch.has("cloude_a") is True
     assert prefetch.registry_for("cloude_a") is None
@@ -609,7 +599,6 @@ def test_the_gather_reaches_nothing_but_its_two_arguments():
         build_instance_index=lambda **kw: kw,
         label_for_name=lambda n: f"L{n}",
         identity_for_live_name=lambda _n: None,
-        restored_activity_state=lambda _n: None,
     )
     gathered = listing_gather.gather_listing_inputs(readers, snapshot)
     assert gathered.instance_index == {

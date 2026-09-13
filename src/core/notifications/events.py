@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 
 class EventType(str, Enum):
-    """All notification kinds the IdleWatcher / lifecycle can emit."""
+    """All notification kinds the toast path / lifecycle can emit."""
 
     PERMISSION_PROMPT = "permission_prompt"
     INPUT_REQUIRED = "input_required"
@@ -28,7 +28,7 @@ class EventType(str, Enum):
     TEST_RESULT = "test_result"
     # v0.7.0 Part 3/4 - Claude Code lifecycle hook kinds, sourced from the
     # hook endpoint via ``session_manager.record_toast``. Distinct from the
-    # IdleWatcher's pattern-derived kinds so a Slack/ntfy presentation
+    # The pattern-derived kinds, kept so a Slack/ntfy presentation
     # table can render them with hook-specific copy.
     CLAUDE_STOP = "claude_stop"
     CLAUDE_NOTIFICATION = "claude_notification"
@@ -48,7 +48,7 @@ class NotificationEvent:
             internal latency metrics and rate-limit decisions; not
             sent on the wire.
         snippet: optional last line of output, truncated to 200 chars.
-            Internal logging only - NEVER sent to ntfy. The IdleWatcher
+            Internal logging only - NEVER sent to ntfy. The producer
             (Item 7) can populate this for its own debug trail.
         policy_key: the DURABLE session identity (``sessions.session_uuid``)
             this event belongs to, or None when the producer does not know

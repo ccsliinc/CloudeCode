@@ -117,7 +117,6 @@ from src.core import listing_attention
 from src.core.attention import registry_read
 from src.core.unread_store import UnreadStore
 from src.core.unique_tmp_path import unique_tmp_path
-from src.core.notifications.idle_watcher import IdleWatcher
 from src.core.upload_sweeper import (
     SweepOutcome,
     UploadSweeper,
@@ -374,7 +373,7 @@ class SessionManager:
             else SessionRegistry(log_cap=lambda: settings.log_buffer_size)
         )
         # S5 - the ONE owner of the three per-session sidecars.
-        # ``idle_watchers``, ``adopt_fifo_offsets`` and
+        # ``adopt_fifo_offsets`` and
         # ``pending_terminal_commands`` are PROPERTIES on this class now,
         # all three aliasing the collaborator's own dicts. In-memory only,
         # exactly as they were: a pending terminal command that survived a
@@ -389,11 +388,11 @@ class SessionManager:
         # command counts. Multiple sessions coexist; two browser tabs can
         # each be attached to a different session, and touching one
         # session's entry NEVER touches another's.
-        # The three per-session sidecars live on ``self._sidecars``.
+        # The two per-session sidecars live on ``self._sidecars``.
         # Notification router reference - set by ``attach_notification_router``
         # during FastAPI lifespan startup (after both the SessionManager and
-        # the router are constructed). When None, IdleWatcher instantiation
-        # is skipped and no notification events fire.
+        # the router are constructed). When None, a recorded toast is not
+        # pushed to any external channel.
         self._notification_router = None
 
         # DURABLE PER-SESSION NOTIFICATION MUTE - set by
@@ -451,7 +450,7 @@ class SessionManager:
         # scope its durable activity write to the exact tmux INSTANCE
         # (tmux_socket, tmux_name, tmux_created_epoch) without a tmux
         # probe on every single hook event - a live probe per hook is
-        # what ``_persist_activity_state`` already refuses to pay for. A
+        # what the durable status write already refuses to pay for. A
         # miss here (pre-restart, or the create/adopt step never resolved
         # an epoch) means the hook-time write is refused, a named
         # CANNOT-DETERMINE, and the state is left to the listing-time
@@ -597,25 +596,18 @@ class SessionManager:
     # endpoint empty on every session), ``away_routes`` used a callable
     # check on the same method (that module was deleted with the away bar
     # on 2026-09-13 and is named here only as one of the four), and
-    # ``websocket.py`` did
+    # ``websocket.py`` reached the per-session idle watchers through
     # ``getattr(sm, "idle_watchers", {})`` (no watcher found, on every
-    # session). All four were repointed in the same commit and their
+    # session - that subsystem was itself deleted with the hooks on
+    # 2026-09-13). All four were repointed in the same commit and their
     # tolerance removed, so the next such move fails loudly.
 
     # ---- the current session's sidecars ---------------------------------
     #
-    # These two stay because each reaches a DIFFERENT collaborator: the
-    # registry answers which session is current, the sidecars answer what
-    # is attached to it. Neither is a forwarder and neither belongs on
-    # either collaborator alone.
-
-    @property
-    def idle_watcher(self) -> Optional[IdleWatcher]:
-        """Idle watcher of the current session (back-compat for the WS hot path)."""
-        sess = self._registry.current_session()
-        if sess is None:
-            return None
-        return self._sidecars.watcher(sess.id)
+    # This one stays because it reaches a DIFFERENT collaborator from the
+    # registry: the registry answers which session is current, the
+    # sidecars answer what is attached to it. It is not a forwarder and
+    # belongs on neither collaborator alone.
 
     @property
     def adopt_fifo_start_offset(self) -> Optional[int]:
@@ -713,9 +705,9 @@ class SessionManager:
         # operations. The token's real lifetime is "as long as a tmux
         # session by that name is still owned", which is what
         # ``HookTokenAuthority.gc`` enforces at load, so nothing accumulates.
-        # feat/hook-driven-status - drop the ephemeral hook-signal state.
-        # The persisted unread flag (keyed by tmux NAME, not session_id) is
-        # deliberately untouched here - it must survive detach/re-adopt.
+        # Drop this session's open attention claims. The persisted unread
+        # flag (keyed by tmux NAME, not session_id) is deliberately
+        # untouched here - it must survive detach and re-adopt.
         self._activity_tracker.forget(session_id)
         if self._registry.last_session_id == session_id:
             self._registry.last_session_id = (
@@ -1849,128 +1841,6 @@ class SessionManager:
 
         return toast
 
-    def subagent_depth(self, session_id: str) -> int:
-        """How many background sub-agents this session has running right now.
-
-        Description: Thin read-only passthrough to
-            ``SessionActivityTracker.subagent_depth`` so the hook endpoint
-            can ask the question without reaching into a private attribute.
-            An unknown session answers 0 - not having a record is not
-            evidence that sub-agents are running, and the one caller uses a
-            positive count only to STAY SILENT.
-        Inputs:
-            session_id: cloudecode session id.
-        Output: int, 0 or greater.
-        Example:
-            >>> mgr.subagent_depth("ses_1")
-            0
-        """
-        return self._activity_tracker.subagent_depth(session_id)
-
-    def subagent_wait_active(self, session_id: str) -> bool:
-        """Whether a recent Stop for this session was a sub-agent wait.
-
-        Description: Thin read-only passthrough to
-            ``SessionActivityTracker.subagent_wait_active``, matching the
-            ``subagent_depth`` passthrough above so the hook endpoint can
-            read both halves of the same evidence without reaching into a
-            private attribute. An unknown session answers False - not
-            having a record is not evidence a wait is in progress, and the
-            one caller uses a True only to STAY SILENT.
-        Inputs:
-            session_id: cloudecode session id.
-        Output: bool.
-        Example:
-            >>> mgr.subagent_wait_active("ses_1")
-            False
-        """
-        return self._activity_tracker.subagent_wait_active(session_id)
-
-    def should_suppress_idle_notification(self, session_id: str) -> bool:
-        """Whether this session's idle ``Notification`` toast should stay quiet.
-
-        Description: Thin read-only passthrough to
-            ``SessionActivityTracker.should_suppress_idle_notification``,
-            matching the ``subagent_depth`` / ``subagent_wait_active``
-            passthroughs above so the hook endpoint can read this signal
-            without reaching into a private attribute. An unknown session
-            answers False - not having a record is not evidence a turn
-            ended, and the one caller uses a True only to STAY SILENT.
-        Inputs:
-            session_id: cloudecode session id.
-        Output: bool.
-        Example:
-            >>> mgr.should_suppress_idle_notification("ses_1")
-            False
-        """
-        return self._activity_tracker.should_suppress_idle_notification(session_id)
-
-    def record_hook_event(
-        self, session_id: str, kind: str, payload: Optional[dict] = None
-    ) -> None:
-        """Feed one Claude Code lifecycle hook event into the activity model.
-
-        Description: Called by the hook endpoint (``POST
-            /hooks/claude-event``) for EVERY event kind - including the
-            ones that never produce a toast (PreToolUse/PostToolUse/
-            SubagentStart/SubagentStop/UserPromptSubmit). Best-effort by
-            design: an unknown ``session_id`` is a documented no-op here
-            (the toast path, ``record_toast``, is the one that legitimately
-            raises/404s on an unknown session - activity tracking is a
-            secondary signal and must never block hook delivery or make
-            the endpoint fail for a session that's mid-teardown).
-        Inputs:
-            session_id: cloudecode session id from the validated hook POST.
-            kind: hook event kind (one of
-                ``claude_hooks.TOAST_EVENTS + claude_hooks.ACTIVITY_ONLY_EVENTS``).
-            payload: the hook's raw JSON body. Unused today (the state
-                machine only needs the event kind + arrival time) but
-                threaded through for forward-compat and so a future signal
-                (e.g. a specific tool name) doesn't require an endpoint
-                signature change.
-        Output: None.
-        Example:
-            >>> mgr.record_hook_event("ses_1", "PreToolUse")
-        """
-        self._activity_tracker.record_event(session_id, kind)
-        backend = self._registry.backends.get(session_id)
-        tmux_name = getattr(backend, "tmux_session", None) if backend else None
-        if not tmux_name:
-            # After a restart the id is not in `backends` yet, but the
-            # persisted map still knows the name - the same fallback the
-            # lineage path uses, and the reason a surviving agent's status
-            # keeps being recorded instead of silently stopping.
-            tmux_name = self.hook_tokens.name_for(session_id)
-        # punchlist 19 - EVERY event kind counts here, not just the
-        # lifecycle pair. The gate asks "has this instance produced ANY
-        # sign of life", and a session whose SessionStart POST was dropped
-        # (hooks are droppable - CLAUDE.md) but whose PreToolUse landed is
-        # plainly past its startup prompt. Recording only SessionStart
-        # would rebuild the one-shot-channel-with-no-retry defect that
-        # cost this project sixteen rows with no conversation id.
-        self._startup_gate_ledger.record_hook(
-            tmux_name, epoch=self._instance_epochs.get(session_id)
-        )
-        # punchlist 3 - A HOOK IS THE TRIGGER, THE PROCESS IS THE
-        # EVIDENCE. Only claude fires these, so a hook is what makes a
-        # process read worth taking for a session whose row records no
-        # agent (launched as a bare shell, then given a hand-typed
-        # claude). The whole ladder, the cost gating and the write live in
-        # session_agent_infer{,_apply}.py; this is one call that runs at
-        # most once per pane per process and never raises.
-        session_agent_infer_apply.apply_agent_inference(
-            self, session_id, tmux_name
-        )
-        if kind == EVENT_STOP and tmux_name:
-            # ONE FLAG, ONE KEY. This, the manual control and the
-            # viewed-clear all derive the epoch through _unread_epoch, so
-            # the three cannot file the same pane under two keys.
-            self._unread_store.set_flag(
-                tmux_name, "auto", True, epoch=self._unread_epoch(tmux_name),
-            )
-        self._persist_activity_state(session_id, tmux_name)
-        self._persist_work_stamp(session_id, tmux_name, kind)
-
     def _persist_work_stamp(
         self, session_id: str, tmux_name: Optional[str], kind: Optional[str]
     ) -> None:
@@ -2187,129 +2057,6 @@ class SessionManager:
                     self._last_persisted_activity[cache_key] = state
         except Exception as exc:  # noqa: BLE001 - never break a listing
             logger.debug("settled_activity_persist_failed", error=str(exc))
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
-    def _restored_activity_state(self, tmux_name: Optional[str]) -> Optional[str]:
-        """The durable activity state for a session, if still trustworthy.
-
-        Description: reads ``activity_state`` / ``activity_state_at`` off
-          the real-instance row and judges it by age through
-          ``activity_persist.restore_state``. Returns None for absent,
-          unparseable, stale or ``dead`` - all of which the caller must
-          leave as not-measured rather than rounding to ``idle``.
-        Inputs: tmux_name (str | None).
-        Output: str | None.
-        """
-        if not tmux_name:
-            return None
-        conn = None
-        try:
-            from src.core.activity_persist import restore_state
-
-            conn = self._writable_datastore_connection()
-            if conn is None:
-                return None
-            row = conn.execute(
-                "SELECT activity_state, activity_state_at FROM sessions "
-                "WHERE tmux_name = ? AND tmux_created_epoch IS NOT NULL "
-                "ORDER BY tmux_created_epoch DESC, id DESC LIMIT 1",
-                (tmux_name,),
-            ).fetchone()
-            if not row:
-                return None
-            state, _reason = restore_state(row[0], row[1])
-            return state
-        except Exception as exc:  # noqa: BLE001 - a read must not break listing
-            logger.debug("activity_state_restore_failed", error=str(exc))
-            return None
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
-    def _persist_activity_state(
-        self, session_id: str, tmux_name: Optional[str]
-    ) -> None:
-        """Stamp the freshly-computed activity state onto the session row.
-
-        Description: makes the hook-derived status DURABLE. Without this,
-          the state lives only in ``SessionActivityTracker``, an in-memory
-          dict, and a server restart forgets what every session was doing
-          - which does not degrade to "unknown" but to a confident
-          ``idle``, because the tmux fallback reports a constant under
-          this app's launch path.
-
-          Best-effort and silent on failure by design: a status write must
-          never be able to fail hook delivery. It writes the state the
-          tracker just computed, so the durable value and the live value
-          cannot disagree.
-
-          SCOPED TO THE EXACT TMUX INSTANCE via ``self._instance_epochs``
-          (populated by the create/adopt persist steps - see that dict's
-          docstring), never to ``tmux_name`` alone: a name is reusable,
-          so an unscoped write would land on every row sharing this
-          session's name, including a dead one. A cache miss (pre-restart,
-          or the epoch was never resolved) is a genuine CANNOT-DETERMINE,
-          not a licence to guess - ``write_state`` refuses the write and
-          logs it, and the listing-time settled write (which always has a
-          fresh, probe-sourced epoch) is what re-establishes durability
-          instead. Paying for a tmux probe on every hook event, just to
-          avoid that gap, is exactly the cost this function already
-          refuses (see the STATUS_UNKNOWN note below).
-        Inputs: session_id (str). tmux_name (str | None).
-        Output: None.
-        """
-        if not tmux_name:
-            return
-        conn = None
-        try:
-            from src.core.activity_persist import write_state
-            from src.core.session_status import STATUS_UNKNOWN
-
-            # STATUS_UNKNOWN is passed deliberately: at hook time we have
-            # not run a tmux probe, and doing one per hook would mean a
-            # subprocess on every single tool call.
-            #
-            # `resolve` only uses the tmux argument for the dead-check and
-            # for the final fallback, so a hook-derived state (question,
-            # working, working_subagent, finished_unread) comes back
-            # unaffected - those are exactly the values worth stamping
-            # here, because they are what the hooks actually told us.
-            #
-            # When the heartbeat has expired it returns STATUS_UNKNOWN,
-            # and skipping that write is right: we genuinely cannot tell
-            # idle from anything else without tmux. The SETTLED value is
-            # stamped by the display path instead, which has a real pane
-            # status - see `_persist_settled_activity_state`. Without that
-            # counterpart this skip freezes a mid-turn `working` in the
-            # row forever, which is what it did when first written.
-            state = self._activity_tracker.resolve(
-                session_id, STATUS_UNKNOWN, unread=False
-            )
-            if not state or state == STATUS_UNKNOWN:
-                return
-            conn = self._writable_datastore_connection()
-            if conn is None:
-                return
-            from src.core.db import transaction
-
-            with transaction(conn):
-                write_state(
-                    conn,
-                    tmux_name,
-                    state,
-                    self._instance_epochs.get(session_id),
-                    tmux_socket=self._tmux_socket_name(),
-                )
-        except Exception as exc:  # noqa: BLE001 - see docstring
-            logger.debug("activity_state_persist_failed", error=str(exc))
         finally:
             if conn is not None:
                 try:
@@ -2753,7 +2500,6 @@ class SessionManager:
 
         backend: Optional[SessionBackend] = None
         new_session: Optional[Session] = None
-        idle_watcher: Optional[IdleWatcher] = None
         try:
             # Build a fresh backend for the new session. Its on_output is
             # bound to THIS session_id so its bytes only fan out to this
@@ -2914,7 +2660,7 @@ class SessionManager:
                     # Cache the resolved instance epoch against THIS
                     # app-level session_id so the hook path can scope its
                     # durable activity write to the exact instance - see
-                    # ``_instance_epochs`` and ``_persist_activity_state``.
+                    # ``_instance_epochs`` and the durable status write.
                     self._instance_epochs[session_id] = persisted.epoch
                 if not persisted.recorded:
                     logger.warning(
@@ -2940,39 +2686,6 @@ class SessionManager:
 
                 create_persist_outcome = CREATE_NOT_TMUX_BACKED
 
-            # Item 7: spin up the per-session IdleWatcher. Skipped silently
-            # when the router hasn't been attached (e.g. in tests that
-            # exercise SessionManager without a full app lifespan) so the
-            # session lifecycle doesn't break.
-            if self._notification_router is not None:
-                try:
-                    auth_config = settings.load_auth_config()
-                    threshold = getattr(
-                        auth_config.notifications,
-                        "idle_threshold_seconds",
-                        30.0,
-                    )
-                except Exception:
-                    threshold = 30.0
-                idle_watcher = IdleWatcher(
-                    session_slug=session_id,
-                    router=self._notification_router,
-                    threshold_s=threshold,
-                    # RESOLVED AT EMIT TIME, NOT NOW. The session's row
-                    # does not exist yet at this point in create_session,
-                    # and the user may mute or unmute at any time after,
-                    # so a value captured here would be wrong within
-                    # seconds. The lambda re-reads the in-memory
-                    # projection on each event, which is two dict lookups.
-                    policy_resolver=(
-                        lambda sid=session_id: (
-                            self.notification_policy_stamp(sid)
-                        )
-                    ),
-                )
-                await idle_watcher.start()
-                self._sidecars.set_watcher(session_id, idle_watcher)
-
             logger.info(
                 "session_created",
                 session_id=session_id,
@@ -2989,7 +2702,7 @@ class SessionManager:
 
         except PTYSessionError as e:
             logger.error("session_creation_failed", error=str(e))
-            await self._cleanup_failed_create(session_id, backend, idle_watcher)
+            await self._cleanup_failed_create(session_id, backend)
             raise ValueError(f"Failed to create session: {e}") from e
         except RuntimeError as e:
             # Backend.start() raises RuntimeError for hard infrastructure
@@ -3001,24 +2714,23 @@ class SessionManager:
             # the route layer can return 502 Bad Gateway with the original
             # message visible to the client.
             logger.error("session_creation_failed_runtime", error=str(e))
-            await self._cleanup_failed_create(session_id, backend, idle_watcher)
+            await self._cleanup_failed_create(session_id, backend)
             raise
         except Exception as e:
             logger.error("session_creation_failed", error=str(e))
-            await self._cleanup_failed_create(session_id, backend, idle_watcher)
+            await self._cleanup_failed_create(session_id, backend)
             raise ValueError(f"Failed to create session: {e}") from e
 
     async def _cleanup_failed_create(
         self,
         session_id: str,
         backend: Optional[SessionBackend],
-        idle_watcher: Optional[IdleWatcher],
     ) -> None:
         """Tear down a half-built session after ``create_session`` failed.
 
-        Stops the backend + idle watcher (best-effort) and wipes any
-        per-session state that ``_register_session`` may have written.
-        Never touches another session's state.
+        Stops the backend (best-effort) and wipes any per-session state
+        that ``_register_session`` may have written. Never touches
+        another session's state.
         """
         # If the session was registered before the failure, mark it errored
         # for any in-flight observer, then wipe it.
@@ -3028,12 +2740,6 @@ class SessionManager:
         if backend is not None:
             try:
                 await backend.stop()
-            except Exception:
-                pass
-        iw = idle_watcher or self._sidecars.watcher(session_id)
-        if iw is not None:
-            try:
-                await iw.stop()
             except Exception:
                 pass
         self._wipe_session_state(session_id)
@@ -3075,17 +2781,6 @@ class SessionManager:
         logger.info("detaching_session", session_id=sid)
 
         try:
-            # Tear down the idle watcher first - mirrors destroy ordering so
-            # a trailing poll iteration can't fire after the backend is gone.
-            iw = self._sidecars.watcher(sid)
-            if iw is not None:
-                try:
-                    await iw.stop()
-                except Exception as exc:
-                    logger.warning(
-                        "idle_watcher_stop_error_on_detach", error=str(exc)
-                    )
-
             # Cancel the backend's reader task so no more pipe bytes land
             # in the fan-out after detach. TmuxBackend.stop() does this as
             # part of its shutdown; we mirror only the reader teardown.
@@ -3179,15 +2874,6 @@ class SessionManager:
         logger.info("destroying_session", session_id=sid)
 
         try:
-            # Item 7: tear down the watcher FIRST so no poll iteration races
-            # with the pending backend shutdown.
-            iw = self._sidecars.watcher(sid)
-            if iw is not None:
-                try:
-                    await iw.stop()
-                except Exception as exc:
-                    logger.warning("idle_watcher_stop_error", error=str(exc))
-
             # Track 1: drop ownership record BEFORE we lose the backend handle.
             owned_name = getattr(backend, "tmux_session", None) if backend else None
             if owned_name:
@@ -4588,7 +4274,6 @@ class SessionManager:
             build_instance_index=self._instance_index_for_listing,
             label_for_name=self._label_for_tmux_name,
             identity_for_live_name=self._identity_for_live_name,
-            restored_activity_state=self._restored_activity_state,
             # THESE TWO ARE FREE FUNCTIONS, NOT BOUND METHODS, so the
             # audit the group above needs does not apply to them at all:
             # neither carries a ``self`` and neither can grow a read of a
@@ -6359,12 +6044,6 @@ class SessionManager:
             name, also=adopt_session_id
         ):
             old_backend = self._registry.backends.get(stale_id)
-            old_iw = self._sidecars.watcher(stale_id)
-            if old_iw is not None:
-                try:
-                    await old_iw.stop()
-                except Exception:
-                    pass
             if old_backend is not None:
                 rt = getattr(old_backend, "_reader_task", None)
                 if rt is not None:
@@ -6625,33 +6304,6 @@ class SessionManager:
 
         # Stash the FIFO offset for THIS session's WS tailer to consume.
         self._sidecars.set_fifo_offset(adopt_session_id, fifo_start_offset)
-
-        # Spin up IdleWatcher per the normal create path so notifications
-        # fire for adopted sessions too. Router may be None in tests.
-        if self._notification_router is not None:
-            try:
-                auth_config = settings.load_auth_config()
-                threshold = getattr(
-                    auth_config.notifications,
-                    "idle_threshold_seconds",
-                    30.0,
-                )
-            except Exception:
-                threshold = 30.0
-            iw = IdleWatcher(
-                session_slug=adopt_session_id,
-                router=self._notification_router,
-                threshold_s=threshold,
-                # Resolved per event - see the create path for why a
-                # captured value would go stale.
-                policy_resolver=(
-                    lambda sid=adopt_session_id: (
-                        self.notification_policy_stamp(sid)
-                    )
-                ),
-            )
-            await iw.start()
-            self._sidecars.set_watcher(adopt_session_id, iw)
 
         logger.info(
             "session_adopted_external",

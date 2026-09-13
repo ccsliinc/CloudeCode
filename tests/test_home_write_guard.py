@@ -2,20 +2,28 @@
 
 WHY THIS FILE EXISTS
 --------------------
-``src/main.py``'s lifespan called ``claude_hooks.ensure_hook_settings()``
-with no path argument. The function fell back to
+``src/main.py``'s lifespan called the Claude settings writer with no
+path argument. The function fell back to
 ``Path.home() / ".claude" / "settings.json"``, so a plain ``pytest`` run
 merged CloudeCode's managed hook block into the DEVELOPER'S OWN live
 Claude Code configuration. Nothing failed, nothing warned: the write
 succeeded, which is the worst shape a defect can take.
+
+THE WRITER CHANGED DIRECTION ON 2026-09-13 AND THE GUARD DID NOT. That
+lifespan call is now ``claude_hooks.strip_managed_hooks``, which REMOVES
+the block instead of installing one - the hook subsystem is deleted. It
+is the same function shape aimed at the same file, so an unguarded run
+would now rewrite the developer's real settings rather than merge into
+it, which is if anything worse. Every layer below applies to it
+unchanged.
 
 An autouse fixture that redirects the path is not sufficient on its own.
 A test that constructs its own app, imports the writer directly, or runs
 in a subprocess can bypass a fixture and silently re-open the hole. So
 the guarantee lives in THREE layers and this file exercises all of them:
 
-1. ``claude_hooks.ensure_hook_settings`` no longer has an implicit
-   default. A caller must decide, in writing, which file it means.
+1. ``claude_hooks.strip_managed_hooks`` has no implicit default. A
+   caller must decide, in writing, which file it means.
 2. ``src/core/test_write_guard.py`` refuses, at the moment of the write,
    any path outside a temp directory while a test run is in progress.
    That is what catches a caller who decides wrong.
@@ -148,20 +156,20 @@ def test_guard_refuses_when_the_temp_root_cannot_be_resolved(monkeypatch) -> Non
 # --------------------------------------------------------------------- #
 
 
-def test_ensure_hook_settings_has_no_implicit_default() -> None:
+def test_strip_managed_hooks_has_no_implicit_default() -> None:
     """Calling it with no path must be a TypeError, not a real-home write.
 
     Removing the default is what turns "which file did this touch?" from
     something a caller INHERITS into something a caller DECIDES.
     """
     with pytest.raises(TypeError):
-        claude_hooks.ensure_hook_settings()  # type: ignore[call-arg]
+        claude_hooks.strip_managed_hooks()  # type: ignore[call-arg]
 
 
 def test_direct_import_cannot_write_outside_temp() -> None:
     """The decisive test, bypass route A: import the writer directly.
 
-    A test that imports ``ensure_hook_settings`` and hands it a path
+    A test that imports ``strip_managed_hooks`` and hands it a path
     outside every temp root - which is what the startup path used to do
     implicitly, resolving to real home - must FAIL loudly and by name.
     Against the pre-fix code the equivalent call SUCCEEDED, wrote, and
@@ -181,7 +189,7 @@ def test_direct_import_cannot_write_outside_temp() -> None:
     outside_temp = _outside_temp_probe("direct")
 
     with pytest.raises(OutsideTempWriteError) as excinfo:
-        claude_hooks.ensure_hook_settings(outside_temp)
+        claude_hooks.strip_managed_hooks(outside_temp)
     assert str(outside_temp.resolve()) in str(excinfo.value)
     assert not outside_temp.exists()
 
@@ -201,19 +209,51 @@ def test_default_settings_path_is_redirected_during_tests(tmp_path: Path) -> Non
 def test_app_startup_path_writes_only_into_temp() -> None:
     """Drive the exact call site from src/main.py's lifespan.
 
-    ``ensure_hook_settings(default_settings_path())`` is what main.py now
-    runs. Under the suite that must land in a temp file and leave the
-    developer's real settings untouched.
+    ``strip_managed_hooks(default_settings_path())`` is what main.py now
+    runs. Under the suite it must reach only the temp file and leave the
+    developer's real settings byte-identical.
+
+    THE TEMP FILE IS SEEDED WITH A MANAGED BLOCK FIRST, so the call has
+    something to remove and takes its WRITING path. A strip run against a
+    file with nothing of ours in it writes nothing at all, and would pass
+    this test without ever exercising the write the guard exists to
+    catch.
     """
     real = Path.home() / ".claude" / "settings.json"
     before = _sha256(real)
 
     target = claude_hooks.default_settings_path()
-    assert claude_hooks.ensure_hook_settings(target) is True
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "curl ... ; : "
+                                        + claude_hooks.CLOUDECODE_HOOKS_MARKER
+                                    ),
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert claude_hooks.strip_managed_hooks(target) is True
 
     assert target.exists()
     written = json.loads(target.read_text(encoding="utf-8"))
-    assert "hooks" in written
+    assert "hooks" not in written
     assert _sha256(real) == before
 
 
@@ -238,7 +278,7 @@ def test_guard_survives_a_subprocess_fork() -> None:
         "from src.core.test_write_guard import OutsideTempWriteError\n"
         "target = pathlib.Path(%r)\n"
         "try:\n"
-        "    claude_hooks.ensure_hook_settings(target)\n"
+        "    claude_hooks.strip_managed_hooks(target)\n"
         "except OutsideTempWriteError as exc:\n"
         "    print('REFUSED:' + str(exc))\n"
         "    raise SystemExit(0)\n"

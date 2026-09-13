@@ -188,17 +188,26 @@ async def test_the_list_read_survives_an_empty_instance_epoch_cache(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_the_stop_hook_and_the_control_write_the_same_key(monkeypatch, tmp_path):
-    """One flag means one key. Two writers, one entry, not two rows."""
+async def test_the_auto_writer_and_the_control_write_the_same_key(monkeypatch, tmp_path):
+    """One flag means one key. Two writers, one entry, not two rows.
+
+    The auto writer used to be the ``Stop`` hook. It is now
+    ``AttentionSideEffects.set_unread`` on a measured ``done_idle``
+    edge, and it derives its key the same way through
+    ``SessionManager._unread_epoch`` - which is the property this
+    asserts, and the reason the two cannot file one pane under two keys.
+    """
     mgr = _manager(monkeypatch, tmp_path)
 
-    mgr.record_hook_event(SESSION_ID, "Stop", {})
-    after_hook = set(mgr._unread_store.raw)
+    mgr._unread_store.set_flag(
+        TMUX_NAME, "auto", True, epoch=mgr._unread_epoch(TMUX_NAME)
+    )
+    after_auto = set(mgr._unread_store.raw)
 
     mgr.set_manual_unread(TMUX_NAME, True)
     after_mark = set(mgr._unread_store.raw)
 
-    assert after_hook == after_mark == {f"{TMUX_NAME}@{EPOCH}"}
+    assert after_auto == after_mark == {f"{TMUX_NAME}@{EPOCH}"}
 
 
 # =========================================================================== #
@@ -259,9 +268,11 @@ async def test_binding_a_terminal_clears_a_manually_marked_session(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_binding_a_terminal_clears_a_stop_flagged_session(monkeypatch, tmp_path):
+async def test_binding_a_terminal_clears_an_auto_flagged_session(monkeypatch, tmp_path):
     mgr = _manager(monkeypatch, tmp_path)
-    mgr.record_hook_event(SESSION_ID, "Stop", {})
+    mgr._unread_store.set_flag(
+        TMUX_NAME, "auto", True, epoch=mgr._unread_epoch(TMUX_NAME)
+    )
     assert await _unread_on_list(mgr) is True
 
     mgr.mark_session_viewed(SESSION_ID)

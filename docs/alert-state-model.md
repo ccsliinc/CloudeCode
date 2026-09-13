@@ -34,6 +34,40 @@ sections 3.1, 3.3 and 3.5 each open with that correction's relevant
 answer, quoted. Read section 3 in order; it is written to show its own
 history rather than presenting only the final shape.
 
+**HEAD NOTE, 2026-09-13: SECTION 1 DESCRIBES A SUBSYSTEM THAT NO LONGER
+EXISTS.** The app installs no Claude Code hooks at all (`docs/DECISIONS.md`,
+"Zero hooks"). The 31-event registry in `src/core/hook_contract.py` and the 10
+subscribed rows section 1 tabulates are gone with the route that received them,
+so read that section as the history of what the app used to be told, not as a
+description of what it reads. The same facts are now READ from four durable
+tiers - the per-pid registry file claude keeps about itself, the transcript
+tail, the pane text and tmux - and the ladder that does it is
+`docs/session-status-model.md` chart 2. The rest of this document is about
+HIERARCHY and RENDERING and is not affected: a level-1 child's state was never
+going to come from a hook that fires in the parent's pane under the parent's
+id, which is the defect that removed them.
+
+**What that resolves, and it is one of this document's two disagreements.**
+Section 3.3 argued that an unevaluable source must not manufacture activity and
+must not be silently laundered into `idle` either. That is now BUILT rather than
+proposed: `src/core/attention/resolve.py` answers `unknown` as a first-class
+verdict with its own named reasons, `unknown` raises no notification and freezes
+the edge detector rather than clearing it, and `attention/display.py` will let
+tmux override an `unknown` with exactly one value, `dead`, because death is
+measured. The section's rule stands; only its status as a proposal changed.
+
+**What stays open, deliberately.** Section 2.3's explicit disagreement -
+`working_subagent` retired as a value of the own-activity axis, re-expressed as
+a `breathing` animation over whichever colour the session actually has - is NOT
+resolved and was not attempted. **The eight state names stay eight by the
+owner's rule**, and `working_subagent` remains one of them. The one thing this
+work changed in 2.3's favour is that the two facts it wants separated are now
+carried separately inside the resolver: an `AttentionVerdict` has a `state` and
+a `reason`, and "waiting on background agents" is
+`busy(subagents)` rather than a seventh state. Collapsing that pair onto one
+name happens in `display.py`, in one table, which makes 2.3 a RENDERING change
+whenever the owner asks for it rather than a change to the model underneath.
+
 ---
 
 ## 0. What is real data and what is not, measured this session

@@ -8,8 +8,8 @@ originally anticipated. Three plain modules still don't justify the
 ABC/registry refactor; revisit if a fourth shows up.
 
 Public surface:
-- ``NotificationRouter`` - synchronous ``emit()`` from any caller (PTY
-  handler, IdleWatcher, lifespan hook), async worker drains a bounded
+- ``NotificationRouter`` - synchronous ``emit()`` from any caller (the
+  toast recorder, the lifespan hook), async worker drains a bounded
   queue and dispatches to every configured backend.
 - ``NotificationEvent`` / ``EventType`` - typed payload.
 - ``ntfy`` module - plain HTTP POST sender; init/shutdown/send/rotate_topic.
@@ -26,13 +26,10 @@ from src.core.notifications.events import (
     NotificationEvent,
     build_deep_link,
 )
-from src.core.notifications.idle_watcher import IdleState, IdleWatcher
 from src.core.notifications.router import NotificationRouter
 
 __all__ = [
     "EventType",
-    "IdleState",
-    "IdleWatcher",
     "NotificationEvent",
     "NotificationRouter",
     "build_deep_link",

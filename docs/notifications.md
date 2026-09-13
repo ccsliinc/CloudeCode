@@ -20,6 +20,61 @@ are named separately everywhere in the code and asserted separately in
   record, in the ONE session that raised it. Typing into session A is
   evidence about session A and says nothing about session B.
 
+## What raises a toast, and the one thing that does it
+
+**A TOAST IS RAISED ON A TRANSITION, NOT ON AN EVENT.** Until 2026-09-13 a
+toast was a Claude Code lifecycle hook arriving at a route: `Stop` raised "your
+turn", `PermissionRequest` raised "needs your permission", `Notification` raised
+"wants your attention". The app installs no hooks now (`docs/DECISIONS.md`,
+"Zero hooks"). `src/core/attention/watcher.py` is ONE server-owned asyncio task
+that reads every watched session's evidence off the loop, resolves it through
+the pure resolver, and hands the answer to `attention/ledger.py`. A toast is
+raised only when the ledger reports that the answer actually CHANGED.
+
+**It is the only raise site.** The listing pass calls the same pure resolver for
+display and raises nothing, which is how `GET /sessions/list` is stopped from
+ever disagreeing with the toasts. And because the watcher raises rather than a
+browser poll, a phone with no browser open still gets its ntfy, Slack and
+Pushover push.
+
+| Transition | Toast kind | What else happens |
+|---|---|---|
+| into `done_idle` | `Stop` | the auto unread flag is set FIRST, through `UnreadStore`, so a muted session that finishes is still finished |
+| into `needs_user(question / permission / plan_approval)` | `PermissionRequest` | nothing else |
+| into `needs_user(input)` | `Notification` | nothing else |
+| into `busy(*)` | none | `sessions.last_work_at` is stamped and permission-kind toasts are auto-acked |
+| into `unknown` | none | the ledger FREEZES the entry: nothing raised, nothing cleared |
+
+The kinds kept their old names on purpose. A client, a log grep and a mute
+policy all key on them, and renaming a string that nothing else about the
+system needs renamed would have been a second change riding on this one.
+
+**Four rules stop the edges from becoming noise**, each one paid for by a
+measured defect and all four in `attention/ledger.py`: first sight of a key is a
+BASELINE and raises nothing, which is what stops the restart storm; a verdict
+the resolver marked `settle_required` must be seen twice at least
+`SETTLE_SECONDS` (1.5) apart; rest additionally needs `DONE_QUIET_SECONDS` (3)
+of transcript silence; and one edge is emitted per (key, state, reason) until
+the STATE moves, so a session sitting on a permission prompt for ten minutes is
+one ask rather than three hundred.
+
+**The mute is asked LAST, and suppressing is not acknowledging.**
+`attention/raise_gate.py` carries the mute branch of the old hook gate verbatim
+and nothing else: by the time it is consulted the session has already been
+MEASURED as needing the user, so the only question left is whether the user
+asked not to be told. An unreadable policy suppresses. A suppressed transition
+still moves the session's state, still paints the light and still flips unread,
+because a mute that quietly marked a pending permission answered would strand
+claude mid-turn behind a yes/no nobody was told about.
+
+**A straggler hook is harmless, and that was checked rather than assumed.** A
+claude that was already running when the app was upgraded still holds the old
+hook block in its own environment and keeps POSTing to `/hooks/claude-event`.
+That route is gone, so it gets a 404 in a few milliseconds. The one-liner is
+`curl -sS` with no `-f`, so curl exits 0 on a 404: nothing stalls, nothing
+retries, and claude logs nothing. It stops on its own when that process
+restarts.
+
 ## What used to filter toasts to the session on screen
 
 Two filters, both at the transport layer, and fixing either alone would
@@ -38,7 +93,7 @@ Between them, a session that needed attention while the owner was
 elsewhere was silent - and the launchpad and archive screens, which hold
 no terminal socket at all, were deaf to notifications entirely.
 
-## What raises them now
+## How a raised toast reaches every screen
 
 `GET /api/v1/toasts` returns every session's records, newest first,
 undismissed by default. `client/js/toast-global-poll.js` polls it every
@@ -96,55 +151,62 @@ user never sees again.
 The owner's ask, verbatim: "on the toasts, if its waiting on me and i
 type into this browser or a remote control session, the toasts should be
 removed, we can tell because i think when a new prompt is sent it should
-trip a hook." He is right about the hook. `UserPromptSubmit` fires
-whenever a prompt is submitted to the agent, whoever typed it and
-wherever - the browser terminal, a remote control session, or the
-keyboard attached to the Mac. So it is a fact about THE USER SHOWING UP,
-and a notification asking the user to show up is answered the moment
-they do.
+trip a hook." He was right about what proves it and the app no longer needs a
+hook to see it. **A real user prompt in the transcript is the same fact, and it
+is durable**: a `user` record that is not `isMeta`, carries no `toolUseResult`,
+and whose `origin.kind` is not `task-notification`. Whoever typed it and
+wherever - the browser terminal, a remote control session, or the keyboard
+attached to the Mac - it lands in the same file.
 
-`src/core/toast_auto_ack.py` is the pure rule set;
-`SessionManager.auto_ack_toasts` applies it; the hook route calls it once,
-right after `record_hook_event`.
+`src/core/toast_auto_ack.py` is the pure rule set, unchanged;
+`SessionManager.auto_ack_toasts` applies it, unchanged. What moved is the
+CALLER: `src/core/attention/side_effects.py`, driven by the watcher.
 
-| Hook event | Toast kinds it answers | Why that set |
-|---|---|---|
-| `UserPromptSubmit` | `Stop`, `PermissionRequest`, `Notification`, `StartupPrompt` | the user typed, so nothing is still waiting on them |
-| `PreToolUse` | `PermissionRequest` only | a tool about to run proves a permission was granted, and proves nothing else |
-| `Stop` | `PermissionRequest`, `Notification`, `StartupPrompt` | an agent cannot end a turn while blocked, and the turn a notice belonged to is over |
+| Passive trigger | Rule set applied | Toast kinds it answers | Why that set |
+|---|---|---|---|
+| a user prompt in the transcript newer than the one this instance was last shown | `UserPromptSubmit` | `Stop`, `PermissionRequest`, `Notification`, `StartupPrompt` | the user typed, so nothing is still waiting on them |
+| an edge into `busy(*)` | `PreToolUse` | `PermissionRequest` only | a tool that is RUNNING proves the permission it needed was granted, and proves nothing else |
 
-**A `Stop` NEVER ACKS A `Stop` TOAST, AND THAT IS STRUCTURAL RATHER THAN
-POSITIONAL.** `Stop` both RAISES the "your turn" card and answers others,
-so the obvious defect is a Stop eating the card it just created. It would
-be tempting to rely on call order - ack before recording, and the new
-toast cannot be seen - but that guarantee survives only until someone
-moves a line, and it fails outright for a DUPLICATED Stop, whose
-predecessor's card is a real unacked record by the time the duplicate
-arrives. Excluding the KIND makes the property hold for every ordering,
-every duplicate and every future call site. Only the user turning up
-clears a "your turn", which is `UserPromptSubmit`, or a click.
+The two hook names survive as RULE SELECTORS, not as claims that a hook fired.
+They name the two rule sets in `toast_auto_ack.py`, and respelling those sets at
+the new call site would have given the project two copies of them.
 
-**THE CUTOFF IS THE EVENT'S OWN INSTANT, NOT THE ACK'S.** Hook events are
-unordered, duplicated and droppable, so the moment the code RUNS says
-nothing about when the thing it describes HAPPENED. The route stamps
-`received_at` at the top of the handler, before any state is mutated, and
-a toast whose `created_at` is later than that is never answered by that
-event. A prompt redelivered late must not clear a notice about something
-that happened after the user typed - that would destroy a record the user
-never saw, which is worse than a card that lingers.
+**The third row is gone with its event.** `Stop` used to answer
+`PermissionRequest`, `Notification` and `StartupPrompt` on the argument that an
+agent cannot end a turn while blocked. Nothing announces a turn end any more,
+and the fact that argument rested on is now structural instead: a session that
+is blocked resolves to `needs_user` and cannot reach `done_idle` at all, so
+there is no state in which a stale permission claim and a finished turn coexist
+to be cleaned up.
+
+**NOTHING ACKS ITS OWN KIND, AND THAT IS STRUCTURAL RATHER THAN POSITIONAL.**
+The rule set that answers the widest range of toasts is the one the "your turn"
+card is raised beside, so the obvious defect is a trigger eating the card it
+just created. It would be tempting to rely on call order - ack before recording,
+and the new toast cannot be seen - but that guarantee survives only until
+someone moves a line. Excluding the KIND makes the property hold for every
+ordering and every future call site. Only the user turning up clears a "your
+turn", or a click.
+
+**THE CUTOFF IS THE EVIDENCE'S OWN INSTANT, NOT THE READING'S**, and passively
+it matters more, not less. A tick runs every two seconds, so the moment the code
+RUNS is never when the thing it describes HAPPENED. The cutoff passed to the
+auto-ack is the PROMPT'S OWN timestamp, read out of the transcript record, and a
+toast whose `created_at` is later than that is never answered by it. A prompt
+noticed late must not clear a notice about something that happened after the
+user typed - that would destroy a record the user never saw, which is worse than
+a card that lingers.
 
 Idempotence falls out of `ack_toast` refusing a second ack: the same
 event delivered ten times acks on the first and does nothing nine times,
 so no duplicate frames, no duplicate log lines, no history churn.
 
-**THE LED AND THE CARD AGREE BECAUSE THEY ARE FED BY THE SAME EVENTS.**
-`src/core/session_activity.py` already clears `permission_open` and
-`notice_open` on exactly `UserPromptSubmit`, `PreToolUse` and `Stop`, so
-no new clearing path was added - the auto-ack simply matches the set that
-was already there. `tests/test_toast_auto_ack.py` asserts it through the
-public resolver rather than trusting the reading, because a session
-showing a "needs permission" light with no card is the same lie as a card
-with no light, pointing the other way.
+**THE LED AND THE CARD AGREE BECAUSE THEY ARE FED BY THE SAME READING.** The
+watcher resolves a session, raises on the edge, and the listing pass paints from
+the SAME pure resolver over the same evidence. There is no second state machine
+to fall out of step with; a session showing a "needs permission" light with no
+card is the same lie as a card with no light, pointing the other way, and the
+two now have one source.
 
 ## Removing a card, not only adding one
 
@@ -333,6 +395,10 @@ dispatcher returns and not on the entry as a whole.
 
 | Piece | File |
 |---|---|
+| The one raise site: read, resolve, act on the edge | `src/core/attention/watcher.py` |
+| Which verdicts are NEWS, and the four rules that keep them news | `src/core/attention/ledger.py` |
+| Whether one transition may interrupt the user (the mute, and only the mute) | `src/core/attention/raise_gate.py` |
+| The jobs that are not toasts: unread, `last_work_at`, auto-ack, title sync, startup gate, agent inference, durable state | `src/core/attention/side_effects.py` |
 | Fan one event out to every external channel at once | `src/core/notifications/channel_dispatch.py` |
 | The bounded queue, both mute gates, the rate limit | `src/core/notifications/router.py` |
 | The three channels | `src/core/notifications/ntfy.py`, `slack.py`, `pushover.py` |
@@ -348,13 +414,13 @@ dispatcher returns and not on the entry as a whole.
 | The two cross-session API calls | `client/js/api-toasts.js` |
 | The cross-session poll | `client/js/toast-global-poll.js` |
 | Stop a dismissed card coming back | `client/js/toast-dismissed-ring.js` |
-| Which toasts a hook event ANSWERS (PURE) | `src/core/toast_auto_ack.py` |
+| Which toasts a trigger ANSWERS (PURE) | `src/core/toast_auto_ack.py` |
 | Apply that, and report what changed | `SessionManager.auto_ack_toasts` |
 | Click a toast, go to its session | `client/js/toast-navigate.js` |
 | What a history row CLAIMS (PURE) | `client/js/toast-history-render.js` |
 | The settings-panel slot | `client/js/toast-history-panel.js` |
 | Styling | `client/css/toast.css`, `client/css/toast-history.css` |
-| Tests | `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs`, `tests/test_toast_render_batch.node.mjs`, `tests/test_notification_channel_dispatch.py` |
+| Tests | `tests/test_attention_replay.py`, `tests/test_toast_cross_session.py`, `tests/test_toast_auto_ack.py`, `tests/test_toast_history_render.node.mjs`, `tests/test_toast_reconcile.node.mjs`, `tests/test_toast_render_batch.node.mjs`, `tests/test_notification_channel_dispatch.py` |
 
 ## Rendering many toasts at once (issue #39)
 
@@ -386,20 +452,20 @@ the flush, never CANCEL it.
    state, as the handoff scoped it.
 2. ~~**The dismissal REASON is not recorded.**~~ CLOSED. `Toast.ack_reason`
    carries it, threaded through `SessionManager.ack_toast`: the human
-   paths write `dismissed`, the hook-driven auto-ack writes `answered`.
+   paths write `dismissed`, the auto-ack writes `answered`.
    A history row reads `open` / `dismissed` / `answered`, and a record
    acked before the field existed carries null and still reads
    `dismissed` - not having recorded which act cleared a toast is not
    evidence it cleared itself. `summarize()` reports `answered` as a
    SUBSET of `dismissed` rather than a sibling, so the count already on
    screen did not silently change meaning.
-3. **A duplicate hook event after a dismissal mints a NEW toast.**
-   Supersession never returns an ACKED record (by design - an acked card
-   is one the user dealt with), so a `Stop` delivered twice with the ack
-   in between pops a second card. Correct for a genuinely new turn, wrong
-   for a duplicated delivery, and the two are indistinguishable at the
-   record level today. Hook events are documented as duplicated and
-   droppable, so this is a real case and not a theoretical one.
+3. ~~**A duplicate hook event after a dismissal mints a NEW toast.**~~
+   CLOSED by the move to edges. There is no duplicate delivery to be
+   indistinguishable from a new turn: the ledger emits ONE edge per
+   (instance key, state, reason) and does not emit another until the STATE
+   moves to something else, so a session that finishes, is dismissed, and is
+   still finished on the next tick raises nothing. A second card now means a
+   second real turn.
 4. **No cap on the cross-session stack.** The owner asked whether toasts
    stack unboundedly across 20+ sessions. The client's visible cap and
    coalescing bound what is DRAWN (`client/js/toast.js`), and the server's

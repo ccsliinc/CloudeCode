@@ -72,6 +72,14 @@ fires on a session file appearing (52 ms) and being removed (52 ms) but NOT on a
 Registration and exit are event-driven; a status change is caught by the 2s tick. So "your turn"
 latency is up to 2s against the old hook's 80 ms. Accepted: the hook was wrong 89% of the time.
 
+[ORCHESTRATOR] 2026-09-13: four CLAUDE.md statements are now FALSE and still need fixing
+(gotcha 8, a stale doc is worse than no doc). The adoption bullet says an invented id "makes the
+hook route answer 403, not 410" and that route is deleted. The conversation-uuid bullet still
+calls it a hook-fed field when the registry is the writer. Gotcha 10 is phrased around a synthetic
+hook and a tracker flag; the lesson generalises but the mechanism is gone. The 1.4.0 seam table
+still lists _mint_hook_token. Fix after the deletion step lands, to avoid editing CLAUDE.md while
+two agents are in the same worktree.
+
 [ORCHESTRATOR] 2026-09-13: the macOS "would like to access data from other apps" prompt (52 in 6h)
 is NOT caused by this app's own reads. The claude CLI binary walks other apps' data under
 ~/Library (488 denials on Group Containers, 144 Application Support, 96 Caches, 86 Containers,

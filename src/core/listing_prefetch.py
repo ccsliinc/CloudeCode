@@ -62,16 +62,13 @@ class NameReads:
     Inputs: label (str | None) - the row's user-facing title.
       identity (dict | None) - ``id`` / ``parent_session_id`` /
       ``agent_type`` / ``agent_family_source`` off the newest row.
-      restored_activity_state (str | None) - the durable activity state,
-      already judged for age by ``activity_persist.restore_state``.
       registry (RegistryRecord | None) / transcript (TranscriptFacts |
       None) - the two file-backed attention tiers, read by
       ``listing_attention.attention_reads_for_name``.
     Output: an immutable record; every field's None is the SAME None the
       per-row reader returns for "no row, no value, or unreadable", so a
       consumer cannot tell this apart from the read it replaces.
-    Example: NameReads(label='work', identity=None,
-      restored_activity_state='idle')
+    Example: NameReads(label='work', identity=None)
 
     THE LAST TWO ARE THE ONE EXCEPTION TO THE NONE RULE ABOVE, AND IT IS
     A SHARPER GUARANTEE RATHER THAN A WEAKER ONE. Their readers CANNOT
@@ -83,7 +80,6 @@ class NameReads:
 
     label: Optional[str] = None
     identity: Optional[dict] = None
-    restored_activity_state: Optional[str] = None
     registry: Optional[Any] = None
     transcript: Optional[Any] = None
 
@@ -139,17 +135,6 @@ class ListingPrefetch:
         entry = self.by_name.get(tmux_name or "")
         return entry.identity if entry is not None else None
 
-    def restored_state_for(self, tmux_name: Optional[str]) -> Optional[str]:
-        """The prefetched durable activity state for a name, or None.
-
-        Inputs: tmux_name (str | None).
-        Output: str | None - already age-judged, so None covers absent,
-          stale, unparseable and ``dead`` exactly as the live read does.
-        Example: prefetch.restored_state_for('cloude_a') -> 'idle'
-        """
-        entry = self.by_name.get(tmux_name or "")
-        return entry.restored_activity_state if entry is not None else None
-
     def registry_for(self, tmux_name: Optional[str]) -> Optional[Any]:
         """The prefetched registry record for a name, or None.
 
@@ -180,7 +165,6 @@ def build_listing_prefetch(
     names: Iterable[Optional[str]],
     label_for_name: Callable[[Optional[str]], Optional[str]],
     identity_for_live_name: Callable[[Optional[str]], Optional[dict]],
-    restored_activity_state: Callable[[Optional[str]], Optional[str]],
     attention_for_name: Optional[
         Callable[[str], Tuple[Any, Any]]
     ] = None,
@@ -200,9 +184,8 @@ def build_listing_prefetch(
     Inputs: names (iterable[str | None]) - the tmux names this pass will
       decorate; falsy entries are skipped, since every reader answers
       None for one without opening anything.
-      label_for_name / identity_for_live_name / restored_activity_state
-      (callables taking a name) - the manager's existing per-row readers,
-      unchanged.
+      label_for_name / identity_for_live_name (callables taking a name) -
+      the manager's existing per-row readers, unchanged.
       attention_for_name (callable taking a name) - returns the
       ``(registry, transcript)`` pair for that name. Omitted, both fields
       stay None and every caller falls through to its own live read,
@@ -221,7 +204,6 @@ def build_listing_prefetch(
         by_name[name] = NameReads(
             label=label_for_name(name),
             identity=identity_for_live_name(name),
-            restored_activity_state=restored_activity_state(name),
             registry=registry,
             transcript=transcript,
         )

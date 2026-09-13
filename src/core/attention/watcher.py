@@ -293,7 +293,15 @@ class AttentionWatcher:
         try:
             while True:
                 try:
-                    await self.tick_once()
+                    acted = await self.tick_once()
+                    # IS THE ONLY NOTIFIER ON THIS MACHINE STILL ALIVE?
+                    # There is no other way to ask. A healthy loop is
+                    # silent by design - it raises only on an edge - so
+                    # "no toasts today" and "the watcher died in
+                    # September" read identically without this. At DEBUG,
+                    # so it costs nothing until someone turns it on
+                    # (LOG_LEVEL=DEBUG).
+                    logger.debug("attention_watcher_tick", transitions=acted)
                     await self._wait_for_work()
                 except asyncio.CancelledError:
                     logger.info("attention_watcher_stopping")

@@ -26,7 +26,7 @@ reads, both bounded and both refusing rather than guessing:
 NEITHER READ MAY RAISE. This runs on the listing path, which paints the
 sidebar and the launchpad, and a status is telemetry: every failure
 becomes a named outcome the caller may log and ignore. That is the same
-posture ``_persist_activity_state`` and ``sync_claude_title`` already
+posture the durable status write and ``sync_claude_title`` already
 take on their own critical paths.
 
 WHERE THE CACHE LIVES, and why it is not an attribute on SessionManager.

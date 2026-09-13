@@ -60,6 +60,7 @@ if str(ROOT) not in sys.path:
 
 # ruff: noqa: E402
 from src.core import session_permission_verify_apply as verify_apply
+from tests.attention_claim_helpers import open_claims
 from src.core.session_activity import EVENT_PERMISSION_REQUEST, SessionActivityTracker
 from src.core.session_permission_verify import (
     PERMISSION_CLEARED_PANE_DEAD,
@@ -96,7 +97,7 @@ class _FakeBackend:
 def test_measured_dead_pane_clears_the_open_permission_flag():
     tracker = SessionActivityTracker()
     t0 = datetime(2026, 9, 10, 12, 0, 0)
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=t0)
+    open_claims(tracker, "ses_1", permission=True, at=t0)
     assert tracker.permission_open_since("ses_1") == t0, "sanity: claim is open"
 
     manager = _FakeManager(tracker)
@@ -142,7 +143,7 @@ def test_unmeasured_pane_liveness_keeps_the_open_permission_flag():
     here would silently dismiss a real permission request."""
     tracker = SessionActivityTracker()
     t0 = datetime(2026, 9, 10, 12, 0, 0)
-    tracker.record_event("ses_3", EVENT_PERMISSION_REQUEST, now=t0)
+    open_claims(tracker, "ses_3", permission=True, at=t0)
 
     manager = _FakeManager(tracker)
     verdict = verify_apply.verify_open_permission(
@@ -255,7 +256,6 @@ def mgr(monkeypatch, tmp_path):
     monkeypatch.setattr(
         manager, "_persist_settled_activity_state", lambda *a, **k: None
     )
-    monkeypatch.setattr(manager, "_restored_activity_state", lambda *a, **k: None)
     return manager
 
 
@@ -285,9 +285,7 @@ def _register_with_open_permission(
     manager._registry.backends[sid] = _SocketBackend(tmux_name, exists=exists)
     manager._registry.subscribers.setdefault(sid, [])
     opened_at = datetime(2026, 9, 11, 12, 0, 0)
-    manager._activity_tracker.record_event(
-        sid, EVENT_PERMISSION_REQUEST, now=opened_at
-    )
+    open_claims(manager, sid, permission=True, at=opened_at)
     assert manager._activity_tracker.permission_open_since(sid) == opened_at
     return opened_at
 
