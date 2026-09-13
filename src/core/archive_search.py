@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.archive_cursor import (
@@ -51,10 +50,16 @@ from src.core.archive_search_fts import (
     run_hit_query,
 )
 from src.core.archive_search_hit import build_fts_hit
-from src.core.message_block_search_state import read_liveness
+from src.core.archive_search_envelope import envelope_for
+from src.core.archive_search_refusals import (
+    SearchInputError,
+    coverage_reason,
+    read_liveness_for,
+    tokenizer_limit_reason,
+    untokenizable_reason,
+)
 from src.core.message_block_search_ddl import BLOCK_SEARCH_TOKENIZER
 from src.core.message_block_search_status import (
-    COVERAGE_INDEXED,
     INDEX_STALE,
     Coverage,
     probe_index_state,
@@ -71,8 +76,6 @@ from src.core.archive_read import (
     SCOPE_CANNOT_DETERMINE,
     SCOPE_NOT_FOUND,
     SCOPE_RESOLVED,
-    envelope,
-    offset_units_meta,
 )
 
 # --- Vocabulary and bounds -------------------------------------------------
@@ -110,20 +113,6 @@ SNIPPET_WITHHELD_SECRET = SNIPPET_WITHHELD_FLAGGED_BODY
 DEFAULT_SEARCH_LIMIT = 50
 MIN_QUERY_CHARS = 2
 MAX_QUERY_CHARS = 200
-
-
-class SearchInputError(ValueError):
-    """A caller-supplied argument could not be evaluated.
-
-    Carries the ``subject``/``reason`` pair that goes straight into the
-    envelope's ``unevaluated`` list, so a refusal is never reduced to a
-    bare exception type.
-    """
-
-    def __init__(self, subject: str, reason: str) -> None:
-        super().__init__(f"{subject}: {reason}")
-        self.subject = subject
-        self.reason = reason
 
 
 # --- SQL -------------------------------------------------------------------
@@ -299,47 +288,6 @@ def _run_scan(
     return hits, 0, 0, SCAN_COMPLETE, None
 
 
-def _envelope_for(
-    q: str, case_sensitive: bool, scope: str, scope_id: int,
-    in_scope: Optional[int], result: Any, result_status: str,
-    scope_status: str, unevaluated: List[Dict[str, str]],
-    scan: Dict[str, Any], paging: Dict[str, Any],
-    gate: Optional[Dict[str, Any]] = None,
-    index_meta: Optional[Dict[str, Any]] = None,
-    coverage_meta: Optional[Dict[str, Any]] = None,
-    filters: Optional[BlockFilters] = None,
-    order: str = ORDER_POSITION,
-) -> Dict[str, Any]:
-    """Assemble the envelope. One builder, so no path can omit a block.
-
-    Description: ``index`` and ``coverage`` are NEW meta blocks and they
-      answer the two questions an FTS search raises that a substring scan
-      did not - is the index usable, and what is it not covering. Both
-      are present on EVERY path, refusals included, because a refusal
-      that omits them cannot say why it refused.
-    Inputs: as the parameter list. index_meta / coverage_meta (dict or
-      None) - None renders as "not measured", never as zeros.
-    Output: dict - the three-outcome envelope.
-    """
-    id_key = "project_id" if scope == SCOPE_PROJECT else "transcript_id"
-    return envelope(
-        result=result, result_status=result_status, scope_status=scope_status,
-        unevaluated=unevaluated,
-        meta={
-            "query": {"q": q, "case_sensitive": bool(case_sensitive),
-                      "order": order,
-                      "filters": (filters or BlockFilters()).as_meta()},
-            "scope": {"kind": scope, id_key: scope_id,
-                      "transcripts_in_scope": in_scope},
-            "scan": scan, "paging": paging,
-            "snippet_gate": gate or snippet_gate_meta(None),
-            "index": index_meta or {"state": None, "reason":
-                                    "the index was not interrogated"},
-            "coverage": coverage_meta or {
-                "measured": False, "bodies_indexed": None,
-                "bodies_not_indexed": None, "not_indexed_by_reason": None},
-            **offset_units_meta(),  # same defn as secrets; cannot drift
-        })
 
 
 def search_scoped(
@@ -422,14 +370,18 @@ def search_scoped(
 
     def refuse(subject: str, reason: str, res: str, sco: str,
                result: Any) -> Dict[str, Any]:
-        return _envelope_for(
+        return envelope_for(
             q, case_sensitive, scope, scope_id, None, result, res, sco,
             [{"subject": subject, "reason": reason}], not_run, no_paging,
             index_meta=index_state.to_meta(), filters=filters, order=order)
 
     try:
         _validate_inputs(q, scope, scope_id, limit, scan_budget, scan_bytes)
-        _validate_order(order)
+        if order not in ORDER_MODES:
+            raise SearchInputError(
+                "order",
+                f"order must be one of {list(ORDER_MODES)}; "
+                f"got {order!r}")
         resume = _decode_resume(cursor, scope, scope_id)
     except SearchInputError as exc:
         bad_scope = exc.subject in ("scope", f"{scope}_id")
@@ -450,13 +402,7 @@ def search_scoped(
                           RESULT_NOT_FOUND, SCOPE_NOT_FOUND, [])
         if not query_is_tokenizable(q):
             return refuse(
-                "q",
-                f"q holds no alphanumeric character, so the tokenizer "
-                f"({BLOCK_SEARCH_TOKENIZER}) produces no term from it and "
-                f"the index cannot be asked. The substring scan this "
-                f"replaced COULD find such a string; that capability is "
-                f"gone and this is the refusal saying so, rather than a "
-                f"result of zero.",
+                "q", untokenizable_reason(q, BLOCK_SEARCH_TOKENIZER),
                 RESULT_CANNOT_DETERMINE, SCOPE_RESOLVED, None)
         index = load_index(conn) if snippets else None
         gate = snippet_gate_meta(index)
@@ -495,23 +441,17 @@ def search_scoped(
     if not hits and coverage.complete and coverage.bodies_not_indexed:
         unevaluated.append({
             "subject": f"{scope}:{scope_id}",
-            "reason": _coverage_reason(coverage)})
+            "reason": coverage_reason(coverage)})
     # The second thing an empty page must be told, and it is about the
     # MATCHER rather than about the corpus. See archive_search_fts's
     # phrase_query for the measured recall this quotes.
     if not hits:
-        unevaluated.append({"subject": "q", "reason": (
-            f"the index matches whole tokens and prefixes of tokens, so a "
-            f"query beginning INSIDE a word cannot be found by it: "
-            f"'resize' does not reach 'sendResize'. Measured recall "
-            f"against a full substring scan of the same text is 96.7 to "
-            f"100 percent over twelve real queries. If {q!r} begins "
-            f"mid-word, an empty result here is a limit of the index "
-            f"rather than an absence in the corpus.")})
+        unevaluated.append(
+            {"subject": "q", "reason": tokenizer_limit_reason(q)})
     if index_state.state == INDEX_STALE:
         unevaluated.append({"subject": "index", "reason": index_state.reason})
 
-    return _envelope_for(
+    return envelope_for(
         q, case_sensitive, scope, scope_id, in_scope, hits,
         RESULT_OK, SCOPE_RESOLVED, unevaluated,
         {"status": status, "method": SCAN_METHOD_FTS,
@@ -526,66 +466,3 @@ def search_scoped(
          "has_more": bool(at_limit),
          "next_cursor": encoded if at_limit else None},
         gate, index_state.to_meta(), coverage.to_meta(), filters, order)
-
-
-def _coverage_reason(coverage: Coverage) -> str:
-    """Word the refusal an empty result over unindexed bodies earns.
-
-    Description: names the COUNT and the REASONS, because "some content
-      is not searchable" is not actionable and "79,667 bodies carry no
-      message text" is.
-    Inputs: coverage (Coverage) - must be ``complete``.
-    Output: str.
-    Example: _coverage_reason(cov) -> '3 of 10 bodies in scope are not ...'
-    """
-    parts = ", ".join(
-        f"{count} {reason}" for reason, count in sorted(coverage.by_reason.items())
-        if reason != COVERAGE_INDEXED)
-    total = coverage.bodies_indexed + coverage.bodies_not_indexed
-    return (
-        f"{coverage.bodies_not_indexed} of {total} bodies in scope are not in "
-        f"the search index and could not have matched ({parts}). "
-        f"An empty result here means NOT FOUND IN INDEXED TEXT, which is "
-        f"not the same as not present in this scope."
-    )
-
-
-def _validate_order(order: str) -> None:
-    """Refuse an unknown ordering rather than silently using the default.
-
-    Description: a typo'd order that silently fell back would return a
-      correct-looking page in the wrong order, which is the kind of wrong
-      nobody reports.
-    Inputs: order (str).
-    Output: None.
-    Raises: SearchInputError.
-    Example: _validate_order("relevance")
-    """
-    if order not in ORDER_MODES:
-        raise SearchInputError(
-            "order",
-            f"order must be one of {list(ORDER_MODES)}; got {order!r}")
-
-
-def read_liveness_for(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
-    """Read the index build record for the database this connection holds.
-
-    Description: the artifact lives beside the database file, so its
-      directory is derived from the connection rather than from settings
-      - a test pointing at a throwaway datastore then reads that
-      datastore's own record instead of the developer's.
-    Inputs: conn (sqlite3.Connection).
-    Output: dict or None - None when there is no record, which is a
-      different fact from a record saying a build failed.
-    Example: read_liveness_for(conn) -> {"outcome": "built", ...}
-    """
-    try:
-        row = conn.execute("PRAGMA database_list").fetchone()
-    except sqlite3.Error:
-        # Specific: a connection that cannot name its own file still has
-        # to be searchable. The record is a DECORATION on the verdict and
-        # its absence renders as "no build recorded".
-        return None
-    if row is None or not row[2]:
-        return None
-    return read_liveness(Path(row[2]).parent)
