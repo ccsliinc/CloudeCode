@@ -263,6 +263,28 @@ def _safe_target(session_name: str, pane: Optional[str] = None) -> str:
     return f"{session_name}:{pane}"
 
 
+class PaneDeadError(RuntimeError):
+    """A ``#{pane_dead}`` probe RAN and MEASURED the pane as dead.
+
+    Description: raised by :meth:`TmuxBackend.attach_existing` only when
+      tmux answered the probe with ``rc=0`` and the value ``"1"`` - a
+      positive, completed measurement that the process behind the pane
+      has exited. It is a distinct type from the bare ``RuntimeError``
+      the same guard raises when the probe ITSELF could not run (tmux
+      timed out, refused, or errored): that case is an unmeasured
+      unknown and must never be treated as a confirmed death. Kept a
+      ``RuntimeError`` subclass so every existing ``except RuntimeError``
+      around ``attach_existing`` (the boot re-adopt's per-target gather,
+      the single-session rehydrate's stale-metadata cleanup) keeps
+      working unchanged; a caller that cares about the distinction -
+      today, only the adopt route - catches this type specifically and
+      answers a 409 ``session_gone`` instead of a 500, the same way a
+      session found missing from a tmux listing already does.
+    Inputs (constructor): message (str) - user-facing reason.
+    Output: a PaneDeadError instance.
+    """
+
+
 # ---- Backend --------------------------------------------------------------
 
 
@@ -1110,6 +1132,13 @@ class TmuxBackend(SessionBackend):
 
             # 1. Refuse dead panes - nothing to stream from, and our attempts
             # to set options on them produce confusing errors further down.
+            # The two failures below are NOT the same kind of thing: a
+            # probe that could not RUN (rc != 0) is an unmeasured unknown
+            # and stays a bare RuntimeError; a probe that RAN and read
+            # "1" is a measured fact and is raised as PaneDeadError so a
+            # caller that cares (the adopt route, via session_manager) can
+            # answer it the same way it answers a session gone from a
+            # listing, rather than as a server fault.
             rc, out, err = await self._run_tmux(
                 "display-message", "-t", target, "-p", "#{pane_dead}",
                 check=False,
@@ -1120,7 +1149,7 @@ class TmuxBackend(SessionBackend):
                     f"{err.decode('utf-8', errors='replace').strip()}"
                 )
             if out.decode("utf-8", errors="replace").strip() == "1":
-                raise RuntimeError(
+                raise PaneDeadError(
                     f"cannot adopt {self.tmux_session}: pane already dead"
                 )
 

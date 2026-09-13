@@ -119,6 +119,42 @@ and be a credential bypass. In memory only is deliberate - a mint plus a
 restart is not recoverable this way, and the restart already has its own
 answer.
 
+**A HUSK ON THE SOCKET CAN OUTLIVE ITS PROCESS, AND ADOPTING IT USED TO BE
+A SERVER FAULT.** `remain-on-exit on` keeps a dead pane's tmux session on
+`cloude`'s listing after its process exits, so the session still shows up
+as adoptable and still passes `is_alive()`. `TmuxBackend.attach_existing`
+already probed `#{pane_dead}` before doing any external-adopt setup, but
+until 2026-09-13 both a MEASURED dead pane and a probe that simply could
+not run shared one bare `RuntimeError`, which the adopt route has no
+special handling for and answers with a 500. On 2026-09-13 one husk,
+`cloude_cloudecode-4`, produced seven identical 500s across ninety minutes
+because the listing kept offering it and the user kept clicking adopt.
+
+The fix splits the two failures apart rather than adding a special case
+for this one husk. `PaneDeadError(RuntimeError)` in `src/core/tmux_backend.py`
+is raised ONLY when the probe RAN and read `"1"` - a positive measurement
+of death. `SessionManager.adopt_external_session` catches it and re-raises
+the existing `AdoptTargetGoneError`, the same error the listing-vs-click
+race above already raises, so `src/api/session_attach_routes.py` needed no
+new branch: it already maps that error to 409 `session_gone` with
+`refresh: true`, telling the client to drop the row and re-list rather
+than retry the same dead adopt. The probe-FAILED branch (tmux timed out,
+errored, or the command otherwise did not complete) deliberately still
+raises the bare `RuntimeError` and stays a 500, on the same discipline
+`StatusMap.complete` and the recreate gate's `gone` versus `unknown` use
+elsewhere in this app: not having been able to measure death is not
+evidence of it, and answering that case with a client-facing "gone" would
+be a guess wearing a confirmed fact's clothing.
+
+`PaneDeadError` subclasses `RuntimeError` on purpose. The boot re-adopt
+pass and the single-session rehydrate both already tolerate a bare
+`RuntimeError` from this method, so neither needed to change to keep
+working when this exception now arrives as a more specific subclass.
+Regression coverage: `tests/test_adoption_three_outcomes.py` and
+`tests/test_session_backend.py`, including a real-tmux case that kills a
+pane's shell and asserts `PaneDeadError` rather than a generic
+`RuntimeError`.
+
 **EVERY SESSION BELONGS TO A PROJECT, AND THE ROW IS WHERE THAT LIVES.**
 The owner's rule, verbatim: "all sessions belong to projects, the root folder
 ... its impossible to not have a project." Nothing in memory carries it - the

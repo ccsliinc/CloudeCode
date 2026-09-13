@@ -330,3 +330,96 @@ def test_the_route_answers_409_session_gone_rather_than_500():
     assert body["error"] == "session_gone"
     assert body["refresh"] is True
     assert body["session_name"] == NAME
+
+
+# --- a fourth way to reach the same gone answer: the pane, not the listing
+
+
+def test_a_husk_the_probe_measures_dead_yields_409_not_500():
+    """``remain-on-exit`` keeps a dead pane's session on the socket, so
+    ``persist_adoption`` above can still find the instance and proceed to
+    ``attach_existing`` - where the LATER ``#{pane_dead}`` probe measures
+    the same "this session is gone" fact. That must answer the same 409
+    ``session_gone`` with a refresh, not the 500 a real server fault
+    gets. Before this fix, ``attach_existing`` raised a bare
+    RuntimeError for a measured-dead pane, indistinguishable from a
+    pipe-pane setup failure, and the route's error middleware turned it
+    into a 500.
+    """
+    import asyncio
+    from pathlib import Path as _Path
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.core.session_adopt_persist import AdoptTargetGoneError
+    from src.core.session_manager import SessionManager
+    from src.core.tmux_backend import PaneDeadError
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+    sm.has_active_session = MagicMock(return_value=False)
+    sm._resolve_external_cwd = AsyncMock(return_value=_Path("/tmp"))
+
+    fake_backend = MagicMock()
+    fake_backend.attach_existing = AsyncMock(
+        side_effect=PaneDeadError(f"cannot adopt {NAME}: pane already dead")
+    )
+    fake_backend.capture_scrollback = MagicMock(return_value=b"")
+    fake_backend._pipe_path = Path("/tmp/never_existent.pipe")
+
+    with patch(
+        "src.core.tmux_backend.TmuxBackend.for_external",
+        return_value=fake_backend,
+    ), patch("src.core.session_manager.settings") as mock_settings:
+        auth_cfg = MagicMock()
+        auth_cfg.session.tmux_socket_name = TEST_SOCKET
+        auth_cfg.session.scrollback_lines = 3000
+        mock_settings.load_auth_config.return_value = auth_cfg
+
+        with pytest.raises(AdoptTargetGoneError) as caught:
+            asyncio.run(sm.adopt_external_session(NAME, confirm_detach=False))
+    assert "pane already dead" in str(caught.value)
+    assert type(caught.value) is not RuntimeError
+
+
+def test_a_probe_that_could_not_measure_the_pane_still_500s():
+    """Negative control for the case above: a probe that RAISED, rather
+    than measuring "1", is an unmeasured unknown and must keep 500ing.
+    Collapsing the two would tell the user his live session died because
+    a tmux command timed out - the false-gone verdict this project keeps
+    naming as the failure to avoid.
+    """
+    import asyncio
+    from pathlib import Path as _Path
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.core.session_adopt_persist import AdoptTargetGoneError
+    from src.core.session_manager import SessionManager
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+    sm.has_active_session = MagicMock(return_value=False)
+    sm._resolve_external_cwd = AsyncMock(return_value=_Path("/tmp"))
+
+    fake_backend = MagicMock()
+    fake_backend.attach_existing = AsyncMock(
+        side_effect=RuntimeError(
+            f"cannot adopt {NAME}: pane-dead probe failed: timeout"
+        )
+    )
+    fake_backend.capture_scrollback = MagicMock(return_value=b"")
+    fake_backend._pipe_path = Path("/tmp/never_existent.pipe")
+
+    with patch(
+        "src.core.tmux_backend.TmuxBackend.for_external",
+        return_value=fake_backend,
+    ), patch("src.core.session_manager.settings") as mock_settings:
+        auth_cfg = MagicMock()
+        auth_cfg.session.tmux_socket_name = TEST_SOCKET
+        auth_cfg.session.scrollback_lines = 3000
+        mock_settings.load_auth_config.return_value = auth_cfg
+
+        with pytest.raises(RuntimeError) as caught:
+            asyncio.run(sm.adopt_external_session(NAME, confirm_detach=False))
+    assert not isinstance(caught.value, AdoptTargetGoneError), (
+        "an unmeasured probe failure must never be reported as gone"
+    )

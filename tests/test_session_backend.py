@@ -34,6 +34,7 @@ from src.core.session_backend import SessionBackend, build_backend
 from src.core.tmux_backend import (
     INITIAL_COLS,
     INITIAL_ROWS,
+    PaneDeadError,
     TmuxBackend,
     _has_control_chars,
     _slugify,
@@ -897,6 +898,77 @@ async def test_tmux_backend_attach_existing_write_works_after(tmux_socket_cleanu
             pass
 
 
+@requires_tmux
+@pytest.mark.asyncio
+async def test_attach_existing_refuses_a_husk_the_process_exited_in(
+    tmux_socket_cleanup,
+):
+    """A pane whose process exited stays on the socket, and adopting it
+    must MEASURE that and raise ``PaneDeadError``, not a probe-failure
+    RuntimeError.
+
+    ``remain-on-exit`` (set by ``start()``) is what keeps the husk on the
+    tmux server instead of the whole session vanishing the instant the
+    shell exits — this is the exact shape a real ``POST
+    /api/v1/sessions/adopt`` hits when the client's listing still shows a
+    session whose process died in the meantime. This test never kills the
+    tmux SESSION; it kills the process INSIDE the pane and lets tmux hold
+    the corpse, on a throwaway per-test socket the subprocess guard in
+    ``tests/socket_guard.py`` refuses to let any command aim elsewhere.
+    """
+    slug = f"attach_husk_{secrets.token_hex(4)}"
+    wd = Path(tempfile.mkdtemp(prefix="cc_attach_husk_"))
+    first = TmuxBackend(
+        session_id=slug,
+        working_dir=wd,
+        on_output=None,
+        socket_name=tmux_socket_cleanup,
+    )
+    try:
+        await first.start(command="/bin/sh")
+        assert first.is_alive()
+
+        # Kill the shell INSIDE the pane, not the tmux session.
+        await first.write(b"exit\r")
+
+        target = first.tmux_session
+        for _ in range(50):
+            rc, out, _ = await first._run_tmux(
+                "display-message", "-t", target, "-p", "#{pane_dead}",
+                check=False,
+            )
+            if rc == 0 and out.decode().strip() == "1":
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("pane never reported #{pane_dead}=1 within 5s")
+
+        # The session itself is still on the socket — remain-on-exit held
+        # the husk, exactly as a real dead-between-listing-and-click
+        # adoption target would be.
+        rc, _, _ = await first._run_tmux(
+            "has-session", "-t", target, check=False
+        )
+        assert rc == 0, "the tmux session must survive its pane's process"
+
+        adopted = TmuxBackend.for_external(
+            session_name=target,
+            working_dir=wd,
+            on_output=None,
+            socket_name=tmux_socket_cleanup,
+        )
+        with pytest.raises(PaneDeadError, match="pane already dead"):
+            await adopted.attach_existing(needs_pipe_setup=True)
+        assert adopted._running is False, (
+            "a refused adopt must not claim the backend is streamable"
+        )
+    finally:
+        try:
+            await first.stop()
+        except Exception:
+            pass
+
+
 def test_pty_backend_attach_existing_raises_not_implemented():
     """PTYBackend cannot rehydrate — attach_existing must raise NotImplementedError."""
     backend = PTYBackend("attach-not-impl", Path.home(), None)
@@ -1381,16 +1453,25 @@ async def test_concurrent_sessions_output_isolation():
     assert base64.b64decode((await qb.get()).payload) == b"still-alive-B"
 
 
-# ---- Test 5: adopt_external_session propagates pane-dead error ----------
+# ---- Test 5: adopt_external_session translates a MEASURED dead pane -----
+# ---- into the named gone error, not a bare RuntimeError -----------------
 
 
 @pytest.mark.asyncio
-async def test_adopt_external_session_refuses_dead_pane():
-    """When the target pane is already dead (``#{pane_dead}`` == "1"),
-    ``attach_existing`` raises RuntimeError("pane already dead") — the
-    adopt method must propagate (wrap or bare) so the route returns 500
-    instead of silently registering a dead session.
+async def test_adopt_external_session_reports_measured_dead_pane_as_gone():
+    """A pane the ``#{pane_dead}`` probe MEASURED dead is a 409, not a 500.
+
+    ``attach_existing`` raises ``PaneDeadError`` (a distinct RuntimeError
+    subclass) when the probe RAN and read "1". ``adopt_external_session``
+    must translate that into ``AdoptTargetGoneError`` — the same type it
+    raises when a tmux listing runs and does not name the target — so the
+    route answers 409 ``session_gone`` with a refresh instead of the 500
+    a genuine server fault gets. This husk is exactly the case
+    ``remain-on-exit`` produces: the process exited, the pane stays on
+    the socket, and adopting it must read as "that session is gone", not
+    as a server failure.
     """
+    from src.core.session_adopt_persist import AdoptTargetGoneError
     from src.core.session_manager import SessionManager
 
     with patch.object(SessionManager, "_load_session_metadata", return_value=None):
@@ -1400,10 +1481,11 @@ async def test_adopt_external_session_refuses_dead_pane():
     sm.has_active_session = MagicMock(return_value=False)  # type: ignore[assignment]
     sm._resolve_external_cwd = AsyncMock(return_value=Path("/tmp"))  # type: ignore[assignment]
 
-    # Backend that immediately raises on attach_existing simulating a dead pane.
+    # Backend that immediately raises on attach_existing simulating a
+    # MEASURED dead pane — the real exception type the guard raises.
     fake_backend = MagicMock()
     fake_backend.attach_existing = AsyncMock(
-        side_effect=RuntimeError("cannot adopt foo: pane already dead")
+        side_effect=PaneDeadError("cannot adopt foo: pane already dead")
     )
     fake_backend.capture_scrollback = MagicMock(return_value=b"")
     fake_backend._pipe_path = Path("/tmp/never_existent.pipe")
@@ -1419,8 +1501,54 @@ async def test_adopt_external_session_refuses_dead_pane():
         auth_cfg.session.scrollback_lines = 3000
         mock_settings.load_auth_config.return_value = auth_cfg
 
-        with pytest.raises(RuntimeError, match="pane already dead"):
+        with pytest.raises(AdoptTargetGoneError, match="pane already dead") as caught:
             await sm.adopt_external_session("foo", confirm_detach=True)
+        # Not the bare RuntimeError the error middleware turns into a 500.
+        assert type(caught.value) is not RuntimeError
+
+
+@pytest.mark.asyncio
+async def test_adopt_external_session_still_500s_when_the_probe_itself_fails():
+    """Negative control: a probe that could NOT RUN stays a 500.
+
+    Not having measured death is not evidence of it. ``attach_existing``
+    raises a bare ``RuntimeError`` (never ``PaneDeadError``) when the
+    ``#{pane_dead}`` probe itself errors out, and that must keep
+    propagating unwrapped so the route's error middleware answers 500 —
+    exactly as it did before the pane-dead case was split out.
+    """
+    from src.core.session_adopt_persist import AdoptTargetGoneError
+    from src.core.session_manager import SessionManager
+
+    with patch.object(SessionManager, "_load_session_metadata", return_value=None):
+        sm = SessionManager()
+
+    sm.has_active_session = MagicMock(return_value=False)  # type: ignore[assignment]
+    sm._resolve_external_cwd = AsyncMock(return_value=Path("/tmp"))  # type: ignore[assignment]
+
+    fake_backend = MagicMock()
+    fake_backend.attach_existing = AsyncMock(
+        side_effect=RuntimeError("cannot adopt foo: pane-dead probe failed: timeout")
+    )
+    fake_backend.capture_scrollback = MagicMock(return_value=b"")
+    fake_backend._pipe_path = Path("/tmp/never_existent.pipe")
+
+    with patch(
+        "src.core.tmux_backend.TmuxBackend.for_external",
+        return_value=fake_backend,
+    ), patch(
+        "src.core.session_manager.settings"
+    ) as mock_settings:
+        auth_cfg = MagicMock()
+        auth_cfg.session.tmux_socket_name = _TEST_SOCKET
+        auth_cfg.session.scrollback_lines = 3000
+        mock_settings.load_auth_config.return_value = auth_cfg
+
+        with pytest.raises(RuntimeError, match="probe failed") as caught:
+            await sm.adopt_external_session("foo", confirm_detach=True)
+        assert not isinstance(caught.value, AdoptTargetGoneError), (
+            "an unmeasured probe failure must never be reported as gone"
+        )
 
 
 # ---- Test 6: lifespan_startup honors owned_tmux_sessions + legacy fallback

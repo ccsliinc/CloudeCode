@@ -86,20 +86,28 @@ PERSIST_REFUSED = "refused"
 
 
 class AdoptTargetGoneError(RuntimeError):
-    """The session being adopted is not in a tmux listing that RAN.
+    """The target of an adopt was MEASURED gone, not merely un-probed.
 
     Description: raised so the route can answer "that session is no
-      longer there" with a refresh instead of the 500 an attach against
-      a dead session produces. It is deliberately a distinct type and
-      not a bare RuntimeError, because ``adopt_external_session`` already
-      raises RuntimeError for a dead pane and a failed pipe-pane setup,
-      and those are genuine server faults while this is a stale client
-      view of a normal, expected race.
+      longer there" with a refresh instead of the 500 a genuine server
+      fault produces. It is deliberately a distinct type and not a bare
+      RuntimeError, because ``adopt_external_session`` also raises plain
+      RuntimeError for a probe that could not RUN (tmux timed out or
+      errored on the listing, or on the later ``#{pane_dead}`` check) and
+      for a failed pipe-pane setup, and those are genuine server faults
+      while this is a stale client view of a normal, expected race.
 
-      ONLY EVER RAISED FROM A LISTING WITH ``ok=True``. An unavailable
-      probe means we could not look, and telling the user his live
-      session has died because tmux timed out is the same false verdict
-      in the other direction.
+      TWO MEASUREMENTS FEED IT, both positive. A tmux listing that ran
+      (``ok=True``) and does not name this instance - it died between the
+      client's listing and the click. Or, later in the same call, the
+      pane-dead probe inside ``TmuxBackend.attach_existing`` answering
+      ``#{pane_dead}=1`` for a husk ``remain-on-exit`` kept on the
+      socket - :class:`src.core.tmux_backend.PaneDeadError`, caught in
+      ``adopt_external_session`` and re-raised as this type. Neither an
+      unavailable listing nor a pane-dead probe that could not run may
+      raise this: not having looked is not evidence of absence, and
+      telling the user his live session died because a probe timed out
+      is the same false verdict in the other direction.
     Inputs (constructor): message (str) - user-facing reason.
     Output: an AdoptTargetGoneError instance.
     """

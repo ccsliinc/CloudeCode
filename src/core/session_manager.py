@@ -6267,7 +6267,12 @@ class SessionManager:
             ``fifo_start_offset`` keys (route wraps in AdoptSessionResponse).
 
         Raises:
-            RuntimeError: pane already dead, or pipe-pane setup failed.
+            AdoptTargetGoneError: the listing said this instance is gone,
+                or the pane-dead probe MEASURED the pane dead. The route
+                answers both as a 409 ``session_gone`` with a refresh.
+            RuntimeError: pipe-pane setup failed, or the pane-dead probe
+                itself could not run. Both are genuine server faults and
+                the route answers them with a 500.
             ValueError: if ``name`` contains tmux target separators.
         """
         _ = confirm_detach  # accepted for API back-compat; intentionally ignored
@@ -6394,7 +6399,7 @@ class SessionManager:
         # Late import: src.core.tmux_backend imports SessionBackend from
         # session_backend, which we already import - no cycle - but
         # keeping the import local matches the pattern in build_backend.
-        from src.core.tmux_backend import TmuxBackend
+        from src.core.tmux_backend import PaneDeadError, TmuxBackend
 
         backend = TmuxBackend.for_external(
             session_name=name,
@@ -6406,7 +6411,20 @@ class SessionManager:
 
         # Step 3 - ensure pipe-pane BEFORE capturing scrollback so the
         # FIFO is guaranteed warm at the moment we read its size.
-        await backend.attach_existing(needs_pipe_setup=True)
+        #
+        # A pane the ``#{pane_dead}`` probe MEASURED dead (remain-on-exit
+        # keeps its husk on the listing, so it can still reach here) is
+        # the same "gone between the listing and the click" story as the
+        # PERSIST_SESSION_GONE check above, told by a later probe - it is
+        # not a server fault, so it is re-raised as the same named gone
+        # error rather than left a bare RuntimeError the route would
+        # answer with a 500. A probe that could not RUN at all (tmux
+        # timed out or errored) stays a plain RuntimeError and a 500,
+        # because not having measured death is not evidence of it.
+        try:
+            await backend.attach_existing(needs_pipe_setup=True)
+        except PaneDeadError as exc:
+            raise AdoptTargetGoneError(str(exc)) from exc
 
         # Step 3b - reshape the adopted pane to the client's grid before
         # anything reads it. See the docstring: without this an adopted
