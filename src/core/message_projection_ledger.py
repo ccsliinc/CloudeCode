@@ -63,6 +63,48 @@ CREATE TABLE IF NOT EXISTS {LEDGER_TABLE} (
 )
 """
 
+#: THE INDEX THAT KEEPS BOTH QUERIES OFF THE TABLE, and it is not
+#: optional. ``transcript_archives`` stores ``content_gzip`` INLINE, so
+#: reaching into it for four small columns walks pages full of
+#: compressed transcript. Measured on a writable copy of the owner's
+#: 4.8 GB backup, 22,828 archive rows:
+#:
+#:   ================================  =========  ========
+#:   query                             before     after
+#:   ================================  =========  ========
+#:   pending_count, ledger drained     529.76 ms  10.32 ms
+#:   select_pending limit 64, drained  522.05 ms   9.87 ms
+#:   pending_count, ledger empty        11.87 ms   1.66 ms
+#:   select_pending limit 64, empty    530.06 ms   0.05 ms
+#:   ================================  =========  ========
+#:
+#: The plan goes from SEARCH on the existing narrow
+#: ``superseded_by_archive_id`` index plus a table fetch per candidate
+#: plus ``USE TEMP B-TREE FOR ORDER BY``, to a single SEARCH USING
+#: COVERING INDEX with no sort. Build cost 0.52s, once.
+#:
+#: THE COLUMN ORDER IS THE QUERY'S AND WAS ARRIVED AT BY MEASURING. A
+#: PARTIAL index (``WHERE superseded_by_archive_id IS NULL``) leading on
+#: ``ingested_at`` was tried first and the planner DID NOT CHOOSE IT -
+#: it kept the existing narrow index and stayed at 530 ms, so the fix
+#: read as no fix at all. Leading on the equality column gives the
+#: planner a SEARCH it prefers, and the remaining columns ride along so
+#: the index answers on its own. Never assume an index is used; read the
+#: plan.
+#:
+#: It is created here rather than in the schema chain for the same
+#: reason the ledger is: it belongs to this pass, and an install that
+#: never projects should not carry it.
+LEDGER_SCAN_INDEX: str = "ix_transcript_archives_projection_scan"
+
+LEDGER_SCAN_INDEX_DDL: str = f"""
+CREATE INDEX IF NOT EXISTS {LEDGER_SCAN_INDEX}
+  ON transcript_archives (
+    superseded_by_archive_id, ingested_at DESC, id DESC,
+    source_path, content_sha256, raw_byte_length, record_count
+  )
+"""
+
 #: Outcomes a ledger row may record. ``projected`` is a first write,
 #: ``replaced`` is a write over a file the archive layer re-measured, and
 #: ``could_not_read`` / ``could_not_ingest`` are REFUSALS that are still
@@ -136,14 +178,17 @@ def ensure_ledger(conn: sqlite3.Connection) -> None:
     """Create the ledger table if this datastore does not carry it yet.
 
     Description: idempotent, and safe to call on every pass. It creates
-      one table and no indexes: the primary key is the only access path
-      the pending query uses.
+      the ledger table AND the partial covering index on
+      ``transcript_archives`` that the pending query needs - see
+      :data:`LEDGER_SCAN_INDEX_DDL` for the measurement that makes the
+      second one load-bearing rather than a nicety.
     Inputs: conn (sqlite3.Connection).
     Output: None.
     Raises: sqlite3.Error - the caller decides whether that is fatal.
     Example: ensure_ledger(conn)
     """
     conn.execute(LEDGER_DDL)
+    conn.execute(LEDGER_SCAN_INDEX_DDL)
 
 
 def select_pending(

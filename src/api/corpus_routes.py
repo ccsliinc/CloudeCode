@@ -30,6 +30,7 @@ numbers.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -88,8 +89,18 @@ async def get_corpus_status(request: Request) -> Dict[str, Any]:
         ``current``, ``stale``, ``never_ran`` or ``cannot_determine`` -
         never a bare boolean.
     """
-    snapshot = corpus_status.build_status(
-        Path(settings.get_state_dir()), scheduler=_scheduler(request),
+    # OFF THE EVENT LOOP, because the body is entirely synchronous
+    # sqlite: three connections and, since the projection block joined
+    # it, a COUNT over the current-archive set. That count is 10.32 ms
+    # on the owner's 22,828 rows WITH its covering index and 529.76 ms
+    # WITHOUT one (see message_projection_ledger.LEDGER_SCAN_INDEX_DDL),
+    # and an index is a thing a database can be missing. A status
+    # endpoint that stalls every terminal in the app while it reports on
+    # the archive is this project's oldest defect wearing a new hat.
+    snapshot = await asyncio.to_thread(
+        corpus_status.build_status,
+        Path(settings.get_state_dir()),
+        scheduler=_scheduler(request),
     )
     logger.info(
         "corpus_status_collected",
@@ -133,8 +144,6 @@ async def post_corpus_ingest(
         is None ONLY when the projection is switched off, which is a
         different fact from a pass that ran and did nothing.
     """
-    import asyncio
-
     report = await asyncio.to_thread(
         run_ingest_once,
         Path(settings.get_state_dir()),

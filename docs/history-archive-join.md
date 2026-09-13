@@ -91,6 +91,31 @@ Extrapolated to the full current set (19,401 archives, 10.25 GiB raw):
 **That number is the strongest argument yet for the owner's own question,
 "we can separate the database out?"** It is deliberately NOT answered here.
 
+## The one performance defect found in review, and what it cost
+
+The pending query is a `LEFT JOIN` over the current archive set and it is
+reached from `GET /corpus/status`, which is a request path. Measured on a
+writable copy of the 4.8 GB backup:
+
+| query | before | after |
+|---|---|---|
+| `pending_count`, ledger drained (steady state) | 529.76 ms | **10.32 ms** |
+| `select_pending limit 64`, drained | 522.05 ms | **9.87 ms** |
+| `pending_count`, ledger empty (first run) | 11.87 ms | **1.66 ms** |
+| `select_pending limit 64`, empty | 530.06 ms | **0.05 ms** |
+
+The cause is that `transcript_archives` stores `content_gzip` INLINE, so
+reaching into the table for four small columns walks pages full of
+compressed transcript. The fix is one covering index, built in 0.52 s.
+
+**The first version of that index did nothing and looked right.** It was
+PARTIAL (`WHERE superseded_by_archive_id IS NULL`) and led on
+`ingested_at`; the planner kept the existing narrow index and the time
+did not move. `EXPLAIN QUERY PLAN` is what found it, and
+`test_the_pending_query_is_answered_by_a_covering_index` is what keeps it
+found. `GET /corpus/status` also moved to `asyncio.to_thread`, because an
+index is a thing a database can be missing.
+
 ## What ships, and what a first run does
 
 - The background pass runs after each ingest, on `asyncio.to_thread`, bounded
