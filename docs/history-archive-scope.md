@@ -15,6 +15,13 @@ going to be left alone, and migrating before modifying is cheaper than the
 reverse. Section 5, the away bar, is PARKED on his call and is no longer
 scheduled. Everything else stands.
 
+**ADDITION, 2026-09-13.** Section 10 captures what would have to be true for
+the history browser to become a standalone project, split into what is FREE
+NOW and what is EXPENSIVE LATER. It is a capture, not a plan, and it adds five
+things to the slices, all of which are free. It also **corrects the server-side
+module count this document has carried from the start**: the family is 68
+modules and 22,750 lines, not 44 and 14,087.
+
 **If you read only one section, read 2.0.** The background ingester fills
 `transcript_archives` and the browser reads the `message_*` tables, and those
 tables are empty. That is why the history browser shows nothing, and it is what
@@ -48,8 +55,10 @@ feature in this application and it already works.
 |---|---|---|
 | client modules matching `archive` | **54** | `git ls-tree -r --name-only adamdev/master client/js \| grep -ci archive` |
 | lines in those, plus `api-archive.js` | **17,387** | `wc -l client/js/*archive*` |
-| server modules matching `archive` or `corpus` | **44** | `git ls-tree -r --name-only adamdev/master src \| grep -ciE 'archive\|corpus'` |
-| lines in those | **14,087** | `wc -l $(git ls-files src \| grep -iE 'archive\|corpus')` |
+| server modules matching `archive` or `corpus` BY NAME | **43** | `git ls-tree -r --name-only adamdev/master src \| grep -ciE 'archive\|corpus'` |
+| lines in those | **13,928** | `wc -l $(git ls-files src \| grep -iE 'archive\|corpus')` |
+| server modules in the family IN FACT | **68** | `archive_* + transcript_* + message_* + corpus_*` |
+| lines in those | **22,750** | see section 10.1 |
 | test files for it | **72**, of which **39** are node suites | `ls tests/ \| grep -icE 'archive\|corpus'` |
 | stylesheets | **14** | `ls client/css/archive-*.css` |
 | modules under `web/src` touching it | **0** | `git ls-tree -r --name-only adamdev/master web/src \| grep -ciE 'archive\|corpus'` |
@@ -1233,6 +1242,12 @@ component. **This is the single highest-value thing the migration can leave
 behind** and it costs almost nothing to do while the components are being
 written anyway.
 
+**3b. An import-direction test, pinned in slice 1.** Nothing outside
+`history/` imports into it, nothing inside it imports from `launchpad/`,
+`sessions/` or `terminal-search/`. Thirty lines, written once, and it is what
+keeps items 1 and 2 above true in a year. Section 10.5 explains why this is the
+highest-value free item in the whole scope.
+
 **4. The store is one store, keyed by route.** Not four stores per endpoint.
 The launchpad migration's KISS section made this call and it held. A second
 store is how two parts of one screen come to disagree about which transcript is
@@ -1343,7 +1358,293 @@ anything: search telling the truth when it stops early (section 2.4), the
 recorded `archive_search.py:107` known gap (section 2.5), and re-measuring the
 browser at 22,828 transcripts (section 2.3), which slice 6 does anyway.
 
-## 10. Open questions
+## 10. Standing it up alone, some day
+
+The owner, verbatim: "also this can realistically in the future be a standalone
+project. not needed right now, but it probably already is close".
+
+**This is a capture, not a plan, and nothing in it adds work to the nine
+slices** except where it is genuinely free and says so. "Not needed right now"
+is a constraint on this section, not a hedge. What follows is an honest read on
+how close it actually is, and then the only list that matters: what is **free
+now** because the code is being touched anyway, against what is **expensive
+later** once it has set.
+
+### 10.1 How close is it really
+
+**On the client, closer than he thinks. On the server, further, and the
+distance is in one specific layer.**
+
+**First, a correction to a figure this document has carried since its first
+draft.** The server side is not 44 modules. That number came from
+`grep -iE 'archive|corpus'`, which misses every `transcript_*` and most
+`message_*` module. Measured properly:
+
+| group | modules | lines |
+|---|---|---|
+| browse, read, search, export (`archive_*`) | 33 | 10,043 |
+| ingest and import (`corpus_*`, `transcript_*`) | 16 | 6,029 |
+| the v16 message model (`message_*`) | 20 | 6,960 |
+| **total** (one module counted in two groups) | **68** | **22,750** |
+
+So the extraction surface is **68 modules and 22,750 lines, not 44 and
+14,087.** The original figure undercounts it by a little over half. The nine
+slices are unaffected, because they are client-side, but any estimate of a
+standalone split that used 44 was wrong by that much.
+
+**The client is genuinely close and this is the cheapest good news in the
+document.** All 54 modules together reach for exactly **eight host globals**:
+
+```
+ 17 refs / 9 modules   window.API
+ 11 refs / 4 modules   window.ModalStack
+  6 refs / 1 module    window.App
+  6 refs / 1 module    window.ModuleLoader
+  4 refs / 1 module    window.Router
+  2 refs / 1 module    window.Auth
+  2 refs / 1 module    window.ModuleFamilies
+  2 refs / 1 module    window.NavigationGeneration
+```
+
+Four of those eight are touched by exactly one module each, and **the nine
+slices already remove five of them as a side effect of work that is happening
+anyway**: `window.API` becomes the granted client in slice 2, `window.Router`
+and `window.App` are severed in slice 1 when `archive-entry.js` goes,
+`window.ModuleLoader` and `window.ModuleFamilies` disappear in slice 3 when
+`archive-loader.js` is deleted rather than ported. **What is left after slice 3
+is `ModalStack`, `Auth`, and `NavigationGeneration`**, and two of those three
+are single-module, single-purpose reaches. That is a very short list for
+17,387 lines of client code.
+
+**On the server the browse half is also close, and the ingest half is not.**
+Measured by import direction across the whole family:
+
+**Archive reaching OUT into CloudeCode**, twelve distinct targets. Eight are
+shared infrastructure that a standalone project would simply own a copy of:
+`src.core.db` (11 imports, the connection helper), `src.core.trail_entry` (5),
+`src.config` (3), `src.core.db_models` (3), `src.core.json_artifact` (1),
+`src.core.claude_project_dirs` (1, and that one arguably belongs WITH the
+archive since it is Claude Code's transcript-path slug rule). `src.api.auth`
+(7) is a real host dependency and is section 10.4.
+
+**The four that are genuine coupling are all in one layer**, and this is the
+single most useful sentence in the section: `src.core.project_writes`,
+`src.core.project_store`, `src.core.claude_title_sync` and
+`src.core.session_kind` are imported by `project_archive.py`,
+`transcript_project_root.py`, `transcript_import_facts.py` and
+`transcript_import_write.py`. **Every one of them is in the rooting and import
+path, and not one of them is in the browse path.** The thing that reads and
+renders a transcript does not know CloudeCode exists. The thing that decides
+which SESSION a transcript belongs to obviously does, and cannot not.
+
+**CloudeCode reaching IN to the archive**, seventeen targets, of which most are
+bookkeeping that a split dissolves: `main.py` mounting five routers,
+`db_steps.py` importing six DDL modules, and the feature flag read in three
+places. **Two are real and both are worth naming now:**
+
+1. **`src/core/secret_scan.py` imports `src.core.message_model_secrets`.** The
+   secret detectors are a deliberate single source of truth shared between the
+   repository's own secret scanner and the transcript message model. CLAUDE.md
+   says so on purpose. **This module belongs to both projects and is the
+   clearest genuine ambiguity in the whole family.** It is also the easiest to
+   resolve, because it is pure pattern matching with no state: whichever side
+   keeps it, the other vendors it or depends on it as a tiny package.
+2. **`src/core/session_project_binding.py` imports `canonical`,
+   `git_top_level` and `is_scratch` from `src.core.transcript_import_paths`.**
+   CloudeCode's session-to-project binding depends on the archive's path
+   canonicalisation rules. That is the wrong direction for a split and it is
+   the one inward dependency that would actually have to be moved rather than
+   deleted. It is small: three pure functions.
+
+**One trap, found while measuring and worth recording because the name invites
+it.** `src/core/project_archive.py` is NOT part of this. It archives a
+PROJECT, the soft retirement of a shelf in the launcher, and has nothing to do
+with transcripts. Anything that globs `*archive*` on the server picks it up and
+is wrong. It stays with CloudeCode.
+
+**Honest summary of distance.** The browse half, 33 modules and 10,043 lines,
+is close to free-standing today. The message model, 20 modules, is
+self-contained by construction. The ingest and import half, 16 modules, is
+entangled with session and project state **and should be**, because rooting a
+transcript to a session is definitionally a CloudeCode question. So the split
+is not "lift 68 modules out". It is "lift 53, and decide what the other 15
+become". That is a real project and it is not a weekend, but it is also not a
+month of untangling, because the entanglement is concentrated rather than
+spread.
+
+### 10.2 The data boundary, and whether this changes the split
+
+**It does not change the design and it does strengthen the argument, which is
+worth saying because a second independent reason to do something is not the
+same as a better reason.**
+
+Section 6 already recommends separating the archive into its own database file,
+on size, backup asymmetry and boot cost. A standalone project needs its own
+store by definition, so this is the same recommendation reached from a second
+direction. Nothing in section 6's design changes: same `ATTACH`, same three
+foreign keys to resolve, same copy-not-re-ingest rule because
+`transcript_root_decisions` holds 23,023 decisions that exist nowhere else.
+
+**One thing it does sharpen.** Section 6 treats dropping the three cross-boundary
+foreign keys as a cost. Under this lens it is partly a benefit: those three keys
+(`transcript_archives.root_session_id`, `transcript_archives.project_id`,
+`transcript_root_decisions.project_id`) are exactly the schema-level expression
+of "this archive belongs to a CloudeCode session", and a standalone browser
+would need them to be soft references anyway. So the split is not only making
+them unenforceable, it is converting them into the interface. Say that in the
+migration's commit message rather than apologising for losing a constraint.
+
+**Sequencing is unchanged.** Step 3, after the data connection and the slices.
+Doing it earlier for standalone reasons would be optimising for a thing the
+owner has explicitly said is not needed now.
+
+### 10.3 The ingester, which is the part that decides weekend or month
+
+**A standalone history browser needs transcripts to arrive. There are two
+honest answers and they cost very differently.**
+
+**Answer A: it takes the ingest half with it.** The 16 `corpus_*` and
+`transcript_*` modules go, and it gains its own scheduler. That is the clean
+product: point it at `~/.claude/projects` and it works for anyone, with no
+CloudeCode anywhere. The cost is the four genuine couplings in 10.1, all in the
+rooting path, so what it actually loses is the ability to say "this transcript
+belongs to session X". For a standalone browser that is not a loss, it is a
+feature it never had.
+
+**Answer B: it takes only the browse half, and the corpus arrives some other
+way.** Smaller, and it makes the product a viewer over a database somebody else
+fills, which is a much weaker thing.
+
+**A is right, and the split inside those 16 modules is already visible.** The
+rooting and attribution code (`transcript_project_root.py`,
+`transcript_import_facts.py`, `transcript_import_write.py`, and
+`project_archive.py` which is not in the family at all) is CloudeCode's. The
+discovery, hashing, byte-exact archiving and scan-plan code
+(`corpus_ingest_service.py`, `corpus_ingest_scan.py`, `corpus_ingest_state.py`,
+`corpus_ingest_task.py`, `transcript_corpus_discover.py`, `transcript_archive.py`)
+is the browser's, and none of it imports session or project state.
+
+**The ambiguous ones, named now because they are what decides the estimate:**
+
+- `transcript_corpus_ingest.py` (684 lines) is BOTH. It ingests, which is the
+  browser's, and it roots against `sessions` and `projects`, which is
+  CloudeCode's. It is the single file where the two jobs are mixed, and
+  splitting it is the largest single piece of work in any extraction.
+- `transcript_import_paths.py` is the one CloudeCode already imports FROM
+  (10.1). Its three pure functions would most naturally move to CloudeCode and
+  be re-imported, or become a shared two-hundred-line package.
+- `message_model_secrets.py` belongs to both, as above.
+
+**That is the whole ambiguity: three modules.** Everything else partitions on
+inspection. **So the honest estimate is closer to a weekend than a month**, and
+the reason is that the entanglement is three files rather than a diffuse
+pattern. If someone tells you otherwise later, this measurement is the thing to
+re-take.
+
+### 10.4 What it genuinely needs from the host
+
+Five candidates. For each: sever, or define as an interface now.
+
+**Auth. DEFINE AN INTERFACE, and it is already half defined.** Seven archive
+routers import `src.api.auth.require_auth` as a FastAPI dependency. That is
+already the right shape: a dependency injected at the router, not auth logic
+inside archive code. A standalone project supplies its own `require_auth` and
+changes nothing else. **Nothing to do. It is already standalone-shaped by
+accident**, and that is the cheapest kind of good news.
+
+**Themes. SEVER, and it costs nothing because the coupling is a convention, not
+an import.** The 12 archive stylesheets use `var(--color-*)` and existing class
+names, and the slices explicitly keep doing that. A standalone project ships a
+default token set and the same stylesheets work. Nothing imports a theme.
+
+**The string catalog. DEFINE AN INTERFACE, cheaply, and only if a slice is
+touching the string anyway.** `web/src/lib/i18n` exists. A feature module that
+hardcodes English is not extractable without a pass over every component.
+Routing strings through the existing catalog as each slice is written is nearly
+free; going back afterwards is a full re-read of 17,387 ported lines.
+
+**The status model. SEVER. It is not used.** No archive module imports
+`StatusLed` or the session status machinery. The archive has its own outcome
+vocabulary in `archive-outcome.js`. Already clean.
+
+**Navigation. ALREADY BEING SEVERED, by slice 1.** That is what the
+`app-screen` surface is: `routePrefix`, `parse`, `buildPath`, `mount`. A
+standalone project implements four functions of host and the feature module
+does not change. **The surface designed in section 3 for plugin reasons turns
+out to be exactly the extraction seam, which is a coincidence worth noticing
+rather than a plan.**
+
+### 10.5 Free now versus expensive later
+
+**This is the section. Everything above is evidence for this list.**
+
+**FREE NOW, because the code is being rewritten anyway. Fold these into the
+slices and do not treat them as extra scope.**
+
+1. **An import-direction test, pinning `history/` as a leaf.** Nothing outside
+   `web/src/lib/plugins/history/` may import from inside it, and nothing inside
+   it may import from `web/src/lib/launchpad/`, `sessions/` or
+   `terminal-search/`. It pins the dependency arrow **outward-only: the module
+   may depend on the host's published seams, the host may depend only on the
+   `Plugin` object.** Cost: one test file, about thirty lines, written once in
+   slice 1. **This is the single highest-value item here.** During a rewrite it
+   is nearly free; afterwards it is near impossible, because by then there are
+   violations and each one is an argument.
+2. **Strings through the i18n catalog as each component is written.** Cost:
+   minutes per slice. Later: a full pass over every ported line.
+3. **Keep the four host globals out of the new components.** Slices 1, 2 and 3
+   already remove five of the eight. The free part is simply not introducing new
+   ones: any host reach goes through the `PluginContext` or the granted client,
+   never `window`. Cost: zero, it is the design already.
+4. **Name the three ambiguous server modules in their own docstrings.** One
+   paragraph each in `transcript_corpus_ingest.py`, `transcript_import_paths.py`
+   and `message_model_secrets.py` saying which project it would belong to and
+   why. Cost: fifteen minutes, and it is the thing nobody can reconstruct in a
+   year.
+5. **Do not let a slice add a NEW import from archive code into session or
+   project state.** Today there are four and they are all in the rooting path.
+   Free to preserve, expensive to unwind.
+
+**EXPENSIVE LATER, and deliberately NOT done now. Listed so the cost is known
+rather than discovered.**
+
+- **Splitting `transcript_corpus_ingest.py`.** 684 lines mixing ingest and
+  rooting. Real work, no benefit today, and the file is not otherwise being
+  touched. **Optional, and not recommended now.**
+- **Moving `transcript_import_paths`' three functions out of the archive
+  family.** Would remove CloudeCode's one wrong-direction dependency. Small,
+  but it touches `session_project_binding.py`, which is their area and is
+  exactly the kind of unasked-for tidying the work protocol warns about.
+  **Optional. Raise it with them rather than doing it.**
+- **A package boundary for `message_model_secrets`.** Only worth it at
+  extraction time.
+- **Extracting the server at all.** 68 modules. Not now.
+
+### 10.6 Would it be a real product
+
+**Yes, and the reason is specific rather than enthusiastic: the addressable
+set is everyone who uses Claude Code, not everyone who uses CloudeCode.**
+
+CloudeCode's premise is driving live sessions from a phone. The archive
+browser's premise is reading what already happened, and that corpus exists on
+the machine of every Claude Code user whether or not they have ever wanted a
+phone client. On this machine alone that is **22,828 transcripts, 26.4 GB raw**,
+accumulated as a by-product, with no tool that reads it. The corpus is a
+documented on-disk format the browser already parses, so the product needs
+nothing from CloudeCode to be useful to a stranger.
+
+It is also **not a product that only makes sense inside this app**, which is
+the test that matters. The one thing it would lose standalone is the session
+rooting, and that is precisely the part a stranger with no CloudeCode sessions
+would never use.
+
+**So the honest answer to "is any of this worth an hour of extra effort" is:
+the five free items in 10.5 are worth it, and nothing else is yet.** Item 1
+alone, the import test, is worth more than the other four together, and it is
+thirty lines in slice 1. The expensive items stay on this page and off the
+schedule until the owner says otherwise.
+
+## 11. Open questions
 
 1. PARKED with the away bar: does a full-history load reach past one screen on
    a Claude Code pane? See section 5. If the fleet report is ever picked up,
