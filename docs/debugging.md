@@ -112,6 +112,32 @@ Every entry point swallows its own errors. A tracer that can break the
 thing it is tracing is worse than no tracer, and this one runs inside
 request handlers and a subprocess spawn path.
 
+## Timing an HTTP request
+
+uvicorn's own access log line carries no timestamp and no duration, so
+answering "how long did this request take" meant carrying forward the
+nearest unrelated structlog timestamp and guessing. `RequestLogMiddleware`
+(`src/api/request_log.py`) closes that gap: it wraps the whole ASGI stack
+(added last in `src/main.py`, so it is outermost of CORS, the CSP headers
+and the rate limiter) and logs one `http_request` event per HTTP request,
+carrying `method`, `path`, `status`, `client_ip` and `duration_ms`. A
+handler that raises still logs the line, with `status=500`, before the
+exception is re-raised.
+
+`path` is logged WITHOUT its query string, on purpose - a query string can
+carry a token (`?token=...`), and this event never reads
+`scope["query_string"]` at all. Nothing here reads or logs a header,
+cookie or `Authorization` value either.
+
+A request under `/static/` or `/static-bundle/`, or ending in
+`.js`/`.css`/`.map`/`.png`/`.woff2`, logs at DEBUG rather than INFO - a
+single page load pulls roughly 220 of those, and logging them at INFO
+would drown everything else, the same reasoning `LOG_LEVEL=DEBUG` above
+already gave for the idle-watcher poller. Everything else logs at INFO.
+websocket and lifespan scopes are never touched by this middleware at all,
+which is why the terminal's PTY socket and `/ws/events` carry no wrapper
+around their frames.
+
 ## The launch picker asks TWO questions about models
 
 `accepts_model` (per wrapper) and `needs_model` (per family) are not the
