@@ -1,8 +1,8 @@
-# TODO — closing out the open issue board
+# TODO - closing out the open issue board
 
 Repo: Adoom666/CloudeCodeDev. 53 open at start, 29 now (re-derived 2026-09-11
 via `gh issue list --state open --json number --jq 'length'`).
-- 11 are ccsliinc's (their draft PRs) — not ours
+- 11 are ccsliinc's (their draft PRs) - not ours
 - 9 carry `blocked` (waiting on ccsliinc PR #19, Adam's ruling): #31 #32 #35
   #36 #37 #50 #51 #58 #66 (re-verified 2026-09-11 by label)
 - the rest are ours
@@ -74,7 +74,7 @@ via `gh issue list --state open --json number --jq 'length'`).
 - [ ] #30 file-tree scan off the event loop
 - [ ] #42 inventory durable browser preferences (phase 5 prerequisite)
 
-## Held — needs Adam
+## Held - needs Adam
 
 - #54 phase 7 control-mode input channel. MEASURED AND NOT PROMOTED, pending a
   ruling. The 5 ms bar is cleared comfortably: delivery to the pane process is
@@ -1202,3 +1202,23 @@ evidence is in the workflow journal.
   collision radar); cross-provider bus on a blackboard MCP server; BBS
   front door + handles + tiers.
 - Claim a tier 1 track by draft PR per docs/DECISIONS.md before starting.
+
+## [ROADMAP] 2026-09-13 - brainstorm filed as GitHub issues
+
+Adam annotated docs/ROADMAP.md section 3 (kept, cut, and tagged which items
+ship as plugins). The surviving items are now issues on Adoom666/CloudeCodeDev.
+
+- 49 feature issues, #123 through #171, all labelled `enhancement` + `roadmap`.
+- #172 "plugins, all of them" is the single aggregate plugins issue, 30
+  checklist entries, labelled `blocked` and blocked by #126.
+- #126 is the plugins catalog. Nothing in #172 starts until it lands.
+- p1 sits on five: #123 crying-wolf notifications, #124 multi-pane grid,
+  #125 skills catalog, #128 provider account ledger, #129 live usage.
+- #136 follow-the-action is blocked by #123 per Adam's note.
+- Two labels were created for this: `roadmap` and `plugin`.
+
+Nothing is started. Claim a track by draft PR per docs/DECISIONS.md first.
+
+Note for anyone picking up a UI item: Adam is rebuilding the entire front end
+in Svelte (style, design and layout only; architecture, server contracts,
+WebSocket and xterm all unchanged). Build no new surface against client/js.
