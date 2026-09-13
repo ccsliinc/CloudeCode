@@ -428,3 +428,35 @@ def test_the_session_ref_is_the_file_stem(path, expected):
     from src.core.message_projection import _session_ref_for
 
     assert _session_ref_for(path) == expected
+
+
+@pytest.mark.asyncio
+async def test_the_route_itself_serves_the_projected_corpus(tmp_path, monkeypatch):
+    # ONE RUNG HIGHER THAN THE FUNCTIONS ABOVE: the actual route
+    # coroutine, resolving the state directory the way a request does and
+    # going out through run_read and the envelope-to-status mapping. It
+    # is called directly rather than through TestClient because the point
+    # here is the DATA reaching the envelope, not the auth dependency,
+    # which tests/test_message_archive_routes_gating.py already owns.
+    # Only the parameterless route is reachable this way - calling one
+    # with a Query default passes the Query object itself - so this
+    # proves the seam, and the four hierarchy functions above prove the
+    # rest of the rail.
+    from src.api import archive_routes
+    from src.api.archive_routes import get_hosts
+
+    state, _corpus, _f = _ingested(tmp_path)
+    # The route module binds state_dir by name at import, so the patch
+    # has to land in ITS namespace, not in archive_support's.
+    monkeypatch.setattr(archive_routes, "state_dir", lambda: state)
+    run_projection_once(state, respect_flag=False)
+
+    response = await get_hosts()
+
+    assert response.status_code == 200
+    import json
+
+    payload = json.loads(response.body)
+    assert payload["result_status"] == "ok"
+    assert len(payload["result"]) == 1
+    assert payload["result"][0]["transcript_count"] == 2
