@@ -1006,6 +1006,82 @@ locally until it is switched on. Nothing was committed or pushed.
       local install refresh and the validator-agent browser pass remain
       open, unchanged from above.
 
+### Released as 1.4.4, 2026-09-13
+
+**Shipped.** `v1.4.4`, published on Adoom666/CloudeCodeDev:
+https://github.com/Adoom666/CloudeCodeDev/releases/tag/v1.4.4. Release
+commit `5369fb8` (`macOS/package.json` 1.4.3 -> 1.4.4, no other change),
+annotated tag on that commit, marked latest, asset
+`Cloude.Code-1.4.4-arm64.app.zip` built from a clean worktree of the tag.
+The .app was verified rather than assumed: version and build both 1.4.4,
+bundle id `com.cloudecode.menubar`, NO `config.json` inside it (0 hits),
+its `client/dist/app.js` carries `mountTerminalSearch`, and
+`terminal-away-bar.js` is absent from the whole bundle.
+
+**The work reached master in four commits**, ahead of the release commit:
+`ea0db52` the three performance fixes, `ced4fab` search / rail / deep
+dive, `2bac78b` the away bar removal, `7710208` the docs and the update
+check repoint. Two files straddled the last two and went into the earlier
+one, which is `ced4fab`: `src/main.py` (it drops the away router beside
+adding the archive lookup router) and `src/core/session_manager.py` (a
+docstring naming a deleted module beside the cursor-restore call).
+
+**P1 FROM THE BROWSER PASS IS FIXED, AND THE CAUSE WAS NOT THE ONE THE
+CSS COMMENT IMPLIED.** `PromptRail.svelte` promised the 24px strip was
+the tap target while only the 12x4 tick carried a handler.
+`RailModel.ordinalNear` maps a point down the strip to the nearest tick,
+reading the y the layout ALREADY placed each tick at rather than deriving
+a second one, and the strip's click handler jumps to it; a click on a
+tick is left to the tick, by comparing the event target against the strip
+itself, so the two cannot both fire.
+
+That alone fixed the MOUSE and did nothing at all for a THUMB, which only
+a re-measurement caught. Measured on a 390px phone viewport: a mouse
+click at x=369 moved `viewportY` 9976 -> 32, and a TAP at the identical
+point was re-targeted onto `xterm-link-layer` and moved nothing. Chrome's
+touch adjustment does not deliver a tap to whatever `elementFromPoint`
+returns; it expands the contact into a rect, scores the clickable nodes
+inside it, and RELOCATES the point - the synthesized click arrived at
+x=362, seven pixels outside the strip. A hand-bound (non-delegated)
+listener and `cursor: pointer` were both tried and both measured as not
+enough. What works is giving the heuristic a real button to snap to: the
+tick's HIT BOX is now the strip's full 24px while the DRAWN mark stays
+12x3, painted as its `::after`. Re-validated with the phone harness,
+4 taps out of 4 at 15px left of a tick's right edge moved the viewport
+(9961 -> 519, 716, 716, 1161), screenshot at
+`/Users/Adam/Dropbox/llmScratch/pw/shots/10-phone-rail-tap.png`.
+
+Five vitest cases carry the claim, and each was watched going red against
+the defect it names: removing the strip handler fails 3, using `clientY`
+without subtracting the strip's own box fails 2, and dropping the target
+check fails 2 on the double-fire.
+
+**Counts on this machine, at the release commit.** Python full run,
+`-p no:randomly`: 7344 passed / 2 failed / 56 skipped in 522.8s. BOTH
+failures are contention, not regressions, and that was established rather
+than assumed: the adopt-rekey mint test and the bare-console respawn test
+both pass in isolation in 10.9s, and the whole `real_tmux` group run on
+its own is 349 passed / 0 failed. The box was driving the real `cloude`
+socket for the browser pass at the same time, which is the flake
+INFRA-49 already names. Node: 203 of 203 suites passing. Vitest: 1434
+passing across 52 files. `svelte-check` 417 files, 0 errors, 0 warnings.
+Secret scan exit 0 over 1819 files. `scripts/web-build-check.sh` green.
+
+**The local install refresh is DONE**, closing one of the two items left
+open above. Killed by explicit PID (the Electron tree plus the port-8000
+Python child, which does not die with its parent), relaunched from the
+repo with `nohup npm start ... & disown`, and verified against the
+DERIVED copy rather than the repo: the meta tag reads `v1.4.4`, the
+derived `client/dist/app.js` carries the rail fix, `terminal-away-bar.js`
+is gone from the derived tree, and `tmux -L cloude list-sessions` reports
+14 sessions before and 14 after.
+
+**STILL OPEN: Deep dive 404s on this install**, unchanged and expected.
+`GET /api/v1/archive/projects/for-cwd` is mounted inside the
+`MESSAGE_ARCHIVE.enabled` block and this install has no `message_archive`
+block in `config.json`, so the archive is off here. The release notes say
+the feature needs it enabled.
+
 ### [PERF] 2026-09-13 - three fixes from the performance audit, verified
 
 Applied yesterday by the audit workflow, which hit a rate limit before its
