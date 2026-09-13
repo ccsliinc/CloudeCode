@@ -137,7 +137,7 @@ console.log('[ConfigEditorModal Module] Loading...');
      * A sensitive file (server-flagged `is_sensitive`) opens MASKED
      * regardless of what the caller might otherwise assume - `revealed`
      * starts false and only App.showConfirmModal can flip it.
-     * Inputs: rootId (string) - "user"|"project"|"workdir"; relPath
+     * Inputs: rootId (string) - "user"|"workdir"; relPath
      *   (string); readOnly (bool) - from the tree node's data attribute;
      *   combined with the server's own read_only flag in the response.
      *   projectPath (string|null) - required when rootId != "user".

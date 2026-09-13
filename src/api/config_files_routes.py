@@ -33,7 +33,7 @@ class ConfigFileWriteRequest(BaseModel):
     """Body for POST /config-files/write.
 
     Inputs (fields):
-      root (str) - "user", "project", or "workdir".
+      root (str) - "user" or "workdir".
       path (str) - rel_path from a tree listing.
       content (str) - new file contents.
       project_path (str|None) - required when root != "user".
@@ -98,7 +98,7 @@ class ConfigFileWriteResponse(BaseModel):
 
 @router.get("/tree", response_model=ConfigFileTreeResponse, dependencies=[Depends(require_auth)])
 async def get_config_file_tree(
-    root: str = Query(..., description='"user", "project", or "workdir"'),
+    root: str = Query(..., description='"user" or "workdir"'),
     project_path: Optional[str] = Query(None),
     path: Optional[str] = Query(
         None,
@@ -111,12 +111,12 @@ async def get_config_file_tree(
 ):
     """
     Description: list the hide-list-filtered claude-config/project file
-      tree for one root ("user"/"project" are also allow-listed;
+      tree for one root ("user" is also allow-listed;
       "workdir" is not). ``path`` and ``depth`` are both OPTIONAL and
       additive: send neither and this returns the whole tree exactly as
       it always has, which is what a client built before those
       parameters existed asks for and still gets.
-    Inputs: root (str, query) - "user", "project", or "workdir";
+    Inputs: root (str, query) - "user" or "workdir";
       project_path (str|None, query) - required for root != "user";
       path (str|None, query) - the directory to list, relative to the
         root, for expanding one node;

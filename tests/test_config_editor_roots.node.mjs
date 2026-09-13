@@ -1,19 +1,24 @@
 // Node test for the file editor's root plan: which roots get listed, and
 // what the user is told when one is not.
 //
-// THE BUG THIS EXISTS TO CATCH. The panel used to skip the "project" and
-// "workdir" roots with a bare `continue` whenever the working directory
-// did not resolve. The tree then rendered ~/.claude alone, with no
-// message, and the user read it as "the file editor is no longer showing
-// my project files" - which is what was reported. A short tree that says
-// nothing is indistinguishable from a complete one.
+// THE BUG THIS EXISTS TO CATCH. The panel used to skip the "workdir"
+// root with a bare `continue` whenever the working directory did not
+// resolve. The tree then rendered ~/.claude alone, with no message, and
+// the user read it as "the file editor is no longer showing my project
+// files" - which is what was reported. A short tree that says nothing
+// is indistinguishable from a complete one.
 //
 // So there are two independent contracts here, and both must hold:
-//   1. a resolved working directory yields ALL THREE roots and no notice;
+//   1. a resolved working directory yields BOTH roots and no notice;
 //   2. an unresolved one yields the user root PLUS a notice that names
 //      what is missing and why - never a silently short plan.
 // Deleting the notice from planRoots(), or restoring the `continue` by
-// dropping the project roots without one, fails a test below.
+// dropping the workdir root without one, fails a test below.
+//
+// A THIRD ROOT, "project" (the project's own `.claude/`), was removed
+// 2026-09-13: it duplicated the same directory already reachable one
+// level inside "workdir". Every assertion below that used to expect
+// three roots now expects two.
 //
 // The unwrap is covered too: the session object is a SessionInfo WRAPPER
 // on the rejoin/deep-link paths and a bare Session on create/adopt, and
@@ -105,8 +110,11 @@ function plain(value) {
 
 const WORKDIR = '/Users/someone/Development/project';
 
-test('the three roots are declared in order, workdir collapsed by default', () => {
-    assert.deepEqual(plain(Roots.ROOTS.map((r) => r.id)), ['user', 'project', 'workdir']);
+test('exactly two roots are declared, in order, with their labels, workdir collapsed by default', () => {
+    assert.deepEqual(plain(Roots.ROOTS.map((r) => r.id)), ['user', 'workdir'],
+        'the file editor drawer must show exactly two roots: user and workdir');
+    const user = Roots.ROOTS.find((r) => r.id === 'user');
+    assert.equal(user.label, '~/.claude');
     const workdir = Roots.ROOTS.find((r) => r.id === 'workdir');
     assert.equal(workdir.label, 'project files');
     assert.equal(workdir.defaultExpanded, false);
@@ -156,10 +164,10 @@ test('an attached session with no working_dir is its OWN reason', () => {
     assert.deepEqual(plain(Roots.resolveProjectContext(tc)), { path: null, reason: 'no-working-dir' });
 });
 
-test('REGRESSION: a resolved working dir plans all three roots, no notice', () => {
+test('REGRESSION: a resolved working dir plans both roots, no notice', () => {
     const plan = Roots.planRoots({ path: WORKDIR, reason: 'ok' });
-    assert.deepEqual(rootIds(plan), ['user', 'project', 'workdir'],
-        'project and workdir must be planned whenever the working directory resolved');
+    assert.deepEqual(rootIds(plan), ['user', 'workdir'],
+        'workdir must be planned whenever the working directory resolved');
     assert.deepEqual(notices(plan), [], 'nothing to explain when every root is listed');
 });
 
@@ -185,7 +193,7 @@ test('REGRESSION: an unresolvable working dir on an ATTACHED session is never si
     const msgs = notices(plan);
     assert.equal(msgs.length, 1);
     assert.match(msgs[0], /no working directory/);
-    assert.match(msgs[0], /project \.claude and project files/);
+    assert.match(msgs[0], /project files/);
 });
 
 test('only the could-not-evaluate reason carries a notice; the measured-absence reason does not', () => {
@@ -295,7 +303,7 @@ test('REGRESSION: roots.js and panel.js share a global scope without colliding',
         'the panel must still define window.ConfigEditorPanel after roots.js loaded');
     assert.deepEqual(
         plain(fakeWindow.ConfigEditorRoots.ROOTS.map((r) => r.id)),
-        ['user', 'project', 'workdir'],
+        ['user', 'workdir'],
     );
 });
 
@@ -303,8 +311,9 @@ test('REGRESSION: roots.js and panel.js share a global scope without colliding',
 //
 // Regression coverage for the "no skills shown" investigation: the fix
 // was NOT in this module's root plan (that part was already correct -
-// ~/.claude and <project>/.claude were both reachable, "skills" was
-// already allow-listed) but in how an OSError from iterdir() got
+// ~/.claude and the project's own .claude/ (reachable inside workdir)
+// were both reachable, "skills" was already allow-listed) but in how an
+// OSError from iterdir() got
 // swallowed into an empty result. listErrorNotice() is the client-side
 // half: the exact sentence rendered for TreeNode.list_error, kept as a
 // pure function so it is asserted here rather than only visible by

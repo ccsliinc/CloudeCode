@@ -1575,7 +1575,7 @@ class API {
      * for one level at a time is that the levels nobody expands are never
      * walked at all.
      *
-     * @param {string} root - "user", "project" or "workdir".
+     * @param {string} root - "user" or "workdir".
      * @param {string|null} [projectPath] - required for root !== "user".
      * @param {{path?: string, depth?: number}} [opts] - `path` is a directory
      *   relative to the root (omit for the root itself); `depth` is how many
@@ -1592,9 +1592,9 @@ class API {
 
     /**
      * File editor: read one file's contents.
-     * @param {string} root - "user" or "project".
+     * @param {string} root - "user" or "workdir".
      * @param {string} path - rel_path from a tree listing.
-     * @param {string|null} [projectPath] - required for root === "project".
+     * @param {string|null} [projectPath] - required for root === "workdir".
      * @returns {Promise<{content: string, is_executable: boolean, read_only: boolean, size: number}>}
      */
     async readConfigFile(root, path, projectPath = null) {
