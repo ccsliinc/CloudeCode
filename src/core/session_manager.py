@@ -66,6 +66,7 @@ from src.core.sessions import theme_dotfile
 from src.core.sessions.theme_accents import ThemeAccents
 from src.core.sessions.theme_store import ThemeStore
 from src.core.sessions.toast_inbox import ToastInbox
+from src.core.db_models import SESSION_CLAUDE_UUID_SOURCE_HOOK
 from src.core.tmux_backend import SESSION_PREFIX
 from src.core.tmux_listing import TmuxListing, coerce_listing
 from src.core.agent_family_display import resolve_family_for_display
@@ -4532,7 +4533,13 @@ class SessionManager:
             return None
 
     def record_claude_lifecycle_event(
-        self, session_id: str, event_kind: str, payload: dict
+        self,
+        session_id: str,
+        event_kind: str,
+        payload: dict,
+        *,
+        uuid_source: str = SESSION_CLAUDE_UUID_SOURCE_HOOK,
+        tmux_name: Optional[str] = None,
     ):
         """Write Claude-session identity / fork lineage for one hook event.
 
@@ -4569,6 +4576,25 @@ class SessionManager:
           header. event_kind (str) - 'SessionStart' or 'SessionEnd'.
           payload (dict) - the hook's JSON body, read defensively; no
           field is required to be present.
+          uuid_source (str) - which channel learned this uuid, stored in
+          ``claude_session_uuid_source``. Defaults to the hook so the
+          historic caller is unchanged; the attention watcher passes
+          ``registry``.
+          tmux_name (str | None) - the pane this session is in, when the
+          CALLER has already measured it. None keeps the two-rung lookup
+          below, which is what the hook had to do because a POST carries
+          no pane. THE CALLER'S ANSWER WINS, and it has to: after a
+          restart the in-memory ``Session`` model comes back with
+          ``tmux_session`` unset and the persisted hook-token map is
+          empty, so both rungs below miss and every binding answers
+          "no live session carries this cloudecode session id" - which is
+          exactly what a live soak measured on 2026-09-13, once per
+          session every two seconds, forever. The watcher's own
+          ``instance_for`` resolves the pane off the BACKEND (gotcha 4b:
+          a session id is not a tmux name, and the backend is where the
+          stored name lives), and passing it here keeps the binding
+          filed under the same instance every other job in that tick
+          used.
         Output: LineageResult - ``outcome`` is one of bound / continued /
           forked / unresolved. Never None, never an exception.
         Example: mgr.record_claude_lifecycle_event(sid, 'SessionStart', p)
@@ -4626,8 +4652,11 @@ class SessionManager:
                 ),
             )
 
-        session = self._registry.get_session(session_id)
-        tmux_name = getattr(session, "tmux_session", None) if session else None
+        if not tmux_name:
+            session = self._registry.get_session(session_id)
+            tmux_name = (
+                getattr(session, "tmux_session", None) if session else None
+            )
         if not tmux_name:
             # RESTART FALLBACK. The pane's CLOUDECODE_SESSION_ID is baked
             # in at spawn and cannot be re-issued to a running agent, but
@@ -4723,6 +4752,7 @@ class SessionManager:
                     source=payload.get("source"),
                     title=payload.get("session_title"),
                     pane_left_previous=pane_left_previous,
+                    uuid_source=uuid_source,
                 )
         except Exception as exc:  # noqa: BLE001 - lineage must never raise
             logger.warning(

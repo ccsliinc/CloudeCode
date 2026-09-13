@@ -1,14 +1,20 @@
 """Every job the hook route secretly owned still runs, with no hook.
 
-**THIS FILE EXISTS BECAUSE THESE SEVEN JOBS HAVE NO OTHER WITNESS.** The
+**THIS FILE EXISTS BECAUSE THESE EIGHT JOBS HAVE NO OTHER WITNESS.** The
 hook endpoint is about to be deleted. Six of the things it did were
 notifications and one was a status; the rest were side effects nobody
 would miss on the day they stopped: a startup-gate stamp, an agent
 inference, a durable status write, the column the whole session list is
-sorted by, a toast auto-ack and the only pull that can see a ``/rename``
-typed inside claude. Delete the route with no test naming them and every
-one fails silently, in a way that surfaces days later as "the ordering
-looks wrong" or "the light never goes out".
+sorted by, a toast auto-ack, the only pull that can see a ``/rename``
+typed inside claude, and the binding that tells the app which
+conversation a session is having. Delete the route with no test naming
+them and every one fails silently, in a way that surfaces days later as
+"the ordering looks wrong" or "the light never goes out".
+
+**THE EIGHTH WAS MISSED THE FIRST TIME AND A LIVE SOAK FOUND IT**, which
+is the argument for the rest of the file: the suite was 7087 green while
+``sessions.claude_session_uuid`` had no writer at all, because no test
+named the binding.
 
 **EVERY TEST HERE HAS A TWIN THAT PROVES IT CAN GO RED** (gotcha 11): for
 each job, one test drives its passive trigger and asserts the job ran,
@@ -42,10 +48,21 @@ from src.core.attention.evidence import (
     TIER_REGISTRY,
 )
 from src.core.attention.ledger import AttentionLedger
-from src.core.attention.registry_read import parse_registry_record
+from src.core.attention.registry_read import (
+    REG_STALE,
+    parse_registry_record,
+    registry_for_session,
+)
 from src.core.attention.side_effects import AttentionSideEffects
 from src.core.attention.transcript_facts import FACTS_FOUND, TranscriptFacts
 from src.core.attention.watcher import Observation, WatchTarget
+from src.core.db_models import SESSION_CLAUDE_UUID_SOURCE_REGISTRY
+from src.core.session_lineage import (
+    LINEAGE_BOUND,
+    LINEAGE_CONTINUED,
+    LINEAGE_UNRESOLVED,
+    LineageResult,
+)
 from src.core.session_startup_gate_ledger import StartupGateLedger
 from src.core.session_status import LIVENESS_LIVE
 
@@ -54,6 +71,10 @@ TMUX_NAME = "cloude_sideeffects"
 EPOCH = 1789095742
 SESSION_ID = "ses_side"
 TARGET = WatchTarget(session_id=SESSION_ID, key="%s@%d" % (TMUX_NAME, EPOCH))
+
+#: The conversation the registry record names. Spelled once so the
+#: binding tests and the record builder cannot drift apart.
+CONVERSATION_UUID = "11111111-2222-3333-4444-555555555555"
 
 #: The folder-trust dialog as claude paints it, so the startup-gate tests
 #: drive a tail that MATCHES a marker. Without it both gate tests would
@@ -91,6 +112,8 @@ class RecordingManager:
         self.work_stamps: list = []
         self.acks: list = []
         self.ack_returns: list = []
+        self.lifecycle_events: list = []
+        self.lifecycle_outcomes: list = []
 
     def _set_flag(self, tmux_name, field_name, value, epoch=None):
         """Record one unread write. Output: None."""
@@ -112,6 +135,27 @@ class RecordingManager:
         """Record one auto-ack and answer with the queued ids. Output: list."""
         self.acks.append((session_id, event_kind, cutoff))
         return list(self.ack_returns)
+
+    def record_claude_lifecycle_event(
+        self, session_id, event_kind, payload, *, uuid_source="hook",
+        tmux_name=None,
+    ):
+        """Record one conversation binding. Output: the REAL LineageResult.
+
+        The real result type rather than a stand-in, because the caller
+        reads ``outcome`` off it to decide whether to memoise, and a
+        namespace would let a renamed field pass (gotcha 12). Answers
+        ``bound`` unless a test has queued something else.
+        """
+        self.lifecycle_events.append(
+            (session_id, event_kind, payload, uuid_source, tmux_name)
+        )
+        outcome = (
+            self.lifecycle_outcomes.pop(0)
+            if self.lifecycle_outcomes
+            else LINEAGE_BOUND
+        )
+        return LineageResult(outcome=outcome, row_id=1)
 
 
 @pytest.fixture()
@@ -158,13 +202,13 @@ def wired(monkeypatch):
 # ---------------------------------------------------------------------
 
 
-def registry_ok(status: str = "idle"):
+def registry_ok(status: str = "idle", session_uuid: str = CONVERSATION_UUID):
     """A real REG_OK record, through the real parser. Output: RegistryRecord."""
     return parse_registry_record(
         {
             "pid": 4242,
             "status": status,
-            "sessionId": "11111111-2222-3333-4444-555555555555",
+            "sessionId": session_uuid,
             "cwd": "/tmp",
             "tmux": "%s:@0.%%0" % TMUX_NAME,
             "version": "2.1.266",
@@ -733,3 +777,198 @@ async def test_a_watcher_with_no_observation_wiring_still_ticks():
         registry_directory=os.path.join(os.sep, "no-such-registry-dir"),
     )
     assert await watcher.tick_once() == 0
+
+
+# ---------------------------------------------------------------------
+# Job 8: the conversation binding, sessions.claude_session_uuid
+# ---------------------------------------------------------------------
+#
+# THIS JOB WAS MISSED WHEN THE OTHER SEVEN WERE REHOMED, AND THE WHOLE
+# SUITE STAYED GREEN WHILE THE PRODUCT DID NOT WORK. The hook route was
+# the only writer of the column that tells the app which conversation a
+# session is having; with the route gone the column stayed NULL, so the
+# transcript tier answered "no conversation is bound to this row" for
+# every session forever and the states derived from it - a finished turn,
+# an unread finish, a session waiting on its own sub-agents - could not
+# be reached at all. Every test below has a twin that can go red.
+
+
+def test_a_live_registry_record_binds_its_conversation_to_the_row():
+    """The happy path: a record that names a conversation writes it.
+
+    The WRITER is the hook's own writer, reached with the hook's own
+    event name, so nothing about the UPDATE or its readers changed. What
+    moved is the caller and the provenance it declares.
+    """
+    manager, effects, _calls = _fresh()
+    effects.on_observation(TARGET, observation(registry=registry_ok()))
+
+    assert len(manager.lifecycle_events) == 1
+    (
+        session_id,
+        event_kind,
+        payload,
+        uuid_source,
+        pane,
+    ) = manager.lifecycle_events[0]
+    assert session_id == SESSION_ID
+    assert event_kind == "SessionStart"
+    assert payload["session_id"] == CONVERSATION_UUID
+    assert uuid_source == SESSION_CLAUDE_UUID_SOURCE_REGISTRY
+    # THE PANE TRAVELS WITH THE BINDING. Measured on a live server: the
+    # writer's own lookup reads the in-memory Session model and then the
+    # persisted hook-token map, and after a restart both are empty for a
+    # re-adopted session, so every binding answered "no live session
+    # carries this cloudecode session id" once per session every two
+    # seconds, forever. Passing the pane the rest of the tick is keyed on
+    # is what makes the join possible at all.
+    assert pane == TMUX_NAME
+
+
+def test_no_registry_record_binds_nothing():
+    """The can-go-red twin. A pane that has registered nothing has told
+    us no conversation, and inventing one would bind a row to a file
+    that is not its own."""
+    manager, effects, _calls = _fresh()
+    effects.on_observation(TARGET, observation(registry=registry_unreadable()))
+    assert manager.lifecycle_events == []
+
+
+def test_a_registry_record_with_no_conversation_binds_nothing():
+    """A record can be REG_OK and still carry no ``sessionId``. None
+    there means NOT KNOWN, and a write keyed on a None uuid would be the
+    same false fact one layer down."""
+    manager, effects, _calls = _fresh()
+    effects.on_observation(
+        TARGET, observation(registry=registry_ok(session_uuid=None))
+    )
+    assert manager.lifecycle_events == []
+
+
+def test_the_binding_is_not_re_issued_on_every_tick():
+    """IDEMPOTENCE, AND IT IS ABOUT COST, NOT CORRECTNESS.
+
+    The writer already refuses to touch the table for a uuid it has seen
+    (it answers ``continued``), so a second call is harmless - but
+    reaching that answer costs a database connection and a ``tmux
+    list-sessions`` subprocess, and on a two second tick that is a
+    subprocess per session per tick for the life of the process. Once
+    settled, the job stops calling.
+    """
+    manager, effects, _calls = _fresh()
+    for _ in range(5):
+        effects.on_observation(TARGET, observation(registry=registry_ok()))
+    assert len(manager.lifecycle_events) == 1
+
+
+def test_a_binding_the_writer_settled_as_already_known_also_stops():
+    """``continued`` is a settled answer, not a failure: the table
+    already holds this uuid, so there is nothing left to do."""
+    manager, effects, _calls = _fresh()
+    manager.lifecycle_outcomes = [LINEAGE_CONTINUED]
+    effects.on_observation(TARGET, observation(registry=registry_ok()))
+    effects.on_observation(TARGET, observation(registry=registry_ok()))
+    assert len(manager.lifecycle_events) == 1
+
+
+def test_a_binding_that_could_not_be_evaluated_is_retried():
+    """The can-go-red twin of the memo, and the reason the memo keys on
+    the OUTCOME rather than on the call.
+
+    ``unresolved`` is not "nothing to do", it is "we could not tell" -
+    most often a tmux listing that did not run - and memoising it would
+    leave the row unbound for the life of the process off one bad
+    subprocess.
+    """
+    manager, effects, _calls = _fresh()
+    manager.lifecycle_outcomes = [LINEAGE_UNRESOLVED]
+    effects.on_observation(TARGET, observation(registry=registry_ok()))
+    effects.on_observation(TARGET, observation(registry=registry_ok()))
+    assert len(manager.lifecycle_events) == 2
+
+
+def test_a_new_conversation_in_the_same_pane_binds_again():
+    """The memo is keyed on the uuid, not on the session, so a pane that
+    genuinely moves to another conversation is not locked out by a
+    binding that settled for the previous one."""
+    manager, effects, _calls = _fresh()
+    effects.on_observation(TARGET, observation(registry=registry_ok()))
+    other = "99999999-8888-7777-6666-555555555555"
+    effects.on_observation(
+        TARGET, observation(registry=registry_ok(session_uuid=other))
+    )
+    assert [event[2]["session_id"] for event in manager.lifecycle_events] == [
+        CONVERSATION_UUID,
+        other,
+    ]
+
+
+def test_a_record_naming_another_conversation_never_reaches_the_writer():
+    """THE MISMATCH RULE, DRIVEN THROUGH THE REAL GATE.
+
+    A row that already holds conversation A is never rewritten to B by
+    this path, and the refusal is upstream: ``registry_for_session`` is
+    handed the row's own uuid and answers REG_STALE for a record naming a
+    different one, so the record arrives here with ``known`` False. This
+    test builds that refusal with the real function rather than asserting
+    it by hand, so removing the gate turns it red.
+    """
+    manager, effects, _calls = _fresh()
+    stale = registry_for_session(
+        tmux_name=TMUX_NAME,
+        index={TMUX_NAME: registry_ok()},
+        claude_session_uuid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    assert stale.verdict == REG_STALE
+
+    effects.on_observation(TARGET, observation(registry=stale))
+    assert manager.lifecycle_events == []
+
+
+def test_a_registry_source_can_never_mint_a_lineage_row():
+    """BELT AND BRACES FOR THE SAME RULE, one layer down.
+
+    Reached directly - a future caller, or a gate somebody removes - a
+    diverging registry observation must still refuse to write. A registry
+    record is a claude PROCESS announcing itself and carries no statement
+    that the pane's incumbent conversation moved, so it classifies as a
+    sibling and mints nothing.
+    """
+    from src.core.session_lineage_divergence import (
+        DIVERGENCE_SIBLING_PROCESS,
+        SESSION_START_SOURCE_REGISTRY,
+        classify_uuid_divergence,
+        mints_a_row,
+    )
+
+    verdict_for_registry = classify_uuid_divergence(SESSION_START_SOURCE_REGISTRY)
+    assert verdict_for_registry == DIVERGENCE_SIBLING_PROCESS
+    assert mints_a_row(verdict_for_registry) is False
+
+
+def _fresh():
+    """A manager and a side-effect layer with the two pulls stubbed.
+
+    Description: the ``wired`` fixture in this file needs monkeypatch,
+    which a plain function cannot take. The binding tests care about one
+    job and about call COUNTS across several observations, so they build
+    the pair directly and replace the two readers that touch the process
+    table and the filesystem.
+    Inputs: none.
+    Output: (RecordingManager, AttentionSideEffects, dict).
+    """
+    calls = {"infer": [], "title": []}
+    manager = RecordingManager()
+    effects = AttentionSideEffects(manager)
+    effects._infer_agent = lambda *a: calls["infer"].append(a)
+    effects._sync_title = lambda *a: calls["title"].append(a)
+    return manager, effects, calls
+
+
+def test_a_session_with_no_resolvable_pane_binds_nothing():
+    """The can-go-red twin of the pane argument. A binding needs an
+    INSTANCE, and a name nobody could resolve identifies no row, so the
+    job declines rather than handing the writer a None to re-derive."""
+    manager, effects, _calls = _fresh()
+    effects._bind_conversation(SESSION_ID, None, registry_ok())
+    assert manager.lifecycle_events == []

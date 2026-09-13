@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 
 from src.core.attention.transcript_facts import (
     BLOCKING_TOOL_NAMES,
+    BOOKKEEPING_RECORD_TYPES,
     FACTS_FOUND,
     FACTS_NO_RECORD,
     FACTS_TAIL_BYTES,
@@ -302,6 +303,103 @@ def _write(tmp_path, records: List[Any], torn_tail: Optional[str] = None) -> str
     return str(path)
 
 
+def _bookkeeping(kind: str, **fields: Any) -> Dict[str, Any]:
+    """One session-scoped bookkeeping record, reproduced key for key.
+
+    Description: the shape every member of the skip set has on disk: a
+      ``type``, a ``sessionId``, its own one or two fields, NO ``message``
+      and NO ``tool_result``. Verified across 72,720 such records in the
+      live corpus, not one of which carries either.
+    Inputs: kind (str) - the record type. fields (Any) - its own keys.
+    Output: dict - one record.
+    Example: _bookkeeping('mode', mode='normal')
+    """
+    record: Dict[str, Any] = {"type": kind, "sessionId": SESSION_UUID}
+    record.update(fields)
+    return record
+
+
+#: THE LIVE SOAK'S OWN FAILURE, copied out of the archived transcript
+#: f522b760-2b70-4efa-8827-c4f88bb2483e.jsonl at records 47 to 53. The
+#: question is unanswered at end of file and five bookkeeping records sit
+#: on top of it, four of them queue-operations written because a
+#: background agent's completion was parked on the input queue. Before
+#: the fix this window answered None and the user was never told.
+_SOAK_HIDDEN_QUESTION_TAIL: List[Dict[str, Any]] = [
+    _assistant_tool_use(
+        "2026-09-13T22:57:49.950Z", "AskUserQuestion", "toolu_01D3Wjreh2owZk3mnfNuc7yq"
+    ),
+    _bookkeeping(
+        "queue-operation",
+        operation="enqueue",
+        timestamp="2026-09-13T22:57:55.975Z",
+        content="<task-notification>\n<task-id>a0141520d35435a18</task-id>\n",
+    ),
+    _bookkeeping(
+        "queue-operation",
+        operation="enqueue",
+        timestamp="2026-09-13T23:01:14.631Z",
+        content="check the archive",
+    ),
+    _bookkeeping(
+        "queue-operation",
+        operation="remove",
+        timestamp="2026-09-13T23:01:14.695Z",
+        content="check the archive",
+        reason="delivered_to_agent",
+    ),
+    _bookkeeping(
+        "queue-operation",
+        operation="enqueue",
+        timestamp="2026-09-13T23:01:19.178Z",
+        content="and then stop",
+    ),
+    _bookkeeping(
+        "last-prompt",
+        lastPrompt="Do exactly two things in this one turn, in this order.",
+        leafUuid="5f0e8e77-a3a6-4f14-a3f3-db00a4a96b03",
+    ),
+    _bookkeeping("cost-state", totalCostUSD=0.82638125, hasUnknownModelCost=False),
+]
+
+
+#: THE OTHER REAL SHAPE, the resume burst: 24 of the 52 corpus instances
+#: look like this, the harness rewriting every session-scoped fact at
+#: once while the question underneath it is still open.
+_RESUME_BURST_HIDDEN_QUESTION_TAIL: List[Dict[str, Any]] = [
+    _assistant_tool_use("2026-09-13T18:00:10.000Z", "AskUserQuestion", "toolu_q"),
+    _bookkeeping("last-prompt", lastPrompt="Super plan this", leafUuid="08ed14bb"),
+    _bookkeeping("custom-title", customTitle="ADAM-Docs"),
+    _bookkeeping("agent-name", agentName="ADAM-Docs"),
+    _bookkeeping("mode", mode="normal"),
+    _bookkeeping("permission-mode", permissionMode="auto"),
+    _bookkeeping("atis-latch", atis=""),
+    _bookkeeping("bridge-session", bridgeSessionId="cse_01Fs2U1koHVq6MaYV439WcVU"),
+]
+
+
+#: THE DIRECTION THAT MUST NOT REGRESS, copied out of the archived
+#: transcript 88641d2a-c467-4a77-a956-30ed0b1bfef1.jsonl at records 34 to
+#: 41: the same bookkeeping burst, but the answer landed FIRST. A question
+#: that was answered is not a question, whatever was appended after it.
+_ANSWERED_THEN_BOOKKEEPING_TAIL: List[Dict[str, Any]] = [
+    _assistant_tool_use("2026-09-13T22:54:49.237Z", "AskUserQuestion", "toolu_a"),
+    _tool_result("2026-09-13T22:56:38.141Z", "toolu_a"),
+    {
+        "type": "attachment",
+        "timestamp": "2026-09-13T22:56:38.144Z",
+        "sessionId": SESSION_UUID,
+        "attachment": {"type": "output_style", "style": "Metal Hacker"},
+    },
+    _bookkeeping("last-prompt", lastPrompt="ask me one question", leafUuid="7ed4b2ac"),
+    _bookkeeping("custom-title", customTitle="ZZVAL2"),
+    _bookkeeping("agent-name", agentName="ZZVAL2"),
+    _bookkeeping("mode", mode="normal"),
+    _bookkeeping("permission-mode", permissionMode="auto"),
+    _bookkeeping("bridge-session", bridgeSessionId="cse_01Fs2U1koHVq6MaYV439WcVU"),
+]
+
+
 # ---------------------------------------------------------------------
 # The pending-agent count, which is the fact the whole change rests on.
 # ---------------------------------------------------------------------
@@ -497,6 +595,136 @@ def test_a_running_tool_at_the_end_of_the_window_is_not_a_question():
     )
     assert facts.blocked_on_tool is None
     assert "still running" in facts.detail
+
+
+# ---------------------------------------------------------------------
+# The bookkeeping records that hid a question, and the answer that must
+# still close one. EVERY SEQUENCE BELOW IS COPIED OUT OF A REAL FILE; the
+# first one is the live soak's own failure, and the corpus survey behind
+# the skip set is in the module docstring of transcript_facts.
+# ---------------------------------------------------------------------
+
+
+def test_the_soak_failure_queue_operations_after_a_question_still_name_it():
+    facts = classify_transcript_records(_SOAK_HIDDEN_QUESTION_TAIL)
+    assert facts.blocked_on_tool == "AskUserQuestion"
+    assert "waiting on the user" in facts.detail
+
+
+def test_every_record_of_that_real_tail_hides_the_question_one_at_a_time():
+    # The window can end at ANY of the five bookkeeping records the soak
+    # appended, because the watcher ticks while the file is being written.
+    for end in range(2, len(_SOAK_HIDDEN_QUESTION_TAIL) + 1):
+        facts = classify_transcript_records(_SOAK_HIDDEN_QUESTION_TAIL[:end])
+        assert facts.blocked_on_tool == "AskUserQuestion", end
+
+
+def test_the_real_resume_burst_after_a_question_still_names_it():
+    facts = classify_transcript_records(_RESUME_BURST_HIDDEN_QUESTION_TAIL)
+    assert facts.blocked_on_tool == "AskUserQuestion"
+
+
+def test_a_real_mode_record_after_an_exit_plan_mode_does_not_answer_it():
+    # A mode of 'normal' after ExitPlanMode reads like a plan being
+    # accepted. All 5 real cases have it written while that ExitPlanMode
+    # was still unanswered, so it is bookkeeping, not an answer.
+    facts = classify_transcript_records(
+        [
+            _assistant_tool_use(
+                "2026-09-13T18:00:10.000Z", "ExitPlanMode", "toolu_p"
+            ),
+            _bookkeeping("mode", mode="normal"),
+            _bookkeeping("permission-mode", permissionMode="auto"),
+            _bookkeeping("bridge-session", bridgeSessionId="cse_01Fs"),
+        ]
+    )
+    assert facts.blocked_on_tool == "ExitPlanMode"
+
+
+def test_an_answered_question_stays_answered_behind_the_same_bookkeeping():
+    # THE OTHER DIRECTION, AND THE ONE THAT MUST NOT REGRESS. The tail is
+    # the real attn2 shape from the soak: the answer landed first, and
+    # the bookkeeping burst landed on top of it.
+    facts = classify_transcript_records(_ANSWERED_THEN_BOOKKEEPING_TAIL)
+    assert facts.blocked_on_tool is None
+
+
+def test_every_record_of_the_answered_tail_keeps_the_question_closed():
+    for end in range(2, len(_ANSWERED_THEN_BOOKKEEPING_TAIL) + 1):
+        facts = classify_transcript_records(_ANSWERED_THEN_BOOKKEEPING_TAIL[:end])
+        assert facts.blocked_on_tool is None, end
+
+
+def test_a_system_record_after_a_question_is_not_skipped():
+    # NOT IN THE SKIP SET ON PURPOSE: the system type is a family and
+    # turn_duration, compact_boundary and agents_killed are statements
+    # about the conversation. Being unsure means NOT skipping.
+    facts = classify_transcript_records(
+        [
+            _assistant_tool_use(
+                "2026-09-13T18:00:10.000Z", "AskUserQuestion", "toolu_q"
+            ),
+            _turn_end("2026-09-13T18:00:20.000Z", pending=None),
+        ]
+    )
+    assert facts.blocked_on_tool is None
+
+
+def test_an_attachment_after_a_question_is_not_skipped():
+    # Never once observed between an open dialog and its answer in the
+    # corpus; it clusters with the answering turn instead. All 160 real
+    # cases of an attachment sitting on top of a dialog are dialogs that
+    # were already ANSWERED, so adding it to the skip set moves the
+    # defect count by zero. It stays out because it buys nothing.
+    facts = classify_transcript_records(
+        [
+            _assistant_tool_use(
+                "2026-09-13T18:00:10.000Z", "AskUserQuestion", "toolu_q"
+            ),
+            {"type": "attachment", "timestamp": "2026-09-13T18:00:20.000Z"},
+        ]
+    )
+    assert facts.blocked_on_tool is None
+
+
+def test_an_answer_anywhere_in_the_window_refuses_the_question():
+    # THE SECOND GUARD, held apart from the first on purpose. Guard one
+    # is that a user record stops the tail walk. Guard two is that
+    # answered_tool_use_ids is gathered from every user record in the
+    # window whatever its position, so even a window whose tail walk
+    # reached the dialog anyway cannot name an answered one. Here the
+    # answer is buried behind an assistant record, so ONLY guard two can
+    # refuse it.
+    facts = classify_transcript_records(
+        [
+            _assistant_tool_use(
+                "2026-09-13T18:00:10.000Z", "AskUserQuestion", "toolu_q"
+            ),
+            _tool_result("2026-09-13T18:01:00.000Z", "toolu_q"),
+            _assistant_tool_use(
+                "2026-09-13T18:02:00.000Z", "AskUserQuestion", "toolu_q"
+            ),
+            _bookkeeping("queue-operation", operation="enqueue", content="later"),
+        ]
+    )
+    assert facts.blocked_on_tool is None
+
+
+def test_bookkeeping_at_the_end_never_invents_a_question_on_its_own():
+    facts = classify_transcript_records(
+        [
+            _assistant_tool_use("2026-09-13T18:00:10.000Z", "Bash", "toolu_b"),
+            _bookkeeping("cost-state", totalCostUSD=0.82638125),
+        ]
+    )
+    assert facts.blocked_on_tool is None
+
+
+def test_the_skip_set_holds_no_conversational_type():
+    # A user record is how every one of the 372 real dialogs was closed,
+    # and an assistant record is the dialog itself. Skipping either would
+    # be the bug this whole change exists to kill, in reverse.
+    assert not BOOKKEEPING_RECORD_TYPES & {"user", "assistant", "system", "attachment"}
 
 
 # ---------------------------------------------------------------------

@@ -24,7 +24,19 @@ the durable activity-state write             every reading
 ``auto_ack_toasts``                          a new user prompt, or the
                                              edge into ``busy``
 ``sync_claude_title`` (``/rename``)          a transcript that grew
+``record_claude_lifecycle_event``            a live registry record that
+  (``sessions.claude_session_uuid``)          names a conversation
 ===========================================  ==============================
+
+THE EIGHTH JOB WAS MISSED THE FIRST TIME, AND A LIVE SOAK IS WHAT FOUND
+IT. ``SessionStart`` was the only writer of
+``sessions.claude_session_uuid``, so deleting the hook route left that
+column permanently NULL on every new session. Nothing went red: the
+whole suite stayed green because no test named the binding, and the
+symptom was one tier down, where the transcript reader answers "no claude
+conversation is bound to this row" and the resolver loses the evidence
+that turn-end toasts, ``finished_unread`` and the sub-agent state are all
+derived from. Three of five live scenarios failed on that one cause.
 
 NOT ONE OF THEM IS A NEW FUNCTION. Every job below calls the same
 function the hook path called; only the CALLER moved. That is deliberate:
@@ -75,10 +87,18 @@ from src.core import claude_title_sync_apply, session_agent_infer_apply
 from src.core.attention.display import to_display
 from src.core.attention.ledger import Transition
 from src.core.attention.watcher import Observation, WatchTarget
+from src.core.db_models import SESSION_CLAUDE_UUID_SOURCE_REGISTRY
 from src.core.session_activity import EVENT_PRE_TOOL_USE, EVENT_USER_PROMPT_SUBMIT
+from src.core.session_lineage_divergence import SESSION_START_SOURCE_REGISTRY
 from src.core.session_status import STATUS_UNKNOWN
 
 logger = structlog.get_logger()
+
+#: The event name ``record_claude_lifecycle_event`` routes a conversation
+#: binding under. It is the hook's spelling because the WRITER is the
+#: hook's writer, unchanged: only the caller moved. Named here so the one
+#: string literal that reaches that method from this module is greppable.
+LIFECYCLE_SESSION_START: str = "SessionStart"
 
 
 def _naive_utc(at: Optional[datetime]) -> Optional[datetime]:
@@ -106,9 +126,16 @@ class AttentionSideEffects:
 
     Description: build one at the composition site and hand its three
       bound methods to :class:`~src.core.attention.watcher.AttentionWatcher`
-      as ``set_unread``, ``on_busy_edge`` and ``on_observation``. It holds
-      no state: every fact is re-resolved from the manager per call, the
-      same way the hook route re-resolved it per event.
+      as ``set_unread``, ``on_busy_edge`` and ``on_observation``. Every
+      fact is re-resolved from the manager per call, the same way the
+      hook route re-resolved it per event.
+
+      IT HOLDS EXACTLY ONE PIECE OF STATE, and it is a memo rather than a
+      fact: which conversation binding has already settled for each
+      session, so the one job here whose write path is expensive is not
+      re-run on every tick. Losing it costs one redundant no-op write per
+      session and nothing else, which is what a memo has to be able to
+      say for itself.
     Inputs: see :meth:`__init__`.
     Output: three callables with the watcher's action signatures.
     Example:
@@ -144,6 +171,12 @@ class AttentionSideEffects:
         self._manager = manager
         self._broadcast_toast_ack = broadcast_toast_ack
         self._broadcast_rename = broadcast_rename
+        # THE ONE PIECE OF STATE THIS CLASS HOLDS, and it buys the
+        # conversation binding its idempotence. Maps a session id to the
+        # conversation uuid whose binding the DATABASE has already
+        # settled, so a session that is bound stops paying for the write
+        # path on every two second tick. See :meth:`_bind_conversation`.
+        self._bound_conversations: dict = {}
 
     # -----------------------------------------------------------------
     # Identity, resolved exactly the way the hook path resolved it
@@ -268,6 +301,19 @@ class AttentionSideEffects:
         tmux_name, epoch = self.instance_for(session_id)
         registry_present = observation.evidence.registry.known
 
+        # FIRST, BECAUSE EVERY TIER BELOW IT IS BLIND WITHOUT IT. The
+        # transcript reader is handed the row's conversation uuid, so
+        # until this job has run once the whole transcript tier answers
+        # "no conversation is bound to this row" and the resolver is
+        # working off the registry alone.
+        self._guard(
+            "attention_conversation_bind_failed",
+            session_id,
+            self._bind_conversation,
+            session_id,
+            tmux_name,
+            observation.evidence.registry,
+        )
         self._guard(
             "attention_startup_gate_failed",
             session_id,
@@ -323,6 +369,108 @@ class AttentionSideEffects:
     # -----------------------------------------------------------------
     # One job each
     # -----------------------------------------------------------------
+
+    def _bind_conversation(
+        self, session_id: str, tmux_name: Optional[str], record: Any
+    ) -> None:
+        """Write this pane's conversation uuid onto its row. The uuid binding.
+
+        Description: ``sessions.claude_session_uuid`` is the id a restart
+          resumes and the id the transcript tier locates a file by, and
+          until this job existed it had exactly one writer, the
+          ``SessionStart`` hook. Deleting that route left the column NULL
+          forever on every session created afterwards.
+
+          THE WRITER IS UNCHANGED; ONLY THE CALLER MOVED, which is the
+          same rule the other seven jobs here follow.
+          ``record_claude_lifecycle_event`` still resolves the row, still
+          takes a fresh listing for the instance epoch, still refuses
+          everything it refused, and still never raises. What replaces
+          the hook's POST is the registry record, which names the same
+          conversation over a channel that repeats: a lost hook was
+          permanent, a missed tick is two seconds.
+
+          THE MISMATCH RULE, AND WHERE IT IS ACTUALLY ENFORCED. A row
+          holding conversation A is NEVER rewritten to B by this path,
+          and the refusal is upstream of here:
+          ``registry_read.registry_for_session`` is handed the row's own
+          uuid and answers :data:`REG_STALE` for a record that names a
+          different one, so a diverging record arrives with ``known``
+          False and is dropped by the guard below. That is the ranking
+          rule the project states as A GUESS MUST NEVER OUTRANK A RECORD,
+          applied to two records: the one on the row was written by a
+          conversation that demonstrably ran in this pane, and a
+          disagreeing registry file is evidence about a DIFFERENT claude
+          (a ``claude -p`` under the same pane, or a reused tmux name).
+          Belt and braces, ``registry`` is a process-boot source in
+          ``session_lineage_divergence``, so even reached directly a
+          divergence answers SIBLING and mints nothing.
+
+          IDEMPOTENCE IS A MEMO, NOT A HOPE. The writer itself is
+          idempotent - a uuid already recorded anywhere answers
+          ``continued`` and leaves the table untouched - but reaching
+          that answer costs a database connection and a ``tmux
+          list-sessions`` per call, which on a two second tick is a
+          subprocess per session per tick forever. So a session whose
+          binding has SETTLED is skipped outright. Settled means the
+          writer reported anything other than "could not evaluate": an
+          unresolved call is retried on the next tick, because the usual
+          reason for one is a tmux listing that did not run.
+          THE PANE IS PASSED IN, NOT RE-DERIVED, and that is the whole
+          difference between this working and not. The writer's own
+          lookup reads the in-memory ``Session`` model and then the
+          persisted hook-token map, and after a restart BOTH are empty
+          for a re-adopted session, so every binding answered "no live
+          session carries this cloudecode session id" - measured on a
+          live server, once per session every two seconds. ``instance_for``
+          is the lookup the watcher's keys, the unread flag and the
+          startup gate all already share, so passing it here also means
+          the binding cannot file itself under a second spelling of one
+          pane (gotchas 4b and 10).
+        Inputs: session_id (str). tmux_name (str | None) - the pane, from
+          :meth:`instance_for`; None does nothing, because a binding with
+          no instance identifies no row. record (RegistryRecord) - this
+          tick's registry tier, typed ``Any`` for the same reason the
+          manager is: this module states no import it does not need.
+        Output: None.
+        Example: effects._bind_conversation("ses_1", "cloude_x", record)
+        """
+        from src.core.session_lineage import LINEAGE_UNRESOLVED
+
+        if not tmux_name or not record.known:
+            return
+        claude_uuid = record.session_uuid
+        if not claude_uuid:
+            return
+        if self._bound_conversations.get(session_id) == claude_uuid:
+            return
+        result = self._manager.record_claude_lifecycle_event(
+            session_id,
+            LIFECYCLE_SESSION_START,
+            {
+                "session_id": claude_uuid,
+                "source": SESSION_START_SOURCE_REGISTRY,
+            },
+            uuid_source=SESSION_CLAUDE_UUID_SOURCE_REGISTRY,
+            tmux_name=tmux_name,
+        )
+        # READ DIRECTLY, NOT THROUGH ``getattr`` WITH A DEFAULT, for the
+        # reason gotcha 12 gives: a moved field answering falsy would
+        # memoise nothing and turn this into a call per tick, silently.
+        if result.outcome == LINEAGE_UNRESOLVED:
+            # SAY WHY, EVERY TIME, because this is the failure the whole
+            # job exists to end and its shape is silence: an unbound row
+            # looks exactly like a session nobody has talked to yet. At
+            # debug level, since the retry is the next tick and a
+            # transient listing failure is not news.
+            logger.debug(
+                "attention_conversation_bind_unresolved",
+                session_id=session_id,
+                claude_uuid=claude_uuid,
+                detail=result.detail,
+            )
+            return
+        self._bound_conversations[session_id] = claude_uuid
 
     def _record_started(
         self, tmux_name: Optional[str], epoch: Optional[int], present: bool

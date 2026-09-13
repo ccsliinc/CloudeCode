@@ -50,6 +50,74 @@ BOUNDED MEANS THIS CAN UNDERCOUNT, WHICH IS THE SAFE DIRECTION. An agent
 launched before the window opened is not counted. Every count here is a
 floor on how busy the session is, never a ceiling: read a positive count
 as proof of work, never a zero as proof of rest on its own.
+
+"WHAT IS THE CONVERSATION WAITING ON" IS NOT ANSWERED BY THE LITERALLY
+LAST RECORD, BECAUSE OTHER WRITERS APPEND TO THIS FILE. A live soak found
+a session genuinely blocked on an AskUserQuestion whose assistant record
+was followed six seconds later by a ``queue-operation`` enqueue, written
+because a background agent's completion had been parked on the input
+queue. The last record was therefore the enqueue, ``blocked_on_tool``
+came back None, the dialog was never named and the user was never told a
+question was waiting. So the tail is located by walking past every record
+whose type is in :data:`BOOKKEEPING_RECORD_TYPES`.
+
+MEASURED, NOT GUESSED. Across the 2,216 transcripts under
+``~/.claude/projects`` that mention either blocking tool, 372 of those
+tool calls are real dialogs, and 52 of them (14 percent, spread over 22
+files) are followed by at least one non-conversational record before the
+answer arrives: every one of those 52 is an instance of the defect above.
+The thirteen types in the skip set are exactly the types observed sitting
+BETWEEN an open dialog and its answer, which is proof that each one gets
+written while the dialog is still open. Of the 72,720 records of those
+thirteen types in that corpus, NOT ONE carries a ``message`` key and NOT
+ONE carries a ``tool_result`` block, so none of them can be the thing
+that closed a dialog.
+
+THE MEMBERSHIP RULE IS THAT A DIALOG IS CLOSED IN EXACTLY ONE SHAPE, a
+``user`` record carrying a ``tool_result`` for that tool_use id: 372 of
+372 answered dialogs in the corpus were closed that way and nothing else
+ever closed one. ``user`` and ``assistant`` are therefore never skipped,
+which is what makes a false "a question is waiting" structurally
+impossible rather than merely unobserved. ``mode`` is in the set on
+evidence and not on faith: a ``mode`` of ``normal`` after an
+``ExitPlanMode`` looks like a plan being accepted, but all 5 real cases
+have it written while that ExitPlanMode was still unanswered, so it is
+resume-time bookkeeping and not an answer.
+
+WHAT IS DELIBERATELY LEFT OUT MATTERS AS MUCH AS WHAT IS IN.
+``attachment``, ``file-history-snapshot`` and ``file-history-delta`` are
+never once observed between an open dialog and its answer; they cluster
+with the answering turn instead, so they stay out. NO ``system`` RECORD IS
+SKIPPED AT ALL, of any subtype, because that type is a family and several
+of its members are statements about the conversation's progress rather
+than bookkeeping: ``turn_duration`` says the turn ENDED, ``compact_boundary``
+says the history was rewritten, ``agents_killed`` says work was stopped.
+The two subtypes ever seen in one of these gaps, ``local_command`` and
+``informational``, account for 3 of 373 gap records, which does not buy
+enough to risk a rule that has to keep enumerating subtypes correctly.
+That costs coverage honestly: the skip set recovers 50 of the 52 real
+instances at every possible tail position and 321 of the 326 positions
+overall, and the 2 it does not are the ones that hide behind a ``system``
+record.
+
+``attachment`` LOOKS LIKE THE BIGGEST WIN AVAILABLE AND IS WORTH NOTHING,
+WHICH IS ONLY VISIBLE WITH GROUND TRUTH. Across the 60 most recent
+transcripts it is the record sitting on top of a dialog 160 times, more
+than every other type combined, and counting those without asking whether
+the dialog was still open reads as 160 hidden questions. All 160 are
+dialogs that were ALREADY ANSWERED, so saying None is the right answer.
+The counterfactual was run rather than argued: adding ``attachment`` to
+this set moves the defect count by exactly ZERO, leaving the same two
+``system`` / ``local_command`` tails and the one ``user`` tail. It is not
+in the set because it buys nothing, not because it would be unsafe.
+
+TWO INDEPENDENT GUARDS MAKE A FALSE "A QUESTION IS WAITING" IMPOSSIBLE,
+and they are worth keeping both. First, ``user`` is not in the skip set,
+so the tail walk stops dead on the record that answers a dialog. Second,
+``answered_tool_use_ids`` is gathered from EVERY user record in the
+window whatever its position, so a dialog whose answer is anywhere in the
+window is refused even if the walk somehow reached it. Measured over the
+same 60 transcripts at every tail depth: ZERO false positives.
 """
 
 from __future__ import annotations
@@ -89,6 +157,30 @@ FACTS_TAIL_BYTES: int = 256 * 1024
 #: tool_use and then write nothing at all until the answer arrives, so an
 #: unanswered one at EOF is the question itself. Verified on 2.1.266.
 BLOCKING_TOOL_NAMES: frozenset = frozenset({"AskUserQuestion", "ExitPlanMode"})
+
+#: Record types that are BOOKKEEPING AND NOT CONVERSATION, so a record of
+#: one of these types at the end of the window is skipped when asking what
+#: the conversation is waiting on. See the module docstring for the
+#: measurement and the membership rule; a type not listed here is NEVER
+#: skipped, because skipping one that DOES mean a dialog closed would
+#: invent a question that is not there.
+BOOKKEEPING_RECORD_TYPES: frozenset = frozenset(
+    {
+        "queue-operation",
+        "last-prompt",
+        "custom-title",
+        "ai-title",
+        "agent-name",
+        "mode",
+        "permission-mode",
+        "atis-latch",
+        "bridge-session",
+        "history-suppression",
+        "pr-link",
+        "frame-link",
+        "cost-state",
+    }
+)
 
 # ---------------------------------------------------------------------
 # Record shapes, verified against the live corpus on claude 2.1.266.
@@ -158,7 +250,11 @@ class TranscriptFacts:
       - ``newest_append_at``: the newest record of ANY type, the
         transcript's own heartbeat.
       - ``blocked_on_tool``: the blocking tool the window ENDS on
-        unanswered, else None.
+        unanswered, else None. "Ends on" means the last record that is
+        CONVERSATION: bookkeeping records other writers appended after the
+        dialog (:data:`BOOKKEEPING_RECORD_TYPES`) are walked past, which
+        is the whole point of the field, while a ``user`` record carrying
+        the dialog's ``tool_result`` is an ANSWER and keeps this None.
       - ``queued_reinvoke``: a completion notice is queued and newer than
         the last turn end, so a re-invoke is coming with no human in it.
       - ``open_async_agents``: launches in the window with no matching
@@ -396,14 +492,20 @@ def classify_transcript_records(
     launches: Dict[str, Dict[str, Optional[str]]] = {}
     notified: Set[str] = set()
     answered_tool_use_ids: Set[str] = set()
-    last_record: Optional[Dict[str, Any]] = None
+    last_meaningful: Optional[Dict[str, Any]] = None
 
     for record in records or ():
         if not isinstance(record, dict):
             # The shared tail reader only ever yields objects; a caller
             # handing this a raw list must not crash a watcher.
             continue
-        last_record = record
+        if record.get("type") not in BOOKKEEPING_RECORD_TYPES:
+            # THE LITERAL LAST RECORD IS NOT THE TAIL OF THE
+            # CONVERSATION. Other writers append to this file while a
+            # dialog sits open, so a bookkeeping record never becomes the
+            # thing the tail shape is read off. See the module docstring
+            # for the corpus measurement behind the membership list.
+            last_meaningful = record
         at = parse_timestamp(record.get("timestamp"))
         newest_append_at = _later(newest_append_at, at)
         kind = record.get("type")
@@ -497,8 +599,8 @@ def classify_transcript_records(
             )
 
     blocked_on_tool: Optional[str] = None
-    if last_record is not None and last_record.get("type") == "assistant":
-        blocks = _content_blocks(last_record, "tool_use")
+    if last_meaningful is not None and last_meaningful.get("type") == "assistant":
+        blocks = _content_blocks(last_meaningful, "tool_use")
         block = blocks[-1] if blocks else None
         if block is not None:
             block_id = block.get("id")
