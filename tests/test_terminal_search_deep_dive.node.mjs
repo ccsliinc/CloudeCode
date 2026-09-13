@@ -10,8 +10,8 @@
 //     on an `unknown` sends the user to a screen whose every request
 //     404s, which is the false-green failure this project keeps paying
 //     for, so `unknown` is treated as a no here even though
-//     ArchiveEntry.open() deliberately treats it as a yes.
-//   - Navigation is `syncUrl` plus `App.showArchive`, NEVER
+//     the archive's own open() deliberately treats it as a yes.
+//   - Navigation is the archive's own openRoute, NEVER
 //     `location.href`. A real navigation in this single-page app tears
 //     down the terminal, its WebSocket and every open session to reach a
 //     screen the router could have shown in place, so the test asserts
@@ -54,10 +54,21 @@ const CWD = '/Users/a/Development/thing';
 const SESSION = { working_dir: CWD };
 
 /**
- * Description: one realm holding the real ArchiveDeeplink plus the deep
- *   dive module, with stubbed archive state, lookup and router.
+ * Description: one realm holding the deep dive module over a DOUBLE of
+ *   the archive seam, with stubbed archive state, lookup and router.
+ *
+ *   THE SEAM IS A DOUBLE NOW AND IT USED TO BE THE REAL MODULE. Route
+ *   parsing and path building moved into the `app-screen` plugin surface
+ *   (web/src/lib/plugins/history/), which is compiled rather than
+ *   loadable as a classic script, so this realm cannot run it. What it
+ *   needs from the seam is small and unchanged in shape: a path for a
+ *   project route, and a navigation that writes the address bar and then
+ *   shows the screen. The double below does exactly that, recording
+ *   both, so every assertion in this file still measures what the DEEP
+ *   DIVE did. The seam's own behaviour is measured against the real
+ *   implementation in web/src/lib/plugins/history/route.test.ts.
  * Inputs: opts (object):
- *   archiveState (string) - what ArchiveEntry.ensure() resolves to.
+ *   archiveState (string) - what the archive's ensure() resolves to.
  *   projectId (number|null) - what the lookup route answers with, null
  *     meaning "no project covers this folder".
  *   resultShape (string) - 'object' (default), 'bare' or 'missing', so
@@ -83,18 +94,47 @@ function loadModules(opts = {}) {
     context.window = context;
     context.globalThis = context;
     vm.createContext(context);
-    for (const f of ['archive-deeplink.js', 'terminal-search-deep-dive.js']) {
+    // THE SEAM IS INSTALLED BEFORE THE SUBJECT LOADS, because the deep
+    // dive reads it at call time and a missing seam is a refusal rather
+    // than a throw - which would make an absent double look like a
+    // working one that declined.
+    context.CloudeWeb = {
+        archive: {
+            STATE_ENABLED: 'enabled',
+            STATE_DISABLED: 'disabled',
+            STATE_UNKNOWN: 'unknown',
+            async ensure() {
+                return opts.archiveState === undefined ? 'enabled' : opts.archiveState;
+            },
+            buildPath(route) {
+                const r = route || {};
+                if (r.view !== 'project') return null;
+                if (!/^[0-9]+$/.test(String(r.projectId))) return null;
+                const q = r.query && r.query.q
+                    ? '?q=' + encodeURIComponent(String(r.query.q)) : '';
+                return '/archive/p/' + r.projectId + q;
+            },
+            openRoute(route) {
+                // The address bar FIRST, then the screen, which is the
+                // order the real implementation uses and the order this
+                // file's assertions are about.
+                const path = this.buildPath(route);
+                if (!path) return false;
+                if (context.location.pathname + context.location.search !== path) {
+                    context.history.pushState({}, '', path);
+                }
+                if (!context.App || typeof context.App.showArchive !== 'function') {
+                    return false;
+                }
+                context.App.showArchive(route);
+                return true;
+            },
+        },
+    };
+    for (const f of ['terminal-search-deep-dive.js']) {
         vm.runInContext(fs.readFileSync(path.join(CLIENT_JS, f), 'utf8'),
             context, { filename: f });
     }
-    context.ArchiveEntry = {
-        STATE_ENABLED: 'enabled',
-        STATE_DISABLED: 'disabled',
-        STATE_UNKNOWN: 'unknown',
-        async ensure() {
-            return opts.archiveState === undefined ? 'enabled' : opts.archiveState;
-        },
-    };
     if (!opts.noLookupFn) {
         context.API = {
             async getArchiveProjectForCwd(cwd) {

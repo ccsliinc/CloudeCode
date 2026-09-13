@@ -21,6 +21,7 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createEnvironment } from './mini-dom.mjs';
+import { installArchiveSeam } from './archive-seam-stub.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -68,8 +69,20 @@ const CSS = read('client', 'css', 'styles.css');
  * Build a real header, run the REAL header-menu.js over it, and report
  * where each control ended up.
  *
- * @param {object|null} feature - the message_archive block the stubbed
- *   /api/v1/features answers with; null means no API client at all.
+ * THE PROBE IS A DOUBLE NOW, AND THE MAPPING IT REPLACED IS TESTED
+ * ELSEWHERE. header-menu.js used to ask `window.ArchiveEntry.ensure()`,
+ * which read /api/v1/features itself; it now asks
+ * `window.CloudeWeb.archive.ensure()`, and the block-to-state mapping
+ * moved into web/src/lib/plugins/history/availability.ts, where
+ * screen.test.ts drives every shape of that block including the three
+ * this file passes. THE SUBJECT HERE IS UNCHANGED: what the HEADER does
+ * with the answer. So the double resolves the state the block names and
+ * this file keeps asserting the gating, which is its own claim.
+ *
+ * @param {object|null} feature - the message_archive block. Its `state`
+ *   is what the probe resolves to, except that a value this build does
+ *   not know, and null (no probe at all), both resolve to 'unknown' -
+ *   the same collapse availability.ts makes, for the same reason.
  * @returns {object} {btn, controls, panel, flush}.
  */
 function mountHeader(feature) {
@@ -89,9 +102,12 @@ function mountHeader(feature) {
     header.appendChild(controls);
     env.document.body.appendChild(header);
 
-    env.window.API = feature === null ? undefined : {
-        call() { return Promise.resolve({ message_archive: feature }); },
-    };
+    const named = feature && typeof feature.state === 'string' ? feature.state : null;
+    const state = named === 'enabled' || named === 'disabled' ? named : 'unknown';
+    installArchiveSeam(env.window, {
+        state,
+        reason: (feature && feature.reason) || '',
+    });
     const sandbox = {
         window: env.window,
         document: env.document,
@@ -100,7 +116,7 @@ function mountHeader(feature) {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
-    for (const file of ['kebab-icon.js', 'archive-entry.js', 'dismiss-guard.js', 'header-menu.js']) {
+    for (const file of ['kebab-icon.js', 'dismiss-guard.js', 'header-menu.js']) {
         vm.runInContext(read('client', 'js', file), sandbox, { filename: file });
     }
     sandbox.window.HeaderMenu.init();

@@ -673,18 +673,19 @@ class AppController {
             // THE ARCHIVE'S ONLY IN-APP EXIT. Its own Back button steps
             // panes within the archive and bottoms out at the root pane,
             // so before this the browser's Back button was the only way
-            // out. Routed through ArchiveEntry.close() rather than
-            // showLaunchpad() because the address bar has to be written
-            // too - see that function for why showLaunchpad() cannot do
-            // it itself.
+            // out. Routed through the history plugin's own close()
+            // rather than showLaunchpad() because the address bar has to
+            // be written too - see that function for why showLaunchpad()
+            // cannot do it itself.
             if (this.currentScreen === 'archive') {
                 console.log('App: Title clicked, leaving the archive');
-                if (window.ArchiveEntry && typeof window.ArchiveEntry.close === 'function') {
-                    window.ArchiveEntry.close();
+                const archive = window.CloudeWeb && window.CloudeWeb.archive;
+                if (archive && typeof archive.close === 'function') {
+                    archive.close();
                 } else {
                     // Named, not silent: a title that does nothing is
                     // indistinguishable from a title nobody clicked.
-                    console.warn('App: ArchiveEntry.close is unavailable; ' +
+                    console.warn('App: the archive exit is unavailable; ' +
                                  'the archive has no exit.');
                 }
             }
@@ -806,10 +807,15 @@ class AppController {
     }
 
     /**
-     * Description: hand a stashed archive route to showArchive(), if
-     *   router.js parked one because auth had not completed when the URL
-     *   was read. Idempotent: clears the stash on the way through, so a
-     *   later showLaunchpad() does not bounce the user back.
+     * Description: hand a stashed SCREEN route to the screen that
+     *   claimed it, if router.js parked one because auth had not
+     *   completed when the URL was read. Idempotent: clears the stash on
+     *   the way through, so a later showLaunchpad() does not bounce the
+     *   user back.
+     *
+     *   IT NO LONGER KNOWS THE ARCHIVE EXISTS. The stash carries the
+     *   screen id the `app-screen` walk resolved, so a second screen
+     *   with its own URL namespace needs no change here.
      *
      *   CALLED FROM showLaunchpad()'S FIRST LINE, AND IT RETURNS THERE.
      *   Called from showLaunchpad() for the same reason the settings deep
@@ -831,12 +837,19 @@ class AppController {
      * Output: boolean - true when a route was delivered; the caller must
      *   return on true, or it will render the launchpad over the archive.
      */
-    _showArchiveIfDeepLinked() {
-        const target = window.ArchiveDeepLinkTarget;
+    _showScreenIfDeepLinked() {
+        const target = window.ScreenDeepLinkTarget;
         if (!target) return false;
-        window.ArchiveDeepLinkTarget = null;
-        this.showArchive(target);
-        return true;
+        window.ScreenDeepLinkTarget = null;
+        const seam = window.CloudeWeb && window.CloudeWeb.screens;
+        if (!seam || typeof seam.deliver !== 'function') {
+            // NAMED, NOT SILENT: an undelivered deep link looks like a
+            // bad link rather than a missing bundle otherwise.
+            console.warn('App: the screen surface is unavailable; the deep ' +
+                         'link could not be delivered.');
+            return false;
+        }
+        return seam.deliver(target.screenId, target.route);
     }
 
     /**
@@ -1004,7 +1017,7 @@ class AppController {
         }
         // Archive deep link: consumed FIRST, and it RETURNS. See
         // _showArchiveIfDeepLinked() for why the position matters.
-        if (this._showArchiveIfDeepLinked()) return;
+        if (this._showScreenIfDeepLinked()) return;
         this.hideAllScreens();
         document.getElementById('launchpad-screen').classList.add('active');
         // These three ship `class="hidden"` in index.html so they are

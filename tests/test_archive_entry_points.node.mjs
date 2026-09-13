@@ -65,36 +65,20 @@ const HTML = read('client', 'index.html');
 const { HOME_ALL_SRC: LAUNCHPAD } = await import('./lib-home-source.mjs');
 const HEADER = read('client', 'js', 'header-menu.js');
 
-/**
- * Load archive-entry.js into a sandbox with a stubbed history + App.
- *
- * @param {object} opts - {pathname, withApp}.
- * @returns {object} {entry, calls, ctx} - the module and what it did.
- */
-function loadEntry(opts) {
-    const o = opts || {};
-    const calls = { pushed: [], shown: [], warned: [] };
-    const fakeWindow = {
-        location: { pathname: o.pathname === undefined ? '/' : o.pathname },
-        history: {
-            pushState(state, title, url) {
-                if (o.throwOnPush) throw new Error('History API blocked');
-                calls.pushed.push(url);
-            }
-        }
-    };
-    if (o.withApp !== false) {
-        fakeWindow.App = { showArchive(p) { calls.shown.push(p); } };
-    }
-    const context = {
-        window: fakeWindow,
-        console: { log() {}, warn(m) { calls.warned.push(String(m)); }, error() {} },
-    };
-    vm.createContext(context);
-    vm.runInContext(read('client', 'js', 'archive-entry.js'),
-                    context, { filename: 'archive-entry.js' });
-    return { entry: context.window.ArchiveEntry, calls };
-}
+// THE BEHAVIOURAL HALF OF THIS FILE MOVED, AND ONLY THE BEHAVIOURAL
+// HALF. `archive-entry.js` is now web/src/lib/plugins/history/, behind
+// the `app-screen` plugin surface, so the cases that LOADED it and drove
+// `open()`, `close()` and `ensure()` moved with it to
+// web/src/lib/plugins/history/screen.test.ts - rule 8.3 of
+// docs/history-archive-scope.md, a suite is ported in the slice that
+// moves its subject.
+//
+// WHAT STAYED IS EVERYTHING BELOW: source assertions about
+// client/index.html, the home screen and client/js/header-menu.js, none
+// of which moved in this slice. They are the guard against a SECOND door
+// onto the archive growing back, and their subject is exactly those
+// files. Moving them into vitest would have left a Svelte test reading
+// client/index.html, which is a worse home than the one they have.
 
 // ---- POSITIVE CONTROL --------------------------------------------------
 // Every assertion below is a substring search over source files. A
@@ -116,11 +100,33 @@ test('POSITIVE CONTROL: all three source files loaded and are non-empty', () => 
 
 // ---- 1. THE MODULE EXISTS AND IS LOADED --------------------------------
 
-test('archive-entry.js is registered as a script and loads before app.js', () => {
-    const entry = HTML.indexOf('/static/js/archive-entry.js');
-    const app = HTML.indexOf('/static/js/app.js');
-    assert.ok(entry > -1, 'archive-entry.js has no <script> tag, so it never parses');
-    assert.ok(app > entry, 'app.js must stay last');
+test('the way in is COMPILED, and no stale script tag was left behind', () => {
+    // INVERTED IN THIS SLICE, AND THE INVERSION IS THE POINT. It used to
+    // assert `/static/js/archive-entry.js` HAD a tag and preceded app.js.
+    // That module is now compiled into the bundle, so the tag must be
+    // GONE - a tag left pointing at a deleted file is a 404 on every page
+    // load and a silently absent entry point.
+    // MATCHED AS A TAG, NOT AS A SUBSTRING. Every one of these paths is
+    // also NAMED in a comment in index.html explaining where the module
+    // went, and a bare `includes` would fail on the explanation rather
+    // than on a real tag - which is the false positive this file's own
+    // positive control exists to make visible.
+    const tagFor = (src) => new RegExp(
+        '<script[^>]*\\ssrc=["\']' + src.replace(/[/.]/g, '\\$&') + '["\']');
+    for (const gone of ['/static/js/archive-entry.js',
+                        '/static/js/archive-deeplink.js',
+                        '/static/js/archive-crumb.js',
+                        '/static/js/archive-crumb-resolve.js']) {
+        assert.ok(!tagFor(gone).test(HTML),
+            `${gone} still has a <script> tag, but the file is deleted`);
+    }
+    // And the thing that replaced them IS loaded, so this is not passing
+    // by the archive having no way in at all.
+    const bundle = HTML.search(tagFor('/static/dist/app.js'));
+    const app = HTML.search(tagFor('/static/js/app.js'));
+    assert.ok(bundle > -1, 'the compiled bundle has no <script> tag');
+    assert.ok(app > -1, 'app.js has no <script> tag');
+    assert.ok(bundle > app, 'the bundle must load after app.js');
 });
 
 // ---- 2. THE LAUNCHPAD BODY ROW IS GONE, ON PURPOSE --------------------
@@ -198,12 +204,13 @@ test('the entry point carries no inline event handler', () => {
 // guard, or a route parameter, or a different history mode, and from
 // then on the two doors lead to different places with nothing to say so.
 
-test('the entry point routes through window.ArchiveEntry', () => {
+test('the entry point routes through the ONE published archive surface', () => {
     assert.ok(!/window\.ArchiveEntry/.test(LAUNCHPAD),
         'the launchpad reaches for ArchiveEntry again; it has no archive ' +
         'control any more, so this can only be a second door growing back');
-    assert.ok(/window\.ArchiveEntry/.test(HEADER),
-        'the header navigates to the archive by some other means');
+    assert.ok(/CloudeWeb\.archive/.test(HEADER),
+        'the header navigates to the archive by some other means than the '
+        + 'one published surface, so there are two doors again');
     // Neither may call showArchive or pushState itself.
     for (const [name, src] of [['the home screen', LAUNCHPAD], ['header-menu.js', HEADER]]) {
         // TIGHTENED IN SLICE 7, AND IT WAS A REAL FALSE POSITIVE. The
@@ -217,49 +224,18 @@ test('the entry point routes through window.ArchiveEntry', () => {
     }
 });
 
-// ---- 6. THE ENTRY POINT ACTUALLY NAVIGATES -----------------------------
-
-test('open() writes the address bar and then shows the screen', () => {
-    const { entry, calls } = loadEntry({ pathname: '/' });
-    assert.equal(entry.open(), true);
-    assert.deepEqual(calls.pushed, ['/archive'], 'the URL was not written');
-    assert.equal(calls.shown.length, 1, 'the screen was not shown');
-});
-
-test('open() does not push a duplicate history entry when already there', () => {
-    const { entry, calls } = loadEntry({ pathname: '/archive' });
-    entry.open();
-    assert.deepEqual(calls.pushed, [],
-        're-entering the archive adds a redundant Back-button target');
-    assert.equal(calls.shown.length, 1, 'the screen must still be shown');
-});
-
-test('a blocked History API does not block the navigation', () => {
-    // Sandboxed iframes throw on pushState. router.js already swallows
-    // exactly this. A wrong address bar is strictly smaller than a
-    // screen that will not open.
-    const { entry, calls } = loadEntry({ pathname: '/', throwOnPush: true });
-    assert.equal(entry.open(), true, 'a History exception aborted the navigation');
-    assert.equal(calls.shown.length, 1);
-});
-
-test('a missing app shell is reported, not silently swallowed', () => {
-    // THREE OUTCOMES. "I navigated", "I could not navigate", and never a
-    // quiet false that reads like success to the caller.
-    const { entry, calls } = loadEntry({ pathname: '/', withApp: false });
-    assert.equal(entry.open(), false,
-        'open() claims success with no App to show anything');
-    assert.equal(calls.shown.length, 0);
-    assert.ok(calls.warned.length > 0, 'a dead entry point produced no diagnostic');
-});
-
-test('the route matches the router prefix', () => {
-    const { entry } = loadEntry({});
-    const router = read('client', 'js', 'router.js');
-    assert.match(router, new RegExp(`ARCHIVE_PREFIX = '${entry.PATH}'`),
-        `ArchiveEntry.PATH (${entry.PATH}) does not match router.js's ARCHIVE_PREFIX, ` +
-        'so the entry point navigates somewhere the router will not parse');
-});
+// ---- 6. THE ENTRY POINT'S BEHAVIOUR IS MEASURED ELSEWHERE NOW ---------
+//
+// Six cases lived here: open() writes the address bar then shows the
+// screen, it does not push a duplicate history entry, a blocked History
+// API does not block the navigation, a missing app shell is reported
+// rather than swallowed, and the route matches the router's prefix. All
+// six are in web/src/lib/plugins/history/screen.test.ts, driven against
+// the real implementation through an injected host rather than a vm
+// sandbox. Nothing was dropped; the last one changed shape, because the
+// two constants it compared (`ArchiveEntry.PATH` and
+// `Router.ARCHIVE_PREFIX`) are one owner now and there is no longer a
+// second spelling for it to disagree with.
 
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

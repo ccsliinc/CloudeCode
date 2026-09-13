@@ -59,7 +59,7 @@ async function test(name, fn) {
 }
 
 /**
- * Load the row, fuzzy, crumb, filter and list modules into one context.
+ * Load the row, fuzzy, filter and list modules into one context.
  * @returns {object} The exported modules plus the document.
  */
 function load() {
@@ -72,7 +72,7 @@ function load() {
     vm.createContext(context);
     for (const file of ['archive-outcome.js', 'archive-format.js',
                         'archive-outcome-view.js', 'archive-fuzzy.js',
-                        'archive-crumb.js', 'archive-tlist-row.js',
+                        'archive-tlist-row.js',
                         'archive-tlist-filter.js', 'archive-transcript-list.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
@@ -82,13 +82,12 @@ function load() {
     return {
         row: context.window.ArchiveTlistRow,
         fuzzy: context.window.ArchiveFuzzy,
-        crumb: context.window.ArchiveCrumb,
         list: context.window.ArchiveTranscriptList,
         document: env.document,
     };
 }
 
-const { row, fuzzy, crumb, list, document } = load();
+const { row, fuzzy, list, document } = load();
 
 /** A row with a human-chosen name. @returns {object} */
 function named() {
@@ -318,66 +317,17 @@ await test('the stylesheet CLIPS these labels rather than wrapping them', () => 
         'indistinguishability the three-outcome design exists to prevent');
 });
 
-// ---- 4. THE BREADCRUMB NAMES THINGS ------------------------------------
-
-await test('a breadcrumb NEVER renders a numeric id', () => {
-    const routes = [
-        { view: 'project', projectId: 48, transcriptId: null },
-        { view: 'transcript', projectId: 48, transcriptId: 5767 },
-        { view: 'transcript', projectId: null, transcriptId: 5767 },
-        { view: 'line', projectId: 48, transcriptId: 5767, lineNo: 1695 },
-    ];
-    for (const r of routes) {
-        // The hardest case: NOTHING has been learned yet, which is what a
-        // fresh deep link looks like before its header request resolves.
-        const parts = crumb.labels(r, { project: null, transcript: null });
-        assert.equal(crumb.hasNumericId(parts), false,
-            'a bare id reached the crumb for ' + JSON.stringify(r) +
-            ': ' + JSON.stringify(parts));
-        for (const p of parts) assert.ok(p.length > 0, 'a blank crumb segment');
-    }
-});
-
-await test('POSITIVE CONTROL: hasNumericId can actually return true', () => {
-    // An assertion of absence over a detector that never fires is not a
-    // measurement. This is the detector's own positive control.
-    assert.equal(crumb.hasNumericId(['project 48']), true);
-    assert.equal(crumb.hasNumericId(['transcript 5767']), true);
-    assert.equal(crumb.hasNumericId(['5767']), true);
-    assert.equal(crumb.hasNumericId(['Infrastructure']), false);
-});
-
-await test('a crumb prefers a NAME, labels a REFERENCE as one, and states an unknown', () => {
-    assert.equal(crumb.projectSegment({ display_name: 'Infrastructure' }).kind, 'name');
-    assert.equal(crumb.projectSegment({ display_name: 'Infrastructure' }).text,
-        'Infrastructure');
-
-    // `full_path` is the raw slug. It is shown, because it is the only
-    // thing known - and LABELLED, so it does not read as a chosen name.
-    const slug = crumb.projectSegment({ full_path: '-Users-jsugamele-Development' });
-    assert.equal(slug.kind, 'ref');
-    assert.match(slug.text, /^ref /);
-
-    assert.equal(crumb.projectSegment(null).kind, 'unknown');
-    assert.equal(crumb.sessionSegment({ title: 'Nightly sweep' }).text, 'Nightly sweep');
-    assert.equal(crumb.sessionSegment({ session_ref: 'journal' }).kind, 'ref');
-    assert.equal(crumb.sessionSegment(null).kind, 'unknown');
-});
-
-await test('the tracker only answers about the id the route names', () => {
-    const t = crumb.createTracker();
-    t.learnTranscript(5767, { title: 'The right one' });
-    // A DIFFERENT transcript. Returning the remembered name here would
-    // render the previous session's title over the current one - a wrong
-    // name, which is worse than the id it replaced, because it is
-    // believable.
-    const parts = t.labelsFor({ view: 'transcript', projectId: null, transcriptId: 9999 });
-    assert.ok(!parts.some((p) => p.includes('The right one')),
-        'a fact about transcript 5767 was rendered for transcript 9999');
-    const right = t.labelsFor({ view: 'transcript', projectId: null, transcriptId: 5767 });
-    assert.ok(right.some((p) => p.includes('The right one')),
-        'the tracker did not answer for the id it was told about');
-});
+// ---- 4. THE BREADCRUMB MOVED, AND SO DID ITS FOUR CASES --------------
+//
+// `archive-crumb.js` is now web/src/lib/plugins/history/crumb.ts, behind
+// the `app-screen` surface, and the four cases that were here - the
+// no-numeric-id rule, its positive control, the name/ref/unknown
+// vocabulary and the tracker's keyed lookup - moved with it to
+// web/src/lib/plugins/history/crumb.test.ts, verbatim. Rule 8.3 of
+// docs/history-archive-scope.md: a suite is ported in the slice that
+// moves its subject. Nothing was dropped; run `npm test` in web/ for
+// them. The crumb's STYLING is still asserted above, because
+// archive-panes.css did not move.
 
 // ---- 5. THE TYPE FILTER: COMPACT, AND DEFAULTED TO SESSIONS ------------
 

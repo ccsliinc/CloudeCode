@@ -16,7 +16,17 @@
  */
 import { register } from './registry';
 import { markUnreadPlugin } from './mark-unread/index';
+import { createHistoryPlugin } from './history/index';
+import { browserScreenHost } from './history-host';
+import { legacyApiTransport } from './api-transport';
 import type { Plugin } from './types';
+
+/**
+ * The history browser, built against the browser host. Its `screen` half
+ * is published on `window.CloudeWeb.archive` by `main.ts` so the legacy
+ * tree has one way in; its `plugin` half is registered below.
+ */
+export const history = createHistoryPlugin(browserScreenHost(), legacyApiTransport());
 
 /**
  * The ship list, in the order it happens to be written. Order here does
@@ -24,6 +34,6 @@ import type { Plugin } from './types';
  * contribution's own `order` and then its id, precisely so this array
  * can be reordered without moving a control on screen.
  */
-const BUILTIN: readonly Plugin[] = [markUnreadPlugin];
+const BUILTIN: readonly Plugin[] = [markUnreadPlugin, history.plugin];
 
 for (const plugin of BUILTIN) register(plugin);

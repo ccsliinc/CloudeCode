@@ -1,5 +1,5 @@
 /**
- * The plugin surface vocabulary: four surfaces, and the payload each one
+ * The plugin surface vocabulary: five surfaces, and the payload each one
  * carries.
  *
  * WHAT A PLUGIN IS HERE, AND WHAT IT IS NOT. A plugin is a TypeScript
@@ -21,14 +21,22 @@
  * to recolor something, it belongs in a theme manifest, not on this
  * registry.
  *
- * WHY FOUR AND NOT MORE. These are the four extension points
+ * WHY FIVE. The first four are the extension points
  * `.claude/notes/svelte-migration-launchpad.md` section 6 named, and the
- * four the launchpad carve is already shaped around. A fifth surface
- * arrives with its first consumer or not at all: a surface with no
- * reader is a guess about a screen nobody has written yet, and this
- * project has paid for that shape before.
+ * four the launchpad carve is already shaped around. The bar this file
+ * set for a fifth was "arrives with its first consumer or not at all: a
+ * surface with no reader is a guess about a screen nobody has written
+ * yet, and this project has paid for that shape before."
  *
- * ONLY ONE OF THE FOUR IS PROVEN. `session-card-action` has a real
+ * `app-screen` CLEARED THAT BAR BEFORE IT WAS ADDED. Its first consumer
+ * is the history browser, whose routing it is built from rather than
+ * built for: `client/js/archive-deeplink.js` already owned inbound
+ * parsing, outbound building, the ordered pattern list and the
+ * three-way answer, and `client/js/router.js` already delegated to it.
+ * The surface is the EXTRACTION of a shape that was working, which is
+ * why it arrives with its hardest part already measured.
+ *
+ * TWO OF THE FIVE ARE PROVEN. `session-card-action` has a real
  * consumer (the sidebar row overflow menu) and a real contribution (the
  * mark-unread control). The other three carry the SMALLEST payload their
  * eventual consumer plainly needs, and their shape is not settled - the
@@ -45,7 +53,8 @@ export type PluginSurface =
     | 'session-card-action'
     | 'launchpad-panel'
     | 'sidebar-item'
-    | 'status-source';
+    | 'status-source'
+    | 'app-screen';
 
 /**
  * What a contribution is allowed to know about the app when it decides
@@ -198,12 +207,159 @@ export interface StatusSource {
     resolve(tmuxName: string): string | null;
 }
 
+/**
+ * What a screen's `parse` may answer. THREE OUTCOMES, NEVER TWO.
+ *
+ * Description: `no-match` means this is not our path at all and the host
+ *   should keep looking. `cannot-determine` means it IS our path and it
+ *   is malformed, which must produce a visible, specific error naming
+ *   the offending segment. A silent redirect to the prefix root tells
+ *   the sender their link was fine and shows the recipient something
+ *   else. `client/js/archive-deeplink.js` measured why: `session_ref`
+ *   "journal" belongs to fourteen different transcripts.
+ */
+export type ScreenRouteResult<Route> =
+    | { readonly ok: true; readonly route: Route }
+    | { readonly ok: false; readonly token: 'no-match'; readonly reason?: string }
+    | { readonly ok: false; readonly token: 'cannot-determine';
+        readonly reason: string };
+
+/**
+ * The one way a screen talks to the server: a fetch scoped to the
+ * prefixes its contribution declared.
+ *
+ * Description: THE CAPABILITY, NOT A CLIENT. The host builds this from
+ *   the contribution's own `apiPrefixes` and hands it to `mount`. A
+ *   plugin never sees `window.API` and never sees `fetch`, so the set of
+ *   routes it can reach is the set it declared, printed on its card and
+ *   readable in one line of its own source.
+ *
+ *   IT IS HANDED TO `mount` AND NOT PUT ON `PluginContext`, WHICH IS A
+ *   DEVIATION FROM THE SCOPE AND IS DELIBERATE. `PluginContext` is
+ *   shared with four other surfaces, none of which declares a grant. A
+ *   granted client on the shared context would either hand those four an
+ *   UNGRANTED one, which is the unbounded access this design exists to
+ *   refuse, or hand them one granted nothing, which is a field that
+ *   throws for four surfaces out of five. A capability belongs to the
+ *   contribution it was granted to, so it arrives with control.
+ *
+ *   A REFUSAL IS NEVER A 404. `call` rejects with a `GrantRefusedError`
+ *   before any request leaves the browser. A 404 is a resolved response
+ *   carrying a status; the two are structurally different rather than
+ *   differently worded, so a caller that only catches can still tell
+ *   them apart. See `screen-api.ts`.
+ */
+export interface ScreenApi {
+    /**
+     * Call one path under `/api/v1`, e.g. '/archive/projects'.
+     * Inputs: path - relative to `/api/v1`, leading slash. init - passed
+     *   to the underlying client unchanged.
+     * Output: Promise of whatever the host's client resolves to.
+     *   REJECTS with a `GrantRefusedError` when the path, after
+     *   normalisation, is outside the grant.
+     */
+    call(path: string, init?: Record<string, unknown>): Promise<unknown>;
+    /**
+     * The prefixes this client actually holds, for a refusal to name and
+     * for a catalog card to print. A copy; mutating it grants nothing.
+     */
+    readonly grants: readonly string[];
+}
+
+/**
+ * A whole screen with its own URL namespace, mounted into the shell.
+ *
+ * Description: THE THIRD KIND OF THING A PLUGIN CAN BE. A
+ *   `session-card-action` is a control, a `launchpad-panel` is a
+ *   component in somebody else's screen, and this is a screen. It owns
+ *   one path prefix, both directions of the URL for everything under
+ *   it, and one container element.
+ *
+ *   BOTH DIRECTIONS, DELIBERATELY. `parse` reads the address bar and
+ *   `buildPath` writes it. A feature that owned only the inbound half
+ *   would leave the outbound half somewhere else, and the two would
+ *   drift: the screen would show one thing and the address bar another,
+ *   which is the failure `archive-screen.js` and `router.js` split
+ *   between them before this surface existed and had to coordinate by
+ *   hand.
+ */
+export interface AppScreen<Route = unknown> {
+    /**
+     * The single leading path segment this screen owns, with no
+     * slashes, e.g. 'archive'. Unique across the registry: a second
+     * contribution claiming a taken prefix is refused the same way a
+     * duplicate contribution id is, whole-plugin, and for the same
+     * reason.
+     *
+     * MATCHED COMPONENT-WISE AND NEVER BY `startsWith`. A prefix of
+     * 'archive' owns `/archive` and `/archive/...` and does NOT own
+     * `/archived-thing`, for the same reason `project_directory.py`
+     * gives: `/Users/jsugamelevil` must not read as living under
+     * `/Users/jsugamele`.
+     */
+    readonly routePrefix: string;
+    /** The id of the container element in `client/index.html`. */
+    readonly screenId: string;
+    /** Label for whatever control opens it. Never empty. */
+    readonly title: string;
+    /**
+     * Read the address bar.
+     *
+     * Description: `search` is the raw query string. A screen that reads
+     *   it MUST allowlist rather than denylist: a parameter invented
+     *   later is then dropped by default instead of published by
+     *   default. The archive's own allowlist is what keeps an opaque
+     *   resume cursor out of a shared link.
+     *
+     *   IT MAY NOT THROW, AND THE HOST DOES NOT TRUST THAT IT WILL NOT.
+     *   A screen whose `parse` throws is skipped with a logged refusal
+     *   and navigation continues for every other screen. See
+     *   `screens.ts`.
+     * Inputs: path - the pathname. search - the raw query string.
+     * Output: ScreenRouteResult<Route>.
+     */
+    parse(path: string, search: string): ScreenRouteResult<Route>;
+    /**
+     * Write the address bar. The inverse of a successful `parse`.
+     * Output: the path, or null when the route cannot be built. NEVER a
+     *   fallback path: handing back the prefix root for an unbuildable
+     *   route is the silent redirect `parse` refuses, moved to the other
+     *   end.
+     */
+    buildPath(route: Route): string | null;
+    /**
+     * Put the screen in its container. Called at most once per page
+     * life, with the granted client for this contribution.
+     * Inputs: container - the element `screenId` resolved to. route -
+     *   the first route parsed for this screen. context - flags and
+     *   repaint. api - the capability built from `apiPrefixes`.
+     */
+    mount(container: Element, route: Route, context: PluginContext,
+          api: ScreenApi): void;
+    /**
+     * A route change WITHIN this screen while it is already mounted.
+     * Separate from `mount` because a deep link to a line number must
+     * not remount the reader and lose its position.
+     */
+    show(route: Route): void;
+    /** The screen is being left. It stays mounted; the host hides it. */
+    hide(): void;
+    /**
+     * API path prefixes under `/api/v1` this screen is granted, e.g.
+     * ['/archive', '/features']. An empty array is a screen that talks
+     * to no server. The host enforces it; declaring it is not the same
+     * as being trusted with it.
+     */
+    readonly apiPrefixes: readonly string[];
+}
+
 /** Map a surface name to the payload a contribution to it carries. */
 export interface SurfacePayloads {
     'session-card-action': SessionCardAction;
     'launchpad-panel': LaunchpadPanel;
     'sidebar-item': SidebarItem;
     'status-source': StatusSource;
+    'app-screen': AppScreen;
 }
 
 /**

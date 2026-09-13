@@ -75,6 +75,13 @@ import { uiPrefs } from './lib/ui/prefs.svelte';
 // plugins on the surface registry. Nothing reads a binding from it.
 import './lib/plugins/builtin';
 import { sessionCardMenuItems, runSessionCardAction } from './lib/plugins/session-card-actions';
+import { history } from './lib/plugins/builtin';
+import { legacyApiTransport } from './lib/plugins/api-transport';
+import { renderCrumb as historyRenderCrumb } from './lib/plugins/history/index';
+import { surfacesOf as pluginSurfacesOf } from './lib/plugins/registry';
+import type { PluginContext } from './lib/plugins/types';
+import { deliverRoute, hideVisibleScreen, visibleScreen, walkScreens,
+         type ScreenHost } from './lib/plugins/screens';
 import { t, setLocale, currentLocale, i18n } from './lib/i18n/index.svelte';
 import { summaryLabel } from './lib/session-summary-label';
 import { mountHomeScreen, launchpadScreen, unmountHomeScreen } from './lib/launchpad/home-screen-host';
@@ -711,6 +718,92 @@ async function loadHomeScreen(): Promise<void> {
     void sessionStore.loadRunningSessions(t);
 }
 
+/**
+ * The context every `app-screen` is consulted with.
+ *
+ * Description: the same two fields every other surface gets. Flags come
+ *   from `client/js/ui-flags.js`'s cache, read LAZILY so a missing
+ *   global is an empty flag set rather than a throw, and the absence of
+ *   a key reads as ON exactly as that module documents.
+ * Inputs: none. Output: PluginContext.
+ */
+function screenContext(): PluginContext {
+    const flags = (window as { UIFlags?: { all?: () => Record<string, boolean> } }).UIFlags;
+    const read = flags && typeof flags.all === 'function' ? flags.all() : {};
+    return { flags: read || {}, refresh: () => {} };
+}
+
+/**
+ * How the screen host reaches the document and the network.
+ *
+ * Description: `transport` is the legacy API client, resolved lazily.
+ *   NOTE WHAT A SCREEN ACTUALLY RECEIVES: not this, but a `ScreenApi`
+ *   the host builds from that screen's own declared `apiPrefixes`. This
+ *   function is what that wrapper calls AFTER the grant passes, so a
+ *   screen can never reach a path it did not declare.
+ * Inputs: none. Output: ScreenHost.
+ */
+function screenHost(): ScreenHost {
+    return {
+        getElement: (id) => document.getElementById(id),
+        // THE SHARED ADAPTER, not a second copy. `api.js` prepends
+        // /api/v1 and `ScreenApi` resolves against it, so the base has to
+        // come back off exactly once - see ./lib/plugins/api-transport.ts
+        // for the bug that taught this.
+        transport: legacyApiTransport(),
+    };
+}
+
+/**
+ * THE `app-screen` SURFACE, AS THE ROUTER SEES IT. Parse the address bar
+ * against every registered screen, and hand the winner its route.
+ *
+ * Description: this is what replaced `router.js`'s hardcoded
+ *   `ARCHIVE_PREFIX` / `parseArchivePath` / `deliverArchiveRoute` block.
+ *   The router now holds a list rather than a branch, and it learns
+ *   nothing about any particular screen.
+ *
+ *   IT RETURNS A PLAIN OBJECT, NOT THE CONTRIBUTION. A classic script
+ *   cannot usefully hold a `Contribution`, and handing it one would let
+ *   a legacy caller reach a plugin's payload directly and call `mount`
+ *   itself. The token vocabulary is the one `router.js` already spoke -
+ *   `ok` / `cannot-determine` / `no-match` - so its existing branches
+ *   read unchanged.
+ * Inputs: path, search - the address bar. Output: a plain result object.
+ * Example: window.CloudeWeb.screens.parse('/archive/t/5767', '')
+ */
+function parseScreenRoute(path: string, search: string): {
+    ok: boolean; token?: string; reason?: string; screenId?: string; route?: unknown;
+} {
+    const r = walkScreens(String(path || ''), String(search || ''), screenContext());
+    if (r.ok) return { ok: true, screenId: r.contribution.id, route: r.route };
+    if (r.token === 'cannot-determine') {
+        return { ok: false, token: 'cannot-determine', reason: r.reason,
+                 screenId: r.contribution.id };
+    }
+    return { ok: false, token: 'no-match', reason: r.reason };
+}
+
+/**
+ * Hand a parsed route to the screen that claimed it.
+ * Inputs: screenId - from `parseScreenRoute`. route - likewise.
+ * Output: boolean - true when the screen is on screen.
+ * Example: window.CloudeWeb.screens.deliver('history-screen', route)
+ */
+function deliverScreenRoute(screenId: string, route: unknown): boolean {
+    const found = surfacesOfScreens().find((c) => c.id === screenId);
+    if (!found) {
+        console.error(`[plugins] no screen "${screenId}" to deliver a route to`);
+        return false;
+    }
+    return deliverRoute(found, route, screenContext(), screenHost());
+}
+
+/** The registered screens, read through the registry each time. */
+function surfacesOfScreens() {
+    return pluginSurfacesOf('app-screen');
+}
+
 /** The namespace the legacy tree may call into. */
 const CloudeWeb = {
     /**
@@ -848,6 +941,62 @@ const CloudeWeb = {
      */
     sessionCardMenuItems,
     runSessionCardAction,
+    /**
+     * THE `app-screen` SURFACE, and the two halves the legacy tree uses.
+     * `screens` is the ROUTER's half: parse a path against every
+     * registered screen, deliver the winner, hide whatever is up when
+     * the app navigates somewhere no plugin owns. `archive` is the
+     * HISTORY BROWSER's own entry points, which the header button, the
+     * title-click exit, the terminal search deep dive and the archive
+     * screen body all call - one implementation, so two doors cannot
+     * drift into two destinations.
+     *
+     * A CLASSIC SCRIPT REACHES THESE AT CALL TIME, NEVER AT PARSE TIME.
+     * This bundle is a deferred module, so it evaluates after every
+     * legacy IIFE; `Router.init()` runs on `window load`, which is after
+     * both. Every legacy call site below is inside a function for that
+     * reason, and each still guards on the seam existing.
+     */
+    screens: {
+        parse: parseScreenRoute,
+        deliver: deliverScreenRoute,
+        hideVisible: hideVisibleScreen,
+        visible: visibleScreen,
+    },
+    archive: {
+        open: () => history.screen.open(),
+        openRoute: (route: Record<string, unknown>) => history.screen.openRoute(route),
+        close: () => history.screen.close(),
+        ensure: () => history.screen.ensure(),
+        state: () => history.screen.state(),
+        reason: () => history.screen.reason(),
+        onResolved: (fn: (state: string) => void) => history.screen.onResolved(fn),
+        buildPath: (route: Record<string, unknown>) =>
+            history.screen.payload.buildPath(route as never),
+        syncUrl: (route: Record<string, unknown>) => {
+            // The outbound half, for the legacy screen body. It writes
+            // the address bar through the SAME `buildPath` the inbound
+            // parse is the inverse of, so the screen and the URL cannot
+            // disagree about where the user is.
+            const path = history.screen.payload.buildPath(route as never);
+            if (!path) return null;
+            if (window.location.pathname + window.location.search === path) return null;
+            try {
+                window.history.pushState({}, '', path);
+            } catch (e) {
+                console.warn('[history] the History API refused ' + path, e);
+                return null;
+            }
+            return path;
+        },
+        renderCrumb: (doc: Document, parts: string[], rootClass: string) =>
+            historyRenderCrumb(doc as never, parts, rootClass),
+        tracker: () => history.screen.tracker(),
+        resolver: () => history.screen.resolver(),
+        STATE_ENABLED: 'enabled',
+        STATE_DISABLED: 'disabled',
+        STATE_UNKNOWN: 'unknown',
+    },
     /**
      * THE STRING LAYER, AS THIS TREE SEES IT. Note what is NOT here: a
      * catalog. The messages live in client/js/i18n/, `boot.js` publishes

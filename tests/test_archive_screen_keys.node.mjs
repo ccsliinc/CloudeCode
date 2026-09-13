@@ -27,6 +27,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { installArchiveSeam } from './archive-seam-stub.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -84,7 +85,7 @@ const MODULES = [
                         'archive-nav.js',
     'archive-fuzzy.js', 'archive-tlist-row.js', 'archive-tlist-filter.js',
     'archive-transcript-list.js', 'archive-search-render.js', 'archive-search.js',
-    'archive-deeplink.js', 'archive-screen-reader.js', 'archive-export.js',
+    'archive-screen-reader.js', 'archive-export.js',
     // The conversation view, which is the reader pane's DEFAULT. The
     // composition root builds it at wire() time, so leaving it out here
     // fails as "Cannot read properties of undefined" inside wire() -
@@ -99,7 +100,10 @@ const MODULES = [
     // vocabulary are four modules it now composes, and it builds its
     // shell at ITS OWN script load - so all four must be in the context
     // before archive-screen.js runs, exactly as in index.html.
-    'archive-pane-resize.js', 'archive-crumb.js',
+    // THE CRUMB'S VOCABULARY IS NOT IN THIS LIST ANY MORE: it moved into
+    // the `app-screen` plugin surface, and the screen reaches it through
+    // window.CloudeWeb.archive, which installArchiveSeam supplies.
+    'archive-pane-resize.js',
     'archive-screen-shell.js', 'archive-screen-tools.js',
     'archive-screen.js',
 ];
@@ -128,8 +132,8 @@ function buildScreen() {
 
     const warns = [];
     const fakeWindow = { document: doc, innerWidth: 1400 };
-    // No `location` and no `history`: ArchiveDeeplink.syncUrl returns
-    // null rather than throwing when they are absent, which keeps the
+    // No `location` and no `history`: the seam stub's syncUrl records
+    // and returns null rather than touching either, which keeps the
     // address bar entirely out of a keyboard test.
     const context = {
         window: fakeWindow,
@@ -145,6 +149,12 @@ function buildScreen() {
         requestAnimationFrame(fn) { fn(); return 0; },
     };
     context.globalThis = context;
+    // THE ARCHIVE SEAM, AS A DOUBLE. archive-screen.js reaches
+    // window.CloudeWeb.archive for the crumb renderer, the crumb
+    // tracker, the project namer and the URL sync. Its subject here
+    // is the KEY HANDLING, so a double is right; the seam's own
+    // behaviour is measured in web/src/lib/plugins/history/.
+    installArchiveSeam(fakeWindow);
     vm.createContext(context);
 
     fakeWindow.API = {

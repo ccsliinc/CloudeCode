@@ -93,7 +93,7 @@ const HEADER_MENU_CONTROL_IDS = [
  *
  * IT IS STILL GATED. Being inline changes WHERE the control lives, not
  * WHETHER it exists: `_wireArchive()` below hides it at wire time and
- * reveals it only once `ArchiveEntry.ensure()` has MEASURED the server
+ * reveals it only once the archive's ensure() has MEASURED the server
  * as having the archive switched on. `disabled` and `unknown` both leave
  * it hidden. Moving a control out of a menu must not turn a measured
  * gate into an always-on door.
@@ -227,7 +227,7 @@ class HeaderMenu {
      *   which no DOM test can see (this is exactly how #logoutBtn was
      *   dead from the initial commit; see its comment in index.html).
      *
-     *   It calls window.ArchiveEntry, the ONE navigation into the
+     *   It calls window.CloudeWeb.archive, the ONE navigation into the
      *   archive, which the launchpad row also calls. Two copies of a
      *   navigation is two copies that can drift.
      *
@@ -253,7 +253,9 @@ class HeaderMenu {
         // archive screen to reach - the server redirects /archive to the
         // launchpad and every /api/v1/archive/* route 404s. So the
         // control is hidden here, at wire time, and revealed only once
-        // ArchiveEntry.ensure() has measured the server as ENABLED.
+        // the archive plugin's own ensure() has MEASURED the server as
+        // ENABLED. Reached through window.CloudeWeb.archive, which is the
+        // one implementation of every way into the archive.
         //
         // It is hidden from JS rather than by a class in index.html for
         // two reasons: index.html is not this feature's to edit, and a
@@ -264,17 +266,19 @@ class HeaderMenu {
         // 'unknown' leaves it hidden. A failed probe is not permission.
         btn.style.display = 'none';
         btn.hidden = true;
-        if (window.ArchiveEntry &&
-            typeof window.ArchiveEntry.ensure === 'function') {
-            window.ArchiveEntry.ensure().then((state) => {
-                if (state !== window.ArchiveEntry.STATE_ENABLED) return;
+        const archive = () => window.CloudeWeb && window.CloudeWeb.archive;
+        const gate = archive();
+        if (gate && typeof gate.ensure === 'function') {
+            gate.ensure().then((state) => {
+                if (state !== gate.STATE_ENABLED) return;
                 btn.style.display = '';
                 btn.hidden = false;
             });
         }
         btn.addEventListener('click', () => {
-            if (window.ArchiveEntry) window.ArchiveEntry.open();
-            else console.warn('[HeaderMenu] ArchiveEntry is not loaded');
+            const a = archive();
+            if (a) a.open();
+            else console.warn('[HeaderMenu] the archive surface is not loaded');
         });
     }
 

@@ -1601,28 +1601,25 @@
          client/js/module-loader.js (the same-origin script loader) and
          client/js/archive-loader.js (App.showArchive()'s glue).
 
-         Two files stay eager. archive-deeplink.js is route PARSING:
-         router.js must be able to resolve a deep link to
-         /archive/t/<id> before anything is lazily loaded, or the app
-         cannot tell what to load - see router.js's own
-         parseArchivePath(), which already has a named "did not load"
-         refusal for exactly this reason. archive-entry.js is THE WAY IN:
-         both the launchpad row and the header overflow item call
-         ArchiveEntry.open(), so there is ONE navigation into the archive
-         rather than two that can drift apart, and it has to be present
-         before the user has clicked anything to decide whether either
-         entry point should even be shown. app.js MUST stay last - it is
-         the controller and reaches for archive-loader.js's and every
-         other eager module's globals at parse time. -->
-    <script src="/static/js/archive-deeplink.js"></script>
-    <script src="/static/js/archive-entry.js"></script>
+         THE TWO EAGER ONES ARE GONE, AND THEY DID NOT MOVE TO ANOTHER
+         TAG. archive-deeplink.js (route parsing) and archive-entry.js
+         (the way in) are now web/src/lib/plugins/history/, reached
+         through the `app-screen` plugin surface and compiled into
+         /static/dist/app.js at the bottom of this file. They had to be
+         eager here because router.js and the header button needed them
+         before anything lazy loaded; the bundle is a deferred module, so
+         it has evaluated before `window load`, which is when Router.init
+         runs and when the header button can first be clicked. app.js
+         MUST still stay last - it is the controller and reaches for
+         archive-loader.js's and every other eager module's globals at
+         parse time. -->
     <!-- The search panel's "deep dive": widen this session's query to
-         every past conversation in the same project folder. AFTER
-         archive-entry.js and archive-deeplink.js, whose enablement gate
-         and route builder it reuses rather than re-deriving - two ways
-         into the archive is two that can drift apart. The search panel
-         loads far above this and reaches window.DeepDive through a
-         typeof guard at press time, so this order is safe. -->
+         every past conversation in the same project folder. It reaches
+         window.CloudeWeb.archive for the enablement gate and the route
+         builder rather than re-deriving either - two ways into the
+         archive is two that can drift apart. The search panel loads far
+         above this and reaches window.DeepDive through a typeof guard at
+         press time, so this order is safe. -->
     <script src="/static/js/terminal-search-deep-dive.js"></script>
     <script src="/static/js/archive-loader.js"></script>
 

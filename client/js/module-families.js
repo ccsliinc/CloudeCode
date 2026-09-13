@@ -16,13 +16,15 @@
  * history around the "App Controller" / "Config/project file tree" blocks).
  * Do not reorder without re-reading why each file had to precede the next.
  *
- * WHAT IS DELIBERATELY NOT HERE. archive-deeplink.js and archive-entry.js
- * stay in client/index.html's eager script list: archive-deeplink.js is
- * route PARSING (client/js/router.js must be able to resolve a deep link
- * to /archive/t/<id> before anything is lazily loaded, or the app cannot
- * tell what to load), and archive-entry.js is the small always-visible
- * "is the archive on" probe both entry points call before the user has
- * clicked anything. modal-stack.js and markdown-lite.js also stay eager:
+ * WHAT IS DELIBERATELY NOT HERE. The archive's ROUTING and its way in
+ * are not vanilla modules at all any more: route parsing, path building,
+ * the breadcrumb vocabulary and the "is the archive on" probe are
+ * web/src/lib/plugins/history/, reached through the `app-screen` plugin
+ * surface and compiled into the bundle. Nothing in this file may load
+ * them, and nothing lazy may be asked to provide them - the router needs
+ * to resolve /archive/t/<id> before this family is fetched, which is
+ * exactly why they were eager before and why they are in the bundle now.
+ * modal-stack.js and markdown-lite.js also stay eager:
  * both are shared with modules that are NOT part of either lazy family
  * (server-status-panel.js and copy-output.js respectively), so moving them
  * here would load them twice or make an unrelated eager feature depend on
@@ -33,8 +35,8 @@
     'use strict';
 
     /**
-     * The message archive (explorer, nav, rows, filters, panes). Excludes
-     * archive-deeplink.js and archive-entry.js - see file header.
+     * The message archive (explorer, nav, rows, filters, panes). The
+     * routing and the way in are in the bundle - see file header.
      * @type {string[]}
      */
     var ARCHIVE = [
@@ -83,8 +85,6 @@
         '/static/js/archive-chat-view.js',
         '/static/js/archive-chat-screen.js',
         '/static/js/archive-pane-resize.js',
-        '/static/js/archive-crumb.js',
-        '/static/js/archive-crumb-resolve.js',
         '/static/js/archive-screen-shell.js',
         '/static/js/archive-screen-tools.js',
         '/static/js/archive-screen-views.js',

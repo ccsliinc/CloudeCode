@@ -14,6 +14,15 @@
  * places. Relying on a Map's insertion order would work perfectly until
  * the day an import moved.
  *
+ * A TAKEN `routePrefix` IS REFUSED THE SAME WAY A DUPLICATE ID IS, and
+ * it is checked in the SAME validation pass rather than in a second one.
+ * An `app-screen` contribution claims one leading path segment, and two
+ * screens claiming one segment is not a paint-order question that a sort
+ * can settle - it is two answers to "who owns this URL", and whichever
+ * the walk reached first would silently own it. The comparison is exact
+ * on the whole segment, never `startsWith`, so `archive` and `archived`
+ * are two prefixes and not a collision.
+ *
  * A DUPLICATE ID IS REFUSED AND SAID OUT LOUD. Last-write-wins would let
  * a new plugin silently replace a shipped control with something that
  * merely shares its name, and the symptom would be a control that
@@ -22,7 +31,7 @@
  * whose second contribution collides registers none of them, so a
  * partially-registered plugin is never a state anything has to handle.
  */
-import type { Contribution, Plugin, PluginSurface } from './types';
+import type { AppScreen, Contribution, Plugin, PluginSurface } from './types';
 
 /** What a registry offers. Built by `createRegistry`, never exported raw. */
 export interface PluginRegistry {
@@ -30,6 +39,12 @@ export interface PluginRegistry {
     register(plugin: Plugin): boolean;
     /** Every contribution to one surface, in the one deterministic order. */
     surfacesOf<K extends PluginSurface>(kind: K): readonly Contribution<K>[];
+    /**
+     * The contribution id owning one route prefix, or null.
+     * Exists so a refusal can be REPORTED rather than merely obeyed, and
+     * so a test can assert the table rather than infer it from a log.
+     */
+    prefixOwner(prefix: string): string | null;
 }
 
 /**
@@ -60,11 +75,29 @@ export function createRegistry(): PluginRegistry {
     const pluginIds = new Set<string>();
     /** Contributions by surface, unsorted. Sorting happens on read. */
     const bySurface = new Map<PluginSurface, Contribution[]>();
+    /** routePrefix -> the contribution id holding it. One owner each. */
+    const prefixOwners = new Map<string, string>();
 
     /** Is this contribution id already taken on its surface? */
     function idTaken(c: Contribution): boolean {
         const held = bySurface.get(c.surface);
         return !!held && held.some((existing) => existing.id === c.id);
+    }
+
+    /**
+     * The route prefix an `app-screen` contribution claims, or '' for a
+     * contribution to any other surface.
+     * Inputs: c. Output: string - the bare segment, no slashes.
+     */
+    function prefixOf(c: Contribution): string {
+        if (c.surface !== 'app-screen') return '';
+        const payload = c.payload as AppScreen | undefined;
+        const raw = payload && typeof payload.routePrefix === 'string'
+            ? payload.routePrefix : '';
+        // Written as one segment by contract. Trimming the slashes a
+        // caller may have added anyway is what makes '/archive' and
+        // 'archive' the same claim rather than two.
+        return raw.replace(/^\/+|\/+$/g, '');
     }
 
     function register(plugin: Plugin): boolean {
@@ -83,6 +116,8 @@ export function createRegistry(): PluginRegistry {
         // collision would leave the surface holding half a feature.
         const incoming = plugin.contributions || [];
         const seen = new Set<string>();
+        /** Prefixes claimed by THIS plugin, so it cannot collide with itself. */
+        const seenPrefixes = new Map<string, string>();
         for (const c of incoming) {
             if (!c || typeof c.id !== 'string' || !c.id) {
                 console.error(
@@ -99,8 +134,27 @@ export function createRegistry(): PluginRegistry {
                 return false;
             }
             seen.add(key);
+            if (c.surface === 'app-screen') {
+                const prefix = prefixOf(c);
+                if (prefix === '') {
+                    console.error(
+                        `[plugins] refused plugin "${plugin.id}": app-screen `
+                        + `contribution "${c.id}" declares no routePrefix`);
+                    return false;
+                }
+                if (prefixOwners.has(prefix) || seenPrefixes.has(prefix)) {
+                    const owner = prefixOwners.get(prefix) ?? seenPrefixes.get(prefix);
+                    console.error(
+                        `[plugins] refused plugin "${plugin.id}": route prefix `
+                        + `"${prefix}" is already owned by contribution `
+                        + `"${owner}" - the one already registered is kept`);
+                    return false;
+                }
+                seenPrefixes.set(prefix, c.id);
+            }
         }
         pluginIds.add(plugin.id);
+        for (const [prefix, owner] of seenPrefixes) prefixOwners.set(prefix, owner);
         for (const c of incoming) {
             const held = bySurface.get(c.surface);
             if (held) held.push(c);
@@ -118,7 +172,11 @@ export function createRegistry(): PluginRegistry {
         return held.slice().sort(byOrderThenId) as Contribution<K>[];
     }
 
-    return { register, surfacesOf };
+    function prefixOwner(prefix: string): string | null {
+        return prefixOwners.get(String(prefix ?? '')) ?? null;
+    }
+
+    return { register, surfacesOf, prefixOwner };
 }
 
 /** The one registry the bundle uses. Private on purpose. */
@@ -140,4 +198,13 @@ export function register(plugin: Plugin): boolean {
  */
 export function surfacesOf<K extends PluginSurface>(kind: K): readonly Contribution<K>[] {
     return registry.surfacesOf(kind);
+}
+
+/**
+ * The contribution id owning one `app-screen` route prefix, or null.
+ * Inputs: prefix - the bare leading segment, e.g. 'archive'.
+ * Output: string | null.
+ */
+export function prefixOwner(prefix: string): string | null {
+    return registry.prefixOwner(prefix);
 }

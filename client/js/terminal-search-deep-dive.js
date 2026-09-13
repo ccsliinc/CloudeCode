@@ -56,18 +56,18 @@
      * Inputs: none.
      * Output: Promise<boolean> - true ONLY on a measured `enabled`.
      *   `unknown` reads as false here, which is the opposite of
-     *   `ArchiveEntry.open()`'s tolerance and is right for this caller:
+     *   the archive open()'s tolerance and is right for this caller:
      *   open() is answering "the user pressed the archive button, should
      *   I refuse them", while this is answering "should I offer a button
      *   at all", and offering one that leads to a screen of 404s is worse
      *   than not offering it.
      */
     async function archiveEnabled() {
-        var entry = global.ArchiveEntry;
-        if (!entry || typeof entry.ensure !== 'function') return false;
+        var archive = global.CloudeWeb && global.CloudeWeb.archive;
+        if (!archive || typeof archive.ensure !== 'function') return false;
         try {
-            var state = await entry.ensure();
-            return state === entry.STATE_ENABLED;
+            var state = await archive.ensure();
+            return state === archive.STATE_ENABLED;
         } catch (err) {
             return false;
         }
@@ -149,9 +149,9 @@
         if (!(await archiveEnabled())) return null;
         var id = await resolveProject(cwd);
         if (id === null) return null;
-        var deeplink = global.ArchiveDeeplink;
-        if (!deeplink || typeof deeplink.build !== 'function') return null;
-        return deeplink.build({
+        var archive = global.CloudeWeb && global.CloudeWeb.archive;
+        if (!archive || typeof archive.buildPath !== 'function') return null;
+        return archive.buildPath({
             view: 'project',
             projectId: Number(id),
             query: { q: q }
@@ -177,8 +177,9 @@
      * Description: go to the archive, scoped to this project and filtered
      *   by this query.
      *
-     *   NAVIGATION IS `syncUrl` PLUS `App.showArchive`, exactly as
-     *   `ArchiveEntry.open()` does it, and NEVER `location.href`. This is
+     *   NAVIGATION IS THE ARCHIVE PLUGIN'S OWN `openRoute`, which writes
+     *   the address bar and then shows the screen, and NEVER
+     *   `location.href`. This is
      *   a single-page app: a real navigation tears down the terminal, the
      *   WebSocket and every session the user has open, to arrive at a
      *   screen the router could have shown in place. `syncUrl` runs FIRST
@@ -197,17 +198,23 @@
             projectId: Number(await resolveProject(workingDirOf(session))),
             query: { q: String(query || '').trim() }
         };
-        var deeplink = global.ArchiveDeeplink;
-        if (deeplink && typeof deeplink.syncUrl === 'function') {
-            deeplink.syncUrl(route, global);
+        var archive = global.CloudeWeb && global.CloudeWeb.archive;
+        if (!archive || typeof archive.openRoute !== 'function') {
+            console.warn('DeepDive: the archive surface is unavailable; the '
+                + 'archive could not be shown.');
+            return false;
         }
-        if (global.App && typeof global.App.showArchive === 'function') {
-            global.App.showArchive(route);
-            return true;
-        }
-        console.warn('DeepDive: App.showArchive is unavailable; the '
-            + 'archive could not be shown.');
-        return false;
+        // ONE navigation into the archive, and it writes the address bar
+        // and shows the screen in that order. This used to be two calls
+        // against two globals here, which is two copies of a navigation
+        // that could drift; the plugin owns both halves now.
+        //
+        // ITS ANSWER IS RETURNED UNCHANGED. A `|| something` here would
+        // report a navigation that did not happen, which is exactly the
+        // quiet false-success the three outcomes exist to prevent - and
+        // it is what the first draft of this line did, caught by
+        // tests/test_terminal_search_deep_dive.node.mjs.
+        return archive.openRoute(route);
     }
 
     global.DeepDive = {

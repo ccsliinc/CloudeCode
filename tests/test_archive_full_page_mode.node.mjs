@@ -247,33 +247,15 @@ function loadApp(opts) {
     return { app, calls, els, ctx: sandbox };
 }
 
-/**
- * Description: load archive-entry.js alone, with a recording history and
- *   an App stub, so close()'s URL write can be observed.
- * Inputs: opts (object) - {pathname, withApp, throwOnPush}.
- * Output: object - {entry, calls}.
- */
-function loadEntry(opts) {
-    const o = opts || {};
-    const calls = { pushed: [], launchpad: 0, warned: [] };
-    const sandbox = {
-        console: { log() {}, warn(m) { calls.warned.push(String(m)); } },
-        location: { pathname: o.pathname === undefined ? '/archive' : o.pathname },
-        history: {
-            pushState(state, title, url) {
-                if (o.throwOnPush) throw new Error('History API blocked');
-                calls.pushed.push(url);
-            },
-        },
-    };
-    sandbox.window = sandbox;
-    if (o.withApp !== false) {
-        sandbox.App = { showLaunchpad() { calls.launchpad++; } };
-    }
-    vm.createContext(sandbox);
-    vm.runInContext(readClientJs('archive-entry.js'), sandbox);
-    return { entry: sandbox.ArchiveEntry, calls };
-}
+// THE EXIT'S BEHAVIOUR IS MEASURED ELSEWHERE NOW. `archive-entry.js` is
+// web/src/lib/plugins/history/ behind the `app-screen` surface, so the
+// five cases that loaded it here and drove `close()` - it returns to the
+// launcher, it writes the address bar, it does not re-push at the root,
+// a blocked History API does not stop it, a missing shell is a named
+// refusal - moved to web/src/lib/plugins/history/screen.test.ts. Rule
+// 8.3 of docs/history-archive-scope.md. What stays below is this file's
+// own subject: the LAYOUT of full-page mode, which is client/js/app.js
+// and did not move.
 
 // ---------------------------------------------------------------------
 // 1. LAYOUT - the archive takes over the page.
@@ -422,50 +404,11 @@ test('the archive screen is still actually shown', () => {
 // 4. THE WAY OUT.
 // ---------------------------------------------------------------------
 
-test('ArchiveEntry.close() exists and returns to the launcher', () => {
-    const { entry, calls } = loadEntry({ pathname: '/archive' });
-    assert.equal(typeof entry.close, 'function', 'the archive has an exit');
-    assert.equal(entry.close(), true);
-    assert.equal(calls.launchpad, 1, 'the launcher is shown');
-});
-
-test('leaving the archive writes the address bar', () => {
-    // Router.resetToLauncher() REFUSES to touch the URL while the path
-    // starts with /archive, so showLaunchpad() alone leaves `/archive`
-    // there and the next refresh drops the user back into the archive
-    // they just left. The exit owns this write, as the entry owns its own.
-    const { entry, calls } = loadEntry({ pathname: '/archive/t/5767' });
-    entry.close();
-    assert.deepEqual(calls.pushed, ['/'],
-        'the URL is reset, or leaving does not survive a refresh');
-});
-
-test('close() does not re-push when already at the root', () => {
-    const { entry, calls } = loadEntry({ pathname: '/' });
-    entry.close();
-    assert.deepEqual(calls.pushed, [], 'no redundant history entry');
-    assert.equal(calls.launchpad, 1, 'and it still navigates');
-});
-
-test('a blocked History API does not stop the navigation', () => {
-    // Same tolerance open() already has: a wrong address bar is a strictly
-    // smaller problem than being stuck on the archive.
-    const { entry, calls } = loadEntry({ pathname: '/archive', throwOnPush: true });
-    assert.equal(entry.close(), true);
-    assert.equal(calls.launchpad, 1);
-});
-
-test('close() reports a missing app shell rather than throwing', () => {
-    const { entry, calls } = loadEntry({ pathname: '/archive', withApp: false });
-    assert.equal(entry.close(), false, 'a named refusal, not an exception');
-    assert.ok(calls.warned.length >= 1, 'and it says so');
-});
-
 test('the header title is wired to leave the archive', () => {
     const src = readClientJs('app.js');
-    assert.ok(/currentScreen === 'archive'[\s\S]{0,400}ArchiveEntry\.close\(\)/.test(src),
-        'clicking the title on the archive must call ArchiveEntry.close() - '
-        + 'without it the browser Back button is the only exit');
+    assert.ok(/currentScreen === 'archive'[\s\S]{0,500}archive\.close\(\)/.test(src),
+        'clicking the title on the archive must call the archive surface\'s '
+        + 'close() - without it the browser Back button is the only exit');
 });
 
 console.log(`\n${passes} passed, ${failures} failed`);

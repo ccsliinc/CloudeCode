@@ -88,77 +88,83 @@
     // them to us anyway, but be explicit client-side as well).
     var DEEPLINK_RX = /^\/session\/([^\/]+)\/?$/;
 
-    // ARCHIVE ROUTES. Four of them: /archive, /archive/p/<id>,
-    // /archive/t/<id> and /archive/t/<id>/l/<n>.
+    // SCREEN ROUTES ARE NOT THIS FILE'S BUSINESS ANY MORE. An
+    // `ARCHIVE_PREFIX` constant, a `parseArchivePath` delegating to one
+    // named global and a `deliverArchiveRoute` helper became the
+    // `app-screen` plugin surface: the registry holds a LIST of screens,
+    // each owning one leading path segment and both directions of every
+    // URL under it, and this file asks the list rather than knowing any
+    // member of it. See web/src/lib/plugins/screens.ts (the walk) and
+    // types.ts (the contract).
     //
-    // NUMERIC IDS ONLY. `session_ref` is not unique and is not close to
-    // unique (measured 2026-08-31: "journal" is the session_ref of 14
-    // different transcripts, "audit" of 5), so it can never appear in a
-    // path - a link like /archive/s/journal would resolve to one of
-    // fourteen with no error, which is the failure mode where the link
-    // works for the sender and shows the recipient a different document.
-    //
-    // WHY THE PATTERNS ARE NOT DECLARED HERE. The design doc (H.5) has
-    // this file carrying its own four regexes. archive-deeplink.js was
-    // built afterwards and already owns them as ROUTE_PATTERNS, in the
-    // canonical MATCH ORDER (line before transcript), with its own test
-    // asserting that order fails on the swallowing form. Declaring them
-    // a second time here would be two declarations of one fact that can
-    // drift, which is the defect class this repo keeps paying for.
-    // So: ONE owner, and this file delegates. If archive-deeplink.js is
-    // not loaded, `parseArchivePath` below returns a NAMED refusal, not
-    // a silent non-match.
-    var ARCHIVE_PREFIX = '/archive';
+    // THE TOKEN VOCABULARY IS UNCHANGED, deliberately, so the branches
+    // below read as they always did. A screen that throws or answers
+    // off-contract is contained by the walk and cannot take navigation
+    // down for the others - asserted in screens.test.ts, and the reason
+    // trading a hardcoded branch for a generic walk is safe.
 
     /**
-     * Parse the current path as an archive route.
+     * Parse the current path against every registered screen.
      *
-     * Description: delegates to ArchiveDeeplink.parse(), which owns the
-     *   four patterns and their match order. Returns three outcomes, not
-     *   two: a route, a stated could-not-resolve, or "not an archive
-     *   path at all" so the caller falls through to the session table.
+     * Description: delegates to the `app-screen` surface, which owns the
+     *   patterns and their match order. Three outcomes, not two. If the
+     *   compiled bundle did not load this is a NAMED refusal rather than
+     *   a silent non-match: saying so beats rendering the launcher and
+     *   letting the person think their link was wrong.
      * Inputs: pathname (string), search (string).
-     * Output: {ok: true, route: object}
+     * Output: {ok: true, screenId: string, route: object}
      *      or {ok: false, token: 'cannot-determine', reason: string}
      *      or {ok: false, token: 'no-match', reason: string}.
      */
-    function parseArchivePath(pathname, search) {
+    function parseScreenPath(pathname, search) {
         var path = typeof pathname === 'string' ? pathname : '';
-        if (path !== ARCHIVE_PREFIX && path.indexOf(ARCHIVE_PREFIX + '/') !== 0) {
-            return { ok: false, token: 'no-match', reason: 'not an archive path' };
-        }
-        if (!window.ArchiveDeeplink || typeof window.ArchiveDeeplink.parse !== 'function') {
-            // NOT a silent fall-through. The path IS an archive path and
-            // this build cannot resolve it; saying so beats rendering the
-            // launcher and letting the person think the link was wrong.
+        var seam = window.CloudeWeb && window.CloudeWeb.screens;
+        if (!seam || typeof seam.parse !== 'function') {
+            if (path === '/' || path.indexOf('/session/') === 0) {
+                return { ok: false, token: 'no-match',
+                         reason: 'not a screen path' };
+            }
             return { ok: false, token: 'cannot-determine',
-                     reason: 'archive routing is unavailable: ' +
-                             'archive-deeplink.js did not load.' };
+                     reason: 'screen routing is unavailable: the compiled ' +
+                             'bundle did not load.' };
         }
-        return window.ArchiveDeeplink.parse(path, search || '');
+        return seam.parse(path, search || '');
     }
 
     /**
-     * Hand a parsed archive route to the app, or stash it until auth.
+     * Hand a parsed screen route to its screen, or stash it until auth.
      *
-     * Description: the ONE place an archive route becomes a screen, so a
+     * Description: the ONE place a screen route becomes a screen, so a
      *   fresh load, a popstate and a post-login delivery take the
      *   identical path.
-     * Inputs: route (object) - from parseArchivePath.
+     * Inputs: parsed (object) - an `ok` result from parseScreenPath.
      * Output: boolean - true when the route was delivered now.
      */
-    function deliverArchiveRoute(route) {
-        if (window.App && typeof window.App.showArchive === 'function') {
+    function deliverScreenRoute(parsed) {
+        var seam = window.CloudeWeb && window.CloudeWeb.screens;
+        if (seam && typeof seam.deliver === 'function') {
             try {
-                window.App.showArchive(route);
+                seam.deliver(parsed.screenId, parsed.route);
             } catch (err) {
-                console.error('Router: App.showArchive threw:', err);
+                console.error('Router: delivering a screen route threw:', err);
             }
-            window.ArchiveDeepLinkTarget = null;
+            window.ScreenDeepLinkTarget = null;
             return true;
         }
-        window.ArchiveDeepLinkTarget = route;
+        window.ScreenDeepLinkTarget = parsed;
         return false;
+    }
+
+    /**
+     * Is this path owned by a registered screen at all?
+     * Description: resetToLauncher's guard must not clobber a screen URL
+     *   before anything has parsed it. Asks the surface rather than
+     *   testing a hardcoded prefix.
+     * Inputs: pathname (string). Output: boolean.
+     */
+    function isScreenPath(pathname) {
+        var r = parseScreenPath(pathname, '');
+        return r.ok === true || r.token === 'cannot-determine';
     }
 
     // Single source of truth for the `/session/<name>` path prefix, used
@@ -280,11 +286,8 @@
         // no error anywhere. Guarded on the PATH rather than on the stash,
         // because the stash is populated by the very code this would have
         // run ahead of.
-        if (window.location.pathname === ARCHIVE_PREFIX ||
-                window.location.pathname.indexOf(ARCHIVE_PREFIX + '/') === 0) {
-            return;
-        }
-        if (window.ArchiveDeepLinkTarget) return;
+        if (isScreenPath(window.location.pathname)) return;
+        if (window.ScreenDeepLinkTarget) return;
         if (window.location.pathname === '/') return;
         try {
             window.history.replaceState({}, '', '/');
@@ -510,12 +513,12 @@
      * - invalid deep link → show banner and rewrite URL to `/`.
      */
     function applyCurrentPath(immediate) {
-        // Archive first: /archive/... can never be a /session/... link,
-        // and the archive router is strict where the session router is
+        // Screens first: a screen path can never be a /session/... link,
+        // and the screen router is strict where the session router is
         // permissive.
-        var archive = parseArchivePath(window.location.pathname,
-                                       window.location.search);
-        if (archive.ok) {
+        var screenRoute = parseScreenPath(window.location.pathname,
+                                          window.location.search);
+        if (screenRoute.ok) {
             clearError();
             // FIRST LOAD ALWAYS STASHES, EVEN WHEN ALREADY AUTHENTICATED.
             // MEASURED 2026-08-31 on a warm reload of /archive/p/12:
@@ -535,22 +538,32 @@
             if (immediate && window.Auth &&
                     typeof window.Auth.isAuthenticated === 'function' &&
                     window.Auth.isAuthenticated()) {
-                deliverArchiveRoute(archive.route);
+                deliverScreenRoute(screenRoute);
             } else {
-                window.ArchiveDeepLinkTarget = archive.route;
+                window.ScreenDeepLinkTarget = screenRoute;
             }
             return;
         }
-        if (archive.token === 'cannot-determine') {
+        if (screenRoute.token === 'cannot-determine') {
             // NO SILENT REDIRECT. The URL stays as typed and the reason
             // names the offending segment, because rewriting it to
             // /archive would turn a broken link into a working one
             // pointing somewhere the sender never meant.
-            showError('archive link could not be resolved: ' + archive.reason);
-            window.ArchiveDeepLinkTarget = { view: 'root', projectId: null,
-                                             transcriptId: null, lineNo: null,
-                                             query: {} };
-            if (immediate) deliverArchiveRoute(window.ArchiveDeepLinkTarget);
+            showError('this link could not be resolved: ' + screenRoute.reason);
+            // NO SILENT REDIRECT. The URL stays as typed and the screen
+            // opens at its root, so the error sits beside the screen
+            // they asked for. Rewriting it would turn a broken link into
+            // a working one pointing somewhere the sender never meant.
+            if (screenRoute.screenId) {
+                window.ScreenDeepLinkTarget = { ok: true,
+                                                screenId: screenRoute.screenId,
+                                                route: { view: 'root',
+                                                         projectId: null,
+                                                         transcriptId: null,
+                                                         lineNo: null,
+                                                         query: {} } };
+                if (immediate) deliverScreenRoute(window.ScreenDeepLinkTarget);
+            }
             return;
         }
 
@@ -630,8 +643,8 @@
         //    mount before we call into it.
         window.addEventListener('authenticated', function () {
             setTimeout(deliverTargetToLaunchpad, 0);
-            // NO archive delivery here, deliberately. App.showLaunchpad()
-            // consumes window.ArchiveDeepLinkTarget on its FIRST line and
+            // NO screen delivery here, deliberately. App.showLaunchpad()
+            // consumes window.ScreenDeepLinkTarget on its FIRST line and
             // returns. Delivering from this listener as well raced that
             // path and the launchpad won: the archive screen was
             // activated and then hidden again, leaving /archive in the
@@ -658,11 +671,13 @@
         // see clearError()'s doc comment for the guard that keeps a
         // rejection from silencing itself.
         clearError: clearError,
-        // Archive routing - the inbound half. Outbound path building
-        // lives in archive-deeplink.js and archive-screen.js.
-        parseArchivePath: parseArchivePath,
-        deliverArchiveRoute: deliverArchiveRoute,
-        ARCHIVE_PREFIX: ARCHIVE_PREFIX,
+        // SCREEN routing - the inbound half only. Outbound path
+        // building belongs to each screen's own `buildPath`, which is
+        // half the point of the `app-screen` surface: one owner for both
+        // directions, so the screen and the address bar cannot drift.
+        parseScreenPath: parseScreenPath,
+        deliverScreenRoute: deliverScreenRoute,
+        isScreenPath: isScreenPath,
         // Exposed for tests / debugging.
         _parseCurrentPath: parseCurrentPath,
         _isLegalDeepLinkName: isLegalDeepLinkName,

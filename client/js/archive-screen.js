@@ -32,6 +32,14 @@ console.log('[ArchiveScreen Module] Loading...');
 (function () {
     'use strict';
 
+    /** Description: the archive plugin's published seam, or null when
+     *  the compiled bundle has not evaluated. Resolved at CALL time, so
+     *  script order cannot strand this module. Output: object|null. */
+    function seam() {
+        var w = window.CloudeWeb;
+        return w && w.archive ? w.archive : null;
+    }
+
     /** Root element id, owned by index.html. @type {string} */
     var SCREEN_ID = 'archive-screen';
 
@@ -62,7 +70,7 @@ console.log('[ArchiveScreen Module] Loading...');
 
     /** The route currently rendered. @type {object} */
     /** Names a project reached by URL rather than by a rail click.
-     *  Built lazily: window.API and ArchiveCrumbResolve are both
+     *  Built lazily: the compiled bundle's archive seam is
      *  globals whose scripts may not have run when this one does. */
     var projectNamer = null;
 
@@ -87,23 +95,26 @@ console.log('[ArchiveScreen Module] Loading...');
 
     /**
      * Description: write the address bar for a route. A THIN DELEGATION
-     *   on purpose - ArchiveDeeplink owns both building a path and
+     *   on purpose - the history plugin owns both building a path and
      *   writing it, so the crumb, the URL and the inbound parser cannot
      *   disagree about a location. Nothing is decided here. Inputs:
      *   route (object), opts|undefined {replace}. Output: void.
      */
     function syncUrl(route, opts) {
-        if (!window.ArchiveDeeplink) return;
-        window.ArchiveDeeplink.syncUrl(route, window, opts);
+        // `opts.replace` is not forwarded: the seam pushes, which every
+        // caller here wanted. Needing a replace means adding it to the
+        // seam, never reaching past it.
+        if (seam()) seam().syncUrl(route);
     }
 
     /** Render the breadcrumb. The SEGMENT WORDING stays here, the only
-     *  file that knows what is open; the markup comes from
-     *  ArchiveDeeplink, beside the path builder. Inputs: parts. Void. */
+     *  file that knows what is open; the markup comes from the history
+     *  plugin, beside the path builder. Inputs: parts. Void. */
     function paintCrumb(parts) {
         if (!shell) return;
         shell.crumb.textContent = '';
-        var nodes = window.ArchiveDeeplink.renderCrumb(document, parts, ROOT_CLASS);
+        if (!seam()) return;
+        var nodes = seam().renderCrumb(document, parts, ROOT_CLASS);
         for (var i = 0; i < nodes.length; i++) shell.crumb.appendChild(nodes[i]);
     }
 
@@ -416,10 +427,8 @@ console.log('[ArchiveScreen Module] Loading...');
      */
     function nameProject(projectId) {
         if (tracker().facts({ projectId: projectId }).project) return;
-        if (!window.ArchiveCrumbResolve || !window.API) return;
-        if (!projectNamer) {
-            projectNamer = window.ArchiveCrumbResolve.createResolver(window.API);
-        }
+        if (!projectNamer) projectNamer = seam() ? seam().resolver() : null;
+        if (!projectNamer) return;
         projectNamer.resolve(projectId).then(function (r) {
             if (!r || !r.node) return;
             if (current.projectId !== projectId) return;
@@ -428,11 +437,18 @@ console.log('[ArchiveScreen Module] Loading...');
         });
     }
 
-    /** Description: the crumb's knowledge, built lazily because
-     *  ArchiveCrumb lives on `window` and its script may not have run
-     *  when this module loads. Inputs: none. Output: object. */
+    /** Description: the crumb's knowledge, built lazily because the
+     *  bundle is a deferred module. IT NEVER RETURNS NULL: callers do
+     *  `tracker().facts(...)` unguarded, so a null would turn a missing
+     *  bundle into a TypeError in the render path rather than the empty
+     *  crumb returned here. Inputs: none. Output: object. */
     function tracker() {
-        if (!crumbFacts) crumbFacts = window.ArchiveCrumb.createTracker();
+        if (!crumbFacts) {
+            crumbFacts = seam() ? seam().tracker() : {
+                learnProject: function () {}, learnTranscript: function () {},
+                facts: function () { return {}; },
+                labelsFor: function () { return []; } };
+        }
         return crumbFacts;
     }
 

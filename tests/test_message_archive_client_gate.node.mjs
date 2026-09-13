@@ -26,6 +26,7 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { createEnvironment } from './mini-dom.mjs';
+import { installArchiveSeam } from './archive-seam-stub.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -64,41 +65,18 @@ function read(...parts) {
 // the claim - there is no archive door left in the body to gate - is
 // made against every slice 7 source rather than one deleted file.
 const { HOME_ALL_SRC: LAUNCHPAD } = await import('./lib-home-source.mjs');
-const ENTRY_SRC = read('client', 'js', 'archive-entry.js');
 
-/**
- * Load archive-entry.js against a stubbed /api/v1/features answer.
- *
- * @param {object} opts - {feature: object|null, reject: boolean,
- *   noApi: boolean, pathname: string}.
- * @returns {object} {entry, calls} - the module and what it did.
- */
-function loadEntry(opts) {
-    const o = opts || {};
-    const calls = { pushed: [], shown: [], warned: [], requested: [] };
-    const fakeWindow = {
-        location: { pathname: o.pathname === undefined ? '/' : o.pathname },
-        history: { pushState(s, t, url) { calls.pushed.push(url); } },
-        App: { showArchive(p) { calls.shown.push(p); } },
-    };
-    if (!o.noApi) {
-        fakeWindow.API = {
-            call(p) {
-                calls.requested.push(p);
-                if (o.reject) return Promise.reject(new Error('network down'));
-                return Promise.resolve(o.feature);
-            },
-        };
-    }
-    const context = {
-        window: fakeWindow,
-        Promise,
-        console: { log() {}, warn(m) { calls.warned.push(String(m)); }, error() {} },
-    };
-    vm.createContext(context);
-    vm.runInContext(ENTRY_SRC, context, { filename: 'archive-entry.js' });
-    return { entry: context.window.ArchiveEntry, calls };
-}
+// THE PROBE'S OWN BEHAVIOUR MOVED, AND THE HEADER'S GATING DID NOT.
+// `archive-entry.js` is web/src/lib/plugins/history/availability.ts now,
+// behind the `app-screen` surface, so the six cases that loaded it here
+// and drove `ensure()` - enabled, disabled, cannot_determine as UNKNOWN,
+// a failed probe, no client at all, and single-flight - moved to
+// web/src/lib/plugins/history/screen.test.ts, against the real
+// implementation. Rule 8.3 of docs/history-archive-scope.md.
+//
+// WHAT STAYS IS THIS FILE'S OTHER SUBJECT: that the HEADER does the
+// right thing with whatever the probe answers, and that the home screen
+// grew no second door to gate. Neither of those moved in this slice.
 
 /**
  * Load header-menu.js over a real mini-DOM header carrying #archiveBtn.
@@ -122,9 +100,17 @@ function loadHeader(feature) {
     header.appendChild(controls);
     env.document.body.appendChild(header);
 
-    env.window.API = feature === null ? undefined : {
-        call() { return Promise.resolve({ message_archive: feature }); },
-    };
+    // A DOUBLE OF THE SEAM, resolving the state the block names. The
+    // block-to-state mapping itself - including that an unknown value
+    // and a dead probe both read UNKNOWN - is measured against the real
+    // availability ladder in web/src/lib/plugins/history/screen.test.ts.
+    // What is measured HERE is what the header does with the answer.
+    const named = feature && typeof feature.state === 'string' ? feature.state : null;
+    const state = named === 'enabled' || named === 'disabled' ? named : 'unknown';
+    installArchiveSeam(env.window, {
+        state,
+        reason: (feature && feature.reason) || '',
+    });
     const sandbox = {
         window: env.window,
         document: env.document,
@@ -133,7 +119,7 @@ function loadHeader(feature) {
     };
     sandbox.globalThis = sandbox;
     vm.createContext(sandbox);
-    for (const file of ['kebab-icon.js', 'archive-entry.js', 'dismiss-guard.js', 'header-menu.js']) {
+    for (const file of ['kebab-icon.js', 'dismiss-guard.js', 'header-menu.js']) {
         vm.runInContext(read('client', 'js', file), sandbox, { filename: file });
     }
     // header-menu.js exports an INSTANCE and self-inits at load when the
@@ -154,74 +140,17 @@ function loadHeader(feature) {
 
 await test('POSITIVE CONTROL: the source files loaded and are non-empty', () => {
     assert.ok(LAUNCHPAD.length > 1000, 'the home screen source did not load');
-    assert.ok(ENTRY_SRC.length > 1000, 'archive-entry.js did not load');
     assert.ok(!LAUNCHPAD.includes('zzqqxyz-not-in-this-file'),
         'the substring search returns true for everything');
 });
 
 // ---- 1. THE PROBE ------------------------------------------------------
 
-await test('a disabled server resolves to disabled and refuses open()', async () => {
-    const { entry, calls } = loadEntry({
-        feature: { message_archive: { state: 'disabled', reason: 'switched off' } },
-    });
-    assert.equal(entry.state(), 'unknown', 'the state must start UNKNOWN, never enabled');
-    assert.equal(await entry.ensure(), 'disabled');
-    assert.deepEqual(calls.requested, ['/features'],
-        'the probe did not go to the always-mounted features endpoint');
-    assert.equal(entry.open(), false, 'open() navigated into a switched-off archive');
-    assert.equal(calls.shown.length, 0, 'the archive screen was shown anyway');
-    assert.ok(calls.warned.length > 0, 'a refusal with no diagnostic is a silent refusal');
-});
-
-await test('an enabled server resolves to enabled and open() works', async () => {
-    const { entry, calls } = loadEntry({
-        feature: { message_archive: { state: 'enabled', reason: 'on' } },
-    });
-    assert.equal(await entry.ensure(), 'enabled');
-    assert.equal(entry.open(), true);
-    assert.deepEqual(calls.pushed, ['/archive']);
-    assert.equal(calls.shown.length, 1);
-});
-
-await test('cannot_determine is UNKNOWN here, not disabled and not enabled', async () => {
-    const { entry } = loadEntry({
-        feature: {
-            message_archive: { state: 'cannot_determine', reason: 'config unreadable' },
-        },
-    });
-    assert.equal(await entry.ensure(), 'unknown',
-        'a server that could not read its own switch was reported as a ' +
-        'definite answer');
-    assert.ok(entry.reason().length > 0, 'the reason was dropped');
-});
-
-await test('a failed probe is unknown, never enabled', async () => {
-    const { entry } = loadEntry({ reject: true });
-    assert.equal(await entry.ensure(), 'unknown');
-});
-
-await test('no API client at all is unknown, never enabled', async () => {
-    const { entry } = loadEntry({ noApi: true });
-    assert.equal(await entry.ensure(), 'unknown');
-});
-
-await test('the probe is single-flight', async () => {
-    const { entry, calls } = loadEntry({
-        feature: { message_archive: { state: 'enabled', reason: '' } },
-    });
-    await Promise.all([entry.ensure(), entry.ensure(), entry.ensure()]);
-    assert.equal(calls.requested.length, 1,
-        'three callers produced three requests for one unchanging answer');
-});
-
-// ---- 2. THERE IS NO LAUNCHPAD ROW TO GATE ANY MORE ---------------------
-// The launchpad shipped a hidden #archive-section that setupArchiveEntry
-// revealed on the ENABLED state. Both are gone: the entry point is the
-// header icon, gated in section 3 below. This is the stronger position
-// for a feature switch, not a weaker one - ONE door means one gate, and
-// a second gate that drifts out of step with the first is how an install
-// with the archive OFF ends up with a visible door onto a 302.
+// The six availability cases that lived here - a disabled server, an
+// enabled one, cannot_determine reading as UNKNOWN, a rejected probe, no
+// client at all, and the probe being single-flight - are now in
+// web/src/lib/plugins/history/screen.test.ts, one for one, against the
+// real ladder. See the note at the top of this file.
 
 await test('the launchpad has no archive door left to gate', () => {
     assert.ok(LAUNCHPAD.length > 1000, 'the home screen source did not load; vacuous');
@@ -229,8 +158,8 @@ await test('the launchpad has no archive door left to gate', () => {
         'the launchpad archive section is back and needs its own gate again');
     assert.ok(!LAUNCHPAD.includes('id="launchpad-archive-entry"'),
         'the launchpad archive row is back and needs its own gate again');
-    assert.ok(!/ArchiveEntry/.test(LAUNCHPAD),
-        'the home screen reaches for ArchiveEntry again, so it is gating (or ' +
+    assert.ok(!/ArchiveEntry|CloudeWeb\.archive/.test(LAUNCHPAD),
+        'the home screen reaches for the archive again, so it is gating (or ' +
         'failing to gate) something this suite does not know about');
 });
 
