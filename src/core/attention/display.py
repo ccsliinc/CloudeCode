@@ -74,18 +74,11 @@ from src.core.session_status import (
 )
 from src.core.session_status_source import (
     STATUS_SOURCE_NONE,
+    STATUS_SOURCE_PANE,
+    STATUS_SOURCE_REGISTRY,
     STATUS_SOURCE_TMUX,
     STATUS_SOURCE_TRANSCRIPT,
 )
-
-#: The registry tier's ``status_source`` token. Defined here because the
-#: shared vocabulary in ``session_status_source`` does not carry it yet;
-#: the wiring step adds it there and this line goes away. The two other
-#: tokens this module needs already exist and are imported, not respelled.
-STATUS_SOURCE_REGISTRY: str = "registry"
-
-#: The pane tier's ``status_source`` token. Same note as above.
-STATUS_SOURCE_PANE: str = "pane"
 
 #: Which hue each ``needs_user`` reason paints. An unlisted reason paints
 #: ``question``: the STATE was measured, only the shade is a fallback,

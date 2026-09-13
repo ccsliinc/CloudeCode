@@ -524,6 +524,73 @@ def test_an_empty_prefetch_reports_every_name_absent():
     assert empty.label_for("cloude_a") is None
 
 
+def test_the_attention_reads_happen_in_the_gather_and_not_per_row():
+    """THE TWO FILE TIERS OF THE STATUS ARE READ IN THE THREAD.
+
+    The transcript tail read is up to 256 KB per session and the registry
+    is a scandir; both used to have no home here at all, and the seed
+    that preceded them ran ON THE LOOP, per row. This pins them to the
+    gather by driving the real body with recording stand-ins and
+    asserting the registry was scanned ONCE for the whole pass while the
+    per-name pair landed in the prefetch, where the per-row loop reads it
+    without touching a file.
+    """
+    scans: list = []
+    tails: list = []
+
+    readers = listing_gather.ListingReaders(
+        build_status_map=lambda: _status_rows(["cloude_a", "cloude_b"]),
+        build_instance_index=lambda **kw: None,
+        label_for_name=lambda n: None,
+        identity_for_live_name=lambda _n: None,
+        restored_activity_state=lambda _n: None,
+        read_registry_index=lambda: scans.append(1) or {},
+        transcript_facts_for=lambda uuid, wd, **kw: tails.append(uuid) or "FACTS",
+    )
+    snapshot = listing_gather.ListingSnapshot(
+        socket=TEST_SOCKET,
+        seed_candidate_names=("cloude_a", "cloude_b"),
+        decorated_names=("cloude_a", "cloude_b"),
+    )
+
+    gathered = listing_gather.gather_listing_inputs(readers, snapshot)
+
+    assert len(scans) == 1, (
+        "the registry is one scandir of about ten small files and every "
+        "row's answer is a lookup into it; reading it per row turns a "
+        f"constant into an N. scans={len(scans)}"
+    )
+    assert len(tails) == 2, (
+        "each listed name must get its own transcript read, in the "
+        f"thread. reads={tails}"
+    )
+    for name in ("cloude_a", "cloude_b"):
+        assert gathered.prefetch.registry_for(name) is not None, (
+            "a registry answer must be in the prefetch, or the per-row "
+            "loop falls through to a live scandir ON THE EVENT LOOP"
+        )
+        assert gathered.prefetch.transcript_for(name) == "FACTS"
+
+
+def test_a_prefetch_built_without_the_attention_readers_reports_them_absent():
+    """ABSENT IS NOT AN ANSWER, and here it is the fall-through signal.
+
+    Neither reader can return None - each answers a record carrying its
+    own refusal - so a None in these two fields means only that this pass
+    did not read them, which is exactly when the per-row loop must take
+    the reads itself.
+    """
+    prefetch = build_listing_prefetch(
+        names=["cloude_a"],
+        label_for_name=lambda n: n,
+        identity_for_live_name=lambda _n: None,
+        restored_activity_state=lambda _n: None,
+    )
+    assert prefetch.has("cloude_a") is True
+    assert prefetch.registry_for("cloude_a") is None
+    assert prefetch.transcript_for("cloude_a") is None
+
+
 def test_the_gather_reaches_nothing_but_its_two_arguments():
     """The thread body's reach is a property of its signature.
 

@@ -46,6 +46,13 @@ something else, so the same ask after a real detour is news again. A
 reason change inside one state IS news, on purpose: ``needs_user`` going
 from ``input`` to ``permission`` is a different question for the user.
 
+IT ALSO HOLDS TWO EVIDENCE BASELINES, and :meth:`note_transcript` is
+where they live: the newest user prompt and the newest append this key
+has already been shown. They are not verdicts, but they are memory, and
+putting them anywhere else would give the package a second thing that
+remembers. They are what the watcher's side-effect layer reads instead of
+a ``UserPromptSubmit`` hook.
+
 KEYED ON THE INSTANCE, NOT THE SESSION ID. The key is
 ``UnreadStore.compose_key(tmux_name, epoch)``, the same identity the
 unread flag already uses, for two reasons the project has already paid
@@ -123,6 +130,17 @@ class _Entry:
     #: what it is now. Cleared the moment the state changes.
     emitted: Set[Tuple[str, str]] = field(default_factory=set)
 
+    #: The newest user-prompt timestamp this key has already been shown,
+    #: and the newest append time. These are baselines about EVIDENCE,
+    #: not about verdicts, and they live here so the module docstring's
+    #: claim stays true: one place in this package remembers anything.
+    seen_user_prompt_at: Optional[datetime] = None
+    seen_append_at: Optional[datetime] = None
+
+    #: Whether any evidence has been noted for this key at all. What
+    #: makes the FIRST user prompt a baseline rather than an edge.
+    evidence_noted: bool = False
+
 
 def _elapsed(now: datetime, since: Optional[datetime]) -> Optional[float]:
     """Seconds from ``since`` to ``now``, or None if unmeasurable.
@@ -142,6 +160,31 @@ def _elapsed(now: datetime, since: Optional[datetime]) -> Optional[float]:
     except TypeError:
         # Mixed aware and naive datetimes. A measurement we cannot make.
         return None
+
+
+def _is_newer(candidate: Optional[datetime], seen: Optional[datetime]) -> bool:
+    """Is ``candidate`` a timestamp strictly later than ``seen``?
+
+    Description: PURE. A missing candidate is never newer, because an
+      absent reading is not a reading. A missing ``seen`` beside a real
+      candidate IS newer: nothing has been recorded yet. A pair that
+      cannot be compared (one aware, one naive) answers False, on the
+      same reasoning as :func:`_elapsed`: a comparison we cannot make is
+      not one that has been shown to hold, and the callers of this turn
+      a True into a dismissal.
+    Inputs: candidate (datetime | None), seen (datetime | None).
+    Output: bool.
+    Example: _is_newer(None, None) -> False
+    """
+    if candidate is None:
+        return False
+    if seen is None:
+        return True
+    try:
+        return candidate > seen
+    except TypeError:
+        # Mixed aware and naive datetimes. A comparison we cannot make.
+        return False
 
 
 class AttentionLedger:
@@ -269,6 +312,72 @@ class AttentionLedger:
             previous_state=previous,
             at=now,
         )
+
+    def note_transcript(
+        self,
+        key: str,
+        *,
+        user_prompt_at: Optional[datetime],
+        append_at: Optional[datetime],
+    ) -> Tuple[Optional[datetime], bool]:
+        """Record this key's transcript timestamps, and say what moved.
+
+        Description: THE PASSIVE REPLACEMENT FOR TWO HOOKS, and the only
+          state in this package about evidence rather than about
+          verdicts. ``UserPromptSubmit`` used to tell the app that the
+          human had turned up; a real user prompt in the transcript,
+          later than the one this key was last shown, says exactly the
+          same thing with nobody installed in the harness.
+
+          THE TWO ANSWERS BASELINE DIFFERENTLY ON PURPOSE, AND THE
+          DIRECTION IS THE JUSTIFICATION. The first reading of a key
+          reports NO new user prompt, because a prompt drives a
+          DISMISSAL: on boot, every session on the machine has an old
+          prompt sitting in its transcript, and treating those as news
+          would silently clear every toast the user has not read. The
+          same reading DOES report an append, because an append drives a
+          cheap idempotent PULL (a title read), and the worst a spurious
+          one costs is one bounded read per session per boot, while a
+          missed one loses a rename typed while the server was down.
+
+          Callers ask this once per reading, whatever the verdict says,
+          because a user prompt is a fact about the file and not about
+          the state the resolver derived from it.
+        Inputs:
+          key: the instance key, as :meth:`observe` takes it.
+          user_prompt_at: ``TranscriptFacts.newest_user_prompt_at``, or
+            None when the window held no real user prompt.
+          append_at: ``TranscriptFacts.newest_append_at``, or None when
+            nothing dated could be read.
+        Output:
+          (new_user_prompt_at, transcript_appended) - the first is the
+          prompt timestamp ONLY when it is strictly newer than the one
+          this key was last shown, else None; the second is True when the
+          transcript has grown since the last reading, or this is the
+          first reading.
+        Example:
+          ledger.note_transcript(key, user_prompt_at=None,
+                                 append_at=None) -> (None, True)
+        """
+        entry = self._entries.get(key)
+        if entry is None:
+            entry = _Entry()
+            self._entries[key] = entry
+
+        first = not entry.evidence_noted
+        entry.evidence_noted = True
+
+        new_prompt: Optional[datetime] = None
+        if not first and _is_newer(user_prompt_at, entry.seen_user_prompt_at):
+            new_prompt = user_prompt_at
+        if _is_newer(user_prompt_at, entry.seen_user_prompt_at):
+            entry.seen_user_prompt_at = user_prompt_at
+
+        appended = first or _is_newer(append_at, entry.seen_append_at)
+        if _is_newer(append_at, entry.seen_append_at):
+            entry.seen_append_at = append_at
+
+        return new_prompt, appended
 
     def confirmed_state(self, key: str) -> Optional[str]:
         """The state this key is currently confirmed at, if any.

@@ -18,7 +18,12 @@ This is that same move for the listing pass.
 
 WHAT IS IN HERE AND WHAT IS DELIBERATELY NOT. Only PURE READS are
 gathered - the one bulk ``tmux list-panes -a`` subprocess, the one
-instance-index query, and THREE of the four name-keyed stored-row reads.
+instance-index query, THREE of the four name-keyed stored-row reads, and
+the two file-backed attention tiers: ONE scandir of claude's own session
+registry for the whole pass, plus one bounded transcript tail read per
+row. The tail read is up to 256 KB and is exactly the kind of work that
+must never be paid on the event loop; see
+``src/core/listing_attention.py``.
 
 THE FOURTH, OWNERSHIP, IS NOT GATHERED, and the reason is a freshness
 one rather than a thread-safety one. ``is_owned_tmux_name`` reads the
@@ -87,9 +92,24 @@ from typing import Any, Callable, Optional, Sequence, Tuple
 
 import structlog
 
+from src.core import listing_attention
 from src.core.listing_prefetch import ListingPrefetch, build_listing_prefetch
 
 logger = structlog.get_logger()
+
+
+def _no_registry_index() -> Any:
+    """The registry reader a caller that supplied none stands in with.
+
+    Description: an EMPTY SCAN, which every lookup answers ``absent``
+      from. It is the same value the real reader returns for a missing
+      directory, so a bundle built without one degrades exactly the way a
+      machine with no ``~/.claude/sessions`` does rather than raising.
+    Inputs: none.
+    Output: dict - always empty.
+    Example: _no_registry_index() -> {}
+    """
+    return {}
 
 
 @dataclass(frozen=True)
@@ -102,11 +122,13 @@ class ListingSnapshot:
       the snapshot is the boundary: past this point the thread sees only
       tuples and strings.
     Inputs: socket (str) - the tmux socket the stored rows are keyed on.
-      seed_candidate_names (tuple[str, ...]) - the names whose stored row
-      the status seed could actually reach, already filtered by
-      ``hooks_seen``; empty means no index connection is opened at all.
+      seed_candidate_names (tuple[str, ...]) - the names the instance
+      index is built over; empty means no index connection is opened at
+      all. It used to be a subset, filtered by ``hooks_seen`` when the
+      status seed was the index's only consumer; the attention resolver
+      that replaced the seed reads the index for every row.
       decorated_names (tuple[str, ...]) - every tmux name this pass will
-      decorate, which is a SUPERSET of the seed candidates.
+      decorate.
     Output: an immutable snapshot.
     Example: ListingSnapshot(socket='cloude',
       seed_candidate_names=('cloude_a',), decorated_names=('cloude_a',))
@@ -133,6 +155,10 @@ class ListingReaders:
       (callables taking a tmux name) - the three name-keyed row reads.
       The ownership read is NOT here; see the module docstring for the
       adoption window that keeps it on the loop.
+      read_registry_index (callable taking nothing) - ONE scandir of
+      claude's own session registry, shared by every row in the pass.
+      transcript_facts_for (callable taking a uuid and a working dir) -
+      one bounded transcript tail read, per row, in the thread.
     Output: an immutable bundle.
     Example: ListingReaders(build_status_map=mgr._build_tmux_status_map,
       ...)
@@ -143,6 +169,14 @@ class ListingReaders:
     label_for_name: Callable[[Optional[str]], Optional[str]]
     identity_for_live_name: Callable[[Optional[str]], Optional[dict]]
     restored_activity_state: Callable[[Optional[str]], Optional[str]]
+    #: DEFAULTED, so every pre-attention construction site - the tests
+    #: that drive this bundle with lambdas included - keeps building a
+    #: valid bundle, and degrades to "the registry said nothing" rather
+    #: than to a TypeError.
+    read_registry_index: Callable[[], Any] = _no_registry_index
+    transcript_facts_for: Callable[..., Any] = (
+        listing_attention.transcript_facts_for
+    )
 
 
 @dataclass(frozen=True)
@@ -196,11 +230,38 @@ def gather_listing_inputs(
     instance_index = readers.build_instance_index(
         socket=snapshot.socket, names=list(snapshot.seed_candidate_names)
     )
+    # ONE SCAN FOR THE WHOLE PASS. The registry is about ten sub-1KB
+    # files and every row's answer is a lookup into this one mapping, so
+    # reading it per row would turn a constant into an N and would let
+    # two rows in one pass describe two different instants.
+    registry_index = readers.read_registry_index()
+
+    def attention_for_name(name: str):
+        """Both file-backed attention tiers for one name. In the thread.
+
+        Inputs: name (str) - a tmux session name.
+        Output: tuple[RegistryRecord, TranscriptFacts].
+        """
+        row = status_map.get(name) if hasattr(status_map, "get") else None
+        epoch = row.get("created_at_epoch") if isinstance(row, dict) else None
+        uuid, working_dir = listing_attention.conversation_for_instance(
+            instance_index, name, epoch
+        )
+        return listing_attention.attention_reads_for_name(
+            name,
+            registry_index=registry_index,
+            session_started_epoch=epoch,
+            claude_session_uuid=uuid,
+            working_dir=working_dir,
+            transcript_reader=readers.transcript_facts_for,
+        )
+
     prefetch = build_listing_prefetch(
         names=snapshot.decorated_names,
         label_for_name=readers.label_for_name,
         identity_for_live_name=readers.identity_for_live_name,
         restored_activity_state=readers.restored_activity_state,
+        attention_for_name=attention_for_name,
     )
     return ListingGather(
         status_map=status_map,

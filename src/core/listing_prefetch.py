@@ -52,28 +52,40 @@ LEFT on the loop precisely because they would need one.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
 class NameReads:
-    """The three name-keyed stored-row decorations for one tmux name.
+    """The name-keyed reads one listing pass takes for one tmux name.
 
     Inputs: label (str | None) - the row's user-facing title.
       identity (dict | None) - ``id`` / ``parent_session_id`` /
       ``agent_type`` / ``agent_family_source`` off the newest row.
       restored_activity_state (str | None) - the durable activity state,
       already judged for age by ``activity_persist.restore_state``.
+      registry (RegistryRecord | None) / transcript (TranscriptFacts |
+      None) - the two file-backed attention tiers, read by
+      ``listing_attention.attention_reads_for_name``.
     Output: an immutable record; every field's None is the SAME None the
       per-row reader returns for "no row, no value, or unreadable", so a
       consumer cannot tell this apart from the read it replaces.
     Example: NameReads(label='work', identity=None,
       restored_activity_state='idle')
+
+    THE LAST TWO ARE THE ONE EXCEPTION TO THE NONE RULE ABOVE, AND IT IS
+    A SHARPER GUARANTEE RATHER THAN A WEAKER ONE. Their readers CANNOT
+    answer None - each returns a record carrying its own refusal verdict
+    - so a None in either field means only "this pass did not read it",
+    which is exactly the distinction :meth:`ListingPrefetch.has` exists
+    to carry and the signal a caller falls back to a live read on.
     """
 
     label: Optional[str] = None
     identity: Optional[dict] = None
     restored_activity_state: Optional[str] = None
+    registry: Optional[Any] = None
+    transcript: Optional[Any] = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +150,30 @@ class ListingPrefetch:
         entry = self.by_name.get(tmux_name or "")
         return entry.restored_activity_state if entry is not None else None
 
+    def registry_for(self, tmux_name: Optional[str]) -> Optional[Any]:
+        """The prefetched registry record for a name, or None.
+
+        Inputs: tmux_name (str | None).
+        Output: RegistryRecord | None - None ONLY when this pass did not
+          read it. A read that found nothing answers a record whose
+          verdict is ``absent``, never None.
+        Example: prefetch.registry_for('cloude_a').verdict -> 'ok'
+        """
+        entry = self.by_name.get(tmux_name or "")
+        return entry.registry if entry is not None else None
+
+    def transcript_for(self, tmux_name: Optional[str]) -> Optional[Any]:
+        """The prefetched transcript facts for a name, or None.
+
+        Inputs: tmux_name (str | None).
+        Output: TranscriptFacts | None - None ONLY when this pass did not
+          read it; an unreadable or absent transcript answers a record
+          whose verdict is ``unreadable``.
+        Example: prefetch.transcript_for('cloude_a').found -> False
+        """
+        entry = self.by_name.get(tmux_name or "")
+        return entry.transcript if entry is not None else None
+
 
 def build_listing_prefetch(
     *,
@@ -145,6 +181,9 @@ def build_listing_prefetch(
     label_for_name: Callable[[Optional[str]], Optional[str]],
     identity_for_live_name: Callable[[Optional[str]], Optional[dict]],
     restored_activity_state: Callable[[Optional[str]], Optional[str]],
+    attention_for_name: Optional[
+        Callable[[str], Tuple[Any, Any]]
+    ] = None,
 ) -> ListingPrefetch:
     """Run every name-keyed stored-row read for a listing pass.
 
@@ -164,6 +203,10 @@ def build_listing_prefetch(
       label_for_name / identity_for_live_name / restored_activity_state
       (callables taking a name) - the manager's existing per-row readers,
       unchanged.
+      attention_for_name (callable taking a name) - returns the
+      ``(registry, transcript)`` pair for that name. Omitted, both fields
+      stay None and every caller falls through to its own live read,
+      which is what a pre-attention caller already did.
     Output: ListingPrefetch - never None, never raises.
     Example: build_listing_prefetch(names=['cloude_a'], ...)
     """
@@ -171,9 +214,15 @@ def build_listing_prefetch(
     for name in names:
         if not name or name in by_name:
             continue
+        registry = None
+        transcript = None
+        if attention_for_name is not None:
+            registry, transcript = attention_for_name(name)
         by_name[name] = NameReads(
             label=label_for_name(name),
             identity=identity_for_live_name(name),
             restored_activity_state=restored_activity_state(name),
+            registry=registry,
+            transcript=transcript,
         )
     return ListingPrefetch(by_name=by_name)

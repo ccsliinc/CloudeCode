@@ -738,14 +738,16 @@ async def test_a_row_state_survives_the_restart_and_beats_the_transcript(
 
 
 @pytest.mark.asyncio
-async def test_a_session_with_live_hook_signal_is_never_seeded(
+async def test_a_session_with_live_hook_signal_is_still_seeded(
     tmp_path, monkeypatch, corpus
 ):
-    """A HOOK OUTRANKS A SEED, immediately and with nothing to expire.
+    """A HOOK NO LONGER OUTRANKS ANYTHING, so it excludes nothing.
 
-    The warm-up skips any session the tracker has seen an event for, and
-    the seam is gated the same way, so the first hook of the process
-    retires the seed for good.
+    The warm-up used to skip any session the tracker had seen an event
+    for, because a live hook was the strongest evidence there was.
+    ``CLOUDECODE_SESSION_ID`` is a pane-wide environment variable, so
+    that signal was mislabeled at source and no longer feeds any status;
+    the skip could then only refuse to warm a session that needs warming.
     """
     from tests.test_boot_readopt import EPOCH_A, seed_row
     from src.config import settings
@@ -780,13 +782,15 @@ async def test_a_session_with_live_hook_signal_is_never_seeded(
     mgr._registry.sessions["ses_hooked"] = session
     mgr._instance_epochs["ses_hooked"] = EPOCH_A
 
-    # Without a hook, the warm-up seeds it.
     assert seed_live_sessions(mgr) == (1, 1)
     assert seeds_for(mgr).get("ses_hooked").state == STATUS_IDLE
 
-    # With one, it is skipped outright - examined zero, seeded zero.
+    # AND A HOOK NO LONGER EXCLUDES IT. The warm-up used to skip any
+    # session whose hooks had spoken, because a hook outranked a seed.
+    # Nothing reads hook signal now, so that skip could only ever refuse
+    # to warm a session that needs warming.
     mgr._activity_tracker.record_event("ses_hooked", EVENT_PRE_TOOL_USE)
-    assert seed_live_sessions(mgr) == (0, 0)
+    assert seed_live_sessions(mgr) == (1, 1)
 
 
 @pytest.mark.asyncio

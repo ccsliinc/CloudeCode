@@ -40,7 +40,11 @@ import src.api.routes as routes_mod
 import src.api.hook_event_routes as hook_routes_mod
 from src.api.auth import require_auth
 from src.core.session_manager import SessionManager
-from src.core.session_status import STATUS_FINISHED_UNREAD, STATUS_IDLE, STATUS_WORKING
+from src.core.session_status import (
+    STATUS_FINISHED_UNREAD,
+    STATUS_UNKNOWN,
+    STATUS_WORKING,
+)
 from src.models import Session, SessionStatus
 
 
@@ -237,12 +241,21 @@ def test_load_unread_state_tolerates_malformed_file(monkeypatch, tmp_path):
 
 
 # =========================================================================== #
-# 4. list_session_infos surfaces the unified status + unread                  #
+# 4. list_session_infos NO LONGER surfaces the hook counter                   #
+#                                                                             #
+# These two asserted the opposite rule until the passive swap. The counter   #
+# they read was mislabeled at source: CLOUDECODE_SESSION_ID is a PANE-WIDE   #
+# environment variable, so a session's background agents posted their hooks  #
+# under the parent's id and the number could not be fixed by ordering. The   #
+# listing now resolves four passive tiers instead, and none of them is a     #
+# hook. THE UNREAD FLAG IS A SEPARATE AXIS AND IT STILL MOVES.               #
 # =========================================================================== #
 
 
 @pytest.mark.asyncio
-async def test_list_session_infos_reflects_working_state(monkeypatch, tmp_path):
+async def test_a_hook_event_no_longer_moves_the_listing_status(
+    monkeypatch, tmp_path
+):
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
     mgr.record_hook_event("ses1", "PreToolUse", {})
@@ -253,12 +266,17 @@ async def test_list_session_infos_reflects_working_state(monkeypatch, tmp_path):
 
     infos = await mgr.list_session_infos()
     assert len(infos) == 1
-    assert infos[0].activity_status == STATUS_WORKING
+    # Nothing readable said what this session is doing: no registry
+    # record, no transcript. That is `unknown`, a real answer, and it is
+    # never spelled `idle`.
+    assert infos[0].activity_status == STATUS_UNKNOWN
     assert infos[0].unread is False
 
 
 @pytest.mark.asyncio
-async def test_list_session_infos_reflects_finished_unread(monkeypatch, tmp_path):
+async def test_a_stop_hook_still_sets_the_unread_flag_it_owns(
+    monkeypatch, tmp_path
+):
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
     mgr.record_hook_event("ses1", "Stop", {})
@@ -268,8 +286,11 @@ async def test_list_session_infos_reflects_finished_unread(monkeypatch, tmp_path
     })
 
     infos = await mgr.list_session_infos()
-    assert infos[0].activity_status == STATUS_FINISHED_UNREAD
     assert infos[0].unread is True
+    # The flag is set and the STATE is still unmeasured, so the pair
+    # cannot be rendered as `finished_unread`: that spelling is a session
+    # measured AT REST and not yet seen, and this one was never measured.
+    assert infos[0].activity_status == STATUS_UNKNOWN
 
 
 # =========================================================================== #

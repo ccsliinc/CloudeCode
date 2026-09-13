@@ -7,11 +7,14 @@ with the same confidence, on the same row. That is the false-green shape
 this project keeps removing: an answer that reads exactly as strong as
 its weakest possible provenance.
 
-FIVE SOURCES, IN DESCENDING STRENGTH OF EVIDENCE:
+SIX SOURCES, IN DESCENDING STRENGTH OF EVIDENCE:
 
-  ``hook``        Claude Code's own lifecycle hooks are live for this
-                  session this process run. The agent said what it was
-                  doing; nothing was inferred.
+  ``registry``    ``~/.claude/sessions/<pid>.json``, the file claude
+                  keeps about itself and rewrites on every status
+                  change. The agent's own word, read passively off disk.
+  ``pane``        The rendered pane: a dialog we matched in text we
+                  actually read. It can only ever say the session is
+                  waiting on a human.
   ``transcript``  Derived from the conversation's transcript file - its
                   mtime, or the last decidable record in its tail. A
                   MEASUREMENT of a file, not a statement by the agent.
@@ -34,8 +37,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-#: Live hook signal from Claude Code's own lifecycle hooks.
-STATUS_SOURCE_HOOK: str = "hook"
+#: Claude's own session registry file, read passively off disk.
+STATUS_SOURCE_REGISTRY: str = "registry"
+
+#: A dialog matched in pane text we actually read.
+STATUS_SOURCE_PANE: str = "pane"
 
 #: Derived from the conversation transcript (mtime, or its tail records).
 STATUS_SOURCE_TRANSCRIPT: str = "transcript"
@@ -50,10 +56,22 @@ STATUS_SOURCE_TMUX: str = "tmux"
 STATUS_SOURCE_NONE: str = "none"
 
 #: Every legal value, for validation and for tests that must fail when a
-#: sixth is added without being thought about.
+#: seventh is added without being thought about.
+#:
+#: ``hook`` WAS HERE AND IS GONE, because nothing can produce it any
+#: more. The listing used to report it whenever Claude Code's lifecycle
+#: hooks had spoken for a session this process run; that whole tier was
+#: replaced by the passive resolver in ``src/core/attention/``, which
+#: reads the registry, the transcript, the pane and tmux and never a
+#: hook. A token no writer can emit is a value a reader will one day
+#: branch on and never reach. Both clients keep a ``via hooks`` tooltip
+#: entry for it, deliberately: a browser holding a cached response from
+#: before the swap still renders it correctly, and an unknown key there
+#: renders no suffix rather than failing.
 ALL_STATUS_SOURCES: frozenset[str] = frozenset(
     {
-        STATUS_SOURCE_HOOK,
+        STATUS_SOURCE_REGISTRY,
+        STATUS_SOURCE_PANE,
         STATUS_SOURCE_TRANSCRIPT,
         STATUS_SOURCE_SEED_ROW,
         STATUS_SOURCE_TMUX,

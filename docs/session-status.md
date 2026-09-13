@@ -383,16 +383,28 @@ have refused the ladder to exactly the sessions it was built for.
 ## Where a status came from
 
 `GET /sessions/list` carries `status_source` beside `activity_status` on
-the WRAPPER. Five values, defined once in
+the WRAPPER. Six values, defined once in
 `src/core/session_status_source.py`, in descending strength of evidence:
 
 | Value | Meaning |
 |---|---|
-| `hook` | Claude Code's own lifecycle hooks are live for this session this run. The agent said what it was doing. |
+| `registry` | `~/.claude/sessions/<pid>.json`, the file claude keeps about itself and rewrites on every status change. The agent's own word, read passively off disk. |
+| `pane` | A dialog matched in pane text we actually read. It can only ever say the session is waiting on a human. |
 | `transcript` | Measured off the conversation file: its mtime, or the last decidable record in its tail. |
 | `seed_row` | Restored from `sessions.activity_state`, judged still worth something by `restore_state`. |
 | `tmux` | tmux alone: a dead pane, a bare shell, or the honest `unknown` a non-shell foreground process earns. |
 | `none` | Nothing answered. Said out loud rather than left blank. |
+
+**`hook` WAS A SIXTH VALUE AND IS GONE.** It meant "Claude Code's own
+lifecycle hooks are live for this session this run", and the listing
+reported it whenever an in-memory counter fed by those hooks had
+answered. `CLOUDECODE_SESSION_ID` is a PANE-WIDE environment variable, so
+the parent agent and every background agent it launched posted under one
+session id and the counter was mislabeled at its source; the listing now
+resolves the four passive tiers above (`src/core/attention/`) and nothing
+can write `hook` any more. Both clients keep a `via hooks` tooltip entry
+for it on purpose, so a browser holding a response cached from before the
+swap still renders correctly.
 
 **It is rendered in the tooltip and nowhere else** - `via hooks`, `via
 transcript` - by `SessionStatusUI.labelWithSource`. It never changes a

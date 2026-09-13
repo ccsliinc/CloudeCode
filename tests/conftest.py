@@ -246,6 +246,35 @@ def _reset_tmux_probe_cache():
     tmux_discovery.reset_probe_cache()
 
 
+@pytest.fixture(autouse=True)
+def claude_session_registry_isolation(monkeypatch, tmp_path_factory) -> None:
+    """Point the attention resolver's registry scan at an EMPTY directory.
+
+    Description: ``~/.claude/sessions`` is the developer's REAL registry
+      of running claude processes, and ``/sessions/list`` scans it on
+      every pass now that the status comes from the passive resolver. The
+      records in it are keyed on the bare tmux NAME, so the socket
+      isolation beside this fixture does not cover them: a developer with
+      a live session actually called ``cloude_proj`` would feed a real
+      record to any test that names its fixture session the same thing,
+      and the test would pass or fail depending on whose machine ran it.
+
+      AN EMPTY DIRECTORY IS A REAL ANSWER AND THE RIGHT DEFAULT. Every
+      lookup against it reports ``absent``, which is what every test
+      written before the resolver already expects. A test that wants a
+      record replaces ``read_registry_index`` itself; a test that reads a
+      fixture directory passes it explicitly and never reaches this.
+    Inputs: monkeypatch, tmp_path_factory (pytest fixtures).
+    Output: None.
+    Example: (autouse - no call site)
+    """
+    empty = tmp_path_factory.mktemp("claude_sessions_registry")
+    monkeypatch.setattr(
+        "src.core.attention.registry_read.default_registry_directory",
+        lambda: str(empty),
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def real_claude_settings_unchanged() -> Iterator[None]:
     """Fail the run if the developer's real settings file changed. READ ONLY.

@@ -309,10 +309,64 @@ class _FakeBackend:
         return True
 
 
+def _resting_evidence(now: datetime) -> tuple:
+    """The two file tiers of a session that has genuinely finished a turn.
+
+    Description: the shape ``src.core.attention.resolve`` rung 8 needs to
+      answer ``done_idle`` - claude reports idle on a version new enough
+      to write the background-agent count, the transcript's last word is
+      a turn end, the count is a measured zero, nothing is queued and the
+      file has been quiet. Built as frozen dataclasses rather than
+      written to disk because these tests are about the READ FLAG, not
+      about the reader.
+    Inputs: now (datetime) - the clock the listing will resolve against.
+    Output: tuple[RegistryRecord, TranscriptFacts].
+    Example: _resting_evidence(datetime.now(timezone.utc))
+    """
+    from src.core.attention.registry_read import (
+        REG_IDLE,
+        REG_OK,
+        RegistryRecord,
+    )
+    from src.core.attention.transcript_facts import (
+        FACTS_FOUND,
+        TranscriptFacts,
+    )
+
+    ended = now - timedelta(seconds=30)
+    return (
+        RegistryRecord(
+            verdict=REG_OK,
+            status=REG_IDLE,
+            waiting_for=None,
+            pid=4321,
+            session_uuid=None,
+            tmux_name="cloude_daily-briefing",
+            cwd=None,
+            status_updated_at=ended,
+            started_at=ended - timedelta(minutes=5),
+            version=(2, 1, 266),
+            detail="fixture",
+        ),
+        TranscriptFacts(
+            verdict=FACTS_FOUND,
+            pending_background_agents=0,
+            pending_field_present=True,
+            turn_end_at=ended,
+            newest_assistant_at=ended - timedelta(seconds=1),
+            newest_append_at=ended,
+            detail="fixture",
+        ),
+    )
+
+
 def _manager_with_row_state(monkeypatch, tmp_path: Path, stored: str) -> SessionManager:
-    """A manager holding one live session whose DURABLE ROW records
-    ``stored`` and which has never fired a hook - the exact shape of the
-    daily-briefing session on live."""
+    """A manager holding one live session the resolver measures AT REST.
+
+    ``stored`` is what the durable row records. It no longer decides the
+    status - the passive resolver does - and it is kept as an argument
+    because these tests exist to prove the FLAG decides the rest pair
+    whatever any stored value says."""
     stub = _StubSettings(
         pin_path=tmp_path / "pinned_themes.json", log_dir=tmp_path / "logs"
     )
@@ -336,6 +390,14 @@ def _manager_with_row_state(monkeypatch, tmp_path: Path, stored: str) -> Session
     # The row says what it says. Nothing rewrites it on a view, which is
     # precisely why the read has to reconcile it.
     monkeypatch.setattr(mgr, "_restored_activity_state", lambda name: stored)
+    # AND THE RESOLVER SAYS THE SESSION IS AT REST. Patched at the read
+    # seam, so the whole ladder above it - resolve, project, then derive
+    # the read state - runs for real.
+    monkeypatch.setattr(
+        mgr,
+        "_attention_reads_for",
+        lambda **kw: _resting_evidence(datetime.now(timezone.utc)),
+    )
     return mgr
 
 

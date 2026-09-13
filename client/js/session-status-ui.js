@@ -110,10 +110,15 @@ console.log('[SessionStatusUI Module] Loading...');
      * @type {Object<string, string>}
      */
     const SOURCE_SUFFIX = {
-        hook: 'via hooks',
+        registry: "via claude's own session record",
+        pane: 'via the pane',
         transcript: 'via transcript',
         seed_row: 'via the session record',
         tmux: 'via tmux',
+        // BACK-COMPAT. The server stopped emitting this when the
+        // listing's status moved off the hook counter. A browser holding
+        // a response cached from before that still renders correctly.
+        hook: 'via hooks',
     };
 
     /**

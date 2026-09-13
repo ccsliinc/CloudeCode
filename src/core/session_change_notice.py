@@ -119,38 +119,41 @@ def publish(app_state: Any, frame: Dict[str, Any]) -> int:
     return hub.publish(frame)
 
 
-def publish_hook_status(app_state: Any, session_manager: Any, session_id: str) -> int:
-    """Publish this session's status right after a hook was recorded.
+def publish_attention_status(
+    app_state: Any,
+    session_manager: Any,
+    session_id: str,
+    *,
+    activity_status: Optional[str] = None,
+) -> int:
+    """Publish this session's status the moment it moved, without a poll.
 
-    Description: reads the state the hook just produced, entirely from
-      memory - `SessionActivityTracker.resolve` and the unread store - and
-      publishes it. THE TMUX ARGUMENT IS `unknown` ON PURPOSE: resolving
-      against a real pane status would cost a subprocess on every single
-      tool call, and it is not needed here, because a hook arriving is
-      itself proof the pane is alive and the dead-check is the only thing
-      that argument decides. The consequence is stated rather than hidden:
-      a hook-derived state comes back exact, and a session whose heartbeat
-      has expired comes back `unknown`, which is a real answer and never
-      `idle`.
+    Description: finds this session's tmux name and epoch, reads its
+      unread flag, and publishes the pair with the status THE CALLER
+      ALREADY RESOLVED. It resolves nothing itself, which is the point:
+      the status comes from one pure resolver
+      (``src.core.attention.resolve``) projected through one display
+      mapping, so a notice and the next ``/sessions/list`` row cannot
+      disagree about the same session. A caller that has no status to
+      report passes none, and the field is omitted rather than guessed.
 
-      FAIL-SOFT AND NEVER RAISES. This runs inside the hook route, which
-      must answer claude whatever happens here, so a manager that cannot
+      FAIL-SOFT AND NEVER RAISES. This runs on paths that must answer
+      their own caller whatever happens here, so a manager that cannot
       answer publishes nothing and logs at debug.
     Inputs: app_state (Any); session_manager (Any) - the live
-      SessionManager; session_id (str).
+      SessionManager; session_id (str); activity_status (str | None) -
+      one of the eight status names, already derived.
     Output: int - clients the notice was accepted by.
-    Example: publish_hook_status(request.app.state, sm, "ses_1")
+    Example: publish_attention_status(request.app.state, sm, "ses_1",
+      activity_status="working")
     """
     hub = get_hub(app_state)
     if hub is None or hub.client_count == 0:
         return 0
 
-    activity_status: Optional[str] = None
     unread: Optional[bool] = None
     tmux_session: Optional[str] = None
     epoch: Optional[int] = None
-
-    tracker = getattr(session_manager, "_activity_tracker", None)
 
     # BOTH OF THESE READS MOVED, AND TOLERANCE IS WHAT HID IT. The live
     # session table went to `SessionRegistry` and the hook-to-pane name map
@@ -187,16 +190,18 @@ def publish_hook_status(app_state: Any, session_manager: Any, session_id: str) -
                 logger.debug("event_notice_unread_unreadable",
                              session_id=session_id, error=str(exc))
 
-    if tracker is not None:
-        from src.core.session_status import STATUS_UNKNOWN
+    # THE LAST WORD ON READ VERSUS UNREAD BELONGS TO THE FLAG, and this
+    # is the same pure function every other surface applies. The caller
+    # supplies the BASE state and this projects it through the flag we
+    # just measured, so a notice and a listing row cannot report one
+    # session at rest two different ways. It is idempotent, and it
+    # touches nothing but the rest pair.
+    if activity_status is not None:
+        from src.core.session_status import derive_read_state
 
-        try:
-            activity_status = tracker.resolve(
-                session_id, STATUS_UNKNOWN, unread=bool(unread)
-            )
-        except (AttributeError, KeyError, TypeError) as exc:
-            logger.debug("event_notice_status_unresolved",
-                         session_id=session_id, error=str(exc))
+        activity_status = derive_read_state(
+            activity_status, unread=bool(unread)
+        )
 
     return hub.publish(
         build_status_notice(

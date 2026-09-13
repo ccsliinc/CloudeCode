@@ -65,6 +65,7 @@ from typing import Any, Callable, List, Optional, Sequence, Set, Tuple
 import structlog
 
 from src.core.attention.evidence import (
+    AttentionVerdict,
     Evidence,
     REASON_INPUT,
     STATE_BUSY,
@@ -109,6 +110,43 @@ class WatchTarget:
     #: which is what the ledger and the unread flag are keyed on. Not
     #: derivable from the session id: see gotchas 4b and 10.
     key: str
+
+
+@dataclass(frozen=True)
+class Observation:
+    """One reading of one session, as the side-effect layer sees it.
+
+    Description: THE SEVEN JOBS THAT ARE NOT TOASTS. Deleting the hook
+      route removes the only caller of a startup-gate stamp, an agent
+      inference, a durable status write, the ``last_work_at`` sort key,
+      a toast auto-ack and the ``/rename`` title pull. None of those is
+      an edge: they are things to do because a session was READ, so they
+      are handed out once per target per tick rather than out of the
+      transition table, and the two evidence edges they key on are
+      computed once here rather than by every consumer.
+    Inputs: n/a.
+    Output: n/a (data holder).
+    """
+
+    #: What the pure resolver just answered for this session.
+    verdict: AttentionVerdict
+
+    #: The bundle the verdict was derived from, so a consumer can read a
+    #: tier directly (the startup gate wants "is there a registry record
+    #: at all", which no verdict field carries).
+    evidence: Evidence
+
+    #: The timestamp of a real user prompt NEWER than the one this
+    #: session was last shown, else None. THE PASSIVE
+    #: ``UserPromptSubmit``: it is the instant the human turned up, and
+    #: it doubles as the auto-ack cutoff, so a prompt that is read late
+    #: still cannot dismiss a toast raised after the user typed.
+    new_user_prompt_at: Optional[datetime]
+
+    #: True when the transcript has grown since the last reading, or
+    #: this is the first reading of the session. The cadence for the
+    #: pulls that are cheap and idempotent.
+    transcript_appended: bool
 
 
 def _toast_kind_for(transition: Transition) -> Optional[str]:
@@ -162,6 +200,7 @@ class AttentionWatcher:
         set_unread: Callable[[WatchTarget], None],
         on_busy_edge: Callable[[WatchTarget, Transition], None],
         ledger: AttentionLedger,
+        on_observation: Optional[Callable[[WatchTarget, "Observation"], None]] = None,
         read_policy: Optional[Callable[[WatchTarget], Tuple[bool, Any]]] = None,
         now: Optional[Callable[[], datetime]] = None,
         tick_seconds: float = DEFAULT_TICK_SECONDS,
@@ -190,6 +229,13 @@ class AttentionWatcher:
             stamps the work time and acks a permission that has since
             been answered.
           ledger: the :class:`AttentionLedger` holding the edges.
+          on_observation: called with (target, :class:`Observation`) once
+            per target per tick, EDGE OR NO EDGE, for the jobs that are
+            not notifications: the startup-gate stamp, the agent
+            inference, the durable status write, the work stamp, the
+            auto-ack and the title pull. None leaves every one of them
+            unwired, which is what a build with no composition site has
+            and what the replay suite drives.
           read_policy: returns (policy_store_attached, policy) for one
             target. None means NO STORE IS ATTACHED, which skips the mute
             gate entirely and behaves exactly as a build without the
@@ -207,6 +253,7 @@ class AttentionWatcher:
         self._raise_toast = raise_toast
         self._set_unread = set_unread
         self._on_busy_edge = on_busy_edge
+        self._on_observation = on_observation
         self._read_policy = read_policy
         self._ledger = ledger
         self._now = now if now is not None else _utc_now
@@ -355,6 +402,30 @@ class AttentionWatcher:
         Example: watcher._apply(target, evidence) -> True
         """
         verdict = resolve_attention(evidence)
+        # THE OBSERVATION COMES FIRST, AND THE ORDER IS LOAD BEARING. A
+        # user prompt read in this tick means the human turned up, which
+        # auto-acks what was waiting on them; doing that BEFORE the
+        # transition table means a toast this same tick raises is not in
+        # the bucket yet and cannot be dismissed by the prompt that
+        # preceded it.
+        if self._on_observation is not None:
+            new_prompt_at, appended = self._ledger.note_transcript(
+                target.key,
+                user_prompt_at=evidence.transcript.newest_user_prompt_at,
+                append_at=evidence.transcript.newest_append_at,
+            )
+            self._call(
+                "attention_observation_failed",
+                target,
+                self._on_observation,
+                target,
+                Observation(
+                    verdict=verdict,
+                    evidence=evidence,
+                    new_user_prompt_at=new_prompt_at,
+                    transcript_appended=appended,
+                ),
+            )
         transition = self._ledger.observe(
             target.key,
             verdict,

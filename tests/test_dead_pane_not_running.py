@@ -234,12 +234,18 @@ def test_persisted_idle_cannot_overwrite_a_measured_dead(mgr, tmp_path, monkeypa
     )
 
 
-def test_persisted_state_still_restores_over_a_live_pane(mgr, tmp_path, monkeypatch):
-    """The restore feature must survive the guard.
+def test_a_persisted_state_no_longer_paints_a_live_pane_at_all(
+    mgr, tmp_path, monkeypatch
+):
+    """THE RESTORE TIER IS GONE, and its guard went with it.
 
-    Restoring `working` over a tmux `idle` is the whole point of the
-    durable column; the guard must only block CONTRADICTING a measurement,
-    not restoring over a live one.
+    ``sessions.activity_state`` used to be consulted whenever no hook had
+    spoken, and a stored ``working`` was painted over a tmux ``idle``.
+    The listing now resolves four passive tiers and the durable column is
+    not one of them: a record of what was true THEN is not a measurement
+    of NOW, which is the same objection the guard beside it made about a
+    stored value contradicting a measured one. So a stored ``working``
+    over a pane nothing could measure answers ``unknown``.
     """
     _register(mgr, "real", "cloude_ses_real", tmp_path)
     monkeypatch.setattr(mgr, "_restored_activity_state", lambda *a, **k: "working")
@@ -248,7 +254,8 @@ def test_persisted_state_still_restores_over_a_live_pane(mgr, tmp_path, monkeypa
         "real", status_map=_row("cloude_ses_real", STATUS_IDLE)
     )
     assert info is not None
-    assert info.activity_status == "working"
+    assert info.activity_status == STATUS_UNKNOWN
+    assert info.activity_status != "working"
 
 
 def test_persisted_state_does_not_manufacture_a_status_when_unmeasurable(

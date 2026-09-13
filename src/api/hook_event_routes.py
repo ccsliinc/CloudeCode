@@ -223,8 +223,32 @@ async def claude_event_hook(request: Request):
     # TOAST notice is the gated one, and it is published past the gate.
     # Never awaits, never raises, and publishes nothing when no browser
     # is connected - see src/core/session_change_notice.py.
-    session_change_notice.publish_hook_status(
-        request.app.state, session_manager, session_id
+    #
+    # THE STATUS IS RESOLVED HERE, NOT IN THE NOTICE. The notice module
+    # publishes a value; deciding what that value is belongs to whoever
+    # measured it. While hooks are still installed this route is one such
+    # measurer, and the tracker's in-memory answer is what it has - so it
+    # is read at the call site and handed over, and it goes away with
+    # this route rather than leaving a tracker read inside a module the
+    # passive watcher also calls. THE TMUX ARGUMENT IS `unknown` ON
+    # PURPOSE: a real pane status would cost a subprocess on every tool
+    # call, and a hook arriving is itself proof the pane is alive.
+    from src.core.session_status import STATUS_UNKNOWN
+
+    _tracker = getattr(session_manager, "_activity_tracker", None)
+    _status = None
+    if _tracker is not None:
+        try:
+            _status = _tracker.resolve(session_id, STATUS_UNKNOWN)
+        except (AttributeError, KeyError, TypeError) as exc:
+            logger.debug(
+                "hook_status_notice_unresolved",
+                session_id=session_id,
+                error=str(exc),
+            )
+    session_change_notice.publish_attention_status(
+        request.app.state, session_manager, session_id,
+        activity_status=_status,
     )
 
     # THE USER TURNED UP, SO THE SESSION'S NOTIFICATIONS ARE ANSWERED.
