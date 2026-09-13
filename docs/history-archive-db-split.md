@@ -264,6 +264,23 @@ raises `IntegrityError` afterwards.
 `content_sha256`: **400/400 before the split reading `main`, 400/400
 after reading the separate archive database, identical results.**
 
+### Schema versions this was measured against
+
+`VERIFIED_SCHEMA_VERSIONS = {25, 26, 27}`. v25 is the read-only backup
+every size and orphan figure above came from. v26 and v27 were checked by
+migrating a fresh database through the app's OWN chain
+(`ensure_db_migrated`) and re-running the partition against the result:
+**zero unclassified objects, and the same three crossing keys**. So the
+FTS5 and compression steps on `feat/173-archive-fts-compress` add no
+crossing foreign key.
+
+This deliberately does NOT import `CURRENT_SCHEMA_VERSION`. Importing it
+would make the rung agree with whatever the code says today, and it would
+never refuse anything - the opposite of its job. A version added after
+this module was written is one whose schema nobody has looked at. Adding
+one here is a one-line change and the measurement behind it takes a
+minute.
+
 ### Resumability, measured by actually killing a copy
 
 A 443 MB copy was SIGKILLed mid-flight. It had finished

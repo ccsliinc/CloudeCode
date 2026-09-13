@@ -46,7 +46,7 @@ from src.core.archive_db_partition import (
     side_for_table,
     unclassified_objects,
 )
-from src.core.archive_db_split import drop_order
+from src.core.archive_db_split import VERIFIED_SCHEMA_VERSIONS, drop_order
 from src.core.archive_db_split_refusals import (
     CONSTRAINT_NOT_STRIPPED,
     COUNT_MISMATCH,
@@ -283,7 +283,8 @@ def _preflight(**over) -> list:
     Output: list[Refusal].
     """
     kwargs = dict(
-        source_integrity="ok", schema_version=25, expected_schema_version=25,
+        source_integrity="ok", schema_version=25,
+        expected_schema_version=VERIFIED_SCHEMA_VERSIONS,
         unclassified=[], crossings=list(EXPECTED_CROSSING_FKS),
         expected_crossings=list(EXPECTED_CROSSING_FKS), orphans={},
         destination_state="absent", free_bytes=10 ** 13, archive_bytes=1,
@@ -297,10 +298,25 @@ def test_a_clean_preflight_refuses_nothing() -> None:
     assert _preflight() == []
 
 
+@pytest.mark.parametrize("version", sorted(VERIFIED_SCHEMA_VERSIONS))
+def test_every_measured_schema_version_is_accepted(version: int) -> None:
+    """The other half of the version rung, so it cannot refuse everything.
+
+    v25 is the read-only backup every figure in the docs came from. v26
+    and v27 were checked by migrating a fresh database through the app's
+    own chain and re-running the partition against the result: zero
+    unclassified objects, and the same three crossing keys.
+    """
+    assert _preflight(schema_version=version) == []
+
+
 @pytest.mark.parametrize(
     "override, rung",
     [
-        ({"schema_version": 26}, SCHEMA_VERSION_UNEXPECTED),
+        # A version nobody has measured. 25, 26 and 27 are in
+        # VERIFIED_SCHEMA_VERSIONS and must NOT refuse; see the positive
+        # control below.
+        ({"schema_version": 99}, SCHEMA_VERSION_UNEXPECTED),
         ({"unclassified": ["mystery_table"]}, UNCLASSIFIED_OBJECT),
         ({"crossings": []}, CROSSING_FK_SET_CHANGED),
         ({"orphans": {"transcript_archives.project_id": 4}}, ORPHANED_REFERENCE),

@@ -55,8 +55,23 @@ from src.core.archive_db_split_refusals import Refusal, blocking
 
 logger = structlog.get_logger()
 
-#: The schema version this migration was written and measured against.
-EXPECTED_SCHEMA_VERSION = 25
+#: Schema versions whose partition and crossing-key set have actually
+#: been MEASURED, not assumed. v25 is the version of the read-only backup
+#: every size and orphan figure in the docs came from; v26 and v27 were
+#: checked by migrating a fresh database through the app's own chain and
+#: re-running the partition against the result, which reported zero
+#: unclassified objects and the same three crossing keys.
+#:
+#: DELIBERATELY NOT `CURRENT_SCHEMA_VERSION`. Importing that would make
+#: this rung agree with whatever the code says today and it would never
+#: refuse anything, which is the opposite of its job: a version added
+#: after this module was written is one whose schema nobody has looked
+#: at. Adding a version here is a one-line change and the measurement
+#: that justifies it takes a minute.
+VERIFIED_SCHEMA_VERSIONS = frozenset({25, 26, 27})
+
+#: Kept for callers and tests that want a single representative version.
+EXPECTED_SCHEMA_VERSION = max(VERIFIED_SCHEMA_VERSIONS)
 
 #: Rows per committed chunk. Bounds the WAL and gives the resume point
 #: its granularity. Not tuned for throughput: the copy is IO bound and

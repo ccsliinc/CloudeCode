@@ -51,7 +51,7 @@ from src.core.archive_db_partition import (
     unclassified_objects,
 )
 from src.core.archive_db_split import (
-    EXPECTED_SCHEMA_VERSION,
+    VERIFIED_SCHEMA_VERSIONS,
     drop_order,
     SplitReport,
     archive_byte_estimate,
@@ -150,7 +150,7 @@ def run_split(
         report.refusals = preflight_refusals(
             source_integrity=_integrity(conn, "main"),
             schema_version=schema_version,
-            expected_schema_version=EXPECTED_SCHEMA_VERSION,
+            expected_schema_version=VERIFIED_SCHEMA_VERSIONS,
             unclassified=unclassified_objects(objects),
             crossings=report.crossings,
             expected_crossings=EXPECTED_CROSSING_FKS,

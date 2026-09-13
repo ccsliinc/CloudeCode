@@ -85,6 +85,22 @@ class Refusal:
         return self.kind == KIND_MEASURED
 
 
+def _as_version_set(expected) -> frozenset:
+    """Accept either one schema version or a collection of them.
+
+    Description: private. The rung is written against a SET of versions
+      whose partition has actually been measured, but a single int is
+      still a valid and readable way to say "only this one", and tests
+      use it that way.
+    Inputs: expected (int | Iterable[int]).
+    Output: frozenset[int].
+    Example: _as_version_set(25)  # frozenset({25})
+    """
+    if isinstance(expected, int):
+        return frozenset({expected})
+    return frozenset(expected)
+
+
 def blocking(refusals: Sequence[Refusal]) -> List[Refusal]:
     """Filter a refusal list down to the ones that stop the run.
 
@@ -101,7 +117,7 @@ def preflight_refusals(
     *,
     source_integrity: Optional[str],
     schema_version: Optional[int],
-    expected_schema_version: int,
+    expected_schema_version,
     unclassified: Sequence[str],
     crossings: Sequence[tuple],
     expected_crossings: Sequence[tuple],
@@ -152,12 +168,14 @@ def preflight_refusals(
             "meta.schema_version could not be read, so it was not confirmed "
             "that this migration matches the schema in front of it",
         ))
-    elif schema_version != expected_schema_version:
+    elif schema_version not in _as_version_set(expected_schema_version):
         out.append(Refusal(
             SCHEMA_VERSION_UNEXPECTED, KIND_MEASURED,
             f"the database is at schema v{schema_version} and this migration "
-            f"was written against v{expected_schema_version}; a newer schema "
-            "may carry a crossing foreign key this code has never seen",
+            f"has only been measured against "
+            f"{sorted(_as_version_set(expected_schema_version))}; a version "
+            "nobody has looked at may carry a crossing foreign key this code "
+            "has never seen",
         ))
 
     if unclassified:
