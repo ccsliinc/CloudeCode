@@ -60,6 +60,7 @@ from src.core.archive_snippet_gate import (
     SNIPPET_WITHHELD_KNOWN_VALUE,
 )
 from src.core.db_migration import ensure_db_migrated
+from src.core.message_block_store import store_blocks_for_body
 from src.core.message_model_secrets import scan_text
 
 #: Synthetic credential material. Random base62, never issued by anyone,
@@ -68,15 +69,39 @@ from src.core.message_model_secrets import scan_text
 FIXTURE_CREDENTIAL = "mm5GsDRfCJXY0R6KVA1WOf5Zx1WU8RXuGoWAqOGj"
 FIXTURE_SHA256 = hashlib.sha256(FIXTURE_CREDENTIAL.encode()).hexdigest()
 
+#: THE BODIES CARRY message.content, WHICH IS THE SHAPE A REAL RECORD HAS.
+#: They used to be a bare ``{"text": ...}`` object, and that worked only
+#: because search grepped the whole of body_json. Search now matches the
+#: extracted content BLOCKS, and a body with no ``message`` key produces
+#: none - correctly, and the extractor records it as
+#: ``no_message_content``. So a fixture in the old shape would make every
+#: assertion below a test of an empty index rather than of the gate.
+def _body(text: str, **extra: object) -> str:
+    """Render one assistant record carrying ``text`` as its content.
+
+    Inputs: text (str) - the message text. extra - extra top-level keys,
+      which land in the ENVELOPE and are therefore deliberately NOT
+      searchable, exactly as on a real record.
+    Output: str - the body JSON.
+    Example: _body("hi") -> '{"type": "assistant", ...}'
+    """
+    record = {"type": "assistant",
+              "message": {"role": "assistant",
+                          "content": [{"type": "text", "text": text}]}}
+    record.update(extra)
+    return json.dumps(record)
+
+
 #: Detected here: a credential-shaped NAME sits beside the value.
-FLAGGED_BODY = json.dumps({"text": "restic run", "api_key": FIXTURE_CREDENTIAL})
+FLAGGED_BODY = _body(f"restic run api_key={FIXTURE_CREDENTIAL}")
 #: NOT detected here: same value, no name beside it. This is the body
 #: that leaked, and the whole point of the file.
-UNFLAGGED_BODY = json.dumps(
-    {"text": f"restic pipeline emitted {FIXTURE_CREDENTIAL} to the log"}
-)
+#: The TEXT inside UNFLAGGED_BODY's one content block. Named separately
+#: because it is the string a hit's match_offset now indexes into.
+UNFLAGGED_TEXT = f"restic pipeline emitted {FIXTURE_CREDENTIAL} to the log"
+UNFLAGGED_BODY = _body(UNFLAGGED_TEXT)
 #: An ordinary body, so a withheld snippet can be told from a broken one.
-ORDINARY_BODY = json.dumps({"text": "restic beacon, nothing sensitive"})
+ORDINARY_BODY = _body("restic beacon, nothing sensitive")
 
 TRANSCRIPT_BYTES = 4096
 
@@ -130,6 +155,10 @@ def _seed(conn: sqlite3.Connection) -> None:
             "'fidelity_verified')",
             (body_id, line_no, body_id, len(text)),
         )
+        # The REAL extractor, so the blocks these tests search are the
+        # blocks a real install would hold, and so the FTS triggers fire.
+        store_blocks_for_body(conn, body_id, text,
+                              "2026-01-01T00:00:00.000000Z")
     # The finding exists for body 1 ONLY. Body 2 holds the same value and
     # the corpus has no idea - which is the live defect, in miniature.
     conn.execute(
@@ -213,7 +242,14 @@ def test_withheld_hit_is_still_reported_with_its_coordinates(corpus):
     hit = _hit(out, 1)
     assert hit["transcript_id"] == 10
     assert hit["body_id"] == 2
-    assert hit["match_offset"] == UNFLAGGED_BODY.index("restic")
+    # THE FRAME OF REFERENCE MOVED WITH THE MATCHER, and the hit says so
+    # rather than leaving a reader to assume. match_offset used to index
+    # into body_json; it now indexes into the content BLOCK's own text,
+    # which is the string the preview is cut from, and match_offset_in
+    # carries that fact explicitly. Asserting the old number would be
+    # asserting an offset into a string nothing reads any more.
+    assert hit["match_offset_in"] == "block_text"
+    assert hit["match_offset"] == UNFLAGGED_TEXT.index("restic")
     assert hit["match_length"] == len("restic")
     assert hit["body_href"].endswith(str(hit["body_id"]))
     assert hit["lines_href"]

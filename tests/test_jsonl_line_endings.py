@@ -61,6 +61,14 @@ from src.core.message_model_export import (
 from src.core.message_model_ingest import SourceLine, ingest_lines
 from src.core.message_model_serialize import join_lines, split_lines
 
+#: The app's OWN connection factory, not sqlite3.connect. It applies the
+#: pragmas every real connection carries AND registers the body codec's
+#: SQL functions, without which a repointed query fails with "no such
+#: function" - which is the intended LOUD failure mode, and which a test
+#: hand-rolling a connection would otherwise hit. It accepts ":memory:"
+#: because Path(":memory:") round-trips to the same string.
+from src.core.db import connect as db_connect  # noqa: E402
+
 #: A minimal valid record, as raw bytes, reused across the cases below.
 RECORD_A: bytes = b'{"type":"user","uuid":"uuid-le-1"}'
 RECORD_B: bytes = b'{"type":"user","uuid":"uuid-le-2"}'
@@ -77,7 +85,15 @@ def conn() -> sqlite3.Connection:
     Output: sqlite3.Connection.
     Example: conn.execute("SELECT 1").fetchone() -> (1,)
     """
-    connection = sqlite3.connect(":memory:")
+    connection = db_connect(":memory:")
+    # db_connect sets row_factory = sqlite3.Row, which is the app's
+    # own shape. The assertions in this file compare rows to plain
+    # TUPLES, which is what they were written against, so the factory
+    # is put back. What this fixture needs from db_connect is the
+    # PRAGMAS and the registered body-codec functions, not the row
+    # type; rewriting every assertion would be churn unrelated to
+    # this change.
+    connection.row_factory = None
     with connection:
         run_chain(connection, 0, CURRENT_SCHEMA_VERSION)
     return connection

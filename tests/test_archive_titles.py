@@ -27,6 +27,14 @@ from src.core.archive_titles import (
     titles_meta,
 )
 
+#: The app's OWN connection factory, not sqlite3.connect. It applies the
+#: pragmas every real connection carries AND registers the body codec's
+#: SQL functions, without which a repointed query fails with "no such
+#: function" - which is the intended LOUD failure mode, and which a test
+#: hand-rolling a connection would otherwise hit. It accepts ":memory:"
+#: because Path(":memory:") round-trips to the same string.
+from src.core.db import connect as db_connect  # noqa: E402
+
 
 def _corpus() -> sqlite3.Connection:
     """Build a miniature corpus with the real column shapes.
@@ -37,7 +45,15 @@ def _corpus() -> sqlite3.Connection:
     Inputs: none. Output: sqlite3.Connection with row_factory set.
     Example: conn = _corpus()
     """
-    conn = sqlite3.connect(":memory:")
+    conn = db_connect(":memory:")
+    # db_connect sets row_factory = sqlite3.Row, which is the app's
+    # own shape. The assertions in this file compare rows to plain
+    # TUPLES, which is what they were written against, so the factory
+    # is put back. What this fixture needs from db_connect is the
+    # PRAGMAS and the registered body-codec functions, not the row
+    # type; rewriting every assertion would be churn unrelated to
+    # this change.
+    conn.row_factory = None
     conn.row_factory = sqlite3.Row
     conn.executescript(
         """

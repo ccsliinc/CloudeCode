@@ -24,6 +24,15 @@ from src.core.message_model_serialize import (
     SESSION_REF_SCHEMES as _PRODUCTION_SCHEMES,
 )
 from src.core.db_steps import run_chain
+from src.core.message_block_store import store_blocks_for_body
+
+#: The app's OWN connection factory, not sqlite3.connect. It applies the
+#: pragmas every real connection carries AND registers the body codec's
+#: SQL functions, without which a repointed query fails with "no such
+#: function" - which is the intended LOUD failure mode, and which a test
+#: hand-rolling a connection would otherwise hit. It accepts ":memory:"
+#: because Path(":memory:") round-trips to the same string.
+from src.core.db import connect as db_connect  # noqa: E402
 
 #: One valid value from each CHECK-constrained column, so a seeder that
 #: does not care about a field still writes something the schema accepts.
@@ -57,7 +66,7 @@ def make_state_dir(tmp_path: Path, name: str = "state") -> Path:
     """
     state_dir = tmp_path / name
     state_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(state_dir / "cloude.db"))
+    conn = db_connect(state_dir / "cloude.db")
     try:
         with conn:
             run_chain(conn, 0, CURRENT_SCHEMA_VERSION)
@@ -76,7 +85,7 @@ def writable(state_dir: Path) -> sqlite3.Connection:
     Output: sqlite3.Connection with ``row_factory = sqlite3.Row``.
     Example: with closing(writable(sd)) as conn: seed_host(conn)
     """
-    conn = sqlite3.connect(str(Path(state_dir) / "cloude.db"))
+    conn = db_connect(Path(state_dir) / "cloude.db")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -223,6 +232,7 @@ def seed_body(
     ts: Optional[str] = "2025-12-29T06:50:35.600Z",
     secret_finding_count: int = 0,
     identity_key: Optional[str] = None,
+    extract_blocks: bool = True,
 ) -> int:
     """Insert one body and return its id.
 
@@ -230,7 +240,9 @@ def seed_body(
       bodies have no ``ts`` and a fixture that cannot express that cannot
       prove those rows stay visible.
     Inputs: conn, body_json (str) - stored verbatim, ts (str|None),
-      secret_finding_count (int), identity_key (str|None).
+      secret_finding_count (int), identity_key (str|None),
+      extract_blocks (bool) - run the real block extractor, which is what
+      a real body always has; False leaves the body NEVER PROCESSED.
     Output: int - the body id.
     Example: seed_body(conn, body_json='{"a":1}', ts=None)
     """
@@ -243,7 +255,25 @@ def seed_body(
         "VALUES (?, ?, ?, 'sha', 'shab', NULL, ?, 'origin', 0, ?, ?)",
         (key, f"uuid-{key}", body_json, ts, secret_finding_count, DEFAULT_INGESTED_AT),
     )
-    return int(cur.lastrowid)
+    body_id = int(cur.lastrowid)
+    # A REAL BODY ALWAYS COMES WITH ITS EXTRACTED BLOCKS, and this seeder
+    # did not, which stopped mattering only because nothing read them.
+    # Search does now: it matches content blocks rather than body_json,
+    # and the FTS index is maintained by triggers on the block table, so
+    # a body seeded without blocks is a body no search can find - which
+    # would make every search test here a test of an empty index rather
+    # than of the matcher.
+    #
+    # The REAL extractor is called, not a hand-written block row, so a
+    # fixture cannot disagree with what a real install would hold.
+    #
+    # ``extract_blocks=False`` is the NEVER PROCESSED state: no row in
+    # message_body_block_status at all, which is a real third outcome
+    # (distinct from "processed, no blocks") and which a test proving it
+    # must be able to express.
+    if extract_blocks:
+        store_blocks_for_body(conn, body_id, body_json, DEFAULT_INGESTED_AT)
+    return body_id
 
 
 def seed_appearance(

@@ -241,10 +241,12 @@ def register_body_functions(conn: sqlite3.Connection) -> None:
     Description: called from ``src.core.db.connect``, which is the one
       place this app opens ``cloude.db``, so every read path gets them.
       A connection that somehow missed them fails a repointed query with
-      "no such function", which is LOUD - the alternative designs all had
-      a silent wrong answer as their failure mode: ``LENGTH()`` over a
-      blob returns its compressed byte count and ``json_extract()`` over
-      one returns NULL, and neither raises.
+      "no such function", which is LOUD. Measured on sqlite 3.53.4, what
+      the UNREPOINTED spellings answer for a compressed row: ``LENGTH``
+      its COMPRESSED byte count, ``SUBSTR`` a slice of the zlib stream,
+      ``INSTR`` 0 - three silent wrong answers. ``json_valid`` answers 0
+      and ``json_extract`` raises "malformed JSON", so those two are the
+      only ones that would have been noticed.
 
       Both are declared deterministic so the planner may use them in an
       index expression and may cache their result within a statement.

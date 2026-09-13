@@ -147,9 +147,12 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
     # connection this app hands out. Registering here - the ONE place
     # cloude.db is opened - is what makes that true without each call
     # site remembering. A connection that somehow missed them fails a
-    # repointed query with "no such function", which is LOUD; the
-    # alternative failure modes are all silent and wrong (LENGTH over a
-    # blob returns its COMPRESSED byte count, json_extract returns NULL).
+    # repointed query with "no such function", which is LOUD. Measured on
+    # sqlite 3.53.4, what the UNREPOINTED spellings do to a compressed
+    # row: LENGTH answers its COMPRESSED byte count, SUBSTR cuts the zlib
+    # stream, and INSTR answers 0 - all three silently wrong. Only
+    # json_extract is loud, raising "malformed JSON", and json_valid
+    # honestly answers 0.
     try:
         register_body_functions(conn)
     except sqlite3.Error as exc:
