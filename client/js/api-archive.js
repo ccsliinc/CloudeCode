@@ -1,5 +1,5 @@
 /**
- * API Module, archive half - the message browser's twelve read endpoints.
+ * API Module, archive half - the message browser's thirteen read endpoints.
  *
  * WHY THIS IS A SEPARATE FILE. `api.js` reached 1,847 lines with the
  * archive methods in it, against this repo's 500-line file cap
@@ -467,6 +467,33 @@ Object.assign(API.prototype, {
     },
 
     /**
+     * Archive: the merged project node whose folder is this directory.
+     *
+     * The lookup behind the terminal search panel's "Deep dive": a live
+     * session's working directory to an addressable `project_id`.
+     *
+     * A ROUND TRIP RATHER THAN A FIND OVER THE MERGED LIST, because the
+     * match is not a string comparison. `~/Development` is a symlink into
+     * iCloud on the owner's box, so one directory has several literal
+     * spellings and a transcript records whichever was in force when it
+     * was written; resolving those needs realpath and the $HOME symlink
+     * table, neither of which a browser has.
+     *
+     * A miss is an `ok` envelope with a null `result`, NOT an error: the
+     * folder has no archived conversations and the caller disables the
+     * control. `meta.matched_by` names the rung that answered - 'exact',
+     * 'realpath' or 'alias', null on a miss.
+     *
+     * @param {string} cwd - The session's working directory.
+     * @returns {Promise<object>} A callEnvelope result.
+     */
+    async getArchiveProjectForCwd(cwd) {
+        return await this.callEnvelope(
+            `/archive/projects/for-cwd?cwd=${encodeURIComponent(cwd)}`,
+            { timeoutMs: this.ARCHIVE_TIMEOUTS.hierarchy });
+    },
+
+    /**
      * Archive: read an export's headers without consuming its body.
      *
      * A GET whose body is discarded, not a HEAD: the verified export
@@ -493,4 +520,4 @@ Object.assign(API.prototype, {
     }
 });
 
-console.log('[API Archive Module] Loaded: 12 archive endpoints on API.prototype');
+console.log('[API Archive Module] Loaded: 13 archive endpoints on API.prototype');

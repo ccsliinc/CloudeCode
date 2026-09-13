@@ -181,7 +181,11 @@ await test('.local-servers has no CSS rule any more', () => {
 
 await test('#localServersContainer is gone from index.html, terminal container remains', () => {
     const html = fs.readFileSync(path.join(CLIENT, 'index.html'), 'utf8');
-    assert.ok(html.indexOf('<div class="terminal-container">') > 0,
+    // The tag carries an id as well now - web/src/lib/mount.ts addresses
+    // a Svelte container by id and by nothing else, and the session
+    // search panel mounts into this one - so the class is what this
+    // asserts rather than the whole opening tag.
+    assert.ok(html.indexOf('<div class="terminal-container"') > 0,
         'the terminal container itself must still be present');
     assert.equal(html.indexOf('id="localServersContainer"'), -1,
         'the panel markup was removed and must not reappear');

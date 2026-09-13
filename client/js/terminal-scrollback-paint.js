@@ -83,6 +83,20 @@ console.log('[TerminalScrollbackPaint Module] Loading...');
      *     `.fitAddon`, `._forceScrollToBottom()`.
      *   b64 (string) - the captured screen, base64.
      *   what (string) - 'adopt' or 'rejoin', for the log line only.
+     *   opts (object, optional) - `{clearScrollback: true}` prefixes
+     *     `ESC[3J` (ED 3, erase the SAVED lines) to the reset above.
+     *     Default false, so every pre-existing caller emits the identical
+     *     three sequences it always did.
+     *
+     *     WHY IT IS NOT ALWAYS ON. `ESC[2J` erases the VIEWPORT only, and
+     *     the two entry paths call this on a terminal they have just
+     *     reset, so there are no saved lines to erase and the extra
+     *     sequence would be noise. The history load in
+     *     terminal-history-load.js is the opposite case: it paints a full
+     *     tmux capture ON TOP of a live buffer that already holds part of
+     *     the same output, so without ED 3 every prompt row and every
+     *     search hit inside the overlap appears TWICE and the rail counts
+     *     one conversation as two.
      * Output: Promise<string> - a named outcome, never a throw:
      *   'painted'     - the bytes are in the parser. The caller should
      *                   set its Ctrl+L replay and post-connect scroll flags.
@@ -95,8 +109,9 @@ console.log('[TerminalScrollbackPaint Module] Loading...');
      *   const r = await TerminalScrollbackPaint.paint(this, b64, 'adopt');
      *   if (r === 'painted') { this._needsReplayCtrlL = true; }
      */
-    async function paint(controller, b64, what) {
+    async function paint(controller, b64, what, opts) {
         if (!controller || !controller.term || !b64) return 'nothing';
+        var clearScrollback = !!(opts && opts.clearScrollback);
 
         // 1. Layout, bounded. See the module header: a bare rAF await
         //    here cancels the connect below it in an unpainted tab.
@@ -111,7 +126,11 @@ console.log('[TerminalScrollbackPaint Module] Loading...');
         // 3 and 4. Clean parser state, then the raw octets.
         try {
             var bytes = decodeCapture(b64);
-            controller.term.write('\x1b[?1049l\x1b[2J\x1b[H');
+            // ED 3 goes FIRST: it erases the saved lines, and doing it
+            // after the home would still be correct but reads as though
+            // the order did not matter. It always precedes the bytes.
+            controller.term.write((clearScrollback ? '\x1b[3J' : '')
+                + '\x1b[?1049l\x1b[2J\x1b[H');
             controller.term.write(bytes, function () {
                 if (typeof controller._forceScrollToBottom === 'function') {
                     controller._forceScrollToBottom();

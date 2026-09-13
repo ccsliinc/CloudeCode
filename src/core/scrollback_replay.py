@@ -42,6 +42,7 @@ project's 500-line ceiling and must not grow.
 from __future__ import annotations
 
 import re
+from typing import Optional, Tuple
 
 #: Matches a line feed that is NOT already preceded by a carriage return.
 #: The lookbehind is what makes the conversion idempotent, so bytes that
@@ -70,3 +71,50 @@ def normalize_replay_newlines(data: bytes) -> bytes:
     if not data:
         return data
     return _BARE_LF.sub(b"\r\n", data)
+
+
+def with_cursor_restore(
+    data: bytes, cursor: Optional[Tuple[int, int]]
+) -> bytes:
+    """Append an absolute cursor position to a replayable capture.
+
+    ``tmux capture-pane`` serialises CELLS and never cursor state, so a
+    client that replays a capture is left wherever the last character it
+    wrote landed. That is where the pane's cursor sits only by
+    coincidence: Claude Code's input box has a bottom border, a path line
+    and a mode line BELOW the prompt, so the capture routinely runs
+    several rows past the cursor and the client ends up that many rows
+    too low. On the normal screen - the shipped case, because it is what
+    makes scrollback exist - the renderer emits pure relative motion and
+    never re-anchors, so a wrong starting cursor is never recovered from.
+
+    THE SUFFIX IS DECLARED HERE AND NOWHERE ELSE. Two copies of the same
+    off-by-one row arithmetic is how one replay path silently keeps a
+    defect the other one fixed.
+
+    Args:
+        data: The capture, already newline-normalized. Empty input is
+            returned unchanged: ``b""`` means "nothing was captured" to
+            every caller, and a lone positioning sequence would turn that
+            into a paint of nothing.
+        cursor: ``(x, y)`` 0-based, exactly as
+            ``TmuxBackend.pane_cursor_position`` reports it, or ``None``.
+            ``None`` appends NOTHING - leaving the client where the text
+            ended is the honest fallback, and an invented ``(0, 0)`` would
+            move every session to the top-left while looking like a
+            working feature.
+
+    Returns:
+        ``data`` with a trailing ``ESC[<y+1>;<x+1>H``, or ``data``
+        unchanged when there is no cursor to restore.
+
+    Example:
+        >>> with_cursor_restore(b"hi", (5, 2))
+        b'hi\\x1b[3;6H'
+        >>> with_cursor_restore(b"hi", None)
+        b'hi'
+    """
+    if not data or cursor is None:
+        return data
+    col, row = cursor
+    return data + f"\x1b[{row + 1};{col + 1}H".encode("ascii")

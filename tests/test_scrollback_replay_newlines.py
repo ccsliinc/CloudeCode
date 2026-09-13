@@ -41,7 +41,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.core.scrollback_replay import normalize_replay_newlines  # noqa: E402
+from src.core.scrollback_replay import (  # noqa: E402
+    normalize_replay_newlines,
+    with_cursor_restore,
+)
 from src.core import tmux_backend as tmux_backend_mod  # noqa: E402
 
 
@@ -135,3 +138,64 @@ def test_capture_scrollback_keeps_its_tmux_flags(flag):
     stub = _StubBackend(b"x\n")
     tmux_backend_mod.TmuxBackend.capture_scrollback(stub, lines=10)
     assert flag in stub.args
+
+
+# ---- the cursor suffix -------------------------------------------------
+#
+# THE SECOND HALF OF A REPLAYABLE CAPTURE. ``capture-pane`` serialises
+# CELLS and never cursor state, so a client that replays one is left
+# wherever the last character it wrote landed - which is where the pane's
+# cursor is only by coincidence. Measured on a real Claude Code pane
+# 2026-09-08: the cursor sat on row 9 inside the input box while the
+# capture ran to row 12, because the box's bottom border, the path line
+# and the mode line all sit BELOW the prompt.
+#
+# The rule lives in ONE function so the attach paint and the rejoin
+# history paint cannot disagree about the arithmetic. These tests pin the
+# arithmetic; the callers' own suites pin that they apply it.
+
+
+def test_a_cursor_becomes_a_one_based_absolute_position():
+    """tmux reports 0-based ``(x, y)``; CUP is 1-based ``row;col``.
+
+    BOTH the order swap and the two increments are in this one line, and
+    getting either wrong puts every replayed session's cursor in the
+    wrong place while looking entirely plausible.
+    """
+    assert with_cursor_restore(b"body", (5, 2)) == b"body\x1b[3;6H"
+
+
+def test_the_origin_cell_is_row_one_column_one():
+    """The 0-based origin is not a falsy special case."""
+    assert with_cursor_restore(b"body", (0, 0)) == b"body\x1b[1;1H"
+
+
+def test_no_cursor_appends_nothing_at_all():
+    """THE NEGATIVE CONTROL, and the reason the parameter is nullable.
+
+    A cursor that could not be read leaves the client where the text
+    ended, which is the behaviour from before the suffix existed. An
+    invented ``(0, 0)`` would move every session to the top-left while
+    looking like a working feature, so ``None`` must add NO bytes - not a
+    home sequence, not an empty escape.
+    """
+    assert with_cursor_restore(b"body", None) == b"body"
+
+
+def test_an_empty_capture_stays_empty():
+    """``b""`` means "nothing was captured" to every caller.
+
+    A lone positioning sequence would make an empty capture truthy, and
+    the rejoin route reads a truthy capture as "paint this", so the
+    client would be handed a paint of nothing.
+    """
+    assert with_cursor_restore(b"", (5, 2)) == b""
+    assert with_cursor_restore(b"", None) == b""
+
+
+def test_the_suffix_is_ascii_and_leaves_the_body_untouched():
+    """The capture's own bytes are never rewritten, only appended to."""
+    body = "héllo\r\n".encode("utf-8")
+    out = with_cursor_restore(body, (1, 1))
+    assert out.startswith(body)
+    assert out[len(body):] == b"\x1b[2;2H"

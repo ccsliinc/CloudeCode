@@ -454,6 +454,12 @@
     window.AltScreenScroll = {
         init: init,
         detectState: detectState,
+        // Exported for terminal-prompt-scan.js, which has to recognise
+        // claude's input-box frame to exclude the LIVE prompt from the
+        // rail. It is exported rather than copied so RULE_CHAR and
+        // RULE_RUN keep exactly one definition; two readings of "is this
+        // a frame edge" is two answers the day one of them is tuned.
+        isRule: isRule,
         scrollByRows: scrollByRows,
         exitTranscript: exitTranscript,
         noteUserInput: noteUserInput,

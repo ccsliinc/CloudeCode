@@ -1,14 +1,15 @@
 # vendored xterm.js bundle
 
-`xterm.css`, `xterm.js`, `xterm-addon-fit.js`, `xterm-addon-webgl.js` and
-`xterm-addon-unicode11.js` are unmodified files pulled straight from
-jsDelivr at the pinned versions below and committed as-is. There is no
+`xterm.css`, `xterm.js`, `xterm-addon-fit.js`, `xterm-addon-webgl.js`,
+`xterm-addon-unicode11.js` and `xterm-addon-search.js` are unmodified files
+pulled straight from jsDelivr at the pinned versions below and committed
+as-is. There is no
 build step here - unlike `client/vendor/codemirror/`, these ship from
 their npm packages as plain browser files, so there is nothing to bundle.
 
 ## why vendored instead of CDN-loaded
 
-`client/index.html` previously loaded all five of these from
+`client/index.html` previously loaded the first five of these from
 `cdn.jsdelivr.net`. On desktop that CDN is fast and typically warm-cached,
 so the failure mode below never surfaces there. On the user's phone
 (Brave), Shields blocks or delays third-party requests by default,
@@ -17,13 +18,13 @@ late, xterm's internal character-measurement element - the hidden DOM node
 it uses to compute cell width/height - never gets the right metrics.
 Backend pane dimensions still come out correct (they are computed
 independently), so the terminal LOOKS fine from the server's point of view
-while the on-device render is garbled. Serving these five files from this
+while the on-device render is garbled. Serving these files from this
 app's own origin removes third-party-CDN reachability from the picture
 entirely: no CDN request, no Shields interaction, no race between script
 load and stylesheet load. Same reasoning that put CodeMirror under
 `client/vendor/`, see that directory's `VERSION.md`.
 
-## pinned versions (fetched 2026-08-16)
+## pinned versions (first five fetched 2026-08-16, search add-on 2026-09-12)
 
 | file | package | version | source URL |
 |---|---|---|---|
@@ -32,6 +33,7 @@ load and stylesheet load. Same reasoning that put CodeMirror under
 | xterm-addon-fit.js | xterm-addon-fit | 0.8.0 | https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js |
 | xterm-addon-webgl.js | xterm-addon-webgl | 0.16.0 | https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.js |
 | xterm-addon-unicode11.js | xterm-addon-unicode11 | 0.6.0 | https://cdn.jsdelivr.net/npm/xterm-addon-unicode11@0.6.0/lib/xterm-addon-unicode11.js |
+| xterm-addon-search.js | xterm-addon-search | 0.13.0 | https://cdn.jsdelivr.net/npm/xterm-addon-search@0.13.0/lib/xterm-addon-search.js |
 
 ## sha256
 
@@ -41,12 +43,19 @@ f0aea0f75f48559013ae6643c2479dd737d26da42d5524e6d2b70915ae6523c7  xterm.js
 10f3194c5f17c1786fb7d5db865c1ec8539b6736a318063fd38bdaaf7c46848f  xterm-addon-fit.js
 0c9c48c9391c4cee816eacf95699dbde97e8cc8f191e87f3a571e73d214c8df8  xterm-addon-webgl.js
 ab10d83642883e5e17ea741cd5b6e5f8c0f6a06e3271f2f0c0e043be4fc5e738  xterm-addon-unicode11.js
+6a6db33f16b764552377a2c5ba4327c6dab6beaf25484533afd7dbecd0b03793  xterm-addon-search.js
 ```
 
 ## updating
 
-Dated snapshot, not auto-updated. To bump, run
-`scripts/xterm-vendor/fetch.sh <xterm-ver> <fit-ver> <webgl-ver> <unicode11-ver>`
-(or edit the pinned versions inside the script and run it with no args),
-then update the version table and sha256 block above to match what it
-prints.
+Dated snapshot, not auto-updated. To bump, edit the version variables and
+the matching sha256 in the `ASSETS` list inside
+`scripts/xterm-vendor/fetch.sh`, run it with no arguments, and update the
+version table and sha256 block above to match what it prints. The script
+re-downloads every file and exits non-zero on the first hash that does not
+match, so a bump you have not recorded here cannot land quietly.
+
+`xterm-addon-search` 0.13.0 is the release that pairs with xterm 5.3.0
+(its `peerDependencies` name `xterm@^5.3.0`). Its UMD bundle defines the
+global `SearchAddon`, and the class is `SearchAddon.SearchAddon` - the
+same double-name shape the fit and webgl add-ons use.

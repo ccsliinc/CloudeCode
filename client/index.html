@@ -255,12 +255,14 @@
          in archive-tlist.css, and load order is the whole mechanism -
          each selector is no more specific than the one it replaces. -->
     <link rel="stylesheet" href="/static/css/archive-panes.css" />
-    <!-- The away bar shown after a measured absence. Its own file because
-         it must be an OVERLAY inside .terminal-container: an in-flow child
-         there steals rows from #terminal, and the resize that follows is
-         an ESC[2J that erases the alternate screen. See
-         client/css/terminal-away-bar.css. -->
-    <link rel="stylesheet" href="/static/css/terminal-away-bar.css" />
+    <!-- NO SESSION-SEARCH STYLESHEET HERE ANY MORE. The find panel, the
+         prompt rail down the pane's right edge and the header trigger's
+         scoping are all in web/src/lib/terminal-search/, so they ship
+         inside /static/dist/app.css (linked at the foot of this head)
+         rather than as a file of their own. They are still overlays
+         inside .terminal-container and still rely on
+         client/css/styles.css making that a containing block;
+         app.css loading LAST is what keeps them winning ties. -->
 
     <!-- Item 9's notice banner - calm info tokens, not the alarm-red
          inline style it shipped with. See client/css/deep-link-notice.css. -->
@@ -538,6 +540,36 @@
                     <circle cx="7.5" cy="11.5" r="1.6" stroke="currentColor" stroke-width="1.5"/>
                 </svg>
             </button>
+            <!-- SEARCH THIS SESSION. Opens the find panel over the
+                 terminal (web/src/lib/terminal-search/); Cmd+F does the
+                 same thing without reaching for the mouse, and the title
+                 says so, because a hotkey nothing advertises is a hotkey
+                 nobody finds.
+
+                 NO INLINE onclick. src/main.py stamps `script-src
+                 'self'`, which forbids inline handlers, and a button
+                 that carried one would be present, sized, visible and
+                 completely dead with nothing but a console violation to
+                 say so - see the logout button's comment above, which
+                 records exactly that having happened.
+                 web/src/lib/terminal-search/mount-search.ts wires this
+                 by id.
+
+                 DESKTOP ONLY, unlike its neighbour, and the reason is a
+                 measured one about the header's width budget rather than
+                 a preference. It is written down in full in
+                 web/src/lib/terminal-search/SearchPanel.svelte, which
+                 also carries the same allow-list scoping
+                 session-editor-header.css uses. The phone reaches this
+                 through the terminal tools menu, which is hidden above
+                 768px, so the two are exact complements. -->
+            <button type="button" id="terminalSearchBtn" class="btn-icon"
+                    aria-label="search session" title="search (Cmd+F)" data-tooltip="search session">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="m10.5 10.5 3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
             <!-- THE LAUNCHER HELP BUTTON IS NOT IN THIS ROW ANY MORE.
                  It now sits inside #appTitle, immediately right of the
                  title text - see there. It was moved out of .controls on
@@ -787,7 +819,12 @@
              put a floating control back here - not a strip, and not one
              button that grows into one. -->
 
-        <div class="terminal-container">
+        <!-- THE ID IS THE SVELTE MOUNT TARGET. web/src/lib/mount.ts
+             addresses a container by id and nothing else, and the
+             session search panel mounts into this one. `mountPanel`
+             never clears its container, so #terminal and anything else
+             the legacy tree injects here are untouched by it. -->
+        <div class="terminal-container" id="terminal-container">
             <div id="terminal"></div>
         </div>
 
@@ -818,6 +855,13 @@
     <script src="/static/vendor/xterm/xterm-addon-fit.js"></script>
     <script src="/static/vendor/xterm/xterm-addon-webgl.js"></script>
     <script src="/static/vendor/xterm/xterm-addon-unicode11.js"></script>
+    <!-- The search add-on backs the session find panel. Its UMD bundle
+         defines the global `SearchAddon` and the class is
+         `SearchAddon.SearchAddon`, the same double-name shape as fit and
+         webgl above. client/js/terminal-search-engine.js loads it onto a
+         terminal at most once and degrades to a warned no-op if this
+         script is missing. -->
+    <script src="/static/vendor/xterm/xterm-addon-search.js"></script>
 
     <!-- Application modules -->
     <!-- Shared click-dismissal guard. Loaded FIRST because it is a
@@ -1207,15 +1251,6 @@
          live stream still comes up. -->
     <script src="/static/js/terminal-scrollback-paint.js"></script>
     <script src="/static/js/terminal.js"></script>
-    <!-- Punchlist item 1: after a measured absence, OFFER full history, a
-         summary of what happened, or just carry on, instead of the app
-         picking silently. terminal-away-gap.js is pure (every rule and
-         every sentence) and must load BEFORE terminal-away-bar.js, which
-         self-installs a heartbeat on DOMContentLoaded and reads
-         window.TerminalController. Neither touches the reconnect buffer's
-         keep rule; they layer on top of it. -->
-    <script src="/static/js/terminal-away-gap.js"></script>
-    <script src="/static/js/terminal-away-bar.js"></script>
     <!-- Clipboard tools: local-clipboard paste + terminal copy chord.
          No UI of its own any more - the session tools menu calls
          ClipboardTools.pasteFromClipboard(). Must load AFTER terminal.js,
@@ -1230,6 +1265,20 @@
          initTerminal) and AFTER output-scan.js, whose scan() it calls. -->
     <script src="/static/js/output-scan.js"></script>
     <script src="/static/js/copy-output.js"></script>
+    <!-- SESSION SEARCH: THE THREE FRAMEWORK-FREE HALVES. The panel, the
+         rail and the chord router are Svelte now and ship in
+         /static/dist/app.js; these three are pure modules it calls
+         through `window` at USE time, so a missing one costs its own
+         feature and never the panel.
+         terminal-prompt-scan.js is the buffer scanner and the tick
+         geometry, and depends on nothing; terminal-history-load.js must
+         come AFTER terminal-scrollback-paint.js (loaded above) because
+         it calls TerminalScrollbackPaint.paint() to write the tmux
+         capture in; terminal-search-engine.js needs the vendored add-on,
+         which is a <script> in the vendor block far above. -->
+    <script src="/static/js/terminal-prompt-scan.js"></script>
+    <script src="/static/js/terminal-history-load.js"></script>
+    <script src="/static/js/terminal-search-engine.js"></script>
     <script src="/static/js/dpad.js"></script>
     <!-- Display-only shortening of a command's full description. Must load
          BEFORE both files below: the filter reads the FULL value off the
@@ -1567,6 +1616,14 @@
          other eager module's globals at parse time. -->
     <script src="/static/js/archive-deeplink.js"></script>
     <script src="/static/js/archive-entry.js"></script>
+    <!-- The search panel's "deep dive": widen this session's query to
+         every past conversation in the same project folder. AFTER
+         archive-entry.js and archive-deeplink.js, whose enablement gate
+         and route builder it reuses rather than re-deriving - two ways
+         into the archive is two that can drift apart. The search panel
+         loads far above this and reaches window.DeepDive through a
+         typeof guard at press time, so this order is safe. -->
+    <script src="/static/js/terminal-search-deep-dive.js"></script>
     <script src="/static/js/archive-loader.js"></script>
 
     <script src="/static/js/app.js"></script>

@@ -48,6 +48,7 @@ from src.models import (
 from src.core import claude_hooks
 from src.core.workspace_settings import build_spawn_env
 from src.core.session_backend import SessionBackend, build_backend
+from src.core.scrollback_replay import with_cursor_restore
 
 # S1 of the decomposition. ``ProbeHealth`` is DEFINED in the collaborator
 # that owns it and re-exported here, so the 108 existing spellings of
@@ -598,7 +599,9 @@ class SessionManager:
     # missing ``_pending_toasts`` (every toast history view empty),
     # ``routes.py`` guarded ``get_toasts`` with ``hasattr`` (the backfill
     # endpoint empty on every session), ``away_routes`` used a callable
-    # check on the same method, and ``websocket.py`` did
+    # check on the same method (that module was deleted with the away bar
+    # on 2026-09-13 and is named here only as one of the four), and
+    # ``websocket.py`` did
     # ``getattr(sm, "idle_watchers", {})`` (no watcher found, on every
     # session). All four were repointed in the same commit and their
     # tolerance removed, so the next such move fails loudly.
@@ -6454,7 +6457,8 @@ class SessionManager:
         # Step 5 - capture scrollback AFTER the offset read so anything
         # that arrives mid-capture is safely past the offset (the tailer
         # will stream it without duplication).
-        scrollback = backend.capture_scrollback()
+        scrollback = with_cursor_restore(
+            backend.capture_scrollback(), backend.pane_cursor_position())
 
         sb_b64 = (
             base64.b64encode(scrollback).decode("ascii")

@@ -1,40 +1,51 @@
 /**
- * The away bar must be anchored to the TERMINAL PANE, not to the screen.
+ * Every overlay in the pane must be anchored to the TERMINAL PANE, not
+ * to the screen.
  * ---------------------------------------------------------------------
- * THE BUG, IN THE OWNER'S WORDS: "the idle bar is wide when the sidebar
- * is out and its overlapping". The bar is the one that reads
- * "away 2 hr 49 min / close / show full history / show summary /
- * just continue".
+ * WHAT THIS GUARDS: the single `position: relative` on
+ * `.terminal-container` in `client/css/styles.css`. It makes the pane the
+ * containing block for the absolutely positioned overlays inside it -
+ * today the session search panel and the prompt rail
+ * (`web/src/lib/terminal-search/`), which deliberately do NOT restate the
+ * declaration, because two `position: relative` rules on one element is
+ * how one of them gets deleted as a duplicate and the other turns out to
+ * be the one that mattered.
  *
- * THE MECHANISM. `.away-bar` is `position: absolute` with
- * `left: 15px; right: 15px`, and `terminal-away-bar.js` appends it to
- * `.terminal-container`. `.terminal-container` carried no `position` at
- * all, so the bar's containing block was the nearest ancestor that did
- * have one - `#terminal-screen`, which is `.screen { position: relative }`.
- * An absolutely positioned box resolves `left`/`right` against its
- * containing block's PADDING box, and `body.session-sidebar-pinned .screen`
- * puts `padding-left: var(--sidebar-dock-w)` on exactly that element. So
- * the bar measured from the viewport edge, behind the docked sidebar,
- * instead of from the pane it is asking the user about.
+ * THE MECHANISM, AND THE BUG IT ALREADY CAUSED ONCE. An overlay here is
+ * `position: absolute` with `left: 15px; right: 15px`. With
+ * `.terminal-container` carrying no `position` at all, its containing
+ * block is the nearest ancestor that does have one - `#terminal-screen`,
+ * which is `.screen { position: relative }`. An absolutely positioned box
+ * resolves `left`/`right` against its containing block's PADDING box, and
+ * `body.session-sidebar-pinned .screen` puts
+ * `padding-left: var(--sidebar-dock-w)` on exactly that element. So the
+ * overlay measures from the viewport edge, behind the docked sidebar,
+ * instead of from the pane it belongs to. The owner reported it as "the
+ * idle bar is wide when the sidebar is out and its overlapping".
  *
  * MEASURED IN A REAL ENGINE at 1357px with the sidebar docked, both
  * arms of the same page, the pre-fix rule reproduced inline:
  *
- *              bar.x   bar.width   intrusion into the 320px sidebar column
+ *          overlay.x  overlay.width  intrusion into the 320px sidebar column
  *   static       15      1327                    305
  *   relative    335      1007                      0
  *
- * The pane itself is x=320 w=1037 in both arms, so the broken bar was
+ * The pane itself is x=320 w=1037 in both arms, so the broken overlay was
  * 290px wider than the thing it overlays. A collateral-damage control was
  * run in the same page with a real xterm mounted: there are SEVEN
  * absolutely positioned descendants of `.terminal-container` and making it
- * a containing block moved exactly ONE of them, the bar. The other six are
- * xterm's own, and `.xterm` is itself `position: relative`.
+ * a containing block moved exactly ONE of them, the overlay. The other six
+ * are xterm's own, and `.xterm` is itself `position: relative`.
+ *
+ * THE AWAY BAR IS WHERE THIS WAS FIRST PAID FOR, and it was removed on
+ * 2026-09-13 at the owner's request. The declaration outlived it because
+ * the search overlays depend on it, which is exactly why this file was
+ * kept and retargeted rather than deleted with the feature.
  *
  * WHY THIS FILE IS NOT A GREP. "the stylesheet contains
  * `position: relative`" would pass while a later file at equal specificity
  * overrode it, which is the whole failure mode here - `.terminal-container`
- * is declared in FOUR stylesheets. So this RESOLVES the cascade over the
+ * is declared in several stylesheets. So this RESOLVES the cascade over the
  * real stylesheets in `client/index.html`'s real load order and reports the
  * winning declaration, the way a browser does.
  *
@@ -44,7 +55,7 @@
  * is required to report `static` - the pre-fix behaviour, reproduced rather
  * than described.
  *
- * Run with: node tests/test_away_bar_containing_block.node.mjs
+ * Run with: node tests/test_terminal_container_containing_block.node.mjs
  */
 
 import assert from 'node:assert/strict';
@@ -293,13 +304,6 @@ const MODEL = buildModel();
 // What the fix actually claims.
 // ---------------------------------------------------------------------
 
-test('the bar is an overlay: .away-bar resolves to position: absolute', () => {
-    for (const width of [1357, 780, 390]) {
-        const got = resolve(MODEL, '.away-bar', 'position', width);
-        assert.equal(got.value, 'absolute', `at ${width}px the bar is ${got.value}`);
-    }
-});
-
 test('the pane is the containing block: .terminal-container is never static', () => {
     for (const width of [1357, 780, 390]) {
         const got = resolve(MODEL, '.terminal-container', 'position', width);
@@ -307,9 +311,20 @@ test('the pane is the containing block: .terminal-container is never static', ()
         assert.notEqual(
             got.value, 'static',
             `at ${width}px .terminal-container resolves to ${got.value} (from ${got.from}), `
-            + 'so the away bar escapes to #terminal-screen and spans the docked sidebar',
+            + 'so every overlay in the pane escapes to #terminal-screen and spans the '
+            + 'docked sidebar',
         );
     }
+});
+
+test('the declaration lives in the file that owns .terminal-container', () => {
+    const got = resolve(MODEL, '.terminal-container', 'position', 1357);
+    assert.equal(
+        got.from, 'client/css/styles.css',
+        `the winning position comes from ${got.from}; it belongs beside the rest of `
+        + '.terminal-container, and a second copy elsewhere is how one gets deleted '
+        + 'as a duplicate',
+    );
 });
 
 test('the docked sidebar really does pad .screen, which is what made it matter', () => {
@@ -321,18 +336,25 @@ test('the docked sidebar really does pad .screen, which is what made it matter',
     );
 });
 
-test('the renderer still appends the bar into .terminal-container', () => {
-    const js = fs.readFileSync(
-        path.join(repoRoot, 'client', 'js', 'terminal-away-bar.js'), 'utf8');
-    const host = /host\s*=\s*document\.querySelector\(\s*'([^']+)'\s*\)/.exec(js);
-    assert.ok(host, 'could not find the host lookup in terminal-away-bar.js');
+test('the search overlays still mount into .terminal-container', () => {
+    // If the panel moves house, the containing-block rule has to move
+    // with it - so this reads the mount target the shipped code uses
+    // rather than assuming it.
+    const ts = fs.readFileSync(
+        path.join(repoRoot, 'web', 'src', 'lib', 'terminal-search', 'mount-search.ts'), 'utf8');
+    const id = /SEARCH_CONTAINER_ID\s*=\s*'([^']+)'/.exec(ts);
+    assert.ok(id, 'could not find SEARCH_CONTAINER_ID in mount-search.ts');
     assert.equal(
-        host[1], '.terminal-container',
-        'the bar moved house; the containing-block rule has to move with it',
+        id[1], 'terminal-container',
+        'the search panel mounts somewhere else now; move the containing-block rule with it',
     );
+
+    // And that id really is the element carrying the class the rule
+    // above resolves for.
+    const html = fs.readFileSync(path.join(repoRoot, 'client', 'index.html'), 'utf8');
     assert.match(
-        js, /host\.appendChild\(bar\)/,
-        'the bar is no longer appended to the host it looked up',
+        html, /class="terminal-container"\s+id="terminal-container"/,
+        '#terminal-container is no longer the element with class .terminal-container',
     );
 });
 
@@ -365,7 +387,7 @@ test('NEGATIVE CONTROL: with the fix removed, the resolver reports static', () =
 
 test('NEGATIVE CONTROL: the resolver can report a value it was not given', () => {
     // A resolver that invented answers would also invent this one.
-    const got = resolve(MODEL, '.away-bar-there-is-no-such-thing', 'position', 1357);
+    const got = resolve(MODEL, '.there-is-no-such-selector', 'position', 1357);
     assert.equal(got.value, null, 'the resolver answered for a selector nothing declares');
 });
 

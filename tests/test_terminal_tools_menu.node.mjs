@@ -86,11 +86,12 @@ function cssRules(css) {
     return css.replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
-/** The three rows, in the order the tools menu declares them. */
+/** The four rows, in the order the tools menu declares them. */
 const ENTRY_IDS = [
     'toolCopyOutput',
     'toolPasteClipboard',
     'toolAttachImage',
+    'toolSearch',
 ];
 
 /** The rows that must NOT be here - they are the session editor's. */
@@ -181,7 +182,7 @@ test('the menu is closed on load and opens on the trigger', () => {
     assert.equal(trigger.getAttribute('aria-expanded'), 'false');
 });
 
-test('THE SPLIT: tools holds the three content rows and nothing else', () => {
+test('THE SPLIT: tools holds the four content rows and nothing else', () => {
     const { env, menu } = load();
     menu.open();
     assert.deepEqual(openIds(env), ENTRY_IDS);

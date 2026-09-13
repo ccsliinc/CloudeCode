@@ -1104,6 +1104,44 @@ body.home-header-active {
     flex-direction: column;
     min-height: 0;
 
+    /* THE PANE IS THE CONTAINING BLOCK FOR EVERY OVERLAY INSIDE IT.
+     * ------------------------------------------------------------------
+     * This element is a flex column, so an in-flow child of it steals
+     * rows from `#terminal`; the ResizeObserver reads that as a real
+     * geometry change, ships a pty_resize, tmux raises SIGWINCH and
+     * claude answers with `ESC[2J`, which on the alternate screen erases
+     * the conversation. So everything that appears over the terminal is
+     * `position: absolute` instead - today that is the session search
+     * panel and the prompt rail (web/src/lib/terminal-search/), and
+     * `#localServersContainer` before them.
+     *
+     * WITHOUT THIS DECLARATION those overlays escape to the nearest
+     * positioned ancestor, `#terminal-screen` (`.screen` is
+     * `position: relative`). An absolutely positioned box resolves
+     * `left`/`right` against its containing block's PADDING box, and
+     * `body.session-sidebar-pinned .screen` puts
+     * `padding-left: var(--sidebar-dock-w)` on exactly that element - so
+     * `left: 15px` measured from the viewport edge, BEHIND the docked
+     * sidebar, rather than from the terminal the overlay belongs to.
+     * Measured in a real engine at 1357px with the sidebar docked: the
+     * overlay's box was x=15 w=1327 against the pane's x=320 w=1037, so
+     * 290px too wide and 305px into the sidebar column.
+     *
+     * SAFE BECAUSE IT WAS COUNTED. With a real xterm mounted there are
+     * SEVEN absolutely positioned descendants here, and making this a
+     * containing block moved exactly ONE of them - the overlay. The
+     * other six are xterm's own, and `.xterm` is itself
+     * `position: relative` (client/vendor/xterm/xterm.css), so they were
+     * never resolving against anything above it.
+     *
+     * It is declared HERE, in the file that owns `.terminal-container`,
+     * and deliberately nowhere else: two `position: relative`
+     * declarations on one element is how one of them gets deleted as a
+     * duplicate and the other turns out to be the one that mattered.
+     * Guarded by tests/test_terminal_container_containing_block.node.mjs,
+     * which resolves the real cascade rather than grepping for the text. */
+    position: relative;
+
     /* Pull-to-refresh barrier. A drag on the terminal lands on
      * `canvas.xterm-link-layer`, which is NOT a descendant of
      * `.xterm-viewport` - the two are siblings under `.xterm`. So when

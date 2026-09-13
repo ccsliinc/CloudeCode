@@ -73,7 +73,7 @@ from src.core.tmux_listing import (
     classify_listing_failure,
     listing_env,
 )
-from src.core.scrollback_replay import normalize_replay_newlines
+from src.core.scrollback_replay import normalize_replay_newlines, with_cursor_restore
 from src.core.session_backend import SessionBackend
 from src.core.session_respawn import (
     RESPAWN_PANE_FORMAT,
@@ -2591,6 +2591,11 @@ class TmuxBackend(SessionBackend):
         line to the column where the previous one ended, which is the
         "scrolling back janks the alignment" report. See that module.
 
+        NO CURSOR IS APPENDED, unlike ``capture_visible_screen``: the
+        startup gate probes panes with this on every listing poll, where
+        one more tmux process per row is not free. Replay callers that
+        need one append it with ``with_cursor_restore`` themselves.
+
         Returns:
             Captured pane bytes with CRLF line endings, or ``b""`` when
             the tmux call fails.
@@ -2719,14 +2724,13 @@ class TmuxBackend(SessionBackend):
 
         Since ``AuthConfig.session.disable_alternate_screen`` defaults on
         (it is what makes scrollback exist at all), the normal-screen
-        renderer is the shipped case, so the cursor is restored here with
-        an explicit ``ESC[row;colH``. Rows line up one to one because the
+        renderer is the shipped case, so the cursor is restored through
+        ``with_cursor_restore``. Rows line up one to one because the
         caller homes and clears first and ``-S 0`` starts at viewport row
         1, so tmux's 0-based ``#{cursor_y}`` is simply row ``y + 1``.
 
-        A cursor that cannot be read appends nothing. Leaving the client
-        where the text ended is the old behavior, and an invented
-        position would be worse than the honest absence of one.
+        A cursor that cannot be read appends nothing; the helper's own
+        docstring carries why an invented one would be worse.
 
         Racing the app is possible and bounded: the cursor is read a
         couple of milliseconds after the capture, so an app that redraws
@@ -2753,12 +2757,8 @@ class TmuxBackend(SessionBackend):
         body = out.rstrip(b"\r\n")
         if not body.strip():
             return b""
-        screen = normalize_replay_newlines(body)
-        cursor = self.pane_cursor_position()
-        if cursor is None:
-            return screen
-        col, row = cursor
-        return screen + f"\x1b[{row + 1};{col + 1}H".encode("ascii")
+        return with_cursor_restore(
+            normalize_replay_newlines(body), self.pane_cursor_position())
 
     def pane_cursor_position(self) -> Optional[Tuple[int, int]]:
         """Read the pane's cursor as tmux reports it, 0-based.

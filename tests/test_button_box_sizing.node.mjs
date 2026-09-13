@@ -150,7 +150,7 @@ test('.btn-icon pins the round header icon controls to a control-size square', (
     assert.equal(decl(reset[0].body, 'height'), 'var(--control-size)');
 });
 
-test('.btn-icon is applied to exactly the four static buttons that need it', () => {
+test('.btn-icon is applied to exactly the five static buttons that need it', () => {
     // header-menu-toggle is built at runtime by header-menu.js, not
     // present in index.html, so it is not part of this static check.
     assert.match(indexHtml, /id="configEditorBtn"[^>]*class="btn-icon hidden"/,
@@ -185,16 +185,29 @@ test('.btn-icon is applied to exactly the four static buttons that need it', () 
     // client/css/session-editor-header.css rather than by a class.
     assert.match(indexHtml, /id="sessionEditorBtn"[^>]*class="btn-icon"/,
         '#sessionEditorBtn should carry the btn-icon class');
+    // #terminalSearchBtn JOINED THIS SET with the session search panel.
+    // It is a header control sitting immediately after the session
+    // editor and opens the find panel over the terminal, so it takes the
+    // header's box from this class for exactly the reason its neighbour
+    // does. Count 4 -> 5, and this is the deliberate edit the note below
+    // asks for. It differs from its four siblings in ONE way, recorded
+    // in web/src/lib/terminal-search/SearchPanel.svelte: it is hidden
+    // below 769px, on
+    // the header's own measured width budget at 330px, and the phone
+    // reaches the same panel through the terminal tools menu instead.
+    assert.match(indexHtml, /id="terminalSearchBtn"[^>]*class="btn-icon"/,
+        '#terminalSearchBtn should carry the btn-icon class');
     // Nothing ELSE in the static markup should carry it - every other
     // button already owns its full box via its own class. This is still an
-    // exact-set assertion, not a floor: a fifth one appearing means
+    // exact-set assertion, not a floor: a sixth one appearing means
     // somebody styled a button by borrowing the header treatment instead
     // of giving it its own, and that should be a deliberate edit here.
     const withClass = [...indexHtml.matchAll(/<button[^>]*class="([^"]*)"[^>]*>/g)]
         .filter((m) => m[1].split(/\s+/).includes('btn-icon'));
-    assert.equal(withClass.length, 4,
-        'btn-icon should be on exactly four static <button>s (#archiveBtn, '
-        + '#configEditorBtn, #launchpad-help-btn and #sessionEditorBtn)');
+    assert.equal(withClass.length, 5,
+        'btn-icon should be on exactly five static <button>s (#archiveBtn, '
+        + '#configEditorBtn, #launchpad-help-btn, #sessionEditorBtn and '
+        + '#terminalSearchBtn)');
 });
 
 test('box-sizing is border-box, which is why the reset eats padding', () => {

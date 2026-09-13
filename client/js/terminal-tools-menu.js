@@ -1,11 +1,16 @@
 /**
  * Terminal tools menu - getting content IN AND OUT of the terminal.
  * ----------------------------------------------------------------------
- * THREE ROWS, ONE IDEA: copy output, paste from clipboard, attach file.
- * Every one of them moves content across the terminal's boundary, which
- * is the rule a user can actually learn for what lives behind this
- * button. It is the successor to the paperclip FAB, which already owned
- * two of the three.
+ * FOUR ROWS, ONE IDEA: copy output, paste from clipboard, attach file,
+ * search. Every one of them moves content across the terminal's
+ * boundary, which is the rule a user can actually learn for what lives
+ * behind this button. It is the successor to the paperclip FAB, which
+ * already owned two of the four.
+ *
+ * SEARCH IS A CONTENT ROW, NOT A CONFIGURATION ONE, which is why it is
+ * here and not in the session editor next door. It pulls something OUT
+ * of the scrollback and puts it in front of the user; it changes nothing
+ * about the session. Same test the other three pass.
  *
  * MOBILE ONLY. The trigger and this menu are hidden above 769px by one
  * media query in terminal-tools.css, on the owner's instruction that
@@ -14,6 +19,12 @@
  * terminal.js's capture-phase file-paste handler; the copy sheet and the
  * file picker have no other desktop entry point, which is recorded there
  * rather than papered over with a second control.
+ *
+ * THE SEARCH ROW IS THE EXCEPTION AND IT IS DELIBERATE: it DOES have a
+ * desktop entry point, #terminalSearchBtn in the header, and that button
+ * is hidden below 769px on the header's own width budget. So the two are
+ * exact complements rather than a duplicate, with no width at which both
+ * or neither is reachable. Cmd+F works at every width regardless.
  *
  * WHAT IS NOT HERE, AND WHY. Session theme and session music were briefly
  * merged into this menu and that was wrong: they do not move content,
@@ -41,7 +52,8 @@ console.log('[TerminalToolsMenu Module] Loading...');
     var ENTRY_IDS = [
         'toolCopyOutput',
         'toolPasteClipboard',
-        'toolAttachImage'
+        'toolAttachImage',
+        'toolSearch'
     ];
 
     /** The Terminal wrapper handed over by terminal.js, or null. */
@@ -68,7 +80,10 @@ console.log('[TerminalToolsMenu Module] Loading...');
         image:
             '<rect x="2" y="3.5" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>' +
             '<path d="m3 11 3-3 2.5 2.5L11 8l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<circle cx="6" cy="6.5" r="1" stroke="currentColor" stroke-width="1.5"/>'
+            '<circle cx="6" cy="6.5" r="1" stroke="currentColor" stroke-width="1.5"/>',
+        search:
+            '<circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5"/>' +
+            '<path d="m10.5 10.5 3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
     };
 
     /**
@@ -90,7 +105,7 @@ console.log('[TerminalToolsMenu Module] Loading...');
     });
 
     /**
-     * The three rows, in order.
+     * The four rows, in order.
      *
      * @param {object} ctl - the FabMenu controller building them.
      * @returns {HTMLButtonElement[]}
@@ -108,6 +123,22 @@ console.log('[TerminalToolsMenu Module] Loading...');
             }),
             c.item(ENTRY_IDS[2], buildIcon('image'), 'attach file', function () {
                 if (fileInputEl) fileInputEl.click();
+            }),
+            c.item(ENTRY_IDS[3], buildIcon('search'), 'search', function () {
+                // open, not toggle: the row is only reachable from an
+                // open menu, and FabMenu closes that menu before this
+                // runs, so a toggle here could only ever mean "open".
+                //
+                // THE PANEL IS SVELTE NOW (web/src/lib/terminal-search/),
+                // so the entry point is on the compiled tree's namespace
+                // rather than on a global of its own. Guarded by typeof
+                // because this classic script loads BEFORE the module
+                // bundle does, and a row built in that window must not
+                // throw.
+                var web = window.CloudeWeb;
+                if (web && typeof web.openTerminalSearch === 'function') {
+                    web.openTerminalSearch();
+                }
             })
         ];
     }

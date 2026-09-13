@@ -109,15 +109,16 @@ function providerBlob() {
 /**
  * Globals provided by the browser or by a vendored library, not by us.
  *
- * The xterm four are the ones worth explaining: `Terminal`, `FitAddon`,
- * `WebglAddon` and `Unicode11Addon` come from `client/vendor/xterm/`,
- * loaded as classic scripts from `/static/vendor/xterm/`. They are OURS
- * to serve and not ours to define, and the CSP forbids fetching them from
- * anywhere else - which the vendored-asset test already enforces. The
- * rest is the standard library.
+ * The xterm five are the ones worth explaining: `Terminal`, `FitAddon`,
+ * `WebglAddon`, `Unicode11Addon` and `SearchAddon` come from
+ * `client/vendor/xterm/`, loaded as classic scripts from
+ * `/static/vendor/xterm/`. They are OURS to serve and not ours to
+ * define, and the CSP forbids fetching them from anywhere else - which
+ * the vendored-asset test already enforces. The rest is the standard
+ * library.
  */
 const AMBIENT = new Set([
-    'Terminal', 'FitAddon', 'WebglAddon', 'Unicode11Addon',
+    'Terminal', 'FitAddon', 'WebglAddon', 'Unicode11Addon', 'SearchAddon',
     'CustomEvent', 'Promise', 'Event', 'Error', 'Math', 'JSON', 'Date', 'Object',
     'Array', 'String', 'Number', 'Boolean', 'Map', 'Set', 'WeakMap', 'WeakSet',
     'RegExp', 'Symbol', 'URL', 'URLSearchParams', 'WebSocket', 'Blob', 'File',

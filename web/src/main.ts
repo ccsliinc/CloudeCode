@@ -1,12 +1,20 @@
 /**
  * Entry point for the Svelte half of the app.
  *
- * WHAT LOADING THIS DOES TO THE RUNNING APP: nothing visible. It
- * publishes one namespace, `window.CloudeWeb`, and returns. It mounts no
- * component into the document, registers no listener, touches no existing
- * element and overwrites no existing global. That is the contract for
- * this round of the migration - the bundle ships and proves itself, and
- * the screens change later, one at a time.
+ * WHAT LOADING THIS DOES TO THE RUNNING APP. It publishes one
+ * namespace, `window.CloudeWeb`, merges the `window.Launchpad` shim into
+ * whatever the legacy tree already put there, and - since the session
+ * search slice - mounts ONE panel and installs ONE document listener,
+ * both only when `.terminal-container` is in the document. It still
+ * overwrites no existing global.
+ *
+ * THAT LAST PART IS A CHANGE AND IT IS WRITTEN DOWN RATHER THAN QUIETLY
+ * MADE. Every earlier slice was mounted by a legacy caller at the line
+ * its own render used to run on. The search panel has no such line:
+ * `client/js/terminal-search.js` mounted itself at script load, and the
+ * chord that opens it has to work before the panel has ever been opened.
+ * So the mount lives here, guarded on the container existing, and
+ * `mountTerminalSearch` is idempotent and reversible.
  *
  * WHY A NAMESPACE AT ALL. The legacy tree is a set of IIFEs that publish
  * onto `window`, and it has to be able to call into the compiled tree
@@ -84,6 +92,13 @@ import {
 } from './lib/launchpad/navigation';
 import { showError as showHomeError, updateStatus } from './lib/launchpad/status-report';
 import type { FabAction } from './lib/launchpad/new-fab';
+import {
+    mountTerminalSearch,
+    openTerminalSearch,
+    terminalSearchIsOpen,
+    toggleTerminalSearch,
+    unmountTerminalSearch,
+} from './lib/terminal-search/mount-search';
 
 /** The id of the container `renderLaunchpadUI()` writes for the card. */
 const ATTRIBUTION_PROMPT_CONTAINER = 'attribution-prompt';
@@ -856,6 +871,20 @@ const CloudeWeb = {
      * them to it across the whole matrix.
      */
     sessionSummaryLabel: summaryLabel,
+    /**
+     * THE SESSION SEARCH PANEL, and the two ways the legacy tree opens
+     * it. `client/index.html`'s `#terminalSearchBtn` is wired by the
+     * mount itself, so these two exist for the surfaces the bundle
+     * cannot reach: the terminal tools menu's search row on a phone,
+     * and anything a later slice adds. `mountTerminalSearch` is exported
+     * as well because it is the only entry point that takes a host, and
+     * the node harness proves the bundle publishes all three.
+     */
+    mountTerminalSearch,
+    unmountTerminalSearch,
+    openTerminalSearch,
+    toggleTerminalSearch,
+    terminalSearchIsOpen,
 } as const;
 
 declare global {
@@ -887,3 +916,10 @@ publishLaunchpadShim({
     selectProject: (project: ProjectRow, choice?: Record<string, unknown> | null) =>
         selectProjectFlow(project, browserNavHost(), t, choice),
 });
+
+// THE SESSION SEARCH PANEL. A no-op on a page with no
+// `.terminal-container`, which is every page but this app's own shell,
+// and idempotent on the one that has it. It is last for the same reason
+// the shim is: it reaches `window` and everything above it should
+// already be published when it does.
+mountTerminalSearch();

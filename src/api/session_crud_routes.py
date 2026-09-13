@@ -11,11 +11,13 @@ DESTROY IS NOT DETACH. Destroy kills the tmux session and marks the row
 closed; detach drops this server's hold on a pane that keeps running.
 """
 
+import asyncio
 import base64
 import os
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from src.api import session_rejoin_capture
 from src.api.auth import require_auth
 from src.config import settings
 from src.core import session_change_notice
@@ -235,42 +237,20 @@ async def get_session(
         # captured bytes are emitted at the same width xterm will render
         # them at. Without this, scrollback for a desktop-width session
         # rejoined from a mobile-width client (or any width mismatch)
-        # paints with reflow artifacts. resize_terminal is sync + no-ops
-        # when the session/backend isn't live, so it's safe to call
-        # unconditionally whenever cols/rows look sane.
-        if cols and rows and cols > 0 and rows > 0:
-            try:
-                session_manager.resize_terminal(
-                    cols=cols, rows=rows, session_id=resolved_sid
-                )
-            except Exception as exc:
-                logger.warning(
-                    "rejoin_pre_resize_failed",
-                    session_id=resolved_sid,
-                    cols=cols,
-                    rows=rows,
-                    error=str(exc),
-                )
-
-        try:
-            # Mirror the depth used elsewhere (see SessionManager.adopt
-            # path) so rejoin and adopt paint the same amount of history.
-            lines = settings.load_auth_config().session.scrollback_lines
-            raw = session_manager.capture_scrollback(
-                lines=lines,
-                session_id=resolved_sid,
-            )
-            if raw:
-                session_info.initial_scrollback_b64 = base64.b64encode(raw).decode("ascii")
-        except Exception as exc:
-            # Non-fatal. Leave the field as default None so the client
-            # falls through to a clean-screen rejoin (still functional;
-            # just no pre-paint of history).
-            logger.warning(
-                "rejoin_scrollback_capture_failed",
-                session_id=resolved_sid,
-                error=str(exc),
-            )
+        # paints with reflow artifacts.
+        #
+        # OFF THE EVENT LOOP, both of them, in ONE thread so the resize
+        # still lands before the capture reads the pane. See
+        # ``session_rejoin_capture.resize_and_capture``.
+        raw = await asyncio.to_thread(
+            session_rejoin_capture.resize_and_capture,
+            session_manager,
+            session_id=resolved_sid,
+            cols=cols,
+            rows=rows,
+        )
+        if raw:
+            session_info.initial_scrollback_b64 = base64.b64encode(raw).decode("ascii")
 
     return session_info
 

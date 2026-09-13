@@ -77,6 +77,7 @@ def test_index_html_mentions_no_cdn_host() -> None:
         "xterm-addon-fit.js",
         "xterm-addon-webgl.js",
         "xterm-addon-unicode11.js",
+        "xterm-addon-search.js",
     ],
 )
 def test_vendored_xterm_asset_present_and_referenced(asset: str) -> None:
