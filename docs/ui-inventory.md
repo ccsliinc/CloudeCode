@@ -93,7 +93,7 @@ stops pulsing, and menu and button transitions are removed.
 Smaller adjustments happen at 768px (header padding and control size shrink, the
 copy output panel becomes a bottom sheet), 640px (the notification stack goes
 full width and shows fewer cards), 600px (the new item menu shrinks, slash
-command chips drop to two per row), 520px (the away bar's buttons stack), and
+command chips drop to two per row), and
 480px (header and title sizes shrink again, the paste panel becomes a bottom
 sheet, settings rows stack). A separate rule fires on any touch device
 regardless of width, raising the home screen's bottom bar to a 44px tap target.
@@ -672,7 +672,7 @@ leaves the session running on the Mac), or by navigating to another screen.
 button, the slash command button and its panel, and the direction pad. Below 700px
 neither the conversation sidebar nor the file drawer can be docked, so both cover
 the terminal instead of narrowing it. The copy panel becomes a bottom sheet below
-768px, the paste panel below 480px, and the away bar's buttons stack below 520px.
+768px and the paste panel below 480px.
 
 Screenshot: `session-idle-desktop` - a session open on a wide screen, nothing else
 showing.
@@ -769,31 +769,6 @@ Screenshot: `session-reconnecting` - the connection light and label mid reconnec
 
 **Music toggle.** The same shared speaker control described on Home.
 id: `#globalAudioBtn`
-
-## Region: away bar
-
-Screenshot: `session-away-bar` - the away bar over the terminal after returning
-from more than a minute away.
-
-An overlay across the terminal, shown when you come back after being away for at
-least a minute with a session attached. It asks what to do about output that
-arrived while you were gone. It measures the absence with a heartbeat rather than
-relying on a visibility event, so a phone that fully sleeps while locked is still
-detected. It appears once per absence. It is an overlay rather than a bar in the
-layout, because taking rows away from the terminal would resize the session and,
-in the agent's full screen mode, erase the visible conversation.
-id: `#awayBar`
-
-Three choices plus a close:
-
-- **show full history.** Replaces what is on screen with a fresh capture of the
-  session's real current state. A caveat line above the buttons says what this
-  will do before you press it.
-- **show summary.** Prints a short account of what happened while you were away,
-  inside the bar, without touching the terminal.
-- **just continue.** Dismisses and does nothing else. Whichever you chose last on
-  this device is marked on the button next time.
-- **close.** Dismisses without choosing.
 
 ## Region: floating controls, phone only
 
@@ -2199,10 +2174,6 @@ where it is in neither.
 falls too far behind the output stream the server closes its connection and the browser
 reconnects and repaints, but it shows the ordinary reconnect notice and waits a backoff step
 while doing it.
-
-**The away bar's full history option is destructive to what is on screen.** It replaces the
-visible terminal with a fresh capture, which is warned about but is still the kind of thing a
-user presses once and regrets.
 
 **The archive's "by machine" navigation is unreachable.** The drill down through machine and
 collection is fully built and still works, but the buttons that used to switch to it were removed

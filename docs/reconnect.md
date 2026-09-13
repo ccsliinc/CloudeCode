@@ -18,7 +18,7 @@ pane's previous geometry paints as shrapnel at the new one.
 
 **The launchpad / sidebar rejoin** (`GET /sessions?include_scrollback=1`).
 The server pre-resizes the pane to the client's grid and captures
-`tmux capture-pane -p -e -J -S -<session.scrollback_lines>`, default 3000
+`tmux capture-pane -p -e -J -S -<session.scrollback_lines>`, default 10000
 lines, and hands it over as `initial_scrollback_b64`. The client then asks
 `client/js/terminal-reconnect-buffer.js` what to do with it:
 
@@ -33,103 +33,55 @@ ALTERNATE SCREEN, where `history_size` is 0, so a capture of one of those
 panes is a single frame - the current one - and nothing before it. For a
 normal shell pane the capture really does reach back through history.
 
-So before this feature the app always decided alone, and never said what
-had happened during the gap.
+So the app decides alone about what to repaint, and does not narrate the
+gap. That is the shipped behaviour and it is deliberate as of
+2026-09-13; see the section below for what used to sit here.
 
-## The choice on wake
+## The away bar, removed 2026-09-13
 
-Punchlist item 1, in the owner's words: expose full-vs-summary as a
-deliberate option on wake, do not ship a suppression as the fix.
+**THERE IS NO WAKE PROMPT ANY MORE. Do not rebuild one without asking.**
 
-After a MEASURED ABSENCE of 60 seconds or more
-(`TerminalAwayGap.AWAY_THRESHOLD_MS`), an inline bar appears at the top of
-the terminal reading `away N min` and offering three answers:
+Between punchlist item 1 and 2026-09-13 the app showed an inline overlay
+after a measured absence of 60 seconds or more, reading `away N min` and
+offering three answers: show full history, show summary, just continue.
+The owner asked for it to go - verbatim, "get rid of this notification" -
+and the whole feature was deleted, client and server. Removed with it:
 
-| answer | what it does |
+| what | where it lived |
 |---|---|
-| show full history | replays tmux's capture, bounded by `session.scrollback_lines` (3000 by default), into the live terminal |
-| show summary | prints what the server recorded during the window |
-| just continue | dismisses; the reconnect keeps whatever it already did |
+| the rules, the thresholds and every sentence | `client/js/terminal-away-gap.js` |
+| the heartbeat, the element and the three actions | `client/js/terminal-away-bar.js` |
+| the overlay stylesheet | `client/css/terminal-away-bar.css` |
+| the facts behind the summary | `src/core/session_away_report.py` |
+| `GET /api/v1/sessions/away/summary` | `src/api/away_routes.py` |
+| the per-device remembered answer | `localStorage` key `cloude.away.lastChoice` |
 
-Under a minute is a blip, not an absence, and raises nothing: today's
-behaviour, no prompt. A bar that fired on every wifi hiccup would be
-dismissed unread, which is worse than no bar.
+**NOTHING WAS LOST, WHICH IS WHY THIS WAS SAFE.** The bar's only
+irreplaceable action was "show full history", and the session search
+feature (`web/src/lib/terminal-search/`, with
+`client/js/terminal-history-load.js`) pulls the full tmux history itself,
+on demand, whenever the user opens it. The summary read three facts the
+server already publishes elsewhere: the toast records
+(`GET /sessions/{id}/toasts`), the activity signal (surfaced as
+`activity_status` on `/sessions/list`) and one `#{alternate_on}` probe.
 
-**The last answer is remembered per device** in `localStorage` under
-`cloude.away.lastChoice`, and it PRE-SELECTS ONLY. The bar is still shown
-every time and nothing runs without a press. A remembered choice that
-acted on its own would be the silent default this feature exists to
-remove, wearing the user's own preference as a disguise.
+**ONE DECLARATION OUTLIVED THE FEATURE.**
+`client/css/terminal-away-bar.css` was where
+`.terminal-container { position: relative }` was declared, and the search
+panel and prompt rail depend on it - `.terminal-container` is a flex
+column, so an in-flow child of it steals rows from `#terminal`, the
+ResizeObserver reads that as a real geometry change, tmux raises SIGWINCH
+and claude answers with `ESC[2J`, erasing the alternate screen. Everything
+over the pane is therefore `position: absolute`, which needs the pane to
+be a containing block or the overlay resolves against `#terminal-screen`
+and spans the docked sidebar. That single declaration moved into
+`client/css/styles.css`, beside the rest of `.terminal-container`, and is
+guarded by `tests/test_terminal_container_containing_block.node.mjs`.
 
-## How the absence is measured
-
-Not by a visibility event alone. A phone that sleeps may fire nothing at
-all: the tab is already hidden and the OS simply suspends the process. So
-`client/js/terminal-away-bar.js` runs a HEARTBEAT, stamping the wall clock
-every 5 seconds while the page is visible. The gap between the last stamp
-and the next tick IS the absence, measured rather than inferred.
-`visibilitychange` is wired too because a tab switch does fire it and
-answers a beat sooner.
-
-**A websocket that drops and reattaches while you are watching raises no
-bar.** That is not an absence: you saw it happen, and the reconnect buffer
-already kept your screen across it. This layer never changes that keep
-rule; it only offers to do something MORE, afterwards, when asked.
-
-## What the summary is built from
-
-No LLM step and no new event log. `GET /api/v1/sessions/away/summary`
-(`src/api/away_routes.py`) reads three things the server already has, and
-`src/core/session_away_report.py` assembles them:
-
-- the session's TOAST RECORDS with a `created_at` at or after the window
-  start, counted by kind (`Stop`, `PermissionRequest`, `Notification`);
-- the live ACTIVITY SIGNAL held by `SessionActivityTracker`:
-  `permission_open`, `notice_open`, and the later of `last_tool_event_ts`
-  and `last_stop_ts`;
-- one tmux probe, `#{alternate_on}`, which is what decides whether "full
-  history" means history or means the current frame.
-
-`client/js/terminal-away-gap.js` turns that into the printed lines. The
-server ships facts and never sentences, so the app has exactly one
-duration formatter rather than two that drift.
-
-Three rules are load-bearing.
-
-**The turn count is a FLOOR, never a total.** `SessionManager.record_toast`
-SUPERSEDES an unacked `Stop` toast with the same title in place rather than
-appending, so twelve finished turns can be one stored record. The report
-therefore counts records, names the coalescing kinds in `coalesced_kinds`,
-and the client prints "at least 3 turns finished". Printing it as a total
-would be the same class of lie the toast layer already refuses to tell in
-the other direction.
-
-**A null is not a false.** `permission_open`, `notice_open` and
-`history.mode` are three-valued. The activity tracker is in-memory and a
-restart legitimately forgets it; the tmux probe can fail. An unread
-permission signal prints as "whether a permission request is open is
-unknown", never as silence. Silence there is the claim that sends someone
-away from a blocked agent.
-
-**Coverage is its own field, because the toast store dies with the
-process.** A bucket emptied by a restart is indistinguishable from a quiet
-session. So a window that starts before this process loaded reports
-`partial_server_restarted` and the bar says so out loud. `complete` and
-`unknown` are the other two. "Nothing happened" and "the record was thrown
-away" must never render the same.
-
-## Why the bar is an overlay
-
-`.terminal-container` is a flex column. An in-flow child of it takes rows
-away from `#terminal`; the ResizeObserver reads that as a real geometry
-change, ships a `pty_resize`, tmux raises SIGWINCH, and claude answers with
-`ESC[2J`, which on the alternate screen erases the whole visible
-conversation. A bar asking "what should I repaint" must not be able to wipe
-the answer on its way in. `#localServersContainer` paid for this lesson
-already; see `.local-servers` in `client/css/styles.css`.
-
-The bar's own stylesheet is `client/css/terminal-away-bar.css`, absolutely
-positioned inside that container.
+**A WEBSOCKET DROP WITH THE USER PRESENT NEVER RAISED A BAR ANYWAY**, and
+still raises nothing. That was never an absence: you saw it happen, and
+the reconnect buffer kept your screen across it. The keep rule below is
+untouched by any of this and always was.
 
 ## The retry ladder, and what an attempt is allowed to claim
 
@@ -198,25 +150,19 @@ if the user has gone elsewhere. See `client/js/navigation-generation.js`.
 
 ## Known gaps
 
-- A websocket drop with the user present raises no bar, by design (above).
-  If it ever should, the signal does not exist today: nothing dispatches an
-  event on `ws.onopen`, and `client/js/terminal.js` is under a no-growth
-  guard.
-- "show full history" on an alternate-screen pane replaces the browser's
-  kept buffer with a single captured frame. The bar says so before the
-  press, in `TerminalAwayGap.historyCaveat`, but the trade is real: for a
-  Claude Code session the browser's buffer is usually the better record.
+- Nothing narrates a gap. Coming back after two hours away, the app
+  repaints on its own rules and says nothing about what happened while you
+  were gone. That is the owner's call (above), not an oversight.
+- Pulling the full tmux history on an alternate-screen pane replaces the
+  browser's kept buffer with a single captured frame, because
+  `history_size` is 0 there. The trade is real: for a Claude Code session
+  the browser's buffer is usually the better record.
 
 ## Files
 
 | piece | file |
 |---|---|
-| The rules, the thresholds and every sentence | `client/js/terminal-away-gap.js` |
-| The heartbeat, the element and the three actions | `client/js/terminal-away-bar.js` |
-| The overlay stylesheet | `client/css/terminal-away-bar.css` |
-| The facts behind the summary | `src/core/session_away_report.py` |
-| `GET /sessions/away/summary` | `src/api/away_routes.py` |
 | What a reconnect may do to the buffer | `client/js/terminal-reconnect-buffer.js` |
 | What an attempt measured, what it costs, and which recovery a close asks for | `client/js/terminal-reconnect-policy.js` |
 | The budget, the backoff, the scheduler and the four branches | `client/js/terminal.js` |
-| Tests | `tests/test_terminal_away_gap.node.mjs`, `tests/test_session_away_report.py`, `tests/test_reconnect_scheduling.node.mjs` |
+| Tests | `tests/test_reconnect_scheduling.node.mjs`, `tests/test_terminal_container_containing_block.node.mjs` |

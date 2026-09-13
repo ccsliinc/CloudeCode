@@ -3,7 +3,7 @@
 This file used to BE the API: 4,397 lines and 51 routes in one module.
 Decomposition slice S6 moved every handler to a sibling next door, one per
 resource, following the pattern ``src/api/`` already used for archive,
-toasts, status, restart, recreate, groups, away, corpus, imported restart,
+toasts, status, restart, recreate, groups, corpus, imported restart,
 config files and version. What is left here is the assembly.
 
 **ORDER IS THE CONTRACT, and it is why this list is not alphabetical.**

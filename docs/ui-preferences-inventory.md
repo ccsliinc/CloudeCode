@@ -23,7 +23,9 @@ can produce).
    `<anything>.getItem|setItem|removeItem` to catch the files that take a
    `storage` parameter instead of naming `localStorage` directly (dependency
    injection for unit-testability - `archive-nav-order.js`,
-   `archive-pane-resize.js`, `themeAudioSettings.js`, `terminal-away-gap.js`).
+   `archive-pane-resize.js`, `themeAudioSettings.js`, `terminal-away-gap.js`
+   - that last file has since been deleted, see its row in "File
+   accounting").
    A regex over the literal token alone would have missed all four of those
    files' actual read/write call sites, even though the token count already
    matched the file-count check - which is exactly the false confidence the
@@ -64,7 +66,7 @@ by design.
 | Classification | Count | Keys |
 |---|---|---|
 | Shared preference (candidate for `ui_preferences`) | 8 | `cloude.theme`, `cloude.audio.enabled`, `cloude.audio.master`, `cloude.audio.volume` (legacy source for the same logical value), `cloude_provider_last_model`, `cloude.session.sidebar.density`, `cloude.session.sidebar.arrangement`, `cloude.configEditor.collapsed` |
-| Per-viewer convenience (must NOT sync) | 10 | `cloude.launchpad.deletedSessionsVisible`, `cloude.launchpad.archivedVisible`, `cloude.statusKey.open`, `cloude.away.lastChoice`, `cloude.archive.projectOrder`, `cloude.archive.panes.v1`, `cloude.themeJsAllowlist` (SUPERSEDED - see its entry), `cloude.theme.vars`, `cloude.audio.settingsVersion`, `cloude.audio.muted` (retired) |
+| Per-viewer convenience (must NOT sync) | 10 | `cloude.launchpad.deletedSessionsVisible`, `cloude.launchpad.archivedVisible`, `cloude.statusKey.open`, `cloude.away.lastChoice` (GONE - see its entry), `cloude.archive.projectOrder`, `cloude.archive.panes.v1`, `cloude.themeJsAllowlist` (SUPERSEDED - see its entry), `cloude.theme.vars`, `cloude.audio.settingsVersion`, `cloude.audio.muted` (retired) |
 | Ambiguous - record both readings (issue's own instruction; the four dock/fold controls that behave differently by viewport) | 4 | `cloude.configEditor.pinned`, `cloude.session.sidebar.pinned`, `cloude.session.sidebar`, `cloude.launchpad.collapsed` |
 | SECRET (never in `ui_preferences`, never printed) | 2 | `claude_tunnel_token`, `claude_refresh_token` |
 
@@ -258,15 +260,20 @@ about itself.
   value means collapsed rather than an error." Whether the status-light
   legend is expanded has nothing to do with any other device.
 
-### `cloude.away.lastChoice`
-- `client/js/terminal-away-gap.js:181` (write) / `:158` (read); the actual
-  `Storage` object is supplied by the one caller,
-  `client/js/terminal-away-bar.js:198` / `:301`
-  (`G.writeRememberedChoice(window.localStorage, ...)` /
-  `G.readRememberedChoice(window.localStorage)`).
-- Value: one of `'full' | 'summary' | 'continue'`. The file's own docstring:
-  "Per DEVICE and not per session on purpose: the preference is about how
-  this person likes to come back on THIS PHONE."
+### `cloude.away.lastChoice` - GONE, 2026-09-13
+- **The key and both files that touched it were deleted with the away bar**
+  (`client/js/terminal-away-gap.js`, `client/js/terminal-away-bar.js`), at
+  the owner's request. See `docs/reconnect.md`, "The away bar, removed
+  2026-09-13". Nothing reads or writes it anywhere in the tree.
+- The entry is kept because the audit's counts above are a snapshot of what
+  was measured, and because the classification still binds: it was
+  per-viewer, it must never become a synced field, and
+  `tests/test_ui_preferences.py` still holds `away_last_choice` in its
+  `MUST_NOT_SYNC` negative control. Nothing writes the key today, so
+  nothing can be migrated out of it either.
+- What it held: one of `'full' | 'summary' | 'continue'`, per DEVICE rather
+  than per session, because the preference was about how this person liked
+  to come back on THIS PHONE.
 
 ### `cloude.archive.projectOrder`
 - `client/js/archive-nav-order.js:168` (write) / `:143` (read). Storage is
@@ -501,8 +508,8 @@ confirmed empty rather than assumed empty.
 | `session-status-key.js` | `cloude.statusKey.open`. |
 | `session-theme-menu.js` | No direct call site. Per-session theme goes through a server PATCH (already server-owned, see below), never localStorage. Its docblock still describes a per-session audio opt-in key that used to live here - see "A stale doc pointer" below; that key no longer exists anywhere in the tree. |
 | `settings-panel.js` | No direct call site. Appearance delegates entirely to `registry.js`/`ThemeSelector`; agent/notification config is a server PATCH (already server-owned, see below). |
-| `terminal-away-bar.js` | Supplies `window.localStorage` into `terminal-away-gap.js`'s injected functions for `cloude.away.lastChoice`; no key of its own. |
-| `terminal-away-gap.js` | `cloude.away.lastChoice`. |
+| `terminal-away-bar.js` | FILE DELETED 2026-09-13 with the away bar. It supplied `window.localStorage` into `terminal-away-gap.js`'s injected functions for `cloude.away.lastChoice`; no key of its own. |
+| `terminal-away-gap.js` | FILE DELETED 2026-09-13 with the away bar. It owned `cloude.away.lastChoice`. |
 | `theme-navigation.js` | No direct call site; reads the default through `registry.js`'s `getStoredThemeId()`, writes either a server-side session pin or `cloude.theme` via `Themes.applyGlobal()` (both already covered under `cloude.theme`). |
 | `themeAudio.js` | Supplies `localStorage` into `themeAudioSettings.js`/`themeAudioVolume.js`'s injected functions for `cloude.audio.master`, `cloude.audio.volume`, `cloude.audio.settingsVersion` and `cloude.audio.muted`; no key of its own. |
 | `themeAudioSettings.js` | `cloude.audio.master`, `cloude.audio.volume` (legacy), `cloude.audio.settingsVersion`, `cloude.audio.muted` (retired). |
