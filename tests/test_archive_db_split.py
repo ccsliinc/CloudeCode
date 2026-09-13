@@ -52,6 +52,7 @@ from src.core.archive_db_split_refusals import (
     CONSTRAINT_NOT_STRIPPED,
     COUNT_MISMATCH,
     CROSSING_FK_SET_CHANGED,
+    DEST_FK_VIOLATIONS,
     KIND_MEASURED,
     KIND_UNCHECKED,
     ORPHANED_REFERENCE,
@@ -101,6 +102,16 @@ def build_state(tmp_path: Path, *, archives: int = 6) -> Path:
       self-reference, and populated values on every crossing column so a
       migration that dropped them would be caught by content rather than
       by arity alone.
+
+      IT CARRIES FORWARD SELF-REFERENCES ON PURPOSE, and it did not
+      until a full-scale rehearsal against the owner's real 5.57 GB
+      database died with "FOREIGN KEY constraint failed". The copy walks
+      rowid order, so a row whose ``parent_archive_id`` points at a
+      HIGHER id is inserted before its parent exists. The live data holds
+      16,387 such forward references; this fixture held ZERO, because it
+      was originally built by filtering exactly those rows out to get a
+      clean subset. A fixture that cannot contain the failure cannot
+      catch it, and this one now can.
     Inputs: tmp_path (Path), archives (int) - how many archive rows.
     Output: Path - the state directory holding cloude.db.
     Example: build_state(tmp_path)
@@ -133,6 +144,27 @@ def build_state(tmp_path: Path, *, archives: int = 6) -> Path:
             "INSERT INTO transcript_root_decisions (archive_id, project_id, note)"
             " VALUES (?,?,?)", (i, (i % 3) + 1, f"n{i}"),
         )
+    # FORWARD self-references, pointing at the LAST row rather than the
+    # next one. The distance is the point: a reference to the very next
+    # row lands inside the same chunk, and one chunk is one
+    # ``INSERT ... SELECT`` whose foreign keys sqlite checks at STATEMENT
+    # END, so a short hop resolves and proves nothing. Pointing at the
+    # final row guarantees the reference crosses a chunk boundary at any
+    # chunk size smaller than the table, which is the shape the live
+    # database actually failed on.
+    #
+    # Written after the inserts with enforcement deferred, because the
+    # fixture cannot create a forward reference in one pass either.
+    conn.execute("PRAGMA foreign_keys=OFF")
+    for i in range(1, archives, 2):
+        conn.execute(
+            "UPDATE transcript_archives SET parent_archive_id=? WHERE id=?",
+            (archives, i),
+        )
+    conn.execute("PRAGMA foreign_keys=ON")
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == [], (
+        "the fixture itself is not referentially sound"
+    )
     conn.close()
     return state
 
@@ -498,6 +530,69 @@ def test_an_interrupted_copy_resumes_rather_than_dying_on_its_own_tables(
     assert arch.execute("SELECT COUNT(*) FROM transcript_archives").fetchone()[0] == 6
     assert arch.execute("SELECT COUNT(*) FROM transcript_records").fetchone()[0] == 6
     arch.close()
+
+
+def test_forward_self_references_survive_the_copy(
+    state: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION, and it came from a full-scale run, not from reasoning.
+
+    ``transcript_archives`` references itself. The copy walks rowid
+    order, so a row whose parent has a HIGHER id is written before that
+    parent exists, and per-row enforcement kills the migration with
+    "FOREIGN KEY constraint failed". Measured on the owner's real 5.57 GB
+    database: 16,387 forward references. The 443 MB fixture had none
+    because it was built by filtering them out, so it passed every time.
+
+    THE CHUNK BOUNDARY IS WHAT MAKES IT FIRE, and getting that wrong is
+    how this test first passed against the very bug it was written for.
+    One chunk is ONE ``INSERT ... SELECT`` statement, and sqlite defers
+    foreign key checks to the END of a statement, so a forward reference
+    INSIDE a chunk resolves fine. The live database failed because
+    10,242,817 rows span many 20,000-row chunks and a reference crossing
+    a boundary meets a parent that is genuinely not there yet. So this
+    shrinks CHUNK_ROWS rather than growing the fixture to 20,000 rows.
+    """
+    monkeypatch.setattr("src.core.archive_db_copy.CHUNK_ROWS", 2)
+
+    with _open(state) as conn:
+        forward = conn.execute(
+            "SELECT COUNT(*) FROM transcript_archives "
+            "WHERE parent_archive_id > id"
+        ).fetchone()[0]
+    assert forward > 0, (
+        "the fixture carries no forward self-reference, so this test cannot "
+        "observe the failure it exists for"
+    )
+
+    report = run_split(state, apply=True, content_sample=6)
+    assert not report.refused, [r.rung for r in report.refusals]
+
+    arch = sqlite3.connect(archive_db_path_for(state))
+    try:
+        assert arch.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert arch.execute(
+            "SELECT COUNT(*) FROM transcript_archives "
+            "WHERE parent_archive_id > id"
+        ).fetchone()[0] == forward
+    finally:
+        arch.close()
+
+
+def test_a_foreign_key_violation_in_the_copy_refuses_the_drop() -> None:
+    """The verification half of the bulk-load idiom is a real refusal.
+
+    Turning enforcement off for the copy is only safe because this rung
+    turns it back into a measured check over the whole database. Without
+    it, the idiom would be a way of not noticing.
+    """
+    refusals = predrop_refusals(
+        count_mismatches={}, content_mismatches=[],
+        write_probe_failures={}, destination_integrity="ok",
+        fk_violations=[("transcript_archives", 41, "transcript_archives", 0)],
+    )
+    assert [r.rung for r in refusals] == [DEST_FK_VIOLATIONS]
+    assert blocking(refusals)
 
 
 def test_a_count_mismatch_refuses_the_drop() -> None:

@@ -384,16 +384,103 @@ for both files and needs no change beyond being pointed at each in turn.
 
 ---
 
+## The full-scale rehearsal, on a copy of the owner's real database
+
+Everything above was proven on a 443 MB fixture. This is the same
+migration run against a 5.57 GB online-backup snapshot of the LIVE
+`cloude.db`, taken 2026-09-13 with the source opened `mode=ro`. The live
+file was never opened for writing.
+
+| | |
+|---|---|
+| snapshot | 5,570,764,800 bytes, integrity ok, **schema v26** |
+| rows moved | **10,289,854** across 19 tables |
+| forward run | **56 seconds** |
+| content sample | 200 compared, **0 mismatched** |
+| dropped from main | 21 objects |
+| after VACUUM | `cloude.db` **5,570,764,800 -> 712,704 bytes (696 KiB)** |
+| archive file | 4.8 GB |
+| both databases | `integrity_check` ok, `foreign_key_check` clean |
+
+**56 seconds, not hours.** That is the number that changes the shape of
+the maintenance window, and it was worth measuring rather than assuming:
+the earlier estimate treated a 4.7 GB copy as a multi-hour job.
+
+**The live install is at schema v26**, which is why
+`VERIFIED_SCHEMA_VERSIONS` had to cover more than the v25 backup. A
+constant left at 25 would have refused the very database this exists for.
+
+### The bug only a full-scale run could find
+
+The first full-scale attempt died with `FOREIGN KEY constraint failed`
+while copying `transcript_archives`. That table references ITSELF through
+`parent_archive_id` and `superseded_by_archive_id`, the copy walks rowid
+order, and **15,085 rows point at a parent with a HIGHER id**. A child is
+therefore inserted before its parent exists.
+
+The 443 MB fixture had ZERO such rows, because it was built by filtering
+exactly those rows out to get a clean subset. A fixture that cannot
+contain the failure cannot catch it.
+
+The fix is the standard sqlite bulk-load idiom, and it is STRONGER than
+what it replaces: enforcement OFF for the copy, then
+`PRAGMA archive.foreign_key_check` over the whole database as a refusal
+rung (`destination_foreign_key_violations`). Per-row enforcement dies on
+the first violation and says nothing about the rest; the check reports
+every one.
+
+**THE CHUNK BOUNDARY IS WHAT MAKES IT FIRE, and two earlier versions of
+the regression test passed against the very bug they were written for.**
+One chunk is one `INSERT ... SELECT`, and sqlite defers foreign key
+checks to STATEMENT end, so a forward reference inside a chunk resolves
+fine. It only fails when the reference crosses a boundary. The test now
+shrinks `CHUNK_ROWS` to 2 and points its forward references at the LAST
+row, and only then does reverting the fix reproduce
+`sqlite3.IntegrityError: FOREIGN KEY constraint failed`.
+
+### A pre-existing data condition, found in passing and NOT caused by this
+
+Auditing all 23,420 archived transcripts against their own recorded
+hashes: **19,557 match their `content_sha256` (83.51 percent) and 3,863
+do not.** All 23,420 decompress cleanly.
+
+It is not a migration defect and that was verified rather than assumed:
+the same rows fail identically when read from the LIVE database, and the
+stored blobs are **byte-identical on both sides, 4 of 4 on the sampled
+failures**. The migration copied them faithfully, preserving a
+discrepancy that was already there.
+
+The shape is coherent: the mismatch correlates PERFECTLY with
+`raw_byte_length`. Every one of the 19,557 sound rows also has
+`len(content) == raw_byte_length`; every one of the 3,863 has
+`len(content) != raw_byte_length`. So for those rows BOTH recorded
+facts describe content the blob does not hold. It does not track
+`growth_kind` (both `initial` and `append` appear on both sides), and the
+recorded hash is not the hash of the compressed blob either (0 rows).
+
+Note this also qualifies an earlier claim in this document: the
+"400 of 400 byte-exact" figure was measured on a fixture subset selected
+by `parent_archive_id IS NULL AND superseded_by_archive_id IS NULL`,
+which turns out to correlate with the healthy population. It was true of
+that subset and is not representative of the whole corpus. The
+migration's OWN content check compares main against archive and is the
+right check for "did the copy work"; it passed with 0 of 200 mismatched.
+
+This is worth an owner decision on its own and is out of scope here.
+
 ## What is NOT done
 
-**The ATTACH is not yet wired into `db.py::connect()`, and the 68-module
-archive family still spells its SQL unqualified.** The migration creates
-and populates the separate file correctly and reversibly, and the
-integrity gate covers it, but the running app still expects the archive
-tables in `main`. Wiring the qualifier through the read paths is the next
-change and is deliberately separate: it touches every archive query and
-wants to be reviewed as its own diff rather than buried under a
-migration.
+**Running the migration on the LIVE install.** Everything is built,
+rehearsed at full scale and reversible, but the live run needs the server
+stopped and that is an owner decision. Measured 2026-09-13: the server is
+up (PID 5451, started 15:45 from the Sep 8 deploy, so it predates the
+ATTACH wiring), the corpus ingester is actively writing, and the live
+database gained 2 archives and 13,514 `transcript_records` during a
+twenty minute window of this work. Migrating out from under a process
+running pre-ATTACH code would break every archive query in it the instant
+the tables left `main`.
 
-So the order to ship in is: this, then the ATTACH wiring, then run the
-migration, then VACUUM as a separate decision.
+**THE ATTACH WIRING IS NOW DONE** (`src/core/archive_db_attach.py`,
+called from `db.py::connect()`), and it needed no change at any of the 68
+call sites. What remains is running the migration on the live install,
+which needs the server stopped and therefore the owner's say-so.

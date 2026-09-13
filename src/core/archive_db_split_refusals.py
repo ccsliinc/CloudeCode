@@ -45,6 +45,7 @@ CONTENT_MISMATCH = "content_sample_mismatch"
 CONSTRAINT_NOT_STRIPPED = "crossing_constraint_not_stripped"
 DEST_INTEGRITY_FAILED = "destination_integrity_failed"
 SOURCE_CHANGED_DURING_COPY = "source_changed_during_copy"
+DEST_FK_VIOLATIONS = "destination_foreign_key_violations"
 
 # Recorded, never refusing.
 DISK_CANNOT_BE_DETERMINED = "disk_headroom_cannot_be_determined"
@@ -236,6 +237,7 @@ def predrop_refusals(
     write_probe_failures: Dict[str, str],
     destination_integrity: Optional[str],
     source_drift: Optional[Dict[str, tuple]] = None,
+    fk_violations: Optional[Sequence[tuple]] = None,
 ) -> List[Refusal]:
     """Evaluate every rung guarding the one destructive step.
 
@@ -264,6 +266,21 @@ def predrop_refusals(
         write_probe_failures={}, destination_integrity="ok")  # []
     """
     out: List[Refusal] = []
+
+    if fk_violations:
+        shown = "; ".join(
+            f"{v[0]} row {v[1]} -> {v[2]}" for v in list(fk_violations)[:10]
+        )
+        out.append(Refusal(
+            DEST_FK_VIOLATIONS, KIND_MEASURED,
+            f"PRAGMA foreign_key_check found {len(fk_violations)} violation(s) "
+            f"in the copied archive: {shown}. The bulk copy runs with "
+            "enforcement OFF because a rowid-ordered insert necessarily "
+            "writes a self-referencing child before its parent (measured on "
+            "the live data: 16,387 forward references in transcript_archives), "
+            "so THIS is where that integrity is established. A violation here "
+            "means the copy is genuinely wrong, not merely out of order",
+        ))
 
     if source_drift:
         detail = "; ".join(

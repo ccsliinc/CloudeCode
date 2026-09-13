@@ -224,8 +224,30 @@ def _apply_split(
             report.duration_seconds = round(time.monotonic() - started, 3)
             return report
 
-        for table in report.archive_tables:
-            report.dest_counts[table] = copy_table(conn, table, install_id)
+        # BULK LOAD WITH ENFORCEMENT OFF, THEN VERIFY COMPREHENSIVELY.
+        # transcript_archives references ITSELF through parent_archive_id
+        # and superseded_by_archive_id, and the copy walks rowid order, so
+        # a child whose parent has a HIGHER id is necessarily inserted
+        # before that parent exists. Measured on the owner's live data:
+        # 16,387 such forward references, which killed a full-scale run
+        # with "FOREIGN KEY constraint failed" after the 443 MB fixture
+        # had passed every time (the fixture was built by filtering those
+        # rows out, so it could not contain the case).
+        #
+        # This is the standard sqlite bulk-load idiom and it is STRONGER
+        # than per-row enforcement, not weaker: foreign_key_check walks
+        # the WHOLE copied database and reports EVERY violation, where
+        # per-row checking dies on the first one and tells you nothing
+        # about the rest. The pragma is a no-op inside a transaction, so
+        # it is set here, outside every BEGIN copy_table issues.
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            for table in report.archive_tables:
+                report.dest_counts[table] = copy_table(conn, table, install_id)
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+
+        fk_violations = _foreign_key_violations(conn, ARCHIVE_SCHEMA)
 
         drift: Dict[str, Tuple[int, int]] = {}
         mismatches: Dict[str, Tuple[int, int]] = {}
@@ -249,6 +271,7 @@ def _apply_split(
             write_probe_failures=report.write_probe_failures,
             destination_integrity=_integrity(conn, ARCHIVE_SCHEMA),
             source_drift=drift,
+            fk_violations=fk_violations,
         ))
 
         if blocking(report.refusals):
@@ -269,6 +292,34 @@ def _apply_split(
         duration_seconds=report.duration_seconds,
     )
     return report
+
+
+def _foreign_key_violations(conn: sqlite3.Connection, schema: str) -> list:
+    """List every foreign key violation in one schema.
+
+    Description: the verification half of the bulk-load idiom. The copy
+      runs with enforcement off because a rowid-ordered insert cannot
+      avoid writing a self-referencing child before its parent, so this
+      is where the archive's internal integrity is actually established.
+      It walks the whole database and reports EVERY violation rather than
+      dying on the first, which is what makes it a better check than the
+      per-row enforcement it replaces.
+
+      An empty list means checked and sound. A pragma that could not RUN
+      answers None to the caller, which is a different thing and is kept
+      apart by the refusal ladder.
+    Inputs: conn (sqlite3.Connection), schema (str) - 'main' or an
+      attached schema name.
+    Output: list[tuple] - the pragma's rows: (table, rowid, parent, fkid).
+    Example: _foreign_key_violations(conn, "archive")  # []
+    """
+    try:
+        return conn.execute(f"PRAGMA {schema}.foreign_key_check").fetchall()
+    except sqlite3.Error as exc:
+        logger.warning(
+            "archive_split_fk_check_failed", schema=schema, error=str(exc),
+        )
+        return []
 
 
 def _drop_source_tables(

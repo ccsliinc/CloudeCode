@@ -221,25 +221,42 @@ def _apply_unsplit(
         if removed:
             report.constraints_restored[name] = sorted(set(removed))
 
-    for name in creation_order:
-        try:
+    # BULK LOAD WITH ENFORCEMENT OFF, THEN VERIFY THE WHOLE THING. Same
+    # reason as the forward direction: transcript_archives references
+    # ITSELF, so an ordered insert necessarily writes a child before its
+    # parent (16,387 such forward references measured on live data).
+    #
+    # This does NOT weaken the reverse's whole point. Re-imposing the
+    # three crossing constraints is the integrity check the split gave
+    # up, and foreign_key_check collects it MORE completely than per-row
+    # enforcement did: it reports every orphan in one pass instead of
+    # dying on the first and leaving the operator to find the rest by
+    # re-running. The constraints are real in the recreated DDL either
+    # way, which is what makes the check meaningful.
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        for name in creation_order:
             conn.execute("BEGIN")
             conn.execute(
                 f'INSERT INTO main."{name}" '
                 f'SELECT * FROM {ARCHIVE_SCHEMA}."{name}"'
             )
             conn.execute("COMMIT")
-        except sqlite3.IntegrityError as exc:
-            conn.execute("ROLLBACK")
-            report.refusals.append((
-                ORPHANED_REFERENCE,
-                f"copying {name} back under its original constraints failed: "
-                f"{exc}. This is the integrity guarantee the split gave up, "
-                "collected: a crossing reference was orphaned while the two "
-                "databases were apart, and it must be resolved by hand before "
-                "the reverse can complete",
-            ))
-            return
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    violations = conn.execute("PRAGMA main.foreign_key_check").fetchall()
+    if violations:
+        shown = "; ".join(f"{v[0]} row {v[1]} -> {v[2]}" for v in violations[:10])
+        report.refusals.append((
+            ORPHANED_REFERENCE,
+            f"{len(violations)} foreign key violation(s) after copying back "
+            f"under the original constraints: {shown}. This is the integrity "
+            "guarantee the split gave up, collected: a reference was orphaned "
+            "while the two databases were apart, and it must be resolved by "
+            "hand before the reverse can complete",
+        ))
+        return
 
     for name in creation_order:
         src_n = table_count(conn, ARCHIVE_SCHEMA, name)
