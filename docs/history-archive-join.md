@@ -128,6 +128,43 @@ index is a thing a database can be missing.
   ever run here and how much is pending. `model_not_populated` stays exactly as
   it was; this is the half it could not say.
 
+## Proven on real data, not only on fixtures
+
+400 real current archives (the newest by `ingested_at`) were copied out of
+the read-only backup into a throwaway datastore and projected. Before:
+`message_transcripts` 0, `message_bodies` 0, `message_content_blocks` 0,
+`message_appearances` 0, against 400 archives holding 1,453,421,920 raw
+bytes and 443,006 `transcript_records`. After:
+
+| table | rows |
+|---|---|
+| `message_transcripts` | 400 |
+| `message_appearances` | **443,006** (exactly the archive's own record count) |
+| `message_bodies` | 216,716 |
+| `message_content_blocks` | 137,168 |
+| `message_projects` | 39 |
+| `message_projection_ledger` | 400, all `projected`, 0 pending |
+
+1157.55 s wall clock. **Fidelity: 443,006 of 443,006 appearances
+`fidelity_verified`, zero failures and zero unverifiable.**
+
+The browser was then driven over it, function by function, and it works:
+the rail returned 1 host / 1 corpus / 39 projects / 50 transcripts in the
+largest; the reader paged 100 lines of an 8,257-line transcript in 1.0 ms;
+the chat view folded 100 turns in 11.7 ms with real roles
+(`user` 13, `assistant` 21, `system` 2, plus the record types) and real
+block types (`tool_use` 12, `thinking` 8, `tool_result` 11, `text` 2,
+`image` 2); search for `tmux` returned 50 hits in 5.2 ms and the negative
+control returned 0.
+
+**Two read-path numbers worth carrying forward, and they are NOT this
+change's doing.** `transcripts_for_project` took 287.3 ms for 50 rows,
+and the search negative control took 648.0 ms because finding nothing
+means scanning the whole scope. Both are pre-existing queries that had
+never been run against a populated model. They are exactly the
+measurement scope section 2.3 asked for and could not take, and they
+belong to the next step.
+
 ## Left for the migration step, named rather than implied
 
 1. **A replace orphans bodies.** `message_bodies` are interned and shared, so
