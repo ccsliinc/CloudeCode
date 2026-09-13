@@ -27,6 +27,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -70,6 +80,7 @@ function load(storage) {
         console: { log() {}, warn() {}, error() {}, debug() {} },
     };
     vm.createContext(context);
+    installArchiveGlobals(context.window || context);
     // archive-nav-card.js IS LOADED DELIBERATELY, and leaving it out was
     // a real false green caught in the browser rather than here:
     // ArchiveNavRow.renderRow DELEGATES every project row to
@@ -77,8 +88,7 @@ function load(storage) {
     // the card module exercises a branch the app never reaches. The
     // assertions below passed against that dead branch while the running
     // app rendered no date at all.
-    for (const file of ['archive-outcome.js', 'archive-format.js',
-                        'archive-outcome-view.js', 'archive-nav-order.js',
+    for (const file of ['archive-outcome.js', 'archive-outcome-view.js', 'archive-nav-order.js',
                         'archive-nav-row.js', 'archive-nav-card.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
@@ -124,8 +134,7 @@ function nodes() {
           newest_activity_at: '2025-12-29T06:34:00Z' },
         { display_name: 'Delta', full_path: '-d', session_count: 7,
           session_counted: true, activity_status: 'none',
-          newest_activity_at: null },
-    ];
+          newest_activity_at: null }];
 }
 
 /**

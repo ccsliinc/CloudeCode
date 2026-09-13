@@ -1,67 +1,27 @@
-// Archive display formatting: byte counts, character counts, timestamps,
-// relative ages, sha256 abbreviation and slug shortening.
-//
-// WHY A FORMATTER GETS ITS OWN TEST FILE. A formatter is the last place
-// anyone looks for a false green, which is exactly why one can live
-// there undisturbed. formatBytes(undefined) returning '0 B' is not a
-// cosmetic problem: it renders a confident, specific, WRONG fact in the
-// same typeface as a real measurement, and no downstream check can tell
-// the two apart afterwards. So the assertions below are split evenly
-// between "does it format correctly" and "does it refuse to invent a
-// number", and the refusal half is the half that matters.
-//
-// Run with: node tests/test_archive_format.node.mjs
-
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
+/**
+ * Pure display formatting: every function's third return, and the two
+ * unit facts. PORTED from `tests/test_archive_format.node.mjs`, deleted
+ * in the same commit.
+ *
+ * THE ASSERTION BODIES ARE THE NODE SUITE'S, UNCHANGED. Only the harness
+ * moved: the vm sandbox that loaded `client/js/archive-format.js` became
+ * a direct import of the ported module, and `node:assert/strict` stayed
+ * exactly as it was rather than being retyped into `expect`. Rewriting a
+ * test against the new implementation is how a port ships a behaviour
+ * change with a green run, and this file has a lot of small assertions
+ * where that would be easy to do without noticing.
+ *
+ * WHAT THE SUITE IS FOR. A formatter is the last place anyone looks for
+ * a false green, which is exactly why it is a good place for one to
+ * hide: `formatBytes(undefined)` returning '0 B' renders a confident,
+ * specific, wrong fact in the same typeface as a real one. Every case
+ * below about NOT_KNOWN is a negative control, and the POSITIVE CONTROL
+ * at the bottom is what stops a function that returned NOT_KNOWN for
+ * EVERYTHING from passing all of them.
+ */
 import assert from 'node:assert/strict';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
-
-let failures = 0;
-let passes = 0;
-
-/**
- * Run one named assertion block, recording pass/fail rather than throwing.
- * @param {string} name - Test description.
- * @param {() => void} fn - Body; throwing marks it failed.
- * @returns {void}
- */
-function test(name, fn) {
-    try {
-        fn();
-        passes++;
-        console.log(`ok - ${name}`);
-    } catch (err) {
-        failures++;
-        console.error(`NOT OK - ${name}`);
-        console.error(err && err.stack ? err.stack : err);
-    }
-}
-
-/**
- * Load client/js/archive-format.js in a vm sandbox.
- * @returns {object} window.ArchiveFormat
- */
-function loadFormat() {
-    const fakeWindow = {};
-    const context = {
-        window: fakeWindow,
-        console: { log() {}, warn() {}, error() {}, debug() {} },
-    };
-    vm.createContext(context);
-    vm.runInContext(
-        fs.readFileSync(path.join(ROOT, 'client', 'js', 'archive-format.js'), 'utf8'),
-        context,
-        { filename: 'archive-format.js' }
-    );
-    return context.window.ArchiveFormat;
-}
-
-const F = loadFormat();
+import { test } from 'vitest';
+import { archiveFormat as F } from './format';
 
 /** Inputs that are not a measurement, in every shape the API can produce. */
 const NOT_A_MEASUREMENT = [null, undefined, NaN, Infinity, -Infinity, -1,
@@ -175,7 +135,7 @@ test('formatTimestamp returns NOT KNOWN, never the epoch or today', () => {
 
 test('formatRelativeAge renders each step against a pinned clock', () => {
     const base = Date.parse('2026-08-31T12:00:00Z');
-    const at = (iso) => F.formatRelativeAge(iso, base);
+    const at = (iso: string) => F.formatRelativeAge(iso, base);
     assert.equal(at('2026-08-31T11:59:30Z'), '30 seconds ago');
     assert.equal(at('2026-08-31T11:59:00Z'), '1 minute ago');
     assert.equal(at('2026-08-31T11:30:00Z'), '30 minutes ago');
@@ -261,7 +221,7 @@ test('shortenSlug never cuts through a surrogate pair', () => {
     const out = F.shortenSlug(slug, 20);
     assert.equal(Array.from(out).length, 20);
     for (const ch of Array.from(out)) {
-        const cp = ch.codePointAt(0);
+        const cp = ch.codePointAt(0)!;
         assert.ok(cp < 0xD800 || cp > 0xDFFF,
             'a lone surrogate survived, so the slice cut through a pair');
     }
@@ -301,9 +261,7 @@ test('POSITIVE CONTROL: no function returns NOT KNOWN for good input', () => {
             `${name} refused input it should have formatted - if this fails, ` +
             'every "refuses bad input" assertion in this file is vacuous');
         assert.equal(typeof value, 'string');
-        assert.ok(value.length > 0);
+        assert.ok(String(value).length > 0);
     }
 });
 
-console.log(`\n${passes} passed, ${failures} failed`);
-process.exit(failures === 0 ? 0 : 1);

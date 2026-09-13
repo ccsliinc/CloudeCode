@@ -122,3 +122,31 @@ export { createArchiveClient };
 export type { ArchiveClient };
 export type { HistoryScreen, ScreenShellHost };
 export type { ArchiveRoute } from './route';
+
+/**
+ * SLICE 4'S PUBLIC SHAPE, FOR THE SEAM AND FOR NOBODY ELSE. State, the
+ * key map, the help modal and the formatters are ported, and eight
+ * modules belonging to slices 3 and 5 to 9 still reach them as
+ * `window.ArchiveState` / `ArchiveKeys` / `ArchiveKeysHelp` /
+ * `ArchiveFormat`. `../archive-state-install.ts` is the ONE thing
+ * outside this directory allowed to take them, and it publishes those
+ * names. Everything comes out through THIS file rather than by letting
+ * anything import `history/state` directly, which is the boundary
+ * `import-direction.test.ts` pins: the public shape may GROW an export,
+ * and nothing outside may reach past it. Slices 5 to 9 delete these
+ * lines along with their callers.
+ */
+export { createArchiveState, initial as archiveInitialState, DEADLINES_MS,
+         ROW_KEY, IDLE, LOADING } from './state';
+export type { ArchiveStateModule, ArchiveStateShape, ArchiveActionMessage,
+              OutcomeClassifier, ViewSlice, Reason } from './state';
+export { ACTIONS, NAMED_KEYS, PLAIN_KEYS, bindings, createSelection,
+         hasCommandModifier, resolve, resolveEscape } from './keys';
+export type { ArchiveAction, Binding, KeyContext, KeyLike, Selection } from './keys';
+export { openHelp, buildHelpTable, HELP_MODAL_ATTR, HELP_MODAL_NAME,
+         HELP_ROOT_CLASS, HELP_CLOSE_ACTION } from './keys-help';
+export type { HelpHandle, ModalStackLike, OpenHelpOptions } from './keys-help';
+export { archiveFormat, formatBytes, formatChars, formatCount,
+         formatTimestamp, formatRelativeAge, abbreviateSha, shortenSlug,
+         renderTranscriptHeader, NOT_KNOWN, SLUG_MAX_CHARS,
+         SHA_ABBREV_CHARS } from './format';

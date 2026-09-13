@@ -1,100 +1,74 @@
-// THE ARCHIVE KEYBOARD MAP, and specifically the Escape ladder's ORDER.
-//
-// Escape means "back out of the innermost thing", and the innermost
-// thing is not always the same. Two owners for one key is how a modal
-// closes and the screen behind it also navigates - one keystroke, two
-// effects, and the second one is invisible until the person notices
-// their paging position is gone.
-//
-// Run with: node tests/test_archive_keys.node.mjs
-
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
-import assert from 'node:assert/strict';
-import { createEnvironment } from './mini-dom.mjs';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
-
-let failures = 0;
-let passes = 0;
-
 /**
- * Run one named assertion block, recording pass/fail rather than throwing.
- * @param {string} name - Test description.
- * @param {() => void} fn - Body; throwing marks it failed.
- * @returns {void}
- */
-function test(name, fn) {
-    try {
-        fn();
-        passes++;
-        console.log(`ok - ${name}`);
-    } catch (err) {
-        failures++;
-        console.error(`NOT OK - ${name}`);
-        console.error(err && err.stack ? err.stack : err);
-    }
-}
-
-/**
- * Load archive-keys.js into a vm context. It is pure, so it needs no DOM.
- * @returns {object} The ArchiveKeys module.
- */
-function load() {
-    const context = {
-        window: {},
-        console: { log() {}, warn() {}, error() {}, debug() {} },
-    };
-    vm.createContext(context);
-    vm.runInContext(
-        fs.readFileSync(path.join(ROOT, 'client', 'js', 'archive-keys.js'), 'utf8'),
-        context, { filename: 'archive-keys.js' }
-    );
-    return context.window.ArchiveKeys;
-}
-
-/**
- * Load ArchiveKeys against a real mini-DOM plus a recording ModalStack.
+ * The archive keyboard map: the Escape ladder, the text-field rule, the
+ * help panel and the selection cursor. PORTED from
+ * `tests/test_archive_keys.node.mjs`, deleted in the same commit.
  *
- * `openHelp` NOW LIVES IN archive-keys-help.js and archive-keys.js
- * delegates to it, so BOTH files are loaded here - loading only the
- * first would make every assertion below fail with "archive-keys-help.js
- * is not loaded", which is the delegation's own named refusal doing
- * exactly its job. It needs a document and the modal registry the real
- * app supplies. The stack is
- * recorded rather than stubbed away, because "did it register" is the
- * assertion that matters: an unregistered overlay means Escape reaches
- * the screen behind it.
- * @param {object} env - a createEnvironment() result.
- * @returns {{keys: object, stack: object}} The module and the stack.
+ * THE ASSERTION BODIES ARE THE NODE SUITE'S, UNCHANGED, with ONE
+ * exception that the commit message names: the case asserting the
+ * vanilla load-order guard, whose subject genuinely went away when the
+ * two modules became linked by an import. That case is KEPT and its
+ * assertion moved onto the property that replaced the guard, rather than
+ * deleted - see it below.
+ *
+ * THE MINI-DOM AND THE RECORDING MODAL STACK ARE THE SUITE'S OWN, reused
+ * rather than replaced with jsdom. "Did the overlay register with the
+ * stack" is the assertion that matters here - an unregistered overlay
+ * means Escape reaches the screen behind it - so the stack is RECORDED
+ * rather than stubbed away.
+ *
+ * WHAT THE BINDING-TABLE CASES ARE FOR. A key shown in help and bound to
+ * nothing is exactly the shape `session-status-key.js` exists to prevent
+ * on the status lights: a vocabulary the app documents and does not
+ * speak. `every binding in the help table actually resolves` is the case
+ * that stops it, and it reads the LIVE table rather than a copy.
  */
-function withModalStack(env) {
-    const context = {
-        window: { document: env.document },
-        document: env.document,
-        console: { log() {}, warn() {}, error() {}, debug() {} },
-    };
-    let entries = [];
-    context.window.ModalStack = {
-        push(overlayEl, options) { entries.push({ overlayEl, options }); },
-        pop(overlayEl) { entries = entries.filter((e) => e.overlayEl !== overlayEl); },
+import assert from 'node:assert/strict';
+import { test } from 'vitest';
+import { createEnvironment } from '../../../../../tests/mini-dom.mjs';
+import { ACTIONS, NAMED_KEYS, PLAIN_KEYS, bindings, createSelection,
+         hasCommandModifier, resolve, resolveEscape } from './keys';
+import { openHelp, HELP_MODAL_ATTR, HELP_MODAL_NAME } from './keys-help';
+
+/**
+ * The module surface, in the shape the node suite's `load()` returned,
+ * so its assertion bodies read unchanged.
+ */
+const keys = {
+    resolve, resolveEscape, bindings, createSelection, hasCommandModifier,
+    ACTIONS, PLAIN_KEYS, NAMED_KEYS, HELP_MODAL_ATTR, HELP_MODAL_NAME,
+    openHelp,
+};
+
+/** The action names, as the suite refers to them. */
+const A = keys.ACTIONS;
+
+/**
+ * Open the help panel against a real mini-DOM plus a RECORDING modal
+ * stack.
+ *
+ * Description: the stack is INJECTED now rather than read off a global -
+ *   the one shape change in `keys-help.ts` - so this hands it in
+ *   directly instead of publishing `window.ModalStack` into a sandbox.
+ *   What it records is identical.
+ * Inputs: env - a createEnvironment() result.
+ * Output: {keys, stack} - a keys surface whose openHelp uses that stack.
+ */
+function withModalStack(env: { document: unknown }) {
+    let entries: { overlayEl: Element; options: unknown }[] = [];
+    const stack = {
+        push(overlayEl: Element, options: unknown) { entries.push({ overlayEl, options }); },
+        pop(overlayEl: Element) { entries = entries.filter((e) => e.overlayEl !== overlayEl); },
         depth() { return entries.length; },
     };
-    vm.createContext(context);
-    for (const f of ['archive-keys.js', 'archive-keys-help.js']) {
-        vm.runInContext(
-            fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),
-            context, { filename: f }
-        );
-    }
-    return { keys: context.window.ArchiveKeys, stack: context.window.ModalStack };
+    return {
+        keys: {
+            ...keys,
+            openHelp: (options: Record<string, unknown>) =>
+                openHelp({ modalStack: stack, ...(options || {}) } as never),
+        },
+        stack,
+    };
 }
-
-const keys = load();
-const A = keys.ACTIONS;
 
 // ---- 1. THE ESCAPE LADDER, RUNG BY RUNG -----------------------------
 
@@ -165,7 +139,7 @@ test('Enter in a text field belongs to that field, not to this map', () => {
 
 test('a command modifier hands the key back to the browser', () => {
     for (const mod of ['ctrlKey', 'metaKey', 'altKey']) {
-        const e = { key: 'j' };
+        const e: Record<string, unknown> = { key: 'j' };
         e[mod] = true;
         assert.equal(keys.resolve(e, {}), null, `${mod}+j was claimed`);
     }
@@ -257,9 +231,9 @@ test('? is claimed by nobody while typing, under a modal, or with a modifier', (
 test('the help panel renders one row per binding and none invented', () => {
     const env = createEnvironment();
     const ctx = withModalStack(env);
-    const handle = ctx.keys.openHelp({ document: env.document });
+    const handle = ctx.keys.openHelp({ document: env.document as never });
     const rows = env.document.querySelectorAll('tr[data-action]');
-    const rendered = rows.map((r) => r.getAttribute('data-action'));
+    const rendered = rows.map((r: Element) => r.getAttribute('data-action'));
     const declared = ctx.keys.bindings().map((b) => b.action);
     // Object.keys length rather than deepStrictEqual: a vm module lives
     // in its own realm, so two structurally identical values can still
@@ -277,7 +251,7 @@ test('the help panel registers with ModalStack and deregisters on close', () => 
     const env = createEnvironment();
     const ctx = withModalStack(env);
     assert.equal(ctx.stack.depth(), 0);
-    const handle = ctx.keys.openHelp({ document: env.document });
+    const handle = ctx.keys.openHelp({ document: env.document as never });
     assert.equal(ctx.stack.depth(), 1,
         'without this, Escape would reach the archive screen underneath ' +
         'and throw away a paging position while closing the panel');
@@ -290,8 +264,8 @@ test('the help panel registers with ModalStack and deregisters on close', () => 
 test('opening the help panel twice does not stack two panels', () => {
     const env = createEnvironment();
     const ctx = withModalStack(env);
-    const a = ctx.keys.openHelp({ document: env.document });
-    const b = ctx.keys.openHelp({ document: env.document });
+    const a = ctx.keys.openHelp({ document: env.document as never });
+    const b = ctx.keys.openHelp({ document: env.document as never });
     assert.equal(env.document.querySelectorAll('[data-modal="archive-help"]').length, 1);
     assert.equal(a.overlay, b.overlay);
     a.close();
@@ -310,7 +284,7 @@ test('openHelp REFUSES a missing document rather than silently doing nothing', (
     // module-missing refusal instead and pass for the wrong reason.
     const env = createEnvironment();
     const { keys: k } = withModalStack(env);
-    let caught = null;
+    let caught: any = null;
     try {
         k.openHelp({});
     } catch (err) {
@@ -319,27 +293,31 @@ test('openHelp REFUSES a missing document rather than silently doing nothing', (
     assert.ok(caught,
         'a help panel that quietly fails to open is indistinguishable ' +
         'from a key that is not bound');
-    assert.equal(caught.name, 'TypeError');
-    assert.ok(/document/.test(caught.message),
+    assert.equal(caught!.name, 'TypeError');
+    assert.ok(/document/.test(String(caught!.message)),
         'the refusal must name the missing argument');
 });
 
-test('openHelp NAMES the missing help module rather than failing as "not a function"', () => {
-    // archive-keys.js alone, exactly as `load()` provides it. An error
-    // reading "openHelp is not a function" would report the wrong cause
-    // - the function IS there, the module it delegates to is not - and
-    // this is the whole reason the delegation is a named refusal and not
-    // an optional-chaining no-op.
-    let caught = null;
-    try {
-        keys.openHelp({ document: createEnvironment().document });
-    } catch (err) {
-        caught = err;
-    }
-    assert.ok(caught, 'a missing module must never fail silently');
-    assert.equal(caught.name, 'ReferenceError');
-    assert.ok(/archive-keys-help\.js/.test(caught.message),
-        'the refusal must name the FILE somebody has to add to index.html');
+test('the help modal is bound at IMPORT time, so no load-order guard is needed', () => {
+    // THE CASE IS KEPT AND ITS ASSERTION MOVED, which the commit message
+    // names. The vanilla `archive-keys.js` carried an `openHelp` that
+    // reached `window.ArchiveKeysHelp` and threw a ReferenceError naming
+    // the file when the script had not loaded - a real guard for a world
+    // of classic scripts that do not import each other, and this case
+    // asserted it fired.
+    //
+    // Inside the bundle there is no load order to get wrong: `keys.ts`
+    // and `keys-help.ts` are linked by an import, so the module is
+    // either there or the build failed. Porting the guard would have
+    // shipped a branch that can never fire, which is worse than no guard
+    // because a reader would believe it protects something. So what is
+    // asserted now is the PROPERTY that made the guard unnecessary.
+    assert.equal(typeof openHelp, 'function',
+        'the help modal is reached by import, not by a global');
+    const env = createEnvironment();
+    const handle = openHelp({ document: env.document as never });
+    assert.ok(handle && handle.overlay, 'it opens without any global being published');
+    handle.close();
 });
 
 // =====================================================================
@@ -408,5 +386,3 @@ test('select() clamps an out-of-range index instead of accepting it', () => {
     assert.equal(s.select(-1), -1, 'a negative index clears the selection');
 });
 
-console.log(`\n${passes} passed, ${failures} failed`);
-process.exit(failures === 0 ? 0 : 1);

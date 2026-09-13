@@ -30,6 +30,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -68,6 +78,7 @@ function loadModules(doc, files) {
     };
     context.globalThis = context;
     vm.createContext(context);
+    installArchiveGlobals(context.window || context);
     for (const f of files) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),
@@ -84,7 +95,7 @@ const NAV_FILES = ['archive-outcome.js', 'archive-outcome-view.js',
 
 /** The transcript list's module set. @type {string[]} */
 const LIST_FILES = ['archive-outcome.js', 'archive-outcome-view.js',
-    'archive-format.js', 'archive-fuzzy.js', 'archive-tlist-filter.js',
+    'archive-fuzzy.js', 'archive-tlist-filter.js',
     'archive-tlist-row.js'];
 
 /** An api that answers every rail call with an empty ok envelope. */
@@ -307,7 +318,7 @@ await test('the reader toolbar carries a view toggle whose label names the desti
 
 await test('the v key resolves to the view toggle and is in the help table', () => {
     const env = createEnvironment();
-    const w = loadModules(env.document, ['archive-keys.js']);
+    const w = loadModules(env.document, []);
     const K = w.ArchiveKeys;
     assert.equal(K.ACTIONS.TOGGLE_VIEW, 'toggle-view');
     assert.equal(K.resolve({ key: 'v' }, { inTextField: false }),

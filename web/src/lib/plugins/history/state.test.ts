@@ -1,92 +1,99 @@
-// Archive screen state machine: the three invariants that make the
-// three-outcome property survive a sequence of requests.
-//
-// INVARIANT 1. Every `loading` carries a deadline, and crossing it turns
-// the view into transport-error. A spinner with no terminal condition is
-// a state that can never fail - a verification step that cannot report a
-// problem, which is the worst defect shape available because there is no
-// outer check left to catch it.
-//
-// INVARIANT 2. A RESPONSE only lands on a `loading` view. A late arrival
-// from a superseded query must not overwrite what a person is currently
-// reading with the answer to a question they moved on from.
-//
-// INVARIANT 3, AND THE ONE THIS FILE EXISTS FOR. A `partial` NEVER
-// becomes a success token without an explicit RESUME. Measured live
-// 2026-08-31, a partial search reported 2,615 of 3,416 transcripts never
-// read; a state machine that lets that quietly become `ok` reports 2,615
-// unread transcripts as searched.
-//
-// Run with: node tests/test_archive_state.node.mjs
-
+/**
+ * The reducer: its three invariants, driven with REAL captured
+ * envelopes. PORTED from `tests/test_archive_state.node.mjs`, deleted in
+ * the same commit.
+ *
+ * THE ASSERTION BODIES ARE THE NODE SUITE'S, UNCHANGED. Only the harness
+ * moved. That matters more here than anywhere else in this slice,
+ * because these cases encode three invariants that are each one edit
+ * away from being silently weakened: a `loading` with no deadline, a
+ * late response landing on a view nobody is waiting with, and a
+ * `partial` quietly becoming an `ok`.
+ *
+ * THE CLASSIFIER IS THE REAL `archive-outcome.js`, vm-loaded. That
+ * module is SLICE 9 and is still vanilla, so a double here would be this
+ * suite agreeing with a fixture it wrote itself - and the outcome
+ * classification is precisely what the fixtures below exist to exercise.
+ * Loading the shipping file keeps the seam honest and is also what the
+ * node suite did.
+ *
+ * THE ENVELOPES ARE CAPTURED FROM THE LIVE SERVER, not constructed here.
+ * A reducer tested against envelopes the test invented is a test of the
+ * test's idea of the API.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { test } from 'vitest';
+import { createArchiveState, type OutcomeClassifier } from './state';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.join(__dirname, '..');
-const FIXTURES = path.join(__dirname, 'fixtures', 'archive');
+/** Repo root, from vitest's cwd (web/). */
+const ROOT = path.join(process.cwd(), '..');
 
-let failures = 0;
-let passes = 0;
+/** Where the captured envelopes live. */
+const FIXTURES = path.join(ROOT, 'tests', 'fixtures', 'archive');
 
-/**
- * Run one named assertion block, recording pass/fail rather than throwing.
- * @param {string} name - Test description.
- * @param {() => void} fn - Body; throwing marks it failed.
- * @returns {void}
- */
-function test(name, fn) {
-    try {
-        fn();
-        passes++;
-        console.log(`ok - ${name}`);
-    } catch (err) {
-        failures++;
-        console.error(`NOT OK - ${name}`);
-        console.error(err && err.stack ? err.stack : err);
-    }
-}
-
-/** @param {string} name @returns {object} A captured live envelope. */
-function fixture(name) {
+/** Read one captured live envelope. */
+function fixture(name: string): any {
     return JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8'));
 }
 
 /**
- * Load archive-outcome.js and archive-state.js into one vm sandbox.
- * They share a context because the reducer calls
- * window.ArchiveOutcome.classify.
- * @returns {object} window.ArchiveState
+ * Load the REAL `archive-outcome.js` in a sandbox and hand back its
+ * classifier.
+ *
+ * Description: slice 9 still owns that module and it is still a classic
+ *   script, so this is the only way to reach the shipping implementation
+ *   from here. When slice 9 lands, this becomes an import.
+ * Inputs: none. Output: OutcomeClassifier.
  */
-function loadState() {
-    const fakeWindow = {};
-    const context = {
-        window: fakeWindow,
+function realOutcome(): OutcomeClassifier {
+    const context: { window: Record<string, unknown>; console: unknown } = {
+        window: {},
         console: { log() {}, warn() {}, error() {}, debug() {} },
     };
     vm.createContext(context);
-    for (const file of ['archive-outcome.js', 'archive-state.js']) {
-        vm.runInContext(
-            fs.readFileSync(path.join(ROOT, 'client', 'js', file), 'utf8'),
-            context, { filename: file }
-        );
-    }
-    return context.window.ArchiveState;
+    vm.runInContext(
+        fs.readFileSync(path.join(ROOT, 'client', 'js', 'archive-outcome.js'), 'utf8'),
+        context, { filename: 'archive-outcome.js' });
+    return context.window.ArchiveOutcome as OutcomeClassifier;
 }
 
-const S = loadState();
+/**
+ * One loosely-typed view of the state object, declared HERE and nowhere
+ * in the production code.
+ *
+ * WHY. `ArchiveStateShape` is an open map of view names to slices, so in
+ * TypeScript every `s.search.token` is a read off `unknown`. The ported
+ * assertion bodies below do that about sixty times, and narrowing each
+ * one by hand would mean EDITING SIXTY ASSERTIONS in a port - which is
+ * exactly how a port ships a behaviour change with a green run. Widening
+ * the production type instead would weaken the real code to please a
+ * test. So the loosening lives in this one alias, in this one file.
+ */
+type LooseState = Record<string, any>;
+
+const S = createArchiveState(realOutcome()) as {
+    initial(): LooseState;
+    reduce(state: LooseState, action: Record<string, unknown>): LooseState;
+    DEADLINES_MS: { search: number; hierarchy: number;
+                    transcript: number; body: number;
+                    exportPreflight: number; [k: string]: number };
+    ROW_KEY: Record<string, string>;
+    IDLE: string;
+    LOADING: string;
+};
 
 /**
  * Drive a search view to `partial` using the real captured response.
- * @returns {object} A state whose search view is partial with rows and a cursor.
+ * Output: a state whose search view is partial with rows and a cursor.
  */
-function searchAtPartial() {
+function searchAtPartial(): LooseState {
     let s = S.initial();
     s = S.reduce(s, { type: 'REQUEST', view: 'search', requestClass: 'search', at: 0 });
-    s = S.reduce(s, { type: 'RESPONSE', view: 'search', envelope: fixture('partial_search'), at: 100 });
+    s = S.reduce(s, { type: 'RESPONSE', view: 'search',
+                      envelope: fixture('partial_search'), at: 100 });
     return s;
 }
 
@@ -280,5 +287,3 @@ test('liveSession has exactly one value and no action can change it', () => {
     assert.equal(s.liveSession.token, 'not-checked');
 });
 
-console.log(`\n${passes} passed, ${failures} failed`);
-process.exit(failures === 0 ? 0 : 1);

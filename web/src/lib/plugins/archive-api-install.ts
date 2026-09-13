@@ -37,6 +37,7 @@
  * untouched.
  */
 import type { ArchiveClient } from './history/index';
+import { seamWarn } from './seam-warn';
 
 /** The methods this seam publishes, in the order `api-archive.js` had them. */
 const METHOD_NAMES = [
@@ -90,14 +91,13 @@ export function installArchiveApi(
     ctor: ApiConstructor | null | undefined, client: ArchiveClient,
 ): boolean {
     if (!ctor || !ctor.prototype) {
-        console.warn(
-            '[plugins] the API constructor is not available, so the archive '
+        seamWarn('[plugins] the API constructor is not available, so the archive '
             + 'read surface was not installed. The archive screen will report '
             + 'that it could not reach the server.');
         return false;
     }
     if (!client) {
-        console.warn('[plugins] no archive client was built, so the archive '
+        seamWarn('[plugins] no archive client was built, so the archive '
                      + 'read surface was not installed.');
         return false;
     }

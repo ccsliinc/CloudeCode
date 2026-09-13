@@ -79,6 +79,7 @@ import { history } from './lib/plugins/builtin';
 import { legacyEnvelopeTransport } from './lib/plugins/api-transport';
 import { renderCrumb as historyRenderCrumb } from './lib/plugins/history/index';
 import { installArchiveApiOnWindow } from './lib/plugins/archive-api-install';
+import { installArchiveGlobals } from './lib/plugins/archive-state-install';
 import { surfacesOf as pluginSurfacesOf } from './lib/plugins/registry';
 import type { PluginContext } from './lib/plugins/types';
 import { deliverRoute, hideVisibleScreen, visibleScreen, walkScreens,
@@ -1080,6 +1081,13 @@ publishLaunchpadShim({
 // deferred module has evaluated, and doing it inside the published block
 // keeps the ordering readable in one place.
 installArchiveApiOnWindow(history.client);
+
+// STATE, KEYS, THE HELP MODAL AND THE FORMATTERS, published for the
+// eight legacy modules in slices 3 and 5 to 9 that still reach them as
+// window.ArchiveState / ArchiveKeys / ArchiveKeysHelp / ArchiveFormat.
+// One implementation, in history/; this is the seam, and it is where the
+// outcome classifier and the host's ModalStack are injected into it.
+installArchiveGlobals();
 
 // THE SESSION SEARCH PANEL. A no-op on a page with no
 // `.terminal-container`, which is every page but this app's own shell,

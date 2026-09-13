@@ -36,6 +36,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -95,8 +105,8 @@ function load() {
         console: { log() {}, warn() {}, error() {}, debug() {} },
     };
     vm.createContext(context);
-    for (const file of ['modal-stack.js', 'archive-outcome.js', 'archive-format.js',
-                        'archive-outcome-view.js', 'archive-nav-row.js',
+    installArchiveGlobals(context.window || context);
+    for (const file of ['modal-stack.js', 'archive-outcome.js', 'archive-outcome-view.js', 'archive-nav-row.js',
                         'archive-nav-card.js', 'archive-nav-info.js',
                         'archive-nav-tree.js', 'archive-nav-fuzzy.js',
                         'archive-nav-merged.js', 'archive-nav.js']) {
@@ -151,8 +161,7 @@ function dualNode() {
             { project_id: 41, corpus_id: 1, host_id: 1,
               host_display_name: 'Joe-MBP-M1', transcript_count: 2800 },
             { project_id: 88, corpus_id: 3, host_id: 2,
-              host_display_name: 'Joseph’s Mac mini (2)', transcript_count: 96 },
-        ],
+              host_display_name: 'Joseph’s Mac mini (2)', transcript_count: 96 }],
     });
 }
 

@@ -25,6 +25,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -61,6 +71,7 @@ function loadRowCacheOnly() {
     const fakeWindow = {};
     const context = { window: fakeWindow, console: { log() {}, error() {} } };
     vm.createContext(context);
+    installArchiveGlobals(context.window || context);
     vm.runInContext(
         fs.readFileSync(path.join(ROOT, 'client', 'js', 'archive-row-cache.js'), 'utf8'),
         context, { filename: 'archive-row-cache.js' });
@@ -149,9 +160,8 @@ function loadModules(doc) {
     };
     context.globalThis = context;
     vm.createContext(context);
-    for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-format.js',
-        'archive-outcome-view.js', 'archive-state.js', 'archive-keys.js',
-        'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
+    installArchiveGlobals(context.window || context);
+    for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-outcome-view.js', 'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
         'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
         'archive-row-cache.js', 'archive-reader.js']) {

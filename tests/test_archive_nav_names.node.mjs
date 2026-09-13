@@ -21,6 +21,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -67,8 +77,8 @@ function load() {
         console: { log() {}, warn() {}, error() {}, debug() {} },
     };
     vm.createContext(context);
-    for (const file of ['archive-outcome.js', 'archive-format.js',
-                        'archive-outcome-view.js', 'archive-nav-fuzzy.js',
+    installArchiveGlobals(context.window || context);
+    for (const file of ['archive-outcome.js', 'archive-outcome-view.js', 'archive-nav-fuzzy.js',
                         'archive-nav-row.js', 'archive-nav-card.js',
                         'archive-nav-info.js', 'archive-nav-tree.js',
                         'archive-nav-order.js', 'archive-nav-drill.js',
@@ -184,12 +194,9 @@ await test('the machine filter narrows to projects with a member there', () => {
     const nodes = [
         node('Media', '-m', '/m', ['H1', 'H2'], 5, [
             { project_id: 1, host_id: 1, host_display_name: 'H1' },
-            { project_id: 2, host_id: 2, host_display_name: 'H2' },
-        ]),
+            { project_id: 2, host_id: 2, host_display_name: 'H2' }]),
         node('Solo', '-s', '/s', ['H1'], 3, [
-            { project_id: 3, host_id: 1, host_display_name: 'H1' },
-        ]),
-    ];
+            { project_id: 3, host_id: 1, host_display_name: 'H1' }])];
     assert.equal(merged.filterByHost(nodes, 2).length, 1);
     assert.equal(merged.filterByHost(nodes, 2)[0].display_name, 'Media');
     assert.equal(merged.filterByHost(nodes, 1).length, 2);
@@ -246,8 +253,7 @@ await test('the real corpus split renders one node, not three and not none', () 
     const split = merged.partitionUnattributed([
         { corpus_id: 1, transcript_count: 0, counted: true },
         { corpus_id: 2, transcript_count: 5, counted: true },
-        { corpus_id: 3, transcript_count: 0, counted: true },
-    ]);
+        { corpus_id: 3, transcript_count: 0, counted: true }]);
     assert.equal(split.shown.length, 1);
     assert.equal(split.shown[0].row.corpus_id, 2);
     assert.equal(split.hidden.length, 2);
@@ -257,8 +263,7 @@ await test('an uncounted corpus keeps its node even beside counted zeroes', () =
     const { merged } = load();
     const split = merged.partitionUnattributed([
         { corpus_id: 1, transcript_count: 0, counted: true },
-        { corpus_id: 2, transcript_count: null, counted: false },
-    ]);
+        { corpus_id: 2, transcript_count: null, counted: false }]);
     // NOT deepStrictEqual on the array: `split.shown` is built inside the
     // vm realm, so its Array prototype is a different object from this
     // module's and deepStrictEqual fails on "same structure but not
@@ -303,8 +308,7 @@ await test('a contiguous match outranks a scattered one', () => {
     const { fuzzy } = load();
     const ranked = fuzzy.rank([
         { display_name: 'M-e-d-i-a-scattered' },
-        { display_name: 'Media' },
-    ], 'media', [{ name: 'display_name', weight: 3 }]);
+        { display_name: 'Media' }], 'media', [{ name: 'display_name', weight: 3 }]);
     assert.equal(ranked[0].row.display_name, 'Media');
 });
 
@@ -324,8 +328,7 @@ await test('a hit in display_name outranks a STRONGER hit in full_path', () => {
                     { name: 'full_path', weight: 1 }];
     const rows = [
         { display_name: 'zzz', full_path: 'media' },
-        { display_name: 'media-x', full_path: 'qqq' },
-    ];
+        { display_name: 'media-x', full_path: 'qqq' }];
     const raw = [fuzzy.match(rows[0].full_path, 'media').score,
                  fuzzy.match(rows[1].display_name, 'media').score];
     assert.ok(raw[0] > raw[1],
@@ -359,8 +362,7 @@ await test('the rail finds a project by a non-prefix fragment', () => {
         nodes: [
             node('Infrastructure', '-a', '/a', ['H1'], 1),
             node('CloudeCode', '-b', '/b', ['H1'], 1),
-            node('Media', '-c', '/c', ['H1'], 1),
-        ],
+            node('Media', '-c', '/c', ['H1'], 1)],
         unattributed: [], hostId: null, filterText: 'struct', onActivate() {},
     });
     assert.equal(result.rendered, 1);

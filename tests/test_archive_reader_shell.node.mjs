@@ -27,6 +27,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -66,14 +76,13 @@ function loadModules(doc) {
     };
     context.globalThis = context;
     vm.createContext(context);
+    installArchiveGlobals(context.window || context);
     // archive-keys.js is here for ONE reason: it owns createSelection(),
     // which the reader asks window.ArchiveKeys for at construction. Omit
     // it and the reader logs a MISSING DEPENDENCY and runs with
     // `selection = null`, so selectedIndex() is permanently -1 and every
     // selection assertion below tests a reader that has no cursor at all.
-    for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-format.js',
-        'archive-outcome-view.js', 'archive-state.js', 'archive-keys.js',
-        'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
+    for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-outcome-view.js', 'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
         'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
         'archive-row-cache.js',
@@ -202,8 +211,7 @@ await test('every failure token routes through archive-outcome-view, never a han
             unevaluated: [], meta: {} }, 'NO MATCHES'],
         ['partial', { result: [1], result_status: 'partial',
             scope_status: 'resolved', unevaluated: [], meta: {} },
-            'INCOMPLETE'],
-    ];
+            'INCOMPLETE']];
     const labels = new Set();
     for (const [token, env, word] of cases) {
         r.setToken(token, env);
@@ -346,8 +354,7 @@ await test('a hard-gated row in the window is never auto-fetched by the reader',
     r.root().querySelector('.archive-reader__scroller').clientHeight = 400;
     r.setSpine([
         { line_no: 62, record_type: 'user', role: 'user', body_id: 2396142,
-            body_chars: 54376859, body_state: 'not_requested' },
-    ], true);
+            body_chars: 54376859, body_state: 'not_requested' }], true);
     assert.equal(calls, 0, 'the reader auto-fetched the 54 MB body');
     const box = r.root().querySelector('.archive-row__body');
     assert.equal(box.getAttribute('data-body-state'), 'gated-hard');

@@ -28,6 +28,16 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
 import { installArchiveSeam } from './archive-seam-stub.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -73,10 +83,7 @@ async function test(name, fn) {
  */
 const MODULES = [
     'modal-stack.js',
-    'archive-outcome.js', 'archive-mask.js', 'archive-format.js',
-    'archive-outcome-view.js', 'archive-state.js', 'archive-keys.js',
-    'archive-keys-help.js',
-    'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
+    'archive-outcome.js', 'archive-mask.js', 'archive-outcome-view.js', 'archive-virtual-list.js', 'archive-body-gate.js', 'archive-body-cache.js',
     'archive-line-render.js', 'archive-reader-dom.js', 'archive-reader-paging.js',
         'archive-reader-select.js', 'archive-reader-body.js',
         'archive-row-cache.js',
@@ -105,8 +112,7 @@ const MODULES = [
     // window.CloudeWeb.archive, which installArchiveSeam supplies.
     'archive-pane-resize.js',
     'archive-screen-shell.js', 'archive-screen-tools.js',
-    'archive-screen.js',
-];
+    'archive-screen.js'];
 
 /**
  * Build a whole archive screen in one vm context sharing one window.
@@ -156,6 +162,7 @@ function buildScreen() {
     // behaviour is measured in web/src/lib/plugins/history/.
     installArchiveSeam(fakeWindow);
     vm.createContext(context);
+    installArchiveGlobals(context.window || context);
 
     fakeWindow.API = {
         /** @returns {Promise<object>} always a transport failure */

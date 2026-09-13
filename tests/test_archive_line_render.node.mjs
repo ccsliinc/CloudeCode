@@ -35,6 +35,16 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createEnvironment } from './mini-dom.mjs';
+import { archiveGlobalsInstaller } from './archive-ported-modules.mjs';
+
+// THE FOUR PORTED ARCHIVE MODULES. state, keys, the help modal and the
+// formatters are web/src/lib/plugins/history/ as of slice 4 and are no
+// longer classic scripts, so they cannot be vm-loaded from client/js.
+// This suite's SUBJECT did not move, so the suite did not either: it
+// installs the REAL ported modules onto its context's window, which is
+// why its collaborator behaviour is unchanged rather than approximated.
+// See tests/archive-ported-modules.mjs.
+const installArchiveGlobals = await archiveGlobalsInstaller();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -75,8 +85,8 @@ function loadModules(doc) {
     };
     context.globalThis = context;
     vm.createContext(context);
-    for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-format.js',
-        'archive-outcome-view.js', 'archive-body-gate.js', 'archive-body-cache.js',
+    installArchiveGlobals(context.window || context);
+    for (const f of ['archive-outcome.js', 'archive-mask.js', 'archive-outcome-view.js', 'archive-body-gate.js', 'archive-body-cache.js',
         'archive-line-render.js']) {
         vm.runInContext(
             fs.readFileSync(path.join(ROOT, 'client', 'js', f), 'utf8'),
@@ -207,8 +217,7 @@ await test('a mask REFUSAL renders the refusal, not the body', async () => {
           payload: { body_json: SECRET_BODY, secret_finding_count: 1,
               secrets: [{ utf16_state: 'computed',
                   match_offset_utf16: SECRET_BODY.length - 2,
-                  match_length_utf16: 40 }] } },
-    ];
+                  match_length_utf16: 40 }] } }];
     for (const c of cases) {
         const { api } = fakeApi({ 3: c.payload });
         const cache = w.ArchiveBodyCache.createCache({ api });
@@ -319,8 +328,7 @@ await test('progress runs collapse to one counted, expandable, never-hidden row'
     const LR = w.ArchiveLineRender;
 
     const spine = [
-        { line_no: 7109, record_type: 'assistant', role: 'assistant', body_chars: 10 },
-    ];
+        { line_no: 7109, record_type: 'assistant', role: 'assistant', body_chars: 10 }];
     for (let i = 7110; i <= 7123; i++) {
         spine.push({ line_no: i, record_type: 'progress', role: null, body_chars: 5 });
     }
@@ -365,8 +373,7 @@ await test('a lone progress line stays a normal row', () => {
     const items = w.ArchiveLineRender.groupRows([
         { line_no: 1, record_type: 'assistant' },
         { line_no: 2, record_type: 'progress' },
-        { line_no: 3, record_type: 'assistant' },
-    ]);
+        { line_no: 3, record_type: 'assistant' }]);
     assert.equal(items.length, 3);
     // A chip reading "progress x 1" costs a row and says less than the
     // row it replaced.
