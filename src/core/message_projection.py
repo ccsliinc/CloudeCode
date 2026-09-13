@@ -54,6 +54,21 @@ background and why the whole-corpus drain is an operator script the
 owner runs deliberately, rather than something an upgrade does to his
 disk while he is not looking.
 
+ONE FILE IS ONE TRANSACTION, AND THE BIGGEST FILE IS THE BOUND. The
+whole of one archive's ingest happens inside a single ``BEGIN
+IMMEDIATE``, which is what makes a replace atomic: there is no instant
+where a transcript has been deleted and not yet rewritten. The cost of
+that is a write lock held for as long as the file takes, and the largest
+transcript in the owner's corpus is 244 MB - about five minutes at the
+measured throughput. WAL plus the 30s busy timeout
+(``src.core.db.CONNECTION_PRAGMAS``) is what lets another writer wait
+rather than fail, and within one server process the question does not
+arise at all because the scheduler runs the ingest and this pass
+sequentially. Shrinking that window means moving the parse outside the
+transaction, which is a change to ``ingest_lines`` and is NOT pretended
+to have been made here. It is also why the first-run drain is an
+operator script the owner runs when it suits him.
+
 IT IS NEVER ON THE EVENT LOOP. ``run_projection_once`` is synchronous
 sqlite and synchronous CPU from end to end, and its only in-process
 caller hands it to ``asyncio.to_thread``. See
