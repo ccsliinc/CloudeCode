@@ -10,6 +10,7 @@ import asyncio
 from contextlib import asynccontextmanager, closing, suppress
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -28,6 +29,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from src.config import settings, StateDirUnavailableError
 from src.security_headers import SECURITY_HEADERS
+from src.api.request_log import RequestLogMiddleware
 from src.core.composition import build_services
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
@@ -55,6 +57,7 @@ from src.core.static_serving import (
     warm_static_gzip_cache,
     render_compressible_html_response,
 )
+from src.core import static_asset_keys
 from src.core.update_check import UpdateChecker
 from src.core.setup_state import (
     current_bind_report,
@@ -918,6 +921,14 @@ app.state.limiter = auth_limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+# Request timing, added LAST so it is the outermost user middleware (per the
+# Starlette LIFO note above CSP: the last `add_middleware` call wraps every
+# earlier one). Outermost here means it measures the whole stack - CORS,
+# CSP, rate limiting and the route itself - rather than a rebuilt inner
+# view of it. See src/api/request_log.py for why this is a pure ASGI
+# middleware rather than BaseHTTPMiddleware.
+app.add_middleware(RequestLogMiddleware)
+
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")  # Auth routes (no auth required)
 app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
@@ -998,14 +1009,56 @@ class NoCacheStaticFiles(StaticFiles):
     compression changes the bytes on the wire, never how long they may be
     kept, which is the whole point of not touching this class's original
     job.
+
+    A CONTENT-KEYED REQUEST IS THE ONE EXCEPTION, AND IT IS NOT A
+    WEAKENING. The shell served from "/" stamps ``?v=<key>`` onto every
+    ``/static/`` URL it references, where the key is a short sha256 of
+    that file's own bytes (src/core/static_asset_keys.py). A request
+    carrying a key that STILL MATCHES what the file hashes to is answered
+    ``public, max-age=31536000, immutable``, because for that exact URL
+    the promise is true by construction: the bytes cannot change without
+    the URL changing. Everything else is unchanged - no key at all (a
+    runtime fetch, a lazily injected module-family script, a theme's CSS)
+    or a key that no longer matches (a bookmarked URL from an older
+    build) keeps ``no-cache, must-revalidate``. That asymmetry is the
+    whole safety argument: an immutable answer is given only where the
+    URL itself names the content, and a stale key REVALIDATES rather than
+    being told a year-long lie nobody can retract from the field. It also
+    means the ghost-bundle failure in the paragraph above cannot return -
+    a phone holding an old key asks, and is given the new bytes.
     """
 
     _NO_CACHE_SUFFIXES = (".js", ".html", ".json", ".css")
 
+    def _cache_control_for(self, path: str, scope: dict) -> str:
+        """Decide the Cache-Control for one static hit.
+
+        Args:
+            path: the request path relative to this mount.
+            scope: the ASGI scope, read for the query string.
+
+        Returns:
+            str: the rule lives in src/core/static_asset_keys.py so the
+            serving side and the URL-writing side cannot drift; this only
+            supplies the two inputs it needs.
+        """
+        query = scope.get("query_string", b"")
+        if b"v=" not in query:
+            return static_asset_keys.REVALIDATE
+        requested = parse_qs(query.decode("latin-1")).get("v", [""])[0]
+        candidate = static_asset_keys.url_to_path(
+            static_asset_keys.STATIC_PREFIX + path, Path(self.directory)
+        )
+        return static_asset_keys.cache_control_for(candidate, requested)
+
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
         if path.lower().endswith(self._NO_CACHE_SUFFIXES):
-            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            # Stamped on a 304 as well as a 200: a conditional request
+            # for a keyed URL must still be told the resource is
+            # immutable, or the browser keeps asking on every load and
+            # the whole point is lost.
+            response.headers["Cache-Control"] = self._cache_control_for(path, scope)
             response = await maybe_gzip_file_response(response, scope)
         return response
 
@@ -1037,6 +1090,15 @@ app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static
 _warmed_count = warm_static_gzip_cache(client_dir, NoCacheStaticFiles._NO_CACHE_SUFFIXES)
 logger.info("static_gzip_cache_warmed", files=_warmed_count)
 
+# Same "pay it at import, never on a request" bargain as the line above,
+# for the same reason. Content-keying every asset the shell references
+# means hashing each one once; without this the FIRST page load after
+# every restart would pay that on the event loop. It is a pure read of
+# the client tree, so a failure here can only cost the optimisation and
+# never the boot - the same fail-soft posture as the gzip warm.
+_keyed_assets = static_asset_keys.warm(client_dir, client_dir / "index.html")
+logger.info("static_asset_keys_warmed", assets=_keyed_assets)
+
 
 # ---------------------------------------------------------------------------
 # App version injection (header chip)
@@ -1066,16 +1128,23 @@ def _render_index_html() -> str:
     place. The chip renders as `v<version>` (e.g. `v0.7.3`); if the version
     is unknown the placeholder is replaced with an empty string so no raw
     `{{VERSION}}` token ever reaches the browser.
+
+    IT ALSO CONTENT-KEYS EVERY STATIC URL IT REFERENCES, via
+    src/core/static_asset_keys.py, which owns the hashing, the memo and
+    the rewrite so this stays the one place the shell is produced and
+    gains no second responsibility. The file on disk is NOT modified;
+    this is a serve-time rewrite, which is why every node harness under
+    tests/ still loads the files exactly as before.
     """
     html = (client_dir / "index.html").read_text(encoding="utf-8")
     chip = f"v{APP_VERSION}" if APP_VERSION else ""
-    return html.replace(_VERSION_PLACEHOLDER, chip)
+    return static_asset_keys.render(html.replace(_VERSION_PLACEHOLDER, chip), client_dir)
 
 
 #: Cache key for the rendered shell's compression (issue #49). A fixed
-#: literal, not a file path: the compressed bytes are addressed by the
-#: TEMPLATE file's fingerprint (see render_compressible_html_response),
-#: not by their own content, because nothing else shares this cache key.
+#: literal, not a file path: the compressed bytes are addressed by a
+#: fingerprint of the RENDERED bytes (see below), not by their own
+#: content, because nothing else shares this cache key.
 _INDEX_HTML_GZIP_CACHE_KEY = "index.html:rendered"
 
 
@@ -1084,13 +1153,23 @@ def _render_index_html_response(request: Request) -> Response:
     accepts gzip - shared by root(), session_deep_link(), archive_root()
     and archive_deep_link() so the four routes cannot drift apart on
     either the version chip or the compression decision. See
-    src/core/static_serving.py::render_compressible_html_response for why
-    the index.html template's own mtime/size stand in for the rendered
-    output's freshness.
+    src/core/static_serving.py::render_compressible_html_response for the
+    compression rules.
+
+    THE FRESHNESS PAIR COMES FROM THE RENDERED BYTES, NOT FROM
+    index.html's stat, and that changed when the shell started embedding
+    a content key per asset. The render is no longer a function of the
+    template alone: edit any one of the ~200 files it references and the
+    rendered shell differs while the template's mtime and size do not
+    move at all. Keying the compression on the template would then serve
+    a gzip of the PREVIOUS shell, pointing every browser at keys that no
+    longer exist - a 404 storm produced by a cache that was measuring the
+    wrong thing.
     """
     return render_compressible_html_response(
         request, _render_index_html, client_dir / "index.html",
         _INDEX_HTML_GZIP_CACHE_KEY,
+        fingerprint=static_asset_keys.shell_fingerprint,
     )
 
 

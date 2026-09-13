@@ -123,6 +123,7 @@ def render_compressible_html_response(
     render: Callable[[], str],
     source_path: Path,
     cache_key: str,
+    fingerprint: Callable[[str], tuple[float, int]] | None = None,
 ) -> Response:
     """Build an HTML response for a dynamically rendered document,
     precompressed when the client accepts gzip.
@@ -141,8 +142,17 @@ def render_compressible_html_response(
         the caller needs it for the uncompressed fallback anyway and this
         module does not change how often the template itself is read.
       source_path (Path) - the on-disk file whose stat stands in for the
-        rendered output's freshness.
+        rendered output's freshness. IGNORED when ``fingerprint`` is
+        given.
       cache_key (str) - stable cache identity for this rendered document.
+      fingerprint (Callable[[str], tuple[float, int]] | None) - derive
+        the freshness pair from the RENDERED bytes instead of stat'ing
+        ``source_path``. Required whenever the render depends on
+        something other than the template: since issue "static asset
+        keys", the shell embeds a content key for every asset it
+        references, so an unchanged template CAN have produced different
+        rendered bytes and the template's stat is no longer a valid
+        stand-in. See src/core/static_asset_keys.py::shell_fingerprint.
     Output: Response - HTMLResponse (uncompressed) or a plain Response
       carrying gzip bytes, both with the SAME Cache-Control the caller
       has always sent (no-cache, must-revalidate): compression changes
@@ -156,15 +166,19 @@ def render_compressible_html_response(
     headers = {"Cache-Control": "no-cache, must-revalidate", "Vary": "Accept-Encoding"}
     accept_encoding = request.headers.get("accept-encoding", "")
     if "gzip" in accept_encoding:
-        try:
-            stat_result = source_path.stat()
-        except OSError:
-            stat_result = None
-        if stat_result is not None:
-            compressed = static_cache.peek(cache_key, stat_result.st_mtime, stat_result.st_size)
+        if fingerprint is not None:
+            stamp: tuple[float, int] | None = fingerprint(html)
+        else:
+            try:
+                stat_result = source_path.stat()
+                stamp = (stat_result.st_mtime, stat_result.st_size)
+            except OSError:
+                stamp = None
+        if stamp is not None:
+            compressed = static_cache.peek(cache_key, stamp[0], stamp[1])
             if compressed is None:
                 compressed = static_cache.compress_and_cache(
-                    cache_key, stat_result.st_mtime, stat_result.st_size,
+                    cache_key, stamp[0], stamp[1],
                     lambda: html.encode("utf-8"),
                 )
             headers["Content-Encoding"] = "gzip"
