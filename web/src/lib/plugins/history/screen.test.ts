@@ -69,13 +69,28 @@ function hostAt(opts: { pathname?: string; throwOnPush?: boolean;
     return { host, calls };
 }
 
-/** A granted client answering `/features` with a given block. */
+/**
+ * A granted client answering `/features` with a given block.
+ *
+ * THE DOUBLE IS ENVELOPE-SHAPED AS OF SLICE 2, because the real
+ * transport is: it hands back `{envelope, httpStatus, headers,
+ * transportError, refusedByGrant}` rather than the parsed body, so that
+ * the archive's 404s can arrive carrying the envelope they really do
+ * carry. A double still shaped like the body would make every case here
+ * pass against a gate that could not read a real answer, which is this
+ * project's recurring "the test handed in a recorder" failure with the
+ * recorder one layer out of date.
+ */
 function featuresApi(block: unknown, seen?: string[]): ScreenApi {
     return {
         grants: Array.from(API_PREFIXES),
         call: (p: string) => {
             seen?.push(p);
-            return Promise.resolve({ message_archive: block });
+            return Promise.resolve({
+                envelope: { message_archive: block },
+                httpStatus: 200, headers: null,
+                transportError: null, refusedByGrant: false,
+            });
         },
     };
 }
@@ -221,6 +236,30 @@ describe('the availability gate has THREE states', () => {
         }
     });
 
+    test('a RESOLVED transport failure is UNKNOWN and names the real cause', async () => {
+        // THE RUNG THAT MOVED IN SLICE 2, asserted rather than left to
+        // a fall-through. The transport now resolves a dead network
+        // instead of rejecting, so this arrives in the `then` and not in
+        // the `catch`. The verdict is the same UNKNOWN it always was;
+        // what would have been lost is the SENTENCE - a fall-through
+        // would have said "the server did not report a message archive
+        // state", which is true of a server that was never reached and
+        // sends the reader to the wrong half of the application.
+        const gate = createAvailability({
+            grants: ['/features'],
+            call: () => Promise.resolve({
+                envelope: null, httpStatus: null, headers: null,
+                transportError: 'request failed: Failed to fetch',
+                refusedByGrant: false,
+            }),
+        });
+        expect(await gate.ensure()).toBe('unknown');
+        expect(gate.reason()).toContain('Failed to fetch');
+        expect(gate.reason(), 'the reason named the wrong cause: the server was never '
+            + 'reached, so it cannot have failed to report a state')
+            .not.toContain('did not report');
+    });
+
     test('a rejected probe is UNKNOWN and names the failure', async () => {
         const gate = createAvailability({
             grants: ['/features'],
@@ -314,7 +353,15 @@ describe('the contribution, and what the host may rely on', () => {
         // silent redirect the whole route design refuses.
         const { plugin, screen } = createHistoryPlugin(
             hostAt().host,
-            () => Promise.resolve({ message_archive: { state: 'disabled', reason: 'off' } }));
+            // A TRANSPORT double, so envelope-shaped: this is the raw
+            // transport the host hands `createHistoryPlugin`, not a
+            // granted client, and the shape it answers in is what the
+            // real one answers in.
+            () => Promise.resolve({
+                envelope: { message_archive: { state: 'disabled', reason: 'off' } },
+                httpStatus: 200, headers: null,
+                transportError: null, refusedByGrant: false,
+            }));
         await screen.ensure();
         expect(screen.state()).toBe('disabled');
         expect(plugin.contributions[0]!.enabled({ flags: {}, refresh: () => {} })).toBe(true);

@@ -895,10 +895,13 @@
          family's eager remnant) are what actually call them. -->
     <script src="/static/js/module-loader.js"></script>
     <script src="/static/js/module-families.js"></script>
-    <!-- The two CROSS-SESSION toast reads, extending API.prototype the
-         way api-archive.js does. MUST load after api.js: `class API` is
-         not hoisted across scripts and this file refuses loudly rather
-         than defining nothing. -->
+    <!-- The two CROSS-SESSION toast reads, extending API.prototype.
+         MUST load after api.js: `class API` is not hoisted across
+         scripts and this file refuses loudly rather than defining
+         nothing. api-archive.js used to be named here as the other file
+         doing this; it is gone as of slice 2 and the archive read
+         surface is installed from the bundle instead, so this is now the
+         only classic script extending the prototype. -->
     <script src="/static/js/api-toasts.js"></script>
     <script src="/static/js/auth.js"></script>
     <!-- The client's copy of the server-owned ui_preferences block.

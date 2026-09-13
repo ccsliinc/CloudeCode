@@ -41,7 +41,7 @@
  * whose default is the wrong way round would have been a silent
  * regression wearing the shape of a simplification.
  */
-import type { ScreenApi } from '../types';
+import type { EnvelopeResult, ScreenApi } from '../types';
 
 /**
  * The three states this module reports. `unknown` is not a flavour of
@@ -120,8 +120,23 @@ export function createAvailability(api: ScreenApi): Availability {
             return probe;
         }
         probe = api.call(FEATURES_PATH).then((data) => {
-            const body = data as { message_archive?: { state?: unknown;
-                                                       reason?: unknown } } | null;
+            // THE TRANSPORT IS ENVELOPE-SHAPED SINCE SLICE 2, so what
+            // arrives here is a result carrying the body rather than the
+            // body itself, and a failure to REACH the server now
+            // RESOLVES instead of rejecting. That rung moved from the
+            // `.catch()` below to here; the verdict it produces is the
+            // same UNKNOWN it always was, but the sentence names the
+            // real cause rather than "the server did not report a
+            // state", which is what a fall-through would have said.
+            const result = data as EnvelopeResult | null;
+            if (result && result.transportError) {
+                settle(STATE_UNKNOWN,
+                       'the message archive switch could not be read: '
+                       + result.transportError);
+                return current;
+            }
+            const body = (result ? result.envelope : null) as {
+                message_archive?: { state?: unknown; reason?: unknown } } | null;
             const block = (body && body.message_archive) || null;
             if (!block || typeof block.state !== 'string') {
                 settle(STATE_UNKNOWN,
@@ -139,6 +154,11 @@ export function createAvailability(api: ScreenApi): Availability {
             }
             return current;
         }).catch((err: unknown) => {
+            // STILL REACHED, AND THE GRANT IS WHAT REACHES IT. The
+            // transport resolves every transport outcome itself, so the
+            // one rejection left on this path is `GrantRefusedError` -
+            // a screen that declared no `/features` grant. That is a
+            // refusal to answer, which is UNKNOWN, not DISABLED.
             const message = err && typeof err === 'object' && 'message' in err
                 ? String((err as { message: unknown }).message) : String(err);
             settle(STATE_UNKNOWN,

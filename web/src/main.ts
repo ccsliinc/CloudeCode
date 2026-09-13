@@ -76,8 +76,9 @@ import { uiPrefs } from './lib/ui/prefs.svelte';
 import './lib/plugins/builtin';
 import { sessionCardMenuItems, runSessionCardAction } from './lib/plugins/session-card-actions';
 import { history } from './lib/plugins/builtin';
-import { legacyApiTransport } from './lib/plugins/api-transport';
+import { legacyEnvelopeTransport } from './lib/plugins/api-transport';
 import { renderCrumb as historyRenderCrumb } from './lib/plugins/history/index';
+import { installArchiveApiOnWindow } from './lib/plugins/archive-api-install';
 import { surfacesOf as pluginSurfacesOf } from './lib/plugins/registry';
 import type { PluginContext } from './lib/plugins/types';
 import { deliverRoute, hideVisibleScreen, visibleScreen, walkScreens,
@@ -750,7 +751,7 @@ function screenHost(): ScreenHost {
         // /api/v1 and `ScreenApi` resolves against it, so the base has to
         // come back off exactly once - see ./lib/plugins/api-transport.ts
         // for the bug that taught this.
-        transport: legacyApiTransport(),
+        transport: legacyEnvelopeTransport(),
     };
 }
 
@@ -1065,6 +1066,20 @@ publishLaunchpadShim({
     selectProject: (project: ProjectRow, choice?: Record<string, unknown> | null) =>
         selectProjectFlow(project, browserNavHost(), t, choice),
 });
+
+// THE ARCHIVE READ SURFACE, PUT BACK WHERE ITS REMAINING CALLERS LOOK.
+// `client/js/api-archive.js` is deleted as of slice 2 and the thirteen
+// endpoints live in `history/client.ts` behind the screen's declared
+// grant. Twelve modules belonging to slices 3 and 5 to 9 still call them
+// as `api.listArchiveHosts()`, so the methods are installed onto
+// `API.prototype` as DELEGATION - one implementation, reached one way.
+//
+// IT RUNS HERE, NOT AT IMPORT TIME, and before the search panel for the
+// same reason the shim is before it: every legacy archive call happens
+// on a user action or on `showArchive`, both of which are after this
+// deferred module has evaluated, and doing it inside the published block
+// keeps the ordering readable in one place.
+installArchiveApiOnWindow(history.client);
 
 // THE SESSION SEARCH PANEL. A no-op on a page with no
 // `.terminal-container`, which is every page but this app's own shell,

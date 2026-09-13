@@ -33,25 +33,15 @@ class API {
         // both the "in flight" and "eventual result" states.
         this._refreshPromise = null;
 
-        // Archive read deadlines, milliseconds, by request class. Every
-        // archive request carries one: a loading state with no terminal
-        // condition can never fail, and a spinner that spins forever is
-        // indistinguishable from a healthy slow answer.
-        //
-        // Each number is a measured server timing with headroom, not a
-        // round guess. Hierarchy reads are indexed and measured
-        // sub-millisecond. A full 30,805-row spine measured 0.132 s
-        // server-side. A single body in this corpus measured 54,376,879
-        // bytes, a legitimately slow transfer. A budget-exhausted search
-        // measured 1.70 s and 2.25 s on two runs; 45 s allows for a cold
-        // page cache on a loaded host. Export preflight reads headers only.
-        this.ARCHIVE_TIMEOUTS = {
-            hierarchy: 10000,
-            transcript: 15000,
-            body: 30000,
-            search: 45000,
-            exportPreflight: 20000
-        };
+        // THE ARCHIVE READ DEADLINES MOVED OUT IN SLICE 2, to
+        // web/src/lib/plugins/history/client-query.ts, which is where
+        // the thirteen archive endpoints now live. They were the last
+        // archive-shaped thing in this file; nothing outside the archive
+        // ever read them, and a copy left behind would be a second table
+        // that drifts. `API.prototype.ARCHIVE_TIMEOUTS` is still
+        // readable by the legacy archive modules - the bundle installs
+        // it from that one definition, see
+        // web/src/lib/plugins/archive-api-install.ts.
     }
 
     /**

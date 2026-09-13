@@ -18,7 +18,7 @@ import { register } from './registry';
 import { markUnreadPlugin } from './mark-unread/index';
 import { createHistoryPlugin } from './history/index';
 import { browserScreenHost } from './history-host';
-import { legacyApiTransport } from './api-transport';
+import { legacyEnvelopeTransport } from './api-transport';
 import type { Plugin } from './types';
 
 /**
@@ -26,7 +26,7 @@ import type { Plugin } from './types';
  * is published on `window.CloudeWeb.archive` by `main.ts` so the legacy
  * tree has one way in; its `plugin` half is registered below.
  */
-export const history = createHistoryPlugin(browserScreenHost(), legacyApiTransport());
+export const history = createHistoryPlugin(browserScreenHost(), legacyEnvelopeTransport());
 
 /**
  * The ship list, in the order it happens to be written. Order here does

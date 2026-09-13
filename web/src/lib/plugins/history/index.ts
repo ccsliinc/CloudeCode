@@ -28,6 +28,7 @@ import { createHistoryScreen, type HistoryScreen, type ScreenShellHost,
          LABEL } from './screen';
 import { API_PREFIXES } from './screen';
 import { createScreenApi, type ApiTransport } from '../screen-api';
+import { createArchiveClient, type ArchiveClient } from './client';
 import type { Plugin } from '../types';
 
 /** The plugin id. Unique across the registry; a second one is refused. */
@@ -42,6 +43,16 @@ export interface HistoryPlugin {
     readonly plugin: Plugin;
     /** The entry points and the availability gate, for the legacy tree. */
     readonly screen: HistoryScreen;
+    /**
+     * THE ARCHIVE READ SURFACE, built on the SAME granted client the
+     * screen holds. It is published because the twenty-five legacy call
+     * sites in slices 3 and 5 to 9 still reach it through
+     * `API.prototype`; `archive-api-install.ts` is what puts it there
+     * and is the only thing outside this module that may take it. Those
+     * slices delete their own call sites, and the last one deletes this
+     * line.
+     */
+    readonly client: ArchiveClient;
 }
 
 /**
@@ -64,6 +75,12 @@ export function createHistoryPlugin(
 ): HistoryPlugin {
     const api = createScreenApi(API_PREFIXES, transport, HISTORY_SCREEN_ID);
     const screen = createHistoryScreen(host, api);
+    // ONE GRANTED CLIENT, TWO READERS. The availability probe and the
+    // thirteen archive endpoints hold the SAME `api`, so there is no
+    // moment at which one half of this module can reach a path the
+    // other's grant does not cover, and the contribution's declared
+    // `apiPrefixes` is the whole of what either can do.
+    const client = createArchiveClient(api);
     const plugin: Plugin = {
         id: HISTORY_PLUGIN_ID,
         contributions: [{
@@ -86,7 +103,7 @@ export function createHistoryPlugin(
             payload: screen.payload,
         }],
     };
-    return { plugin, screen };
+    return { plugin, screen, client };
 }
 
 /**
@@ -101,5 +118,7 @@ export function createHistoryPlugin(
 export { renderCrumb } from './crumb-render';
 export { CRUMB_ROOT_LABEL } from './route';
 export { LABEL, API_PREFIXES };
+export { createArchiveClient };
+export type { ArchiveClient };
 export type { HistoryScreen, ScreenShellHost };
 export type { ArchiveRoute } from './route';

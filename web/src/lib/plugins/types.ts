@@ -249,6 +249,50 @@ export type ScreenRouteResult<Route> =
  *   differently worded, so a caller that only catches can still tell
  *   them apart. See `screen-api.ts`.
  */
+/**
+ * What one call through the granted client resolves to.
+ *
+ * Description: THE ENVELOPE SHAPE, AND IT IS THE ONE THE WHOLE ARCHIVE
+ *   READ SURFACE SPEAKS. Every archive route answers a COMPLETE,
+ *   renderable envelope on a non-2xx as well as on a 200: measured on
+ *   the live server, `GET /archive/transcripts/99999` is HTTP 404
+ *   carrying `result_status: 'not_found'` and the row that explains it.
+ *   Those are findings a person has to read, not errors, so the shape
+ *   carries the status beside the body rather than throwing the body
+ *   away on the way to a rejection.
+ *
+ *   IT NEVER ARRIVES AS A REJECTION. A network failure, a body that is
+ *   not JSON and a deadline expiry all RESOLVE, with `envelope` null and
+ *   `transportError` naming what happened, because "the server did not
+ *   answer" is a finding a screen must render and a rejected promise is
+ *   how a finding becomes an unhandled console line nobody sees.
+ *
+ *   `refusedByGrant` IS THE ONE THING NO HTTP ANSWER CAN PRODUCE. A
+ *   capability refusal never reaches the network, so it has no status
+ *   and no headers - but a null `httpStatus` alone is also what a dead
+ *   network produces, and the two are not the same problem. The flag
+ *   says which, positively, so nobody has to infer a security refusal
+ *   from an absent number or parse it out of a message string.
+ * Example:
+ *   const r = await client.getArchiveTranscript(99999);
+ *   // r.httpStatus === 404, r.envelope.result_status === 'not_found'
+ */
+export interface EnvelopeResult {
+    /** The parsed body, or null when there was none to parse. */
+    readonly envelope: unknown;
+    /** The HTTP status, or null when no HTTP answer was received. */
+    readonly httpStatus: number | null;
+    /** The response headers, or null. Read by the export preflight. */
+    readonly headers: { get(name: string): string | null } | null;
+    /** Why there is no envelope, or null when the server answered. */
+    readonly transportError: string | null;
+    /**
+     * True only when the granted client refused the path. Never true for
+     * anything the server said, including a 404.
+     */
+    readonly refusedByGrant: boolean;
+}
+
 export interface ScreenApi {
     /**
      * Call one path under `/api/v1`, e.g. '/archive/projects'.

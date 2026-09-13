@@ -2,9 +2,8 @@
  * API Module, toast half - the two CROSS-SESSION toast reads.
  *
  * WHY THIS IS A SEPARATE FILE, and why it extends the prototype rather
- * than subclassing: the same reasons api-archive.js gives. `window.API`
- * is one instance built at the end of api.js and roughly a hundred call
- * sites hold it; a second singleton would give the app two token-refresh
+ * than subclassing. `window.API` is one instance built at the end of
+ * api.js and roughly a hundred call sites hold it; a second singleton would give the app two token-refresh
  * mutexes, which is the exact race api.js's single-flight comment exists
  * to prevent. `Object.assign(API.prototype, ...)` leaves every call site
  * and the mutex untouched.

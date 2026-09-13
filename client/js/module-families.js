@@ -40,7 +40,6 @@
      * @type {string[]}
      */
     var ARCHIVE = [
-        '/static/js/api-archive.js',
         '/static/js/archive-outcome.js',
         '/static/js/archive-mask.js',
         '/static/js/archive-format.js',
