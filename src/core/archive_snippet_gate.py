@@ -187,6 +187,17 @@ def _evaluate_window(
     return None
 
 
+#: The PUBLIC name for the layer 2 + layer 3 window gate. A second caller
+#: arrived when search moved onto content blocks
+#: (``src/core/archive_search_hit.py``): its window is cut out of the
+#: BLOCK's text rather than out of ``body_json``, so it needs a different
+#: cutter and must NOT get a different policy. Exporting the one
+#: evaluator is what keeps "there is exactly one gate" true - a second
+#: copy of these three layers is how two previews come to be governed by
+#: two rules nobody compared.
+evaluate_window = _evaluate_window
+
+
 def layer_one_state(secret_finding_count: int) -> Optional[str]:
     """Layer 1: a body already flagged secret-bearing is withheld whole.
 

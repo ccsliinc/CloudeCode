@@ -71,6 +71,7 @@ from src.core.archive_overlay_ddl import DDL_V19
 from src.core.message_activity import install_transcript_activity
 from src.core.message_scheme_repair import repair_session_ref_schemes
 from src.core.message_block_ddl import DDL_V18
+from src.core.message_block_search_ddl import DDL_V27
 from src.core.message_host_ddl import DDL_V17
 from src.core.message_archive_flag import message_archive_enabled
 from src.core.message_model_ddl import DDL_V16
@@ -925,6 +926,25 @@ def _apply_v18_ddl(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _apply_v27_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v27 block-search DDL.
+
+    Description: one FTS5 virtual table and three triggers, each
+      with IF NOT EXISTS. It CREATES the index and does not POPULATE
+      it: building it over the measured corpus takes 1.80 s, which a
+      migration transaction may not spend, and over a corpus twenty
+      times that size it is a boot that looks hung. An empty index is
+      a NAMED state the status ladder reports as ``never_built``, not
+      a search that quietly finds nothing. Touches no row of
+      ``message_content_blocks`` or ``message_bodies``.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _apply_v27_ddl(conn)
+    """
+    for statement in DDL_V27:
+        conn.execute(statement)
+
+
 def apply_message_model_schema(conn: sqlite3.Connection) -> None:
     """Materialize the whole message-archive schema, idempotently.
 
@@ -948,6 +968,7 @@ def apply_message_model_schema(conn: sqlite3.Connection) -> None:
     _apply_v16_ddl(conn)
     _apply_v17_ddl(conn)
     _apply_v18_ddl(conn)
+    _apply_v27_ddl(conn)
 
 
 def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
@@ -1338,6 +1359,40 @@ def _step_v25_to_v26(conn: sqlite3.Connection) -> None:
         conn.execute(DDL_V26_SESSIONS_NOTIFICATION_POLICY_GENERATION)
 
 
+def _step_v26_to_v27(conn: sqlite3.Connection) -> None:
+    """Create the FTS5 index over content-block text, and its triggers.
+
+    Description: build step for v27. See
+      src/core/message_block_search_ddl.py for the measured false-positive
+      counts this replaces, the tokenizer comparison behind
+      ``unicode61``, and why the index is kept current by TRIGGERS rather
+      than by a Python write path (a cascading delete of a body is
+      invisible to Python and visible to a trigger).
+
+      IT CREATES AND DOES NOT POPULATE, for the reason _apply_v27_ddl
+      gives. A v26 database reaches v27 with an EMPTY index, and that is
+      the honest state: message_block_search_status reports it as
+      ``never_built`` and search REFUSES with cannot_determine rather
+      than returning zero hits. Falling back to the old INSTR scan was
+      considered and rejected - it would silently restore the defect this
+      version exists to fix.
+
+      Gated on the archive flag exactly as v18 is: an install with the
+      archive off has no message_content_blocks for the triggers to
+      reference, and CREATE TRIGGER against a missing table fails.
+      Crossing this version with the flag off leaves the work to
+      apply_message_model_schema, which applies v27 with the rest.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+    Output: None.
+    Example: _step_v26_to_v27(conn)  # after _step_v25_to_v26
+    """
+    if not message_archive_enabled():
+        return
+    if not table_exists(conn, "message_content_blocks"):
+        return
+    _apply_v27_ddl(conn)
+
+
 # from_version -> the function that advances it by one. Adding a key here
 # without bumping CURRENT_SCHEMA_VERSION in db_models (or vice versa) is
 # caught by tests/test_db_migration.py, because a bumped constant with no
@@ -1369,6 +1424,7 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     23: _step_v23_to_v24,
     24: _step_v24_to_v25,
     25: _step_v25_to_v26,
+    26: _step_v26_to_v27,
 }
 
 

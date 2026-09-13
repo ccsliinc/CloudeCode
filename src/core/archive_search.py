@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.core.archive_cursor import (
     CURSOR_LINES,
@@ -39,6 +40,25 @@ from src.core.archive_snippet_gate import (  # noqa: F401  re-exported
     SNIPPET_INCLUDED, SNIPPET_WITHHELD_BY_REQUEST,
     SNIPPET_WITHHELD_FLAGGED_BODY, KnownSecretIndex, build_hit, load_index,
     snippet_gate_meta,
+)
+from src.core.archive_search_fts import (
+    LINE_DONE,
+    ORDER_MODES,
+    ORDER_POSITION,
+    ORDER_RELEVANCE,  # noqa: F401  re-exported for the route
+    BlockFilters,
+    query_has_tokens,
+    run_hit_query,
+)
+from src.core.archive_search_hit import build_fts_hit
+from src.core.message_block_search_state import read_liveness
+from src.core.message_block_search_ddl import BLOCK_SEARCH_TOKENIZER
+from src.core.message_block_search_status import (
+    COVERAGE_INDEXED,
+    INDEX_STALE,
+    Coverage,
+    resolve_coverage,
+    resolve_index_state,
 )
 from src.core.archive_read import (
     MAX_PAGE_LIMIT,
@@ -71,13 +91,19 @@ SCAN_COMPLETE = "complete"
 SCAN_BUDGET_EXHAUSTED = "budget_exhausted"
 SCAN_LIMIT_REACHED = "limit_reached"
 SCAN_NOT_RUN = "not_run"
+
+#: How the haystack was reached. Named because ``bytes_scanned`` is
+#: now legitimately 0 - the index answered and no body was read - and a
+#: zero with no explanation beside it reads as a broken counter.
+SCAN_METHOD_FTS = "fts_index"
 #: Kept as the historical name for the body-flag layer, so a caller
 #: importing it still gets the state that layer emits.
 SNIPPET_WITHHELD_SECRET = SNIPPET_WITHHELD_FLAGGED_BODY
 
-#: ``LINE_DONE`` means the named transcript was scanned to its end, so
-#: resume strictly AFTER it; >= 0 resumes INSIDE it, at a greater line_no.
-LINE_DONE = -1
+#: ``LINE_DONE`` is declared in ``archive_search_fts`` beside the keyset
+#: that reads it, and re-exported here so an existing importer of
+#: ``archive_search.LINE_DONE`` still resolves. One declaration, two
+#: names for it, rather than two declarations.
 
 #: A snippet is not a body and is never placed in ``body_json`` (spec 1
 #: rule 3); ``SNIPPET_CONTEXT_CHARS`` is the window either side.
@@ -101,39 +127,32 @@ class SearchInputError(ValueError):
 
 
 # --- SQL -------------------------------------------------------------------
-# Measured plan (spec 6.11): SEARCH a USING INDEX
-# sqlite_autoindex_message_appearances_1 (transcript_id=?), then SEARCH b
-# USING INTEGER PRIMARY KEY. The index bounds the work; the scan matches.
-# KNOWN GAP, recorded not hidden: the JOIN drops appearance rows with a
-# NULL body_id (1 of 3,125,122 - the line that failed to parse at
-# ingest). It has no body, so it is a CANNOT DETERMINE the spec renders
-# as an absence.
-_HIT_SQL = """
-SELECT a.line_no, a.body_id, b.secret_finding_count,
-       -- LENGTH() on TEXT counts CODE POINTS; also emitted as body_chars.
-       LENGTH(b.body_json) AS body_bytes,
-       -- INSTR is 1-based and CHARACTER-based (sqlite 3.53.4): a 0-based
-       -- CODE POINT offset, the unit the secrets use.
-       INSTR({hay}, {needle}) - 1 AS match_offset
-  FROM message_appearances a
-  JOIN message_bodies b ON b.id = a.body_id
- WHERE a.transcript_id = :tid {line_clause}
-   AND INSTR({hay}, {needle}) > 0
- ORDER BY a.line_no LIMIT :cap
-"""
+# THE MATCHER MOVED, AND THAT IS THE POINT OF THIS VERSION.
+# ``INSTR(b.body_json, needle)`` used to run here over the WHOLE jsonl
+# record - cwd, sessionId, parentUuid, timestamp, gitBranch, entrypoint,
+# version, promptId and the message together - so a search for a model
+# name matched the envelope of every message that model produced.
+# Measured on the 400-transcript projection, 2026-09-13: ``claude-opus-4``
+# returned 33,805 bodies of which 165 carried it in real message text;
+# ``"cache_read_input_tokens"`` 91,623 against 30. A miss cost 919 ms.
+#
+# The matcher is now ``src/core/archive_search_fts.py``: the FTS5 index
+# over ``message_content_blocks.text`` narrows the corpus, and ``INSTR``
+# over those blocks' own text still decides the literal match and its
+# offset, so the substring contract and ``case_sensitive`` are unchanged
+# while the haystack is 0.001 percent of the size.
+#
+# KNOWN GAP, recorded not hidden, and NARROWED rather than closed: the
+# old JOIN dropped appearance rows with a NULL body_id (1 of 3,125,122 -
+# the line that failed to parse at ingest). That row still has no body,
+# and now it also has no content block, so it is still a CANNOT DETERMINE
+# rendered as an absence. It is now REPORTABLE: ``meta.coverage`` counts
+# every body in scope that is outside the index and says why.
 
 _TRANSCRIPT_COLUMNS = "id, session_ref, ingested_at, raw_byte_length"
 _PROJECT_EXISTS_SQL = "SELECT id FROM message_projects WHERE id = ?"
 _PROJECT_COUNT_SQL = "SELECT COUNT(*) FROM message_transcripts WHERE project_id = ?"
 
-#: Order (ingested_at DESC, id DESC) matches /projects/{id}/transcripts,
-#: so search and the transcript list agree on "next". ``ingested_at`` is
-#: NOT unique (21,039 rows share one batch), so the id tie-break is
-#: mandatory.
-_PROJECT_SCAN_SQL = (
-    f"SELECT {_TRANSCRIPT_COLUMNS} FROM message_transcripts "
-    "WHERE project_id = :scope_id {keyset} ORDER BY ingested_at DESC, id DESC"
-)
 _TRANSCRIPT_ROW_SQL = (
     f"SELECT {_TRANSCRIPT_COLUMNS} FROM message_transcripts WHERE id = ?"
 )
@@ -227,91 +246,56 @@ def _scope_size(conn: sqlite3.Connection, scope: str, scope_id: int) -> Optional
     return int(conn.execute(_PROJECT_COUNT_SQL, (scope_id,)).fetchone()[0])
 
 
-def _iter_scan_order(
-    conn: sqlite3.Connection, scope: str, scope_id: int,
-    resume: Optional[Dict[str, Any]],
-) -> Iterator[sqlite3.Row]:
-    """Yield the transcripts to scan, (ingested_at DESC, id DESC). A
-    resume whose ``line_no`` is >= 0 INCLUDES its own transcript;
-    ``LINE_DONE`` excludes it.
-
-    Inputs: conn, scope, scope_id, resume. Output: iterator of rows
-      (id, session_ref, ingested_at, raw_byte_length).
-    """
-    if scope == SCOPE_TRANSCRIPT:
-        row = conn.execute(_TRANSCRIPT_ROW_SQL, (scope_id,)).fetchone()
-        if row is not None:
-            yield row
-        return
-    params: Dict[str, Any] = {"scope_id": scope_id}
-    keyset = ""
-    if resume is not None:
-        params["c_ts"] = resume["t_ingested_at"]
-        params["c_id"] = resume["t_id"]
-        # Lexicographic ordering of ingested_at is correct ONLY because
-        # every value is fixed-width UTC ISO-8601 with a Z suffix. That
-        # is a property of the DATA, not of the schema (spec 5.2).
-        op = "<" if resume["line_no"] == LINE_DONE else "<="
-        keyset = (f"AND (ingested_at < :c_ts "
-                  f"OR (ingested_at = :c_ts AND id {op} :c_id))")
-    for row in conn.execute(_PROJECT_SCAN_SQL.format(keyset=keyset), params):
-        yield row
-
-
 def _run_scan(
     conn: sqlite3.Connection, q: str, scope: str, scope_id: int, limit: int,
     scan_budget: int, scan_bytes: int, case_sensitive: bool,
     resume: Optional[Dict[str, Any]], index: Optional[KnownSecretIndex],
-    snippets: bool,
+    snippets: bool, filters: BlockFilters, order: str,
 ) -> Tuple[List[Dict[str, Any]], int, int, str, Optional[Dict[str, Any]]]:
-    """Walk the scope until the page fills or a budget is spent. Budget
-    is charged AFTER a transcript is scanned, so the first is always
-    scanned even when it alone exceeds the budget; charging first would
-    let a small budget make zero progress and mint a cursor that never
-    advances - a loop that looks like paging.
+    """Run ONE index query over the whole scope and page its result.
 
-    Inputs: conn, q, scope, scope_id, limit, scan_budget, scan_bytes,
-      case_sensitive, resume. Output: (hits, transcripts_scanned,
-      bytes_scanned, stop_status, position); position carries
-      t_ingested_at/t_id/line_no, or None when the scope was exhausted.
+    Description: the per-transcript walk this used to do was measured on
+      the real index and it is the wrong shape - re-running the MATCH for
+      each transcript cost 945.8 ms for ``tmux`` over 50 transcripts
+      against 15.85 ms for the single query. The keyset that used to sit
+      in the outer loop is now in the ORDER BY, so the result ORDER and
+      the resume CURSOR are unchanged.
+
+      THE BUDGETS ARE NO LONGER REACHABLE HERE AND THE COUNTS SAY SO
+      RATHER THAN PRETEND. The index covers every transcript in scope, so
+      one query searches all of them: the caller reports
+      ``transcripts_scanned == transcripts_in_scope`` and
+      ``transcripts_not_scanned == 0``, both measurements. ``bytes_scanned``
+      is 0 because no ``body_json`` was read, and ``scan.method`` says
+      ``fts_index`` so a reader knows why a real number is zero. The two
+      budget arguments are still accepted and still reported, because
+      removing a parameter is a shape change; they simply never bind.
+
+      Fetches ``limit + 1`` and DISCARDS the extra: the only ``has_more``
+      method that does not lie.
+    Inputs: conn, q, scope, scope_id, limit, scan_budget, scan_bytes
+      (both inert, see above), case_sensitive, resume, index, snippets,
+      filters (BlockFilters), order (ORDER_POSITION | ORDER_RELEVANCE).
+    Output: (hits, transcripts_scanned, bytes_scanned, stop_status,
+      position); position carries t_ingested_at/t_id/line_no, or None
+      when the scope was exhausted.
+    Example: _run_scan(conn, "tmux", "project", 1, 50, 1, 1, False, None,
+      idx, True, BlockFilters(), ORDER_POSITION)[3] -> 'complete'
     """
-    hay = "b.body_json" if case_sensitive else "LOWER(b.body_json)"
-    needle = ":q" if case_sensitive else "LOWER(:q)"
-    resume_tid = resume["t_id"] if resume is not None else None
-    resume_line = resume["line_no"] if resume is not None else LINE_DONE
-    hits: List[Dict[str, Any]] = []
-    scanned = 0
-    used_bytes = 0
-
-    for trow in _iter_scan_order(conn, scope, scope_id, resume):
-        tid = int(trow["id"])
-        room = limit - len(hits)
-        line_clause = ""
-        params: Dict[str, Any] = {"tid": tid, "q": q, "cap": room + 1}
-        if tid == resume_tid and resume_line != LINE_DONE:
-            line_clause = "AND a.line_no > :resume_line"
-            params["resume_line"] = resume_line
-        rows = conn.execute(
-            _HIT_SQL.format(hay=hay, needle=needle, line_clause=line_clause),
-            params,
-        ).fetchall()
-
-        scanned += 1
-        used_bytes += int(trow["raw_byte_length"])
-        # Fetch room+1 and DISCARD the extra: it is the only has_more
-        # method that does not lie (spec 5.5).
-        overflow = len(rows) > room
-        for row in rows[:room]:
-            hits.append(build_hit(conn, trow, row, q, index, snippets))
-        if overflow:
-            return (hits, scanned, used_bytes, SCAN_LIMIT_REACHED,
-                    {"t_ingested_at": trow["ingested_at"], "t_id": tid,
-                     "line_no": hits[-1]["line_no"]})
-        if used_bytes >= scan_bytes or scanned >= scan_budget:
-            return (hits, scanned, used_bytes, SCAN_BUDGET_EXHAUSTED,
-                    {"t_ingested_at": trow["ingested_at"], "t_id": tid,
-                     "line_no": LINE_DONE})
-    return hits, scanned, used_bytes, SCAN_COMPLETE, None
+    rows = run_hit_query(
+        conn, q, scope, scope_id, cap=limit + 1,
+        case_sensitive=case_sensitive, filters=filters, resume=resume,
+        order=order,
+    )
+    overflow = len(rows) > limit
+    hits = [build_fts_hit(row, q, index, snippets) for row in rows[:limit]]
+    if overflow:
+        last = rows[limit - 1]
+        return (hits, 0, 0, SCAN_LIMIT_REACHED,
+                {"t_ingested_at": last["ingested_at"],
+                 "t_id": int(last["transcript_id"]),
+                 "line_no": int(last["line_no"])})
+    return hits, 0, 0, SCAN_COMPLETE, None
 
 
 def _envelope_for(
@@ -320,18 +304,39 @@ def _envelope_for(
     scope_status: str, unevaluated: List[Dict[str, str]],
     scan: Dict[str, Any], paging: Dict[str, Any],
     gate: Optional[Dict[str, Any]] = None,
+    index_meta: Optional[Dict[str, Any]] = None,
+    coverage_meta: Optional[Dict[str, Any]] = None,
+    filters: Optional[BlockFilters] = None,
+    order: str = ORDER_POSITION,
 ) -> Dict[str, Any]:
-    """Assemble the envelope. One builder, so no path can omit a block."""
+    """Assemble the envelope. One builder, so no path can omit a block.
+
+    Description: ``index`` and ``coverage`` are NEW meta blocks and they
+      answer the two questions an FTS search raises that a substring scan
+      did not - is the index usable, and what is it not covering. Both
+      are present on EVERY path, refusals included, because a refusal
+      that omits them cannot say why it refused.
+    Inputs: as the parameter list. index_meta / coverage_meta (dict or
+      None) - None renders as "not measured", never as zeros.
+    Output: dict - the three-outcome envelope.
+    """
     id_key = "project_id" if scope == SCOPE_PROJECT else "transcript_id"
     return envelope(
         result=result, result_status=result_status, scope_status=scope_status,
         unevaluated=unevaluated,
         meta={
-            "query": {"q": q, "case_sensitive": bool(case_sensitive)},
+            "query": {"q": q, "case_sensitive": bool(case_sensitive),
+                      "order": order,
+                      "filters": (filters or BlockFilters()).as_meta()},
             "scope": {"kind": scope, id_key: scope_id,
                       "transcripts_in_scope": in_scope},
             "scan": scan, "paging": paging,
             "snippet_gate": gate or snippet_gate_meta(None),
+            "index": index_meta or {"state": None, "reason":
+                                    "the index was not interrogated"},
+            "coverage": coverage_meta or {
+                "measured": False, "bodies_indexed": None,
+                "bodies_not_indexed": None, "not_indexed_by_reason": None},
             **offset_units_meta(),  # same defn as secrets; cannot drift
         })
 
@@ -348,60 +353,113 @@ def search_scoped(
     scan_bytes: int = MAX_SCAN_BYTES,
     case_sensitive: bool = False,
     snippets: bool = True,
+    role: Optional[str] = None,
+    block_type: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    is_error: Optional[bool] = None,
+    order: str = ORDER_POSITION,
 ) -> Dict[str, Any]:
-    """Substring search inside ONE project or ONE transcript.
+    """Literal search inside ONE project or ONE transcript, over MESSAGE TEXT.
 
     The caller MUST branch on ``result_status`` before rendering an empty
     state: ``ok`` = searched, holds nothing; ``partial`` = a budget ran
     out and ``meta.scan.resume_cursor`` says where to continue;
     ``cannot_determine`` = the question was never evaluated.
 
+    WHAT MOVED. The haystack is now the broken-out content blocks rather
+    than the whole jsonl record, so a metadata token no longer matches
+    every message that carried it in its envelope: ``claude-opus-4``
+    returned 33,805 bodies and now returns the 165 blocks that hold it in
+    real message text. The MATCHER is unchanged - still a literal
+    substring, still honouring ``case_sensitive`` - only what it runs
+    over changed.
+
+    WHAT REFUSES. When the index is ``missing`` or ``never_built`` this
+    answers ``cannot_determine`` and names it. It does NOT fall back to
+    the old scan: that would silently restore the defect on exactly the
+    installs least likely to notice.
+
+    WHAT IS NOT SEARCHABLE, AND SAYS SO. 36.8 percent of bodies carry no
+    message text at all (attachments, file-history snapshots, titles),
+    and ``meta.coverage`` counts them by reason. An EMPTY result over a
+    scope holding any of them adds an ``unevaluated`` entry, so "not
+    found", "not indexed" and "never looked at" are three distinguishable
+    answers rather than one empty list.
+
     Inputs: conn (read-only sqlite3.Connection, row_factory Row), q (str,
       2..200 chars), scope ("project"|"transcript"), scope_id (int),
-      limit (1..200), scan_budget (transcripts, SECONDARY cap), cursor
-      (opaque or None), scan_bytes (the PRIMARY governor),
+      limit (1..200), scan_budget (accepted and reported, now inert - see
+      _run_scan), cursor (opaque or None), scan_bytes (likewise inert),
       case_sensitive, snippets (False returns no preview text at all,
-      the only HARD guarantee here; meta.snippet_gate states the rest).
-    Output: the three-outcome envelope. ``transcripts_scanned`` and
-      ``bytes_scanned`` are CUMULATIVE across a resumed scan, so scanned
-      + not_scanned == transcripts_in_scope; budgets are per request.
+      the only HARD guarantee here; meta.snippet_gate states the rest),
+      role / block_type / tool_name / is_error (optional narrowings, each
+      None meaning no filter), order ("position" - the default and the
+      ordering this endpoint has always had - or "relevance", BM25).
+    Output: the three-outcome envelope. ``transcripts_scanned`` equals
+      ``transcripts_in_scope`` because one index query covers the scope;
+      ``bytes_scanned`` is 0 because no body was read, and
+      ``scan.method`` says so.
     Raises: nothing - every defect becomes a ``cannot_determine``
       envelope naming its subject, because a route needs a payload.
+    Example: search_scoped(conn, "tmux", "project", 1,
+      block_type="tool_use")["meta"]["index"]["state"] -> 'current'
     """
     started = time.perf_counter()
+    filters = BlockFilters(
+        role=role, block_type=block_type, tool_name=tool_name,
+        is_error=is_error,
+    )
     #: When no scan ran, every count is None. 0 would be a measurement.
-    not_run = {"status": SCAN_NOT_RUN, "transcripts_scanned": None,
+    not_run = {"status": SCAN_NOT_RUN, "method": SCAN_METHOD_FTS,
+               "transcripts_scanned": None,
                "transcripts_not_scanned": None, "bytes_scanned": None,
                "budget_transcripts": scan_budget, "budget_bytes": scan_bytes,
                "elapsed_seconds": None, "resume_cursor": None}
     no_paging = {"limit": limit, "returned": 0, "has_more": None,
                  "next_cursor": None}
+    index_state = resolve_index_state(conn, read_liveness_for(conn))
 
     def refuse(subject: str, reason: str, res: str, sco: str,
                result: Any) -> Dict[str, Any]:
-        return _envelope_for(q, case_sensitive, scope, scope_id, None, result,
-                             res, sco, [{"subject": subject, "reason": reason}],
-                             not_run, no_paging)
+        return _envelope_for(
+            q, case_sensitive, scope, scope_id, None, result, res, sco,
+            [{"subject": subject, "reason": reason}], not_run, no_paging,
+            index_meta=index_state.to_meta(), filters=filters, order=order)
 
     try:
         _validate_inputs(q, scope, scope_id, limit, scan_budget, scan_bytes)
+        _validate_order(order)
         resume = _decode_resume(cursor, scope, scope_id)
     except SearchInputError as exc:
         bad_scope = exc.subject in ("scope", f"{scope}_id")
         return refuse(exc.subject, exc.reason, RESULT_CANNOT_DETERMINE,
                       SCOPE_CANNOT_DETERMINE if bad_scope else SCOPE_RESOLVED,
                       None)
+    # A search the index cannot answer is a cannot_determine, never an
+    # empty list. This is checked BEFORE the scope, because "the index is
+    # not built" is true whatever project was asked for.
+    if not index_state.usable:
+        return refuse("index", index_state.reason, RESULT_CANNOT_DETERMINE,
+                      SCOPE_RESOLVED, None)
     try:
         in_scope = _scope_size(conn, scope, scope_id)
         if in_scope is None:
             return refuse(f"{scope}:{scope_id}",
                           f"no row in message_{scope}s with id {scope_id}",
                           RESULT_NOT_FOUND, SCOPE_NOT_FOUND, [])
+        if not query_has_tokens(conn, q):
+            return refuse(
+                "q",
+                f"q produced no indexable token: the tokenizer "
+                f"({BLOCK_SEARCH_TOKENIZER}) found no word in it, so it "
+                f"cannot be looked up. This is not a result of zero.",
+                RESULT_CANNOT_DETERMINE, SCOPE_RESOLVED, None)
         index = load_index(conn) if snippets else None
         gate = snippet_gate_meta(index)
         hits, scanned, used, status, position = _run_scan(
             conn, q, scope, scope_id, limit, scan_budget, scan_bytes,
-            case_sensitive, resume, index, snippets)
+            case_sensitive, resume, index, snippets, filters, order)
+        coverage = resolve_coverage(conn, scope, scope_id)
     except sqlite3.Error as exc:
         # Specific, and deliberately not re-raised: a route needs a
         # payload. The message names the operation, never a body value.
@@ -409,42 +467,105 @@ def search_scoped(
                       f"sqlite refused the scan: {type(exc).__name__}: {exc}",
                       RESULT_CANNOT_DETERMINE, SCOPE_CANNOT_DETERMINE, None)
 
-    total_scanned = (resume["scanned"] if resume else 0) + scanned
-    total_bytes = (resume["bytes"] if resume else 0) + used
-    not_scanned = max(0, in_scope - total_scanned)
-    # A budget spent exactly as the scope ran out is COMPLETE. Calling it
-    # budget_exhausted would invent unscanned work that does not exist,
-    # and mint a resume cursor that returns nothing forever.
-    if status == SCAN_BUDGET_EXHAUSTED and not_scanned == 0:
-        status, position = SCAN_COMPLETE, None
+    # ONE index query covers every transcript in scope, so the whole scope
+    # WAS searched. Both numbers are measurements, and their invariant
+    # (scanned + not_scanned == in_scope) still holds.
+    total_scanned = in_scope
+    not_scanned = 0
+    total_bytes = 0
     encoded = None if position is None else encode_cursor(
         CURSOR_SEARCH,
         {"v": CURSOR_VERSION, "scanned": total_scanned,
          "bytes": total_bytes, **position})
     at_limit = status == SCAN_LIMIT_REACHED
-    exhausted = status == SCAN_BUDGET_EXHAUSTED
 
     unevaluated: List[Dict[str, str]] = []
-    if exhausted:
-        spent = (f"byte budget {scan_bytes} was spent" if used >= scan_bytes
-                 else f"transcript budget {scan_budget} was spent")
+    # An EMPTY result over a scope holding unsearchable bodies is the one
+    # case where "found nothing" and "could not have found it" look the
+    # same, so that is where the coverage refusal is raised. Saying it on
+    # every search would make it noise nobody reads.
+    if not hits and coverage.complete and coverage.bodies_not_indexed:
         unevaluated.append({
             "subject": f"{scope}:{scope_id}",
-            "reason": (f"{not_scanned} of {in_scope} transcripts were not "
-                       f"scanned: {spent} after {scanned} transcripts")})
+            "reason": _coverage_reason(coverage)})
+    if index_state.state == INDEX_STALE:
+        unevaluated.append({"subject": "index", "reason": index_state.reason})
 
     return _envelope_for(
         q, case_sensitive, scope, scope_id, in_scope, hits,
-        RESULT_PARTIAL if exhausted else RESULT_OK, SCOPE_RESOLVED, unevaluated,
-        {"status": status, "transcripts_scanned": total_scanned,
+        RESULT_OK, SCOPE_RESOLVED, unevaluated,
+        {"status": status, "method": SCAN_METHOD_FTS,
+         "transcripts_scanned": total_scanned,
          "transcripts_not_scanned": not_scanned, "bytes_scanned": total_bytes,
          "budget_transcripts": scan_budget, "budget_bytes": scan_bytes,
          "elapsed_seconds": round(time.perf_counter() - started, 6),
-         # Exactly one of resume_cursor / next_cursor is ever set.
-         "resume_cursor": encoded if exhausted else None},
+         # Exactly one of resume_cursor / next_cursor is ever set, and on
+         # this path the budget is unreachable so resume_cursor never is.
+         "resume_cursor": None},
         {"limit": limit, "returned": len(hits),
-         # None, never False: False claims the end of the list was
-         # reached, and an exhausted scan never read it.
-         "has_more": True if at_limit else (None if exhausted else False),
+         "has_more": bool(at_limit),
          "next_cursor": encoded if at_limit else None},
-        gate)
+        gate, index_state.to_meta(), coverage.to_meta(), filters, order)
+
+
+def _coverage_reason(coverage: Coverage) -> str:
+    """Word the refusal an empty result over unindexed bodies earns.
+
+    Description: names the COUNT and the REASONS, because "some content
+      is not searchable" is not actionable and "79,667 bodies carry no
+      message text" is.
+    Inputs: coverage (Coverage) - must be ``complete``.
+    Output: str.
+    Example: _coverage_reason(cov) -> '3 of 10 bodies in scope are not ...'
+    """
+    parts = ", ".join(
+        f"{count} {reason}" for reason, count in sorted(coverage.by_reason.items())
+        if reason != COVERAGE_INDEXED)
+    total = coverage.bodies_indexed + coverage.bodies_not_indexed
+    return (
+        f"{coverage.bodies_not_indexed} of {total} bodies in scope are not in "
+        f"the search index and could not have matched ({parts}). "
+        f"An empty result here means NOT FOUND IN INDEXED TEXT, which is "
+        f"not the same as not present in this scope."
+    )
+
+
+def _validate_order(order: str) -> None:
+    """Refuse an unknown ordering rather than silently using the default.
+
+    Description: a typo'd order that silently fell back would return a
+      correct-looking page in the wrong order, which is the kind of wrong
+      nobody reports.
+    Inputs: order (str).
+    Output: None.
+    Raises: SearchInputError.
+    Example: _validate_order("relevance")
+    """
+    if order not in ORDER_MODES:
+        raise SearchInputError(
+            "order",
+            f"order must be one of {list(ORDER_MODES)}; got {order!r}")
+
+
+def read_liveness_for(conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:
+    """Read the index build record for the database this connection holds.
+
+    Description: the artifact lives beside the database file, so its
+      directory is derived from the connection rather than from settings
+      - a test pointing at a throwaway datastore then reads that
+      datastore's own record instead of the developer's.
+    Inputs: conn (sqlite3.Connection).
+    Output: dict or None - None when there is no record, which is a
+      different fact from a record saying a build failed.
+    Example: read_liveness_for(conn) -> {"outcome": "built", ...}
+    """
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+    except sqlite3.Error:
+        # Specific: a connection that cannot name its own file still has
+        # to be searchable. The record is a DECORATION on the verdict and
+        # its absence renders as "no build recorded".
+        return None
+    if row is None or not row[2]:
+        return None
+    return read_liveness(Path(row[2]).parent)

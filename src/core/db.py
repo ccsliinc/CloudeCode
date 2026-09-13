@@ -51,6 +51,7 @@ from typing import Iterator, Optional
 import structlog
 
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
+from src.core.message_body_codec import register_body_functions
 
 logger = structlog.get_logger()
 
@@ -138,6 +139,25 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
         conn.close()
         raise DatastoreUnreadableError(
             f"could not apply pragmas to {path.name}: {exc}", path
+        ) from exc
+    # ``message_bodies.body_json`` holds EITHER the JSON text or this
+    # module's compressed frame, per row, and SQLite has no inflate. So
+    # every reader spells LENGTH(cloude_body_chars(...)) rather than
+    # LENGTH(body_json), and those functions have to exist on every
+    # connection this app hands out. Registering here - the ONE place
+    # cloude.db is opened - is what makes that true without each call
+    # site remembering. A connection that somehow missed them fails a
+    # repointed query with "no such function", which is LOUD; the
+    # alternative failure modes are all silent and wrong (LENGTH over a
+    # blob returns its COMPRESSED byte count, json_extract returns NULL).
+    try:
+        register_body_functions(conn)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise DatastoreUnreadableError(
+            f"could not register the body codec functions on {path.name}: "
+            f"{exc}",
+            path,
         ) from exc
     return conn
 
