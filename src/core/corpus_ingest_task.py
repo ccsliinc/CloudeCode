@@ -51,6 +51,13 @@ from src.core.message_archive_flag import (
     resolve as resolve_message_archive,
 )
 from src.core.corpus_ingest_service import CorpusIngestReport, run_ingest_once
+from src.core.message_projection import run_projection_once
+from src.core.message_projection_report import (
+    ProjectionReport,
+    projection_enabled,
+    resolve_max_archives,
+    resolve_max_seconds,
+)
 
 logger = structlog.get_logger()
 
@@ -170,6 +177,8 @@ class CorpusIngestScheduler:
         self.enabled = ingest_enabled()
         self.last_report: Optional[CorpusIngestReport] = None
         self.runs_completed = 0
+        self.last_projection: Optional[ProjectionReport] = None
+        self.projection_runs_completed = 0
         self._cancel = Event()
         self._task: Optional[asyncio.Task] = None
 
@@ -228,6 +237,7 @@ class CorpusIngestScheduler:
                 )
                 self.last_report = report
                 self.runs_completed += 1
+                await self._project_slice()
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:  # noqa: BLE001 - see docstring
@@ -248,6 +258,58 @@ class CorpusIngestScheduler:
                 await asyncio.sleep(self.interval_seconds)
             except asyncio.CancelledError:
                 raise
+
+    async def _project_slice(self) -> None:
+        """Run one budgeted archive-to-message-model projection pass.
+
+        Description: THE ARCHIVE AND THE BROWSER ARE TWO STORES AND THIS
+          IS WHERE THEY MEET. The ingest pass above fills
+          ``transcript_archives``; the history browser reads the v16
+          ``message_*`` tables; until this call existed nothing joined
+          them, and the browser rendered an empty rail over a correctly
+          ingested corpus (measured 2026-09-13: 22,828 archive rows,
+          0 message rows).
+
+          IT RUNS AFTER THE INGEST, IN THE SAME CYCLE, AND ON A THREAD.
+          After, because a pass has nothing to project until the archive
+          holds it. On a thread for the same reason the ingest is: the
+          work is synchronous sqlite and synchronous CPU, and on the
+          event loop it would block every terminal keystroke for as long
+          as it ran. It is BUDGETED rather than exhaustive, because the
+          measured first-run cost over the owner's corpus is hours; the
+          budget is what keeps a background pass a background pass.
+
+          ITS FAILURES ARE ITS OWN. ``run_projection_once`` never raises
+          and publishes a liveness record on every terminating path, so
+          this awaits it and logs, and a projection that cannot run never
+          costs the archive its ingest.
+        Inputs: none.
+        Output: None.
+        Example: awaited only by :meth:`_loop`.
+        """
+        if not projection_enabled():
+            return
+        try:
+            self.last_projection = await asyncio.to_thread(
+                run_projection_once,
+                self.state_dir,
+                cancel=self._cancel,
+                max_archives=resolve_max_archives(),
+                max_seconds=resolve_max_seconds(),
+            )
+            self.projection_runs_completed += 1
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - see _loop's own catch
+            # Same reasoning as the loop's outermost catch: anything that
+            # escapes here would kill the scheduler for the process's
+            # life, and a dead scheduler is indistinguishable from a
+            # quiet corpus. run_projection_once has already named every
+            # failure it can; this catches the ones it could not.
+            logger.warning(
+                "message_projection_slice_crashed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
 
     async def aclose(self, timeout: float = 10.0) -> None:
         """Stop the loop between files and wait for the worker to unwind.
@@ -293,6 +355,8 @@ class CorpusIngestScheduler:
             "runs_completed_this_process": self.runs_completed,
             "cancel_requested": self._cancel.is_set(),
             "byte_verify_sample": self.byte_verify_sample,
+            "projection_enabled": projection_enabled(),
+            "projection_runs_this_process": self.projection_runs_completed,
             "artifact_dir": str(state_io.artifact_dir(self.state_dir)),
         }
 

@@ -50,6 +50,7 @@ from src.core.corpus_ingest_service import (
     resolve_corpus_root,
 )
 from src.core.db import DatastoreError, connect, db_path_for, read_schema_version
+from src.core.message_projection_status import projection_block
 
 #: Lowest schema carrying ``message_ingest_findings``.
 MIN_MODEL_SCHEMA = 16
@@ -292,6 +293,11 @@ def build_status(
         "scheduler": scheduler_block,
         "archive": archive,
         "gate_findings": _gate_findings_block(state_dir),
+        # THE HALF ``model_not_populated`` COULD NOT SAY. That word is
+        # a true statement about the message model and it cannot tell a
+        # reader whether the join has ever run or how much of the
+        # archive is still waiting. See message_projection_status.
+        "projection": projection_block(state_dir),
         "corpus": {
             "root": str(root),
             "exists": root.is_dir(),
