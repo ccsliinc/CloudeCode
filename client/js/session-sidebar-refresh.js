@@ -59,5 +59,27 @@ console.log('[SessionSidebarRefresh Module] Loading...');
         });
     };
 
+    /**
+     * Re-read the moment the tab is visible again.
+     *
+     * Description: the return half of the poll's hidden gate. The
+     *   controller's `_startPoll` skips every tick while document.hidden
+     *   is true (an open sidebar in a backgrounded tab was measured
+     *   fetching twelve times a minute for nobody), so without this the
+     *   list would sit stale for whatever was left of the interval after
+     *   the user came back. It goes through `refreshNow`, which already
+     *   refuses while the panel is closed, so there is exactly one rule
+     *   about rendering into a hidden panel and this is not a second
+     *   copy of it. Read on the EVENT, never on a frame (gotcha 9).
+     * Inputs: none. Output: undefined.
+     */
+    function onVisibilityChange() {
+        if (!document.hidden) sidebar.refreshNow();
+    }
+
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+
     console.log('[SessionSidebarRefresh Module] Loaded');
 })();

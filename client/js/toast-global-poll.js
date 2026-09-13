@@ -90,11 +90,16 @@
      *   is no token (the login screen would otherwise generate a 401 every
      *   ten seconds), when the API or the toast manager has not loaded,
      *   and when a previous tick is still outstanding - a slow response
-     *   must not be allowed to queue up ticks behind it.
+     *   must not be allowed to queue up ticks behind it. Also refuses
+     *   while the document is HIDDEN: a backgrounded tab was measured
+     *   spending six of these a minute for a screen nobody is looking
+     *   at, and the visibilitychange listener in start() performs the
+     *   authoritative re-read the instant the tab is back.
      * Inputs: none. Output: boolean.
      */
     function canPoll() {
         if (state.inFlight) return false;
+        if (document.hidden) return false;
         if (!window.API || typeof window.API.getAllToasts !== 'function') return false;
         if (typeof window.API.getToken === 'function' && !window.API.getToken()) {
             return false;

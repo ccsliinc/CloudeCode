@@ -307,10 +307,16 @@ class SessionSidebarController {
         else this.close();
     }
 
-    /** Description: start the poll timer. Inputs: none. Output: void. */
+    /**
+     * Description: start the poll timer. A tick that lands while the
+     *   document is HIDDEN is skipped, never queued; session-sidebar-refresh.js
+     *   performs the re-read the instant the tab is visible again.
+     * Inputs: none. Output: void.
+     */
     _startPoll() {
         if (this._pollInterval) return;
         this._pollInterval = setInterval(() => {
+            if (document.hidden) return;
             this._fetchAndRender().catch((err) => {
                 console.warn('SessionSidebar: poll tick failed:', err);
             });

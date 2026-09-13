@@ -50,7 +50,7 @@ from typing import Iterator, Optional
 
 import structlog
 
-from src.core.db_models import META_CREATED_AT, META_INSTALL_ID, META_SCHEMA_VERSION
+from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
 
 logger = structlog.get_logger()
 
@@ -90,24 +90,6 @@ class DatastoreUnreadableError(DatastoreError):
     def __init__(self, message: str, path: Optional[Path] = None) -> None:
         super().__init__(message)
         self.path = path
-
-
-class DatastoreReadOnlyError(DatastoreError):
-    """A write was attempted while the datastore is in degraded mode.
-
-    Description: raised by :func:`Datastore.write` when the startup
-      resolution put the app into read-only mode - a failed migration, an
-      unreadable database, a schema version newer than this code
-      understands, or an unverifiable backup. Reads still work; writes
-      must not silently no-op.
-    Inputs: message (str), reason (str) - the machine-readable status
-      that caused read-only mode.
-    Output: an exception instance carrying ``.reason``.
-    """
-
-    def __init__(self, message: str, reason: str) -> None:
-        super().__init__(message)
-        self.reason = reason
 
 
 def db_path_for(state_dir: Path) -> Path:
@@ -420,14 +402,3 @@ def ensure_install_id(conn: sqlite3.Connection) -> str:
     minted = str(_uuid.uuid4())
     set_meta(conn, META_INSTALL_ID, minted)
     return minted
-
-
-def created_at_key() -> str:
-    """Return the meta key holding the database's creation timestamp.
-
-    Description: trivial accessor so callers do not import the constant
-      from two modules and drift.
-    Inputs: none.
-    Output: str.
-    """
-    return META_CREATED_AT

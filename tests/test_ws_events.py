@@ -76,7 +76,6 @@ def patched_auth_config(monkeypatch):
 
     fake_settings = _FakeSettings()
     monkeypatch.setattr("src.api.auth.settings", fake_settings)
-    monkeypatch.setattr("src.api.deps.settings", fake_settings)
     yield
 
 

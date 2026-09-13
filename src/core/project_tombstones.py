@@ -49,10 +49,7 @@ from typing import Optional, Set
 import structlog
 
 from src.core.db import get_meta, table_exists
-from src.core.db_models import (
-    META_PROJECT_TOMBSTONES_LEGACY_GAP,
-    META_PROJECT_TOMBSTONES_SINCE,
-)
+from src.core.db_models import META_PROJECT_TOMBSTONES_LEGACY_GAP
 from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
@@ -138,15 +135,6 @@ def tombstoned_roots(conn: sqlite3.Connection) -> Set[str]:
         row[0]
         for row in conn.execute("SELECT root FROM project_tombstones").fetchall()
     }
-
-
-def tracking_since(conn: sqlite3.Connection) -> Optional[str]:
-    """When deletion tracking began on this database.
-
-    Inputs: conn (sqlite3.Connection).
-    Output: str | None - ISO-8601, or None on a database below schema v5.
-    """
-    return get_meta(conn, META_PROJECT_TOMBSTONES_SINCE) or None
 
 
 def legacy_gap(conn: sqlite3.Connection) -> bool:

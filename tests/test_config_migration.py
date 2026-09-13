@@ -249,12 +249,15 @@ def test_migrate_config_file_noop_leaves_no_backup(tmp_path, monkeypatch):
     already_current = {"config_version": CURRENT_CONFIG_VERSION, "agents": {"wrappers": []}}
     config_path.write_text(json.dumps(already_current, indent=2))
 
-    monkeypatch.setattr(
-        "src.core.config_migration.probe_shell_function", lambda name, runner=None: False
-    )
+    # A RECORDING spy, not an inert lambda. Once the probes moved behind
+    # the v0 gate this stub stopped being called at all, so a lambda here
+    # would vouch for nothing while still reading like a guard; the
+    # assertion below is what keeps it honest.
+    calls = _counting_probe(monkeypatch)
 
     result = migrate_config_file(config_path)
     assert result["migrated"] is False
+    assert calls == [], f"a no-op migration probed the shell: {calls}"
 
     backup_path = config_path.with_suffix(".json.bak")
     assert not backup_path.exists()
@@ -431,3 +434,67 @@ def test_migration_to_v2_is_idempotent_end_to_end():
     second, changed2 = migrate_config_dict(first, True, True)
     assert changed2 is False
     assert second == first
+
+
+# ---------------------------------------------------------------------- #
+# migrate_config_file - the shell probes are lazy (perf audit F1)
+# ---------------------------------------------------------------------- #
+#
+# Each ``probe_shell_function`` call runs ``zsh -ic``, sourcing the user's
+# whole ~/.zshrc, measured at about 2 s apiece. Only ``_step_v0_to_v1``
+# reads the answers, so an already-migrated config must never pay for
+# them. The negative control below is the assertion that carries the
+# claim; it was watched going red against the unconditional probes.
+
+def _counting_probe(monkeypatch) -> list:
+    """Replace the module-level probe with a spy that records each name.
+
+    Inputs: monkeypatch (pytest.MonkeyPatch).
+    Output: list[str] - the names probed so far, appended to live.
+    """
+    calls: list = []
+
+    def spy(name: str, runner=None) -> bool:
+        calls.append(name)
+        return name == "cld"
+
+    monkeypatch.setattr("src.core.config_migration.probe_shell_function", spy)
+    return calls
+
+
+def test_already_current_config_never_probes_the_shell(tmp_path, monkeypatch):
+    calls = _counting_probe(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"config_version": CURRENT_CONFIG_VERSION, "agents": {"wrappers": []}})
+    )
+
+    result = migrate_config_file(config_path)
+
+    assert result["migrated"] is False
+    assert calls == [], f"an already-current config probed the shell: {calls}"
+
+
+def test_v0_config_probes_both_names_exactly_once(tmp_path, monkeypatch):
+    calls = _counting_probe(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"agents": {"codex_command": "codex"}}))
+
+    result = migrate_config_file(config_path)
+
+    assert result["migrated"] is True
+    assert len(calls) == 2
+    assert set(calls) == {"cld", "cldor"}
+    assert result["wrapper_ids"] == ["claude", "cld"]
+
+
+def test_non_object_document_neither_probes_nor_raises(tmp_path, monkeypatch):
+    calls = _counting_probe(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text("[]")
+
+    result = migrate_config_file(config_path)
+
+    assert result["migrated"] is False
+    assert calls == []
+    assert config_path.read_text() == "[]"

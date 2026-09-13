@@ -216,6 +216,23 @@ console.log('[SessionHeaderLed Module] Loading...');
     /** The fallback poll's timer handle, or null. @type {any} */
     let timer = null;
 
+    /** Whether the visibility listener is registered. @type {boolean} */
+    let wired = false;
+
+    /**
+     * Re-read the moment the tab is visible again.
+     *
+     * Description: the return half of the hidden gate in `tick`. The
+     *   tick refuses while hidden, so without this the light would wait
+     *   out whatever was left of the interval after the user came back.
+     *   Registered ONCE for the life of the module, across any number of
+     *   start/stop cycles, so a restart cannot stack a second re-read.
+     * Inputs: none. Output: void.
+     */
+    function onVisibilityChange() {
+        if (!document.hidden) tick();
+    }
+
     /**
      * One fallback tick: paint the header when nothing else is going to.
      *
@@ -234,12 +251,22 @@ console.log('[SessionHeaderLed Module] Loading...');
      *   condition the sidebar's own timer is started and stopped on, and
      *   it is already public - the alternative was a second accessor on
      *   a file sitting at its 500-line budget.
+     *
+     *   AND IT STANDS DOWN WHILE THE DOCUMENT IS HIDDEN. This is the
+     *   poll that calls GET /sessions/list, the most expensive listing
+     *   the server has, and a backgrounded terminal tab was measured
+     *   paying for it twelve times a minute with nobody looking. The
+     *   timer keeps running and the gate is read on the tick itself,
+     *   never on a frame (gotcha 9); the visibilitychange listener in
+     *   start() performs the authoritative re-read the instant the tab
+     *   is back, so a returning tab cannot show a stale light.
      * Inputs: none.
      * Output: Promise<void> - never rejects; a failed poll leaves the
      *   last painted light alone rather than blanking it, because a
      *   failed request is not evidence the session changed.
      */
     async function tick() {
+        if (document.hidden) return;
         const sidebar = window.SessionSidebar;
         if (!sidebar || typeof sidebar.activeTmuxName !== 'function') return;
         const name = sidebar.activeTmuxName();
@@ -271,6 +298,10 @@ console.log('[SessionHeaderLed Module] Loading...');
      * Example: SessionHeaderLed.start();
      */
     function start() {
+        if (!wired && typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', onVisibilityChange);
+            wired = true;
+        }
         if (timer) return;
         timer = setInterval(() => { tick(); }, pollMs());
     }

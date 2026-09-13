@@ -178,7 +178,7 @@ def migrate_config_dict(
 def migrate_config_file(config_path: Path) -> Dict:
     """Run the migration against a real config.json on disk, idempotently.
 
-    Description: reads, probes the environment, calls
+    Description: reads, probes the environment ONLY for a v0 config, calls
       ``migrate_config_dict`` inside the ONE serialization boundary in
       ``config_writer``, which - only if it reports a change - backs up
       the pre-write bytes to ``config.json.bak`` (overwritten each call,
@@ -202,12 +202,23 @@ def migrate_config_file(config_path: Path) -> Dict:
     if not config_path.exists():
         raise FileNotFoundError(f"config.json not found: {config_path}")
 
-    has_cld = probe_shell_function("cld")
-    has_cldor = probe_shell_function("cldor")
-
     migrated: Dict = {}
 
     def migrate(data: Dict) -> Optional[Dict]:
+        # The shell probes run ``zsh -ic`` (about 2 s each, sourcing the
+        # user's whole ~/.zshrc) and only ``_step_v0_to_v1`` reads their
+        # answers, so they are taken ONLY for a genuine v0 config, read
+        # off the document the boundary just handed us. Every migrated
+        # install therefore boots with zero subprocesses here; a v0 one
+        # still probes both names before the step runs. Holding the lock
+        # for the probes is acceptable because that branch runs once per
+        # install, on first boot. A non-int version is left for
+        # ``migrate_config_dict`` to refuse, unprobed, and so is a
+        # document that is not an object at all.
+        version = data.get("config_version", 0) if isinstance(data, dict) else None
+        needs_probe = isinstance(version, int) and version < 1
+        has_cld = probe_shell_function("cld") if needs_probe else False
+        has_cldor = probe_shell_function("cldor") if needs_probe else False
         new_data, changed = migrate_config_dict(data, has_cld, has_cldor)
         if not changed:
             # Returning None is how the boundary is told to touch NEITHER

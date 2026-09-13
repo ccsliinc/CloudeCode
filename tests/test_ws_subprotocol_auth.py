@@ -70,7 +70,6 @@ def patched_auth_config(monkeypatch):
 
     # Patch at each import site the code under test reads from.
     monkeypatch.setattr("src.api.auth.settings", fake_settings)
-    monkeypatch.setattr("src.api.deps.settings", fake_settings)
     yield
 
 

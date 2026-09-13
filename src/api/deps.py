@@ -1,18 +1,14 @@
 """API dependencies and authentication."""
 
-from fastapi import Header, HTTPException, Request, WebSocket
-from typing import Optional, Tuple, TYPE_CHECKING
+from fastapi import HTTPException, WebSocket
+from typing import Optional, Tuple
 import structlog
 
-from src.config import settings
 # Item 5: WS auth goes through decode_access_token so `typ == "access"` is
 # enforced. decode_access_token raises HTTPException(401) on any failure;
 # we catch it here and translate to the (False, reason) tuple the WS
 # handler expects so close codes map cleanly.
 from src.api.auth import decode_access_token
-
-if TYPE_CHECKING:
-    from src.core.refresh_store import RefreshStore
 
 logger = structlog.get_logger()
 
@@ -24,34 +20,6 @@ logger = structlog.get_logger()
 # access logs (query strings are routinely logged; the Sec-WebSocket-Protocol
 # header is not).
 SUBPROTOCOL_MARKER = "cloude.jwt.v1"
-
-
-async def verify_api_key(x_api_key: Optional[str] = Header(None)) -> bool:
-    """
-    Verify API key if configured.
-
-    Args:
-        x_api_key: API key from request header
-
-    Returns:
-        True if authentication successful
-
-    Raises:
-        HTTPException: If authentication fails
-    """
-    # Skip auth if no API key is configured
-    if not settings.api_key:
-        return True
-
-    if not x_api_key or x_api_key != settings.api_key:
-        logger.warning("authentication_failed", provided_key=x_api_key[:8] if x_api_key else None)
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API key",
-            headers={"WWW-Authenticate": "ApiKey"}
-        )
-
-    return True
 
 
 def _parse_subprotocols(raw: Optional[str]) -> list[str]:
@@ -128,16 +96,3 @@ def verify_jwt_from_subprotocol(websocket: WebSocket) -> Tuple[bool, Optional[st
         return False, "invalid token"
 
     return True, token
-
-
-def get_refresh_store(request: Request) -> "RefreshStore":
-    """FastAPI dependency - returns the RefreshStore mounted on app.state.
-
-    Raises 503 if the lifespan didn't wire one up (e.g. startup ordering
-    bug). Preferable to returning None and forcing every endpoint to
-    guard for it.
-    """
-    store = getattr(request.app.state, "refresh_store", None)
-    if store is None:
-        raise HTTPException(status_code=503, detail="Refresh service not available")
-    return store
