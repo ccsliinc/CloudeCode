@@ -264,11 +264,21 @@ tail.**
 
 ### 2.5 A recorded known gap in the search JOIN
 
-`src/core/archive_search.py:107` carries a comment beginning
-`KNOWN GAP, recorded not hidden: the JOIN drops appearance rows with a ...`.
-It is the only declared gap in the whole 98-module inventory. Read it, decide
-whether it still matters at 22,828 transcripts, and either close it or record
-it here as a decided non-goal.
+**ANSWERED, 2026-09-13, and the answer is NARROWED rather than closed.** See
+`docs/archive-search-index.md`. The gap was that the JOIN drops appearance
+rows with a NULL `body_id` - 1 of 3,125,122, the line that failed to parse at
+ingest. That row still has no body, and now it also has no content block, so
+it is still a CANNOT DETERMINE rendered as an absence. What changed is that it
+is now REPORTABLE: `meta.coverage` counts every body in scope that is outside
+the index and says why, in four named reasons, and an EMPTY page over a scope
+holding any of them carries a named `unevaluated` entry.
+
+The larger finding is that the gap named here was not the important one. The
+matcher itself was wrong: `INSTR(body_json, needle)` searched the whole jsonl
+record, so `claude-opus-4` returned **33,805 bodies of which 165** hold it in
+real message text. Search now matches the extracted content blocks through an
+FTS5 index. 36.8 percent of bodies carry no message text at all and are
+correctly unsearchable; that is the coverage block's whole reason to exist.
 
 ### 2.6 The database is 5.2 GB and the app's own state is a rounding error
 
@@ -971,8 +981,12 @@ protocol. None is a container.
 2. **Measure the browser at 22,828 transcripts**, once item 0 makes that
    possible. The rail, the transcript list, the virtual list and the search
    budget. Record the numbers.
-3. **Search tells the truth when it stops early**, plus the `archive_search.py:107`
-   known gap: close it or record it.
+3. ~~**Search tells the truth when it stops early**, plus the
+   `archive_search.py:107` known gap: close it or record it.~~ **Done,
+   2026-09-13.** It cannot stop early any more - one index query covers the
+   scope, so `budget_exhausted` is unreachable and there is a test pinning
+   that. The refusals that replaced it are an unbuilt index, an untokenizable
+   query, and the coverage gap. See `docs/archive-search-index.md`.
 4. **Add the `app-screen` surface** to `types.ts`, `registry.ts` and the host
    walk in `router.js`, with the negative test for a throwing `parse`.
 5. **Register the archive through it**, porting `archive-deeplink.js` to

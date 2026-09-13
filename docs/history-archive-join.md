@@ -173,8 +173,23 @@ belong to the next step.
    claim to prove.
 2. **No `superseded` back-projection.** Historical versions are not browsable
    and their blobs are pruned upstream anyway.
-3. **The search JOIN gap** recorded at `archive_search.py:107` is untouched.
+3. ~~**The search JOIN gap** recorded at `archive_search.py:107` is
+   untouched.~~ **Answered 2026-09-13 in `docs/archive-search-index.md`.**
+   The matcher moved off `body_json` entirely and onto an FTS5 index over
+   `message_content_blocks.text`, which turned out to be a CORRECTNESS fix
+   rather than a speed one: `claude-opus-4` returned 33,805 bodies and now
+   returns the 165 blocks that hold it in real message text. The NULL
+   `body_id` row is still an absence and is now reportable through
+   `meta.coverage`.
 4. **Search at 22,828 transcripts is still unmeasured** (scope 2.3), and it
    cannot be measured until a corpus of that size is actually in the model.
-   This is the change that makes that measurement possible.
+   This is the change that makes that measurement possible. What HAS been
+   measured, on this 400-transcript projection: a miss went from 919 ms to
+   0.02 ms and the index is 51.4 MiB for 125.1 MiB of block text.
+
+6. **`body_json` is now compressed per row**, 756.8 MiB to 398.1 MiB at
+   zlib-6, and the two changes are COUPLED: the column was stored
+   uncompressed only because search grepped it. Byte-exact export was
+   re-verified either side of the backfill. See
+   `docs/archive-search-index.md` section 7.
 5. **Nothing under `web/src` knows the archive exists** (scope 2.7). Unchanged.
