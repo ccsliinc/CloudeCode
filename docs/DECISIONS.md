@@ -649,3 +649,5 @@ on ours" (2026-09-10, above), which mirrored every branch and tag to
 safeguard ("Push only to origin and adamdev, never to upstream", 2026-09-08)
 stays in force: a push to `Adoom666/CloudeCode` still has to fail by
 construction.
+
+The repository stays private; do not change its visibility.

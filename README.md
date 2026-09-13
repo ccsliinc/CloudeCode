@@ -8,9 +8,11 @@
 
 **Drive your Mac's live Claude Code sessions from your phone. Real terminal, real keystrokes, real control — while the session runs in tmux whether you're watching or not.**
 
-### [Download Cloude Code 1.2.1 for macOS](https://github.com/ccsliinc/CloudeCode/releases/download/v1.2.1/Cloude.Code-1.2.1-arm64.dmg)
+### [Download Cloude Code for macOS](https://github.com/Adoom666/CloudeCodeDev/releases/latest)
 
 Apple Silicon, macOS 13+. Open the DMG and drag the app to Applications. That is the whole install.
+
+The repository is private — downloading a release needs a GitHub account that has been granted access.
 
 ![Version](https://img.shields.io/badge/version-1.2.1-d77757)
 ![License](https://img.shields.io/badge/license-MIT-4ade80)
@@ -339,12 +341,14 @@ Three rules for these:
 ### Path A — DMG (recommended)
 
 ```bash
-# 1. Download
-curl -LO https://github.com/ccsliinc/CloudeCode/releases/download/v1.2.1/Cloude.Code-1.2.1-arm64.dmg
+# 1. Download. The repo is private, so a plain curl against a release asset
+# 404s for anyone without access — use the gh CLI, signed in with a GitHub
+# account that has been granted access to the repo, instead.
+gh release download --repo Adoom666/CloudeCodeDev --pattern '*.dmg'
 
 # 2. Verify
-shasum -a 256 Cloude.Code-1.2.1-arm64.dmg
-# expected: see the sha256 published on the v1.2.1 release page
+shasum -a 256 Cloude.Code-*.dmg
+# expected: see the sha256 published on the release page
 #
 # Upstream's own rebuilt 1.0.36 DMG, for anyone verifying that artifact:
 #   Cloude.Code-1.0.36-arm64.dmg
@@ -375,7 +379,7 @@ per setting.
 ### Path B — From source
 
 ```bash
-git clone https://github.com/Adoom666/CloudeCode.git cloudecode
+git clone git@github.com:Adoom666/CloudeCodeDev.git cloudecode
 cd cloudecode
 
 python3 -m venv venv
@@ -548,7 +552,7 @@ A single SQLite database at `~/Library/Application Support/CloudeCode/cloude.db`
 |---|---|---|---|
 | `session` | `backend` | `auto` | `auto` \| `tmux` \| `pty`. Auto degrades to PTY if tmux is missing |
 | | `tmux_socket_name` | `cloude` | The dedicated `tmux -L` socket name |
-| | `scrollback_lines` | `3000` | How much history is replayed on rejoin |
+| | `scrollback_lines` | `10000` | How much history is replayed on rejoin |
 | auth | `access_token_ttl_seconds` | `14400` (4h) | Access-token lifetime |
 | | `refresh_token_ttl_seconds` | `604800` (7d) | Refresh-token lifetime |
 | `auth_rate_limits` | `totp_verify_per_minute` | `5` | Login attempts per minute per IP |
@@ -743,13 +747,13 @@ The remote surface is a web server on your LAN that can start processes on your 
 
 - Access-token TTL raised from 15 minutes to 4 hours. No more re-entering an OTP every time the laptop wakes.
 
-Full history: [releases](https://github.com/Adoom666/CloudeCode/releases) · 14 tags, 235 commits since 2025-10-27.
+Full history: [releases](https://github.com/Adoom666/CloudeCodeDev/releases) · 14 tags, 235 commits since 2025-10-27.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome at [Adoom666/CloudeCode](https://github.com/Adoom666/CloudeCode).
+Issues and pull requests are welcome at [Adoom666/CloudeCodeDev](https://github.com/Adoom666/CloudeCodeDev), from anyone with access to the repository — it is private.
 
 Before opening a PR:
 

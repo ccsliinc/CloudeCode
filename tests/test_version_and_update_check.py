@@ -418,21 +418,24 @@ def test_configured_remote_overrides_origin(tmp_path: Path) -> None:
 
 # --- which repository this checker names -----------------------------------
 #
-# THE NEGATIVE CONTROL: the owner's ruling (2026-09-08, "use adams main
-# repo") is Adoom666/CloudeCode. ccsliinc/CloudeCode is the OTHER repo
-# named in this project (see CLAUDE.md's push-target rule), so asserting
-# against the exact string is what makes this fail if the fallback is ever
-# pointed at the wrong one, rather than only checking it is "a URL".
+# THE NEGATIVE CONTROL: the owner's ruling (2026-09-12, "One repository:
+# Adoom666/CloudeCodeDev" - "We should only ever be working in our one
+# single repo") is Adoom666/CloudeCodeDev. Both Adoom666/CloudeCode and
+# ccsliinc/CloudeCode are repos named in this project's history (see
+# CLAUDE.md's push-target rule and docs/DECISIONS.md), so asserting against
+# the exact string is what makes this fail if the fallback is ever pointed
+# at one of them rather than only checking it is "a URL".
 
 
 def test_fallback_remote_is_the_ruled_on_repo_not_the_other_one() -> None:
-    assert FALLBACK_REMOTE == "https://github.com/Adoom666/CloudeCode.git"
+    assert FALLBACK_REMOTE == "https://github.com/Adoom666/CloudeCodeDev.git"
     assert "ccsliinc" not in FALLBACK_REMOTE
+    assert FALLBACK_REMOTE != "https://github.com/Adoom666/CloudeCode.git"
 
 
 def test_default_upgrade_command_points_at_the_ruled_on_repo() -> None:
     assert DEFAULT_UPGRADE_COMMAND == (
-        "open https://github.com/Adoom666/CloudeCode/releases/latest"
+        "open https://github.com/Adoom666/CloudeCodeDev/releases/latest"
     )
     assert "ccsliinc" not in DEFAULT_UPGRADE_COMMAND
 
@@ -440,37 +443,62 @@ def test_default_upgrade_command_points_at_the_ruled_on_repo() -> None:
 def test_real_repo_numbers_never_offer_a_downgrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Pins the exact scenario the update-checker-repo issue measured.
+    """A remote reporting an older tag than the install must never upgrade.
 
-    Adoom666/CloudeCode published v1.0.36 as its latest tag while this line
-    ships 1.2.1 (measured 2026-09-11, unchanged since the issue was filed).
-    A 1.2.1 install consulting that feed must read CURRENT, never
-    UPDATE_AVAILABLE - offering an older release as an upgrade is the exact
-    defect class this checker exists to prevent.
+    Historical note: this property was discovered against the now-retired
+    Adoom666/CloudeCode feed, which published v1.0.36 while this line
+    shipped 1.2.1 (see docs/DECISIONS.md, 2026-09-10). The fallback remote
+    has since moved to Adoom666/CloudeCodeDev (2026-09-12 ruling), but the
+    invariant - an older "latest" must read CURRENT, never
+    UPDATE_AVAILABLE - is a property of this checker and is still asserted
+    here with the same numbers.
     """
     monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
-    write_version_file("1.2.1", root=tmp_path)
+    write_version_file("1.4.3", root=tmp_path)
     monkeypatch.setattr(update_check, "fetch_remote_tags", lambda remote: ["1.0.36"])
     status = _checker(tmp_path).refresh()
     assert status.status == STATUS_CURRENT
     assert status.status != STATUS_UPDATE_AVAILABLE
 
 
+def test_an_unreachable_private_remote_is_unknown_not_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The release repo is private, so an unauthenticated `git ls-remote`
+    against it fails (non-zero exit) rather than listing tags. That must
+    resolve to STATUS_UNKNOWN with a reason, never crash the checker and
+    never report STATUS_CURRENT on no evidence at all.
+    """
+    monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
+    write_version_file("1.4.3", root=tmp_path)
+
+    def _refuse(remote: str) -> list[str]:
+        raise update_check.UpdateCheckError(
+            "could not reach the release remote: repository not found"
+        )
+
+    monkeypatch.setattr(update_check, "fetch_remote_tags", _refuse)
+    status = _checker(tmp_path).refresh()
+    assert status.status == STATUS_UNKNOWN
+    assert status.reason
+
+
 # ---------------------------------------------------------------------- #
 # which repo the checker targets
 # ---------------------------------------------------------------------- #
 
-#: The upstream product both update checkers consult, by the owner's ruling
-#: of 2026-09-10 ("use adams main repo"). Recorded in docs/DECISIONS.md.
-EXPECTED_UPSTREAM_REPO = "Adoom666/CloudeCode"
+#: The sole repository both update checkers consult, by the owner's ruling
+#: of 2026-09-12 ("One repository: Adoom666/CloudeCodeDev"). Recorded in
+#: docs/DECISIONS.md. It is private and stays private.
+EXPECTED_UPSTREAM_REPO = "Adoom666/CloudeCodeDev"
 
 
 def test_the_fallback_remote_is_the_upstream_product_repo() -> None:
     """PINNED ON PURPOSE, so moving it is a decision and not a drive-by.
 
     The remote a packaged install consults is an outward-facing contract with
-    every copy of the app already out there, and the menubar client's own feed
-    URL had drifted away from this one until 2026-09-10. Naming the expected
+    every copy of the app already out there, and it has drifted more than
+    once (docs/DECISIONS.md, 2026-09-10 and 2026-09-12). Naming the expected
     repo here means a future move fails a test rather than shipping quietly.
     """
     assert FALLBACK_REMOTE == f"https://github.com/{EXPECTED_UPSTREAM_REPO}.git"
@@ -491,12 +519,13 @@ def test_a_latest_older_than_the_install_reads_current_not_available(
 ) -> None:
     """A remote whose newest tag is BEHIND us must never offer an upgrade.
 
-    The measured state on 2026-09-10: the upstream repo publishes v1.0.36
-    while this line ships 1.2.1, so the checker is pointed at a release list
-    that is older than the running install. That the reported figure is wrong
-    is a known and recorded consequence. That it must not become a prompt to
-    install an older build is the invariant, so it is asserted with the real
-    numbers rather than with abstract ones.
+    Historical note: measured 2026-09-10 against the now-retired
+    Adoom666/CloudeCode feed, which published v1.0.36 while this line
+    shipped 1.2.1 - a release list older than the running install. That the
+    reported figure was wrong is a known, recorded consequence. That it
+    must never become a prompt to install an older build is the invariant,
+    and it is still asserted here with those same real numbers regardless
+    of which repo is currently configured.
     """
     monkeypatch.delenv("CLOUDE_APP_VERSION", raising=False)
     write_version_file("1.2.1", root=tmp_path)

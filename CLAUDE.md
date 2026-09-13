@@ -152,6 +152,8 @@ under `/static` exactly as it serves everything else.
 | Slice 2's tests | `web/src/lib/launchpad/recent{,-actions,-chrome,-visibility}.test.ts`, `no-delete-wording.test.ts` |
 | The emitted bundle, COMMITTED | `client/dist/app.js`, `client/dist/app.css` |
 | Prove the committed bundle is current | `scripts/web-build-check.sh` |
+| The terminal search panel and prompt rail (new UI on a still-legacy screen, not a launchpad slice) | `web/src/lib/terminal-search/{SearchPanel,PromptRail,PromptTick}.svelte`, `search-controller.svelte.ts`, `rail-model.svelte.ts`, `search-keys.ts`, `count-label.ts`, `search-host.ts`, `types.ts`, `mount-search.ts` |
+| Its framework-free logic, kept in `client/js` on purpose | `client/js/terminal-prompt-scan.js`, `terminal-search-engine.js`, `terminal-history-load.js`, `terminal-search-deep-dive.js`, `client/vendor/xterm/xterm-addon-search.js` |
 
 **The workflow is `npm run build` from `web/`, and `npm run watch` for a
 rebuild-on-save loop.** `npm test` runs vitest, `npm run check` runs
@@ -305,15 +307,19 @@ THE MISTAKE THIS PARAGRAPH EXISTS TO STOP.** What those seven slices finished
 is the LAUNCHPAD: the home screen, the launcher, the project tree and the
 session lists. The rest of the app is still the hand-written tree, and it is
 the larger half. Measured at `v1.4.0` and again at `b5de919`, identical at
-both: **137 files under `web/src`** (26 `.svelte`, 110 `.ts`, and `app.css`) against
-**221 files under `client/js`**, every one of them `.js` (205 at the top
+both: 137 files under `web/src` (26 `.svelte`, 110 `.ts`, and `app.css`)
+against 221 files under `client/js`, every one of them `.js` (205 at the top
 level, 16 in `labels/`, `icons/`, `i18n/` and `themes/` - a bare
 `ls client/js/*.js` answers 205 and silently misses the subdirectories), and
-`client/index.html`
-still loads **155 `<script>` tags** by hand beside the one
+`client/index.html` loaded 155 `<script>` tags by hand beside the one
 `<script type="module" src="/static/dist/app.js">` at the bottom of it.
-`client/js/launchpad.js` is gone; `client/dist/app.js` and `client/dist/app.css`
-are committed.
+Re-measured 2026-09-12 after the terminal search work landed: **152 files
+under `web/src`** (29 `.svelte`, 122 `.ts`, and `app.css`) against **226
+files under `client/js`** (210 at the top level, still 16 in the same four
+subdirectories), and `client/index.html` now loads **159 `<script>` tags** by
+hand. The bundle grew with it: `client/dist/app.js` is **220,084 bytes**
+and `client/dist/app.css` is **4,960 bytes**. `client/js/launchpad.js` is
+gone; `client/dist/app.js` and `client/dist/app.css` are committed.
 
 **STILL VANILLA, AND NOT SCHEDULED**: the terminal and everything around it
 (`client/js/terminal.js` and its family), the toasts
@@ -323,6 +329,39 @@ are committed.
 (`client/js/settings-panel.js`, `settings-sections.js`) and the archive
 screens. So the answer to "is the client Svelte now" is NO - it is BOTH, and
 the first question about any client change is which tree owns that screen.
+
+**AS OF 2026-09-12, ALL NEW UI GOES IN `web/`, EVEN ON A SCREEN THAT IS STILL
+LEGACY.** The owner's ruling, verbatim: "full send into svelt. let's not fuck
+around." That does not undo the paragraph above: a screen that is still
+vanilla stays vanilla, and porting one wholesale is still "legacy or
+compiled, never half of each." What changed is what a BRAND NEW control on
+that screen is built in. It is Svelte from the day it is conceived, whatever
+tree the rest of the screen lives in - the "never half of each" rule governs
+a PORT, not a new addition sitting beside unported code.
+
+The first case is the terminal's search panel and prompt rail, a wholly new
+feature dropped onto the still-vanilla terminal screen
+(`client/js/terminal.js` and its family are untouched otherwise): Svelte
+components under `web/src/lib/terminal-search/` -
+`SearchPanel.svelte`, `PromptRail.svelte`, `PromptTick.svelte` - plus the
+pure and reactive modules beside them, `search-controller.svelte.ts`,
+`rail-model.svelte.ts`, `search-keys.ts`, `count-label.ts`, `search-host.ts`,
+`types.ts` and the mount seam `mount-search.ts`. It mounts through the SAME
+one mount path every launchpad slice uses (`web/src/lib/mount.ts`, into
+`#terminal-container`, the id `client/index.html` already gives the
+terminal's own container) and is published on `window.CloudeWeb` as
+`mountTerminalSearch`, `openTerminalSearch`, `toggleTerminalSearch`,
+`terminalSearchIsOpen` and `unmountTerminalSearch` (`web/src/main.ts`).
+
+Logic that has nothing to do with rendering a component stays
+FRAMEWORK-FREE, in `client/js`, exactly where it would have lived before this
+ruling: `client/js/terminal-prompt-scan.js` (reads xterm buffer cells
+directly), `client/js/terminal-search-engine.js`,
+`client/js/terminal-history-load.js`,
+`client/js/terminal-search-deep-dive.js`, and the vendored
+`client/vendor/xterm/xterm-addon-search.js`. None of those touch the DOM as
+a component, so porting them into Svelte would buy nothing and cost a
+rewrite of code that is already plain functions.
 
 **THE STATUS LED IS THE ONE THING THAT LIVES IN BOTH TREES AT ONCE, ON
 PURPOSE, AND IT IS NOT A DUPLICATION BUG.** `client/js/status-led.js` is still
@@ -1786,11 +1825,15 @@ tell the two apart.
 
 Nothing in `client/` has consumed it since `4ee2f44` removed the panel.
 Grepping `client/` for `local_server`, `localServer` or `local-servers` finds
-only comments: three in `terminal-resize-settle.js`, `terminal-away-bar.js` and
-`terminal-away-bar.css` citing `#localServersContainer` as the worked example
+only comments citing `#localServersContainer` as the worked example
 of why a panel must never sit IN FLOW beside `.terminal-container` (it was
-toggled on every fetch, so it reflowed the terminal under the user), plus one
-unrelated CSS accent comment. So the route and both WebSocket messages are live
+toggled on every fetch, so it reflowed the terminal under the user): one in
+`terminal-resize-settle.js`, one in the `.terminal-container` rule in
+`client/css/styles.css`, and one in
+`web/src/lib/terminal-search/SearchPanel.svelte`, plus one
+unrelated CSS accent comment. Two of those comments used to live in
+`terminal-away-bar.js` / `.css`, which were deleted with the away bar on
+2026-09-13. So the route and both WebSocket messages are live
 and unread. **Do not put any panel back in flow beside the terminal container.**
 
 **AND THE `local_servers` FIELD ON THE API IS HARDCODED EMPTY, SO IT DOES NOT
@@ -2692,7 +2735,14 @@ is the kind of claim that decays quietly.
   `integration/1.3.0` with all four 1.4.0 branches merged, `-p no:randomly`:
   7318 passed / 4 failed / 57 skipped in 284.81 s. The SAME four, so the
   fifteen tests the state-dir round added all pass and this consolidation
-  introduced no new failure.** The four are environmental, they fail identically on
+  introduced no new failure.** RE-MEASURED AGAIN 2026-09-12 on `master`
+  after the terminal search work landed, `-p no:randomly`: **7365 passed /
+  0 failed / 60 skipped.** The four named below are gone at this reading,
+  so ZERO FAILED IS ONCE MORE THE NUMBER TO HOLD; node reads **203 suites,
+  all passing** (the count MOVED DOWN from 223, not up, because two
+  vanilla-JS suites were consolidated into one bundle suite rather than
+  ported test-for-test - fewer suites is not fewer coverage here), and
+  vitest reads **1430** tests. The four are environmental, they fail identically on
   the other party's parent `6012467`, and they are named here so you can
   recognise them rather than chase them:
   `test_cold_socket_born_at_depth_real_tmux`,
@@ -2806,7 +2856,9 @@ is the kind of claim that decays quietly.
   on the consolidated `integration/1.3.0` (the four-branch 1.4.0 round
   merged): 198 tracked suites, all 198 passing, none failing.** The three
   added are the client round's own
-  `test_away_bar_containing_block.node.mjs`,
+  `test_away_bar_containing_block.node.mjs` (renamed to
+  `test_terminal_container_containing_block.node.mjs` on 2026-09-13 when
+  the away bar went and the declaration it guards did not),
   `test_settings_panels_mount.node.mjs` and
   `test_write_failure_is_visible.node.mjs`. THE COUNT WENT DOWN AT
   `b5de919` AND THAT WAS THE MIGRATION, NOT A LOSS OF COVERAGE: the svelte slices retired node
@@ -4239,7 +4291,7 @@ their plumbing (`client/js/fab-menu.js` builds the dropdown,
 
 | Control | Rows | Surface |
 |---|---|---|
-| `#terminalToolsBtn` | copy output, paste from clipboard, attach file | floating button, bottom row slot 0, **phone only** |
+| `#terminalToolsBtn` | copy output, paste from clipboard, attach file, search | floating button, bottom row slot 0, **phone only** |
 | `#sessionEditorBtn` | session theme, detach session | a button in the header's `.controls` row, beside the file editor |
 | `#slash-commands-btn` | opens `#slash-commands-modal`: every slash command, grouped, with a description and a starred-favorites row, live-filterable | floating button, bottom-left corner, **phone only** |
 
@@ -4338,6 +4390,94 @@ same style `tests/test_terminal_tools_menu.node.mjs` already uses for the
 tools FAB's menu - and confirms the `#slash-commands-modal` rule exists
 exactly once, sits inside a `(min-width: 769px)` block, and carries
 `display: none !important`.
+
+## Terminal search, and why the rail reads the buffer, not the transcript
+
+**FOUR CHORDS, AND ONE OF THEM WAS REFUSED.** Cmd+F / Ctrl+F opens the
+panel (or refocuses it if already open), Cmd+G / Ctrl+G jumps to the next
+match with Shift for the previous one, and Escape closes it. Ctrl+S was
+the obvious pick for "search" and it is REFUSED outright: it is already
+claude's own `chat:stash` chord, and inside a plain shell it is XOFF,
+which freezes the terminal's output until Ctrl+Q unfreezes it. Ctrl+F
+opens ONLY on the normal buffer, never the alternate one, because Ctrl+F
+is page-down in vim and in `less`; Ctrl+G is bound ONLY while the panel is
+already open, because the rest of the time it is readline's own abort
+keystroke. `web/src/lib/terminal-search/search-keys.ts` is the ladder
+that resolves all of this from a raw keydown.
+
+**THE PROMPT RAIL READS BUFFER CELLS, NEVER THE TRANSCRIPT, BECAUSE THE
+TWO DO NOT LINE UP ONE TO ONE.** `client/js/terminal-prompt-scan.js`
+detects a submitted prompt by its CELL SIGNATURE - claude's own caret,
+U+276F, sitting in column 0 over palette background 237 with palette
+foreground 239, with any wrapped continuation row carrying that same
+background and no caret - and never by reading text, because claude
+prints that same caret glyph in other chrome and a user's markdown `>`
+quote is not a prompt. A resumed conversation replays turns the buffer
+never held, a repaint redraws a prompt that is already on screen, and the
+buffer is trimmed at 50000 lines while the transcript is not - so a rail
+tick built from the transcript can point at a row that does not exist in
+this buffer. Measured on one live pane: **65 prompts on screen against 40
+typed prompts in the transcript**, the gap made of exactly those repaints
+and replays. The rail folds an adjacent repainted duplicate into one tick
+and skips a bash-mode `!` row outright, because that is claude's shell
+passthrough rather than a prompt.
+
+**A HISTORY LOAD ONTO A LIVE BUFFER MUST SEND `ESC[3J`, NOT JUST
+`ESC[2J`.** `ESC[2J` erases only the visible viewport; the saved
+scrollback lines survive it, so a history paint that used only `ESC[2J`
+would leave the OLD scrollback sitting behind the newly painted one and
+every prompt tick and every search hit would double.
+`TerminalScrollbackPaint.paint(shim, b64, 'history', {clearScrollback:
+true})` is the switch that prefixes `ESC[3J` (erase the SAVED lines) ahead
+of the usual reset, and `client/js/terminal-history-load.js` is its only
+caller for this path. The load goes through that paint module directly
+and NEVER through `terminal-write-queue.js`'s bounded 4 MiB path: a queue
+shed under pressure writes its drop marker into what is about to become
+permanent scrollback, which is a worse defect than a slow load. The
+rejoin capture that runs on reconnect now carries a cursor restore too
+(`src/core/scrollback_replay.py::with_cursor_restore`), while the startup
+gate's own tail probe deliberately does not, because that would add one
+more `tmux capture-pane` call to a probe that already runs on every
+session on every 5 second listing poll.
+
+**A HARD-WRAPPED TOKEN CAN BEAT THE SEARCH ADD-ON AND STILL HIT THE
+RAIL.** The vendored `client/vendor/xterm/xterm-addon-search.js` rejoins
+`isWrapped` rows before matching, so a term claude's own renderer split
+across a hard wrap will not match as one string in the search panel. The
+prompt rail is unaffected by that limit, because it folds a prompt's own
+continuation rows itself rather than asking the search add-on to do it.
+
+**THE HEADER BUTTON AND THE TOOLS-MENU ROW ARE EXACT COMPLEMENTS AT
+769px, NOT A DUPLICATE.** `#terminalSearchBtn` in the header is
+desktop-only; the `search` row inside `#terminalToolsBtn`'s menu is
+phone-only; there is no width at which both or neither is reachable. A
+FIFTH always-on header control was rejected for the same reason the
+existing four are capped at `--control-size` 40 at 330px: it would push
+the session title under its own readable floor. Cmd+F and Ctrl+F work at
+every width regardless of which button is on screen.
+
+**A SILENT BASH 3.2 NO-OP, FIXED.** `scripts/xterm-vendor/fetch.sh` used
+`declare -A` associative arrays to record what it had downloaded and
+verified. macOS ships bash 3.2, where `declare -A` is not a hard error -
+the script kept running, printed a pass, and had downloaded and verified
+NOTHING. Fixed 2026-09-12 with a plain newline-delimited list and an
+explicit count guard, which needs no bash 4 feature at all.
+
+**"DEEP DIVE" HANDS A HIT TO THE ARCHIVE, AND THE BUTTON IS HIDDEN WHEN
+THE ARCHIVE CANNOT ANSWER IT.** `client/js/terminal-search-deep-dive.js`
+builds `/archive/p/<id>?q=<term>` through `ArchiveDeeplink.build` and
+navigates with `App.showArchive`, the same route a manual archive visit
+uses. The project id comes from `GET /api/v1/archive/projects/for-cwd`,
+which lives entirely INSIDE the `MESSAGE_ARCHIVE.enabled` guard and 404s
+when the archive is switched off - so the deep-dive control checks for
+that and hides itself rather than linking to a page that would 404.
+
+**THE TOOLS MENU'S FOUR ROWS ARE PINNED BY NAME, NOT BY COUNT.**
+`tests/test_terminal_tools_menu.node.mjs` asserts its `ENTRY_IDS`
+(`toolCopyOutput`, `toolPasteClipboard`, `toolAttachImage`, `toolSearch`)
+against the real rendered menu with `assert.deepEqual`, so a row added,
+removed or reordered fails by naming which one moved rather than by a
+bare count mismatch.
 
 ## The string layer, and the one catalog rule
 

@@ -191,7 +191,34 @@ def test_get_state_dir_raises_named_error_when_uncreatable(tmp_path, monkeypatch
 def test_get_state_dir_uncreatable_does_not_touch_tmp(tmp_path, monkeypatch):
     """A failed resolution must not have created ANYTHING under the
     system temp directory as a fallback - the whole point of this
-    feature is that /tmp is exactly the wrong place for this data."""
+    feature is that /tmp is exactly the wrong place for this data.
+
+    Description: the temp root is REDIRECTED to a private empty
+      directory for the duration of this test, and that is what makes
+      the listing a measurement of the RESOLVER rather than of the
+      machine. It used to list the shared system temp directory, so any
+      unrelated process creating a file inside the assertion window
+      failed the run: measured 2026-09-12 on a loaded developer box, the
+      two "extra items" were ``jsii-kernel-YZpQ9M`` (an AWS CDK runtime)
+      and one anonymous ``tmp*`` file, neither of which
+      ``get_state_dir()`` had anything to do with. That is the same
+      defect the absolute-prefix comment above records, one directory
+      over: an assertion about the machine wearing the clothes of an
+      assertion about the code. Nothing is weakened by the redirect - a
+      fallback the resolver DID take would land in the private directory
+      and be caught, because that is what ``tempfile.gettempdir()`` now
+      answers for every caller in this process.
+    Inputs: tmp_path, monkeypatch (pytest fixtures).
+    Output: None.
+    """
+    private_tmp = tmp_path / "system-temp"
+    private_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(private_tmp))
+    assert tempfile.gettempdir() == str(private_tmp), (
+        "the redirect did not take, so this test would be measuring the "
+        "shared system temp directory again"
+    )
+
     before = set(os.listdir(tempfile.gettempdir()))
     blocker = tmp_path / "blocker2"
     blocker.write_text("x")

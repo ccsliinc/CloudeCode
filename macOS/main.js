@@ -316,7 +316,7 @@ async function waitForServerHealth(timeoutMs = 30000) {
 function showAboutDialog() {
   const { BrowserWindow } = require('electron');
   // Same repo identity the update checker's default feed points at - one
-  // named constant, not a second hardcoded "Adoom666/CloudeCode" literal.
+  // named constant, not a second hardcoded repo-name literal.
   const { DEFAULT_RELEASE_REPO } = require('./update-check.js');
 
   // Create a small modal window.

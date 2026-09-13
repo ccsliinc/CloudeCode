@@ -87,6 +87,26 @@ await atest('a non-200 feed is unknown, not current', async () => {
   assert.ok(r.detail.includes('403'), 'the status must reach the reason');
 });
 
+await atest('THE PRIVATE-REPO CASE: a 404 is unknown, not current, and never throws', async () => {
+  // The release repo is private (docs/DECISIONS.md, 2026-09-12), so an
+  // unauthenticated caller against api.github.com/repos/<owner>/<repo>/
+  // releases/latest gets a 404 - GitHub does not distinguish "does not
+  // exist" from "exists but you cannot see it" for a caller with no
+  // credential. This must resolve to "could not check", never crash the
+  // caller, and never render as "up to date".
+  let threw = false;
+  let r;
+  try {
+    r = await U.checkForUpdate('1.4.3', async () => ({ ok: false, status: 404 }));
+  } catch {
+    threw = true;
+  }
+  assert.equal(threw, false, 'a 404 must never throw out of checkForUpdate');
+  assert.equal(r.result, U.RESULT_UNKNOWN);
+  assert.notEqual(r.result, U.RESULT_CURRENT);
+  assert.ok(r.detail.includes('404'), 'the status must reach the reason');
+});
+
 await atest('an unparseable tag is unknown, not current', async () => {
   const r = await U.checkForUpdate('1.0.29', ok({ tag_name: 'nightly-build' }));
   assert.equal(r.result, U.RESULT_UNKNOWN);
@@ -108,21 +128,23 @@ await atest('checkForUpdate never throws', async () => {
 
 // ---- which repository the feed asks --------------------------------
 //
-// THE NEGATIVE CONTROL: the owner's ruling (2026-09-08, "use adams main
-// repo") is Adoom666/CloudeCode. ccsliinc/CloudeCode is the OTHER repo
-// this file used to point at before the fix in this change, and asserting
-// against it by name is what makes this test fail if the pointer is ever
-// moved back rather than only checking it is "a string".
+// THE NEGATIVE CONTROL: the owner's ruling (2026-09-12, "One repository:
+// Adoom666/CloudeCodeDev" - "We should only ever be working in our one
+// single repo") is Adoom666/CloudeCodeDev. Both Adoom666/CloudeCode and
+// ccsliinc/CloudeCode are repos this file has pointed at before, and
+// asserting against them by name is what makes this test fail if the
+// pointer is ever moved back rather than only checking it is "a string".
 
-test('the default release repo is the ruled-on one, not the old one', () => {
-  assert.equal(U.DEFAULT_RELEASE_REPO, 'Adoom666/CloudeCode');
+test('the default release repo is the ruled-on one, not an old one', () => {
+  assert.equal(U.DEFAULT_RELEASE_REPO, 'Adoom666/CloudeCodeDev');
+  assert.notEqual(U.DEFAULT_RELEASE_REPO, 'Adoom666/CloudeCode');
   assert.notEqual(U.DEFAULT_RELEASE_REPO, 'ccsliinc/CloudeCode');
 });
 
 test('the default feed URL is built from the default repo', () => {
   assert.equal(
     U.UPDATE_FEED_URL,
-    'https://api.github.com/repos/Adoom666/CloudeCode/releases/latest'
+    'https://api.github.com/repos/Adoom666/CloudeCodeDev/releases/latest'
   );
   assert.equal(U.feedUrlFor(U.DEFAULT_RELEASE_REPO), U.UPDATE_FEED_URL);
 });
@@ -240,45 +262,44 @@ await atest('with no config override, checkForUpdate asks the default repo', asy
   assert.equal(requestedUrl, U.UPDATE_FEED_URL);
 });
 
-// ---- THE REAL SCENARIO THE ISSUE NAMES ---------------------------------
+// ---- A LATEST OLDER THAN THE INSTALL MUST NEVER OFFER A DOWNGRADE -------
 //
-// Adoom666/CloudeCode published v1.0.36 as its latest tag while this line
-// ships 1.2.1 (measured 2026-09-11, unchanged since the issue was filed).
-// A 1.2.1 install pointed at that feed must read CURRENT, never AVAILABLE
-// - offering an older release as an upgrade is the exact defect class both
-// checkers exist to prevent.
+// Historical note: this property was discovered against Adoom666/CloudeCode
+// (the now-retired public feed), which lagged the shipped version by
+// several releases (see docs/DECISIONS.md, 2026-09-10). The repo pointer
+// has since moved to Adoom666/CloudeCodeDev (2026-09-12 ruling), but the
+// underlying guarantee - an older "latest" must read CURRENT, never offer
+// an "upgrade" that is actually a downgrade - is a property of
+// checkForUpdate itself and is still asserted here.
 
 await atest('a real install ahead of a stale release repo reads current, never available', async () => {
-  const r = await U.checkForUpdate('1.2.1', ok({ tag_name: 'v1.0.36', html_url: 'u' }));
+  const r = await U.checkForUpdate('1.4.3', ok({ tag_name: 'v1.0.36', html_url: 'u' }));
   assert.equal(r.result, U.RESULT_CURRENT);
   assert.notEqual(r.result, U.RESULT_AVAILABLE);
 });
 
 // ---- which repo the feed points at ---------------------------------
 // PINNED ON PURPOSE. The feed URL is an outward-facing contract with every
-// installed copy of this app, and it has already moved once. A change here
-// must be a decision someone made, not a change someone made in passing.
-test('the feed is the upstream product repo, by the 2026-09-10 ruling', () => {
+// installed copy of this app, and it has already moved more than once. A
+// change here must be a decision someone made, not a change someone made
+// in passing.
+test('the feed is the sole repository, by the 2026-09-12 ruling', () => {
   assert.equal(
     U.UPDATE_FEED_URL,
-    'https://api.github.com/repos/Adoom666/CloudeCode/releases/latest',
-    'both checkers point at Adoom666/CloudeCode; see docs/DECISIONS.md'
+    'https://api.github.com/repos/Adoom666/CloudeCodeDev/releases/latest',
+    'both checkers point at Adoom666/CloudeCodeDev; see docs/DECISIONS.md'
   );
 });
 
 await atest('a latest OLDER than the install is current, never a downgrade', async () => {
-  // The measured state on 2026-09-10: the feed repo publishes v1.0.36 while
-  // this line ships 1.2.1. The figure reported is wrong and that is a known,
-  // recorded consequence. What must NEVER happen is a prompt to "upgrade"
-  // onto an older release, so it is asserted with the real numbers.
   const feed = async () => ({
     ok: true, status: 200,
     json: async () => ({
       tag_name: 'v1.0.36',
-      html_url: 'https://github.com/Adoom666/CloudeCode/releases/tag/v1.0.36'
+      html_url: 'https://github.com/Adoom666/CloudeCodeDev/releases/tag/v1.0.36'
     })
   });
-  const r = await U.checkForUpdate('1.2.1', feed);
+  const r = await U.checkForUpdate('1.4.3', feed);
   assert.equal(r.result, U.RESULT_CURRENT, 'an older latest must not offer an upgrade');
   assert.notEqual(r.result, U.RESULT_AVAILABLE);
   assert.equal(r.latest, '1.0.36', 'the wrong-but-honest figure is still reported');

@@ -852,3 +852,277 @@ modified in the working tree before this task started.
   route-table test would have passed too. Guard ordering statically, pin the
   floor to the version the suite runs, and run the critical paths once under the
   version production actually has.
+
+## [TERM-SEARCH] 2026-09-12 - terminal search, prompt rail, project deep dive
+
+Plan: /Users/Adam/.claude/plans/i-like-your-pick-gentle-token.md (approved).
+Success criteria: Cmd+F / Ctrl+F opens a search panel over the terminal; live
+filter with n of N, Enter / Shift+Enter and Cmd+G / Ctrl+G walk matches; a
+prompt rail on the right edge (one tick per submitted prompt, filtered by the
+query, Up/Down or click jumps the viewport); the full tmux history is loaded
+non-destructively when search opens; a Deep dive button opens the archive
+explorer pre-filtered to this session's project folder and the query. Zero
+lines added to client/js/terminal.js. All new modules under 500 lines. Python
+baseline 7326 / 0 / 56 and node 198/198 plus the new suites, secret scan clean,
+validator-agent PASS in a real browser, release 1.5.0 on CloudeCodeDev only.
+
+- [x] server: to_thread the resize+capture pair, cursor restore on
+      capture_scrollback, archive cwd lookup route (agent: server)
+- [x] client core: prompt-scan, prompt-rail, history-load, deep-dive modules,
+      scrollback-paint clearScrollback arg, altscreen isRule export, node
+      tests (agent: client-core)
+- [x] client panel: vendor xterm-addon-search 0.13.0, search-engine,
+      search panel, css, index.html wiring, header button, tools menu row,
+      key tests (agent: client-panel)
+- [x] integration: full suites, secret scan, leftover-reference sweep,
+      adopt-path cursor restore, this result block (agent: integration)
+- [x] away bar removed 2026-09-13 at the owner's request ("get rid of this
+      notification"): `terminal-away-bar.js`, `terminal-away-gap.js`,
+      `terminal-away-bar.css`, `away_routes.py`, `session_away_report.py`
+      and their tests are gone, the panel's `#away-bar` offset with them.
+      Nothing is lost - search loads the full history itself. The away
+      bar's `.terminal-container { position: relative }` moved into
+      `client/css/styles.css`, because the search panel and prompt rail
+      need the pane to be a containing block; its guard survives as
+      `tests/test_terminal_container_containing_block.node.mjs`.
+
+### Integration result, 2026-09-12
+
+SCOPE CHANGED MID-INTEGRATION AND THE RELEASE TARGET WITH IT. The search
+panel and prompt rail are being REBUILT in Svelte under `web/`, so the
+vanilla `client/js/terminal-search*.js`, `terminal-prompt-rail.js`,
+`client/css/terminal-search.css` and the `client/index.html` wiring are
+handed to that port rather than being finished here. The version target is
+**1.4.4**, not the 1.5.0 named in the criteria above. Three integration
+steps were withdrawn with the scope change and are NOT done: the CLAUDE.md
+paragraph (owed after the port, so it describes what shipped rather than
+what was replaced), the local install refresh, and the validator-agent
+browser pass.
+
+What shipped from the four workers: the rejoin path's resize and capture
+moved into one `asyncio.to_thread` (`src/api/session_rejoin_capture.py`,
+its own module because `session_crud_routes.py` is at the 500-line cap),
+`scrollback_replay.with_cursor_restore` as the single declaration of the
+replay cursor suffix, the archive cwd lookup
+(`src/core/archive_cwd_lookup.py` plus
+`GET /api/v1/archive/projects/for-cwd`), the six new client modules and
+the vendored `xterm-addon-search@0.13.0`, and the update-check repoint off
+`Adoom666/CloudeCode` onto `Adoom666/CloudeCodeDev`.
+
+Counts. Python full run, `-p no:randomly`, real_tmux included:
+**7365 passed / 0 failed / 60 skipped** in 690s, against the 7326 / 0 / 56
+baseline this section opened with. Node: **204 of 204 suites passing**,
+against 198 tracked before this work (six new suites, no regressions).
+Secret scan exit 0, 1814 files, 8 detectors. The leftover-reference sweep
+finds no live `Adoom666/CloudeCode` or `ccsliinc/CloudeCode` reference; the
+five remaining hits are all inside `tests/test_version_and_update_check.py`
+and are NEGATIVE assertions naming the old repos on purpose.
+
+TWO FAILURES ON THE FIRST FULL RUN, BOTH DIAGNOSED, ONE FIXED AND ONE
+ATTRIBUTED TO THE MACHINE.
+
+`tests/test_state_dir_resolution.py::test_get_state_dir_uncreatable_does_not_touch_tmp`
+was a real test defect and is fixed. It listed the SHARED system temp
+directory before and after the call, so any unrelated process creating a
+file inside that window failed it: the two extra entries measured were
+`jsii-kernel-YZpQ9M` (an AWS CDK runtime) and one anonymous `tmp*` file,
+neither of them anything `get_state_dir()` did. It now redirects
+`tempfile.tempdir` to a private empty directory for the duration, which
+makes the listing a measurement of the RESOLVER rather than of the box.
+That is the same lesson the absolute-prefix comment higher in that file
+already records. Nothing is weakened: the negative control was WATCHED
+GOING RED, a file written into the redirected temp root is still caught.
+
+`tests/test_ws_subprotocol_auth.py::test_ws_connect_with_old_query_token_no_longer_works`
+was an ERROR at teardown, not a test failure: the session-scoped
+`real_claude_settings_unchanged` canary in `tests/conftest.py` reported
+that `~/.claude/settings.json` changed during the run. It was NOT the
+suite. Four readings say so: both named tests pass in isolation (39
+passed); the suite points `CLOUDE_CLAUDE_SETTINGS_PATH` at a throwaway AND
+`src/core/test_write_guard.py` refuses that path by name, two independent
+layers; the file's changed keys are Claude Code's own
+(`feedbackSurveyState` and friends), which `ensure_hook_settings` never
+touches; and a SECOND full run, watched from outside at 20-second
+intervals for the whole 690 seconds, recorded ZERO changes to that file.
+The box was running twelve live Claude Code sessions at the time. The
+canary was not weakened and must not be: quieting it would replace a true
+"something wrote this" with a false "nothing did".
+
+One more node failure appeared and was fixed:
+`tests/test_launchpad_help_content.node.mjs` pinned `Adoom666/CloudeCode#`
+in the regex it uses to find README links in the help body, so the repoint
+did not make it report a dead link, it made it report "no README link at
+all". The repo is no longer pinned there; the ANCHOR check, which is what
+that test is about, still runs against README.md's real headings and its
+negative control was watched going red.
+
+`scripts/xterm-vendor/fetch.sh` USED `declare -A` AND WAS A SILENT NO-OP ON
+THIS MACHINE. Associative arrays are bash 4 and macOS ships bash 3.2 as
+`/bin/bash`: under 3.2 the loop iterated zero times and the script exited 0
+announcing every asset verified, having downloaded and checked nothing. It
+is a newline-delimited `name|url|sha256` list now. Verified end to end
+under the real `/bin/bash 3.2.57`: all six assets downloaded from jsdelivr,
+all six matched their pinned sha256 including the new
+`xterm-addon-search.js` at `6a6db33f...`, and the re-fetch left
+`client/vendor/xterm/` BYTE-IDENTICAL.
+
+THE CURSOR RESTORE IS ON TWO PAINT PATHS AND DELIBERATELY NOT ON A THIRD.
+The rejoin path composes it in `session_rejoin_capture.resize_and_capture`,
+and the ADOPT path now does too (`session_manager.py`, one call plus one
+import). It is NOT inside `TmuxBackend.capture_scrollback`, because that
+method is also the startup gate's per-row pane probe on every 5-second
+listing poll and reading a cursor there would cost one more tmux process
+per session per poll. Both paint paths are one-off and pay it once. Note
+the deviation from the brief: this cost `session_manager.py` two lines
+rather than one, an import and a wrapped call, because the single-line
+version is 102 characters and that file's widest line today is 101.
+
+Open items. The CLAUDE.md paragraph, the local install refresh and the
+validator-agent browser pass are all owed after the Svelte port lands.
+`GET /api/v1/archive/projects/for-cwd` is mounted INSIDE the
+`MESSAGE_ARCHIVE.enabled` block, and this install has no `message_archive`
+block in `config.json` and no `CLOUDE_MESSAGE_ARCHIVE` in the running
+server's environment, so the archive is OFF here and Deep dive will 404
+locally until it is switched on. Nothing was committed or pushed.
+
+### Svelte port and doc update, 2026-09-12
+
+- [x] The search panel and prompt rail named as "REBUILT in Svelte" above
+      landed under `web/src/lib/terminal-search/` (`SearchPanel.svelte`,
+      `PromptRail.svelte`, `PromptTick.svelte`, `search-controller.svelte.ts`,
+      `rail-model.svelte.ts`, `search-keys.ts`, `count-label.ts`,
+      `search-host.ts`, `types.ts`, `mount-search.ts`), mounted through
+      `web/src/lib/mount.ts` and published on `window.CloudeWeb`. The
+      framework-free logic stayed in `client/js`
+      (`terminal-prompt-scan.js`, `terminal-search-engine.js`,
+      `terminal-history-load.js`, `terminal-search-deep-dive.js`) plus the
+      vendored `client/vendor/xterm/xterm-addon-search.js`.
+- [x] The owed CLAUDE.md paragraph is written: the "ALL NEW UI GOES IN
+      `web/`" ruling in "The `web/` build" section, its table rows for
+      this slice, re-measured `web/src` / script-tag / bundle-size counts,
+      the new "Terminal search, and why the rail reads the buffer, not
+      the transcript" section near the two session-scoped menus, and the
+      re-measured python/node/vitest baseline in "How we work here". The
+      local install refresh and the validator-agent browser pass remain
+      open, unchanged from above.
+
+### [PERF] 2026-09-13 - three fixes from the performance audit, verified
+
+Applied yesterday by the audit workflow, which hit a rate limit before its
+tests ran. Everything below was re-verified from the code and re-measured
+this session; every negative control named here was WATCHED GOING RED
+against the pre-fix code rather than assumed to be discriminating.
+
+- [x] F1, the boot shell probes are lazy. `migrate_config_file`
+      (`src/core/config_migration.py`) ran `probe_shell_function("cld")`
+      and `("cldor")` unconditionally, each a `zsh -ic 'type <name>'` that
+      sources the whole `~/.zshrc`, on a call `src/main.py` makes
+      synchronously at line 279, before uvicorn binds. Only
+      `_step_v0_to_v1` reads the answers. Both calls moved inside the
+      `config_writer.commit` mutator and gated on the same
+      `config_version < 1` condition `migrate_config_dict` itself uses, so
+      the probe fires exactly when the step that consumes it will run.
+      Measured in-process on this box: the real probe pair costs
+      3376.8 ms (cld 1965.0, cldor 1411.8); a current v5 config now issues
+      ZERO subprocesses in 0.13 ms, where it used to pay the full pair on
+      every boot. A genuine v0 config still issues exactly two,
+      `zsh -ic 'type cld'` then `zsh -ic 'type cldor'`, and still seeds
+      `['claude', 'cld', 'cldor']`. Three tests in
+      `tests/test_config_migration.py` carry the claim and all three go
+      red against the ungated code. The pre-existing no-op test's
+      monkeypatch had become an inert lambda that was never called, so it
+      vouched for nothing while reading like a guard; it is a recording
+      spy now with its own zero-calls assertion.
+
+- [x] F10, the background pollers stand down while the tab is hidden.
+      `client/js/toast-global-poll.js`, `session-header-led.js`,
+      `session-sidebar.js` and `session-sidebar-refresh.js` skip the HTTP
+      on a tick that lands while `document.hidden`, and perform ONE
+      authoritative re-read on the way back to visible. Measured by
+      `tests/test_poll_visibility_gate.node.mjs` over a simulated minute:
+      12 x `GET /sessions/list` from the header LED and 6 x
+      `GET /sessions/toasts` from the toast poll before, plus 12 sidebar
+      fetches whenever its drawer is pinned open; zero after, and exactly
+      one re-read per poller on return. Every gate reads `document.hidden`
+      on a TIMER TICK or a `visibilitychange` EVENT and never on a
+      `requestAnimationFrame`, which gotcha 9 says a hidden tab never
+      runs, and the suite asserts that by reading the source. Two cases
+      were added this session because the ten already there could all be
+      satisfied by a gate evaluated once inside `start()` and remembered:
+      they run a visible minute first, assert its traffic, then go hidden
+      and require zero, and both fail against exactly that mutation.
+      `session-sidebar.js` is 485 lines, inside its 500-line budget.
+
+- [x] F12, six dead symbols deleted. `verify_api_key` and
+      `get_refresh_store` (`src/api/deps.py`), `DatastoreReadOnlyError`
+      and `created_at_key` (`src/core/db.py`), `tracking_since`
+      (`src/core/project_tombstones.py`) and `save_to_session_dir`
+      (`src/api/uploads.py`), plus the imports they orphaned (`Header`,
+      `Request` and `settings` in deps.py, `META_CREATED_AT` in db.py, and
+      the narrowed `db_models` import in project_tombstones.py). A
+      `grep -rn` for each of the six across `src`, `tests`, `scripts`,
+      `macOS`, `web/src`, `client/js` and `docs` returns nothing at all,
+      the stale copies under `.claude/worktrees/` aside, and
+      `venv/bin/python3 -c "import src.main"` succeeds. An AST pass over
+      the four files finds no remaining unused import.
+
+Seven findings from the same audit were REFUTED on verification and are
+recorded here so they are not re-proposed. Do not re-litigate them; the
+evidence is in the workflow journal.
+
+- F3, "43 ms of per-row work on the event loop". That number was a
+  SUBTRACTION, not a measurement: 84 ms minus an assumed gather-thread
+  figure minus an assumed queueing figure. Measured against 13 real panes
+  the per-row loop cost is 1.2 ms/row and the gather thread alone is
+  50 to 73 ms, so the headline does not survive its own arithmetic.
+- F4, per-instance jitter on the three recheck windows. A lengthening
+  jitter stops all 13 instances re-reading at W+1s, which is the exact
+  edge two existing permission and startup-gate tests pin, and it needs
+  either a new argument through a locked call site or a ledger that
+  misreports when a reading was taken, against CLAUDE.md's rule that a
+  reading is measured. It also moves the same 13 subprocesses into a
+  different pass rather than removing any.
+- F5, skip the second tmux call on `/sessions/attachable`. Both calls live
+  in the locked `session_manager.py`, not the route file the report named;
+  the listing is not empty (13 rows are decorated and the route filters
+  after), and the second call is what feeds the pane status the rows need.
+  The saving is 12.8 ms every 5000 ms.
+- F6, add `GZipMiddleware`. The only cost compression can remove is body
+  transfer, measured at 0.05 to 0.10 ms per response, which is less than
+  the compression itself costs. Worse, the CSP stamp is a
+  `BaseHTTPMiddleware`, so every response streams and `minimum_size` never
+  applies: the one-line fix would compress `/health` and the tray's
+  20-second version poll inline on the event loop and strip
+  `Content-Length`.
+- F7, the 9 GiB server.log. The file is appended by the Electron launcher
+  copying the server's stdout pipe, not by the Python process, so its size
+  cannot reach the event loop; the "98 percent of it is one INFO line"
+  attribution is false, and the growth rate quoted was a spot reading
+  eleven times the whole-file average.
+- F8, unlink the 135 orphaned `.pipe` files. They are regular files, not
+  FIFOs, nothing on a user-felt path ever enumerates that directory, and
+  the proposed unlink key cannot be computed for 108 of the 135, which are
+  named by internal session id rather than tmux name. Both wiring points
+  are in the locked `session_manager.py`. It is disk hygiene wearing a
+  performance label.
+- F9, defer 284 KB of eager JS. All of the candidate files are plain
+  `<script src>` tags in `client/index.html`, and the only deferral
+  mechanism in this codebase works by DELETING a family's tags from that
+  file. `client/index.html` is locked this release and owned by another
+  worker, so the fix cannot be written.
+
+## [ROADMAP] 2026-09-13 - feature brainstorm committed, nothing started
+
+- docs/ROADMAP.md landed in commit 21a56b5 (not pushed): 91 unconstrained
+  ideas, top 50 with a "probably possible" twin each, Adam's 17 fleshed
+  out, locked decisions, three-tier roadmap. Registered in the CLAUDE.md
+  docs table; tests/test_docs_index.py passes.
+- Tier 1 tracks, NOT STARTED, independent, can run in parallel:
+  A1 multi-pane grid (client, XL); A5 usage + provider accounts dashboard
+  (backend, L); A3 skills catalog on git + AWS Amplify with signed
+  publishers (catalog, XL).
+- Tier 2, NOT STARTED: cheap-model seam then timeline + newscan; git
+  awareness (branch chip, modified-files rail, diff drawer, worktrees,
+  collision radar); cross-provider bus on a blackboard MCP server; BBS
+  front door + handles + tiers.
+- Claim a tier 1 track by draft PR per docs/DECISIONS.md before starting.

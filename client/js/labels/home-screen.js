@@ -107,7 +107,7 @@ export const HELP_COMMANDS = {
 
 /** Where `<<README>>` in the help prose points. */
 export const HELP_README_URL =
-    'https://github.com/Adoom666/CloudeCode#before-you-start-three-things-that-will-bite-you';
+    'https://github.com/Adoom666/CloudeCodeDev#before-you-start-three-things-that-will-bite-you';
 
 /**
  * The sentence for one refused project row, and which rung said it.

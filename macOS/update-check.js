@@ -17,12 +17,16 @@
  * up-to-date whenever the network is down is worse than no notifier: it
  * actively tells the user a falsehood they will act on.
  *
- * WHICH REPOSITORY THIS ASKS. Owner's ruling, 2026-09-08, verbatim: "use
- * adams main repo." DEFAULT_RELEASE_REPO below is the single named
- * constant for that repo - the ONE place this file's identity of "the
- * release feed" is spelled out - and every site that needs to say the
- * same repo (this module's default feed, the About window's "View on
- * GitHub" link in main.js) reads it rather than re-typing the string.
+ * WHICH REPOSITORY THIS ASKS. Owner's ruling, 2026-09-12, verbatim: "We
+ * should only ever be working in our one single repo" and "never work in
+ * any other repo. I don't care what Joe says" (docs/DECISIONS.md, "One
+ * repository: Adoom666/CloudeCodeDev"). That repo is private and stays
+ * private - do not change its visibility. DEFAULT_RELEASE_REPO below is
+ * the single named constant for that repo - the ONE place this file's
+ * identity of "the release feed" is spelled out - and every site that
+ * needs to say the same repo (this module's default feed, the About
+ * window's "View on GitHub" link in main.js) reads it rather than
+ * re-typing the string.
  *
  * A packaged build has no git checkout to read and nobody is expected to
  * hand-edit config.json for one, so a packaged install always resolves to
@@ -42,23 +46,32 @@
  * a known gap rather than built speculatively; the config override above
  * covers that same developer today.
  *
- * KNOWN CONSEQUENCE, stated here rather than discovered later, and carried
- * across verbatim in substance from the other line's version of this fix.
- * That repo publishes v1.0.36 while this line ships 1.2.1, so an install is
- * told the latest release is OLDER than the one it is running. It does NOT
- * prompt a downgrade: compareVersions('1.2.1', '1.0.36') is 1, and
- * checkForUpdate reports RESULT_AVAILABLE only when the comparison is
- * negative, so the outcome is RESULT_CURRENT. What IS wrong is the figure
- * reported alongside it, and the release the upgrade link opens. Both
- * suites pin those real numbers. See docs/DECISIONS.md, 2026-09-10.
+ * THE REPO IS PRIVATE, SO THE UNAUTHENTICATED FEED 404s BY DESIGN. This
+ * process carries no GitHub credential, so
+ * `api.github.com/repos/Adoom666/CloudeCodeDev/releases/latest` answers
+ * 404 (GitHub does not distinguish "does not exist" from "exists but you
+ * cannot see it" for an unauthenticated caller - that is itself a privacy
+ * property of a private repo, not a bug). A 404, a 403, or any other
+ * non-2xx status is caught by the plain `!response.ok` check below and
+ * resolves to RESULT_UNKNOWN with the status code in `detail` - the same
+ * "could not check" outcome as an offline network or a timeout, never a
+ * thrown error and never a false RESULT_CURRENT. It is logged once, at the
+ * point the non-ok response is observed, so a developer reading the
+ * console can tell "the feed answered but said no" apart from "nothing
+ * answered" without the menu bar app itself raising anything alarming -
+ * the only thing the user sees is the existing, already-reviewed "Could
+ * Not Check for Updates" dialog, and only when they explicitly ask via the
+ * tray menu.
  */
 
 const fs = require('node:fs');
 
 // The canonical release repo per the owner's ruling. Matches
 // src/core/update_check.py's FALLBACK_REMOTE / DEFAULT_UPGRADE_COMMAND, so
-// the two checkers name one project by default, never two.
-const DEFAULT_RELEASE_REPO = 'Adoom666/CloudeCode';
+// the two checkers name one project by default, never two. This repo is
+// private (docs/DECISIONS.md, 2026-09-12), so an unauthenticated feed read
+// against it 404s by design - see checkForUpdate below.
+const DEFAULT_RELEASE_REPO = 'Adoom666/CloudeCodeDev';
 
 const CHECK_TIMEOUT_MS = 6000;
 
@@ -211,6 +224,14 @@ async function checkForUpdate(currentVersion, fetchImpl, configPath) {
       clearTimeout(timer);
     }
     if (!response || !response.ok) {
+      // Logged once, here, and nowhere else in this call - a private repo's
+      // unauthenticated feed 404s by design (see the header comment), so
+      // this is expected background noise on every install, not a fault to
+      // repeat or escalate. The caller still gets RESULT_UNKNOWN and
+      // renders it as "could not check", never as a thrown error.
+      console.log(
+        `[update-check] feed returned ${response ? response.status : 'no response'} for ${feedUrl}`
+      );
       return {
         result: RESULT_UNKNOWN, current: currentVersion, latest: null,
         url: null,

@@ -124,8 +124,17 @@ test('every README link in the help body resolves to a real heading anchor', () 
     // TEXT is translatable and its TARGET is not. The anchor is what this
     // test has always been about, and it is still checked against the
     // README's real headings.
+    // THE REPO IS NOT PINNED HERE, AND THAT IS THE FIX RATHER THAN A
+    // LOOSENING. This pattern read `Adoom666/CloudeCode#` and therefore
+    // stopped matching the moment the project repointed at
+    // `Adoom666/CloudeCodeDev`: it did not report a dead link, it
+    // reported "no README link in the help body at all" and would have
+    // gone on passing for any repo whose name happened to be spelled the
+    // old way. A second copy of the repo name in a test is one more place
+    // a rename has to reach. What this test is about is the ANCHOR, which
+    // is still checked against README.md's real headings below.
     const links = Array.from(
-        body.matchAll(/https:\/\/github\.com\/Adoom666\/CloudeCode#([a-z0-9-]+)/g),
+        body.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+#([a-z0-9-]+)/g),
     );
     assert.ok(links.length > 0, 'expected at least one README link in the help body');
     for (const [, anchor] of links) {

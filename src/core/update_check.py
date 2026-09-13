@@ -72,13 +72,18 @@ LS_REMOTE_TIMEOUT_SECONDS = 20.0
 _TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 _LS_REMOTE_REF_RE = re.compile(r"refs/tags/(\S+?)(?:\^\{\})?$")
 
-# Fallback when the checkout has no usable origin. The public upstream.
-FALLBACK_REMOTE = "https://github.com/Adoom666/CloudeCode.git"
+# Fallback when the checkout has no usable origin. The sole repository
+# (docs/DECISIONS.md, "One repository: Adoom666/CloudeCodeDev", 2026-09-12).
+# It is PRIVATE and stays private, so `git ls-remote` against it with no
+# credential fails - fetch_remote_tags() catches that as any other
+# unreachable-remote case and reports STATUS_UNKNOWN, never a crash and
+# never a false STATUS_CURRENT.
+FALLBACK_REMOTE = "https://github.com/Adoom666/CloudeCodeDev.git"
 
 # What a human runs to upgrade. There is no in-place upgrader: the app ships
 # as a .dmg you drag to /Applications, so the honest instruction is to open
 # the releases page. `open` is a real, copy-pasteable macOS command.
-DEFAULT_UPGRADE_COMMAND = "open https://github.com/Adoom666/CloudeCode/releases/latest"
+DEFAULT_UPGRADE_COMMAND = "open https://github.com/Adoom666/CloudeCodeDev/releases/latest"
 
 # Cache filename. It is written INSIDE the resolved source root rather than a
 # private dot-directory of its own, deliberately: in production that root IS
