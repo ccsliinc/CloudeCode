@@ -50,12 +50,8 @@ from src.core.archive_db_partition import (
     archive_db_path_for,
     classify_objects,
 )
-from src.core.archive_db_split import (
-    ORIGIN_TABLE,
-    PROGRESS_TABLE,
-    drop_order,
-    table_count,
-)
+from src.core.archive_db_copy import drop_order
+from src.core.archive_db_split import ORIGIN_TABLE, PROGRESS_TABLE, table_count
 from src.core.db import connect, db_path_for
 
 logger = structlog.get_logger()

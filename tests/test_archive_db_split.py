@@ -46,7 +46,8 @@ from src.core.archive_db_partition import (
     side_for_table,
     unclassified_objects,
 )
-from src.core.archive_db_split import VERIFIED_SCHEMA_VERSIONS, drop_order
+from src.core.archive_db_copy import copy_table, drop_order
+from src.core.archive_db_split import VERIFIED_SCHEMA_VERSIONS
 from src.core.archive_db_split_refusals import (
     CONSTRAINT_NOT_STRIPPED,
     COUNT_MISMATCH,
@@ -471,17 +472,13 @@ def test_an_interrupted_copy_resumes_rather_than_dying_on_its_own_tables(
     leaves the archive schema and the progress rows on disk exactly as a
     kill would.
     """
-    boom = RuntimeError("interrupted mid-copy")
     calls = {"n": 0}
-    real_copy = __import__(
-        "src.core.archive_db_split", fromlist=["copy_table"]
-    ).copy_table
 
     def flaky(conn, table, install_id):
         calls["n"] += 1
         if calls["n"] == 2:
-            raise boom
-        return real_copy(conn, table, install_id)
+            raise RuntimeError("interrupted mid-copy")
+        return copy_table(conn, table, install_id)
 
     monkeypatch.setattr("src.core.archive_db_split_run.copy_table", flaky)
     with pytest.raises(RuntimeError):
