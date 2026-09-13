@@ -26,7 +26,6 @@ work happened rather than about how fast this machine is.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import time
 from pathlib import Path
 from typing import List, Tuple

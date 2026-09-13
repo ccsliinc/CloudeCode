@@ -64,7 +64,7 @@ from src.core.archive_db_split import (
     verify_content_sample,
 )
 from src.core.archive_db_split_refusals import blocking, predrop_refusals, preflight_refusals
-from src.core.db import DatastoreUnreadableError, connect, db_path_for
+from src.core.db import connect, db_path_for
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
 
 logger = structlog.get_logger()

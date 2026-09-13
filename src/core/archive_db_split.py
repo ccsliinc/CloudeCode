@@ -36,7 +36,6 @@ convention. Nothing is created, copied or dropped without ``apply=True``.
 
 from __future__ import annotations
 
-import os
 import shutil
 import sqlite3
 import time
@@ -51,22 +50,8 @@ from src.core.archive_db_ddl import (
     residual_app_references,
     strip_crossing_references,
 )
-from src.core.archive_db_partition import (
-    ARCHIVE_SCHEMA,
-    EXPECTED_CROSSING_FKS,
-    SIDE_ARCHIVE,
-    archive_db_path_for,
-    classify_objects,
-    crossing_foreign_keys,
-    orphaned_reference_counts,
-    unclassified_objects,
-)
-from src.core.archive_db_split_refusals import (
-    Refusal,
-    blocking,
-    predrop_refusals,
-    preflight_refusals,
-)
+from src.core.archive_db_partition import ARCHIVE_SCHEMA, SIDE_ARCHIVE
+from src.core.archive_db_split_refusals import Refusal, blocking
 
 logger = structlog.get_logger()
 
