@@ -271,6 +271,17 @@ def create_archive_schema(
     conn.execute(PROGRESS_DDL)
     conn.execute(ORIGIN_DDL)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # A RESUMED RUN FINDS ITS OWN TABLES ALREADY THERE. The DDL comes out
+    # of sqlite_master verbatim and therefore carries no IF NOT EXISTS, so
+    # re-running raised "table X already exists" and the whole migration
+    # died on the first object. Measured by SIGKILLing a real copy
+    # mid-flight, which is the only way this shows up.
+    existing = {
+        r[0] for r in conn.execute(
+            f"SELECT name FROM {ARCHIVE_SCHEMA}.sqlite_master "
+            "WHERE type IN ('table','view')"
+        )
+    }
     for obj in objects:
         if obj.side != SIDE_ARCHIVE or not obj.sql:
             continue
@@ -291,6 +302,11 @@ def create_archive_schema(
             raise sqlite3.IntegrityError(
                 f"{obj.name} still references {residual} after rewriting"
             )
+        if obj.name in existing:
+            # Already created by an earlier run of this same migration.
+            # The origin row above was refreshed, so the reverse still has
+            # the exact pre-strip DDL; there is nothing else to do.
+            continue
         qualified = sql.replace(
             f"{obj.kind.upper()} {obj.name}",
             f"{obj.kind.upper()} {ARCHIVE_SCHEMA}.{obj.name}",

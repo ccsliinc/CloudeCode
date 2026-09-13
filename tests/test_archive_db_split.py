@@ -438,6 +438,55 @@ def test_refuses_when_a_crossing_reference_survives(
         ).fetchone()[0] == 6
 
 
+def test_an_interrupted_copy_resumes_rather_than_dying_on_its_own_tables(
+    state: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REGRESSION. A resumed run must not trip over the schema it created.
+
+    The DDL is read out of ``sqlite_master`` verbatim and therefore
+    carries no ``IF NOT EXISTS``, so a second run raised
+    ``table archive_project_overlay already exists`` and the whole
+    migration died on the first object, leaving the source intact but the
+    operation permanently stuck. Found by SIGKILLing a real 443 MB copy
+    mid-flight, which is the only way it surfaces: every clean run creates
+    the schema exactly once.
+
+    Here the interruption is simulated by failing the copy partway, which
+    leaves the archive schema and the progress rows on disk exactly as a
+    kill would.
+    """
+    boom = RuntimeError("interrupted mid-copy")
+    calls = {"n": 0}
+    real_copy = __import__(
+        "src.core.archive_db_split", fromlist=["copy_table"]
+    ).copy_table
+
+    def flaky(conn, table, install_id):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise boom
+        return real_copy(conn, table, install_id)
+
+    monkeypatch.setattr("src.core.archive_db_split_run.copy_table", flaky)
+    with pytest.raises(RuntimeError):
+        run_split(state, apply=True)
+
+    # The schema and at least one table's progress survive the interruption.
+    assert archive_db_path_for(state).exists()
+    with _open(state) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transcript_archives"
+        ).fetchone()[0] == 6
+
+    monkeypatch.undo()
+    report = run_split(state, apply=True, content_sample=6)
+    assert not report.refused, [r.rung for r in report.refusals]
+    arch = sqlite3.connect(archive_db_path_for(state))
+    assert arch.execute("SELECT COUNT(*) FROM transcript_archives").fetchone()[0] == 6
+    assert arch.execute("SELECT COUNT(*) FROM transcript_records").fetchone()[0] == 6
+    arch.close()
+
+
 def test_a_count_mismatch_refuses_the_drop() -> None:
     """Arity is verified before anything is removed."""
     refusals = predrop_refusals(
