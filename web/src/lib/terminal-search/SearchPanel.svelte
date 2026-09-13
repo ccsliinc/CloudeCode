@@ -28,22 +28,29 @@
   gets deleted as a duplicate and the other turns out to be the one that
   mattered.
 
-  WHERE IT SITS, AND WHY NOT THE OBVIOUS CORNERS.
-    Top-right   is forbidden outright - see the comment above
-                `.terminal-container` in client/index.html. A folded tool
-                strip lived there, covered output across the pane's full
-                width, and is not coming back.
-    Bottom      on a desktop is where claude's input box is, and the user
-                has to keep seeing what they are typing while they search.
-    Top-left    is what is left, and it is also where a browser's own
-                Find bar has trained everybody to look.
+  WHERE IT SITS. TOP-RIGHT, ON THE OWNER'S 2026-09-13 INSTRUCTION: "make
+  the search bar wider, on the right side of the screen (notifications
+  should appear under), and auto-focus to the search box." It was
+  top-left until then, and the comment above `.terminal-container` in
+  client/index.html says not to put a floating control back in this
+  corner. THAT PROHIBITION IS ABOUT A PERSISTENT ONE. What it was written
+  for is the folded tool strip that lived here permanently and covered
+  output across the pane's full width, and the 45px session-editor button
+  that replaced it and grew back into one; both are gone, the corner is
+  empty, and this panel is neither - it is transient, it is only on
+  screen while the user is searching, and Esc removes it. Bottom is still
+  refused on a desktop: that is where claude's input box is, and the user
+  has to keep seeing what they are typing while they search.
+
   Under 769px it moves to the BOTTOM anyway, for thumb reach, above where
   the on-screen keyboard comes up. That is the same line the tools FAB
   and the d-pad already break on; a third "mobile" number is how a row
   ends up with a hole in it at some width nobody tested.
 
-  Z-INDEX 31, WHICH IS ABOVE EVERY OTHER OVERLAY THIS PANE CARRIES. The
-  panel is the one the user just asked for, so it wins any overlap.
+  Z-INDEX 1110, WHICH IS ABOVE THE TOAST STACK. The panel is the one the
+  user just asked for, so it wins any overlap. See the rules at the foot
+  of the style block for the offset that stops the two overlapping at
+  all.
 -->
 <script lang="ts">
     import PromptRail from './PromptRail.svelte';
@@ -68,6 +75,36 @@
     $effect(() => {
         controller.setInputElement(inputEl);
         return () => controller.setInputElement(null);
+    });
+
+    /**
+     * Publish the panel's bottom edge so the toast stack can start below
+     * it.
+     *
+     * The toast container is `position: fixed` on `body`, so it is not a
+     * descendant of anything this component can style a variable onto -
+     * hence documentElement. It is MEASURED rather than computed because
+     * the panel's viewport `top` is the header's height plus the pane's
+     * padding, and the header is not one number: it changes with the
+     * breakpoint and with the deep-link banner above it. One read, on
+     * open, which is safe here because `opened` has already been flushed
+     * to the DOM by the time an effect runs.
+     *
+     * A STALE VALUE CANNOT MOVE ANYTHING. The rule that consumes it is
+     * gated on `body:has(.terminal-search-panel.is-open)`, so the toast
+     * stack is back where it was the moment the panel closes whether or
+     * not this clears - and it clears anyway.
+     */
+    $effect(() => {
+        const root = panelEl?.ownerDocument?.documentElement;
+        if (!root) return;
+        if (!controller.opened) {
+            root.style.removeProperty('--terminal-search-toast-top');
+            return;
+        }
+        const bottom = panelEl?.getBoundingClientRect?.().bottom ?? 0;
+        root.style.setProperty('--terminal-search-toast-top', `${Math.round(bottom) + 12}px`);
+        return () => root.style.removeProperty('--terminal-search-toast-top');
     });
 </script>
 
@@ -199,10 +236,23 @@
         display: none;
         position: absolute;
         top: 15px;
-        left: 15px;
-        z-index: 31;
+        /* 24px of prompt rail plus the same 15px gutter the panel used to
+         * keep on the left, so the panel stops short of the rail rather
+         * than covering its top ticks. */
+        right: 39px;
+        /* ABOVE THE TOAST STACK (1100, client/css/toast.css) rather than
+         * the 31 this used to carry. Both now live in the pane's top
+         * right, and the panel is the thing the user just asked for, so
+         * it wins any overlap outright instead of relying on the offset
+         * below being right. Still under the row menu (1200) and the
+         * modals (9998+), neither of which can reach this corner. */
+        z-index: 1110;
 
-        width: min(360px, calc(100% - 30px));
+        /* 560px fits a full path or a long flag beside the counter and
+         * the four controls without the field collapsing, and still
+         * leaves the pane readable behind it; the calc is the same
+         * "never overflow" clamp as before, now counting the rail. */
+        width: min(560px, calc(100% - 54px));
         box-sizing: border-box;
         padding: 6px 8px;
 
@@ -385,7 +435,30 @@
             top: auto;
             bottom: 15px;
             left: 8px;
+            /* Cancels the desktop `right` so `left` + `width` decide the
+             * box, rather than leaving all three set at once. */
+            right: auto;
             width: calc(100% - 16px);
+        }
+    }
+
+    /* -----------------------------------------------------------------
+     * The toast stack starts BELOW the panel while the panel is open.
+     *
+     * The owner's ask, verbatim: "on the right side of the screen
+     * (notifications should appear under)". Both now occupy the top
+     * right, so without this they land on top of each other.
+     *
+     * DESKTOP ONLY, because under 769px the panel is at the BOTTOM and
+     * the toasts are already clear of it - pushing them down there would
+     * move them for nothing. The `:has()` gate is what makes the offset
+     * exist only while the panel does, so a closed panel restores the
+     * stack with no teardown step to forget. The 60px fallback is
+     * toast.css's own value, so a missing measurement changes nothing.
+     * --------------------------------------------------------------- */
+    @media (min-width: 769px) {
+        :global(body:has(.terminal-search-panel.is-open) .toast-container) {
+            top: var(--terminal-search-toast-top, 60px);
         }
     }
 </style>

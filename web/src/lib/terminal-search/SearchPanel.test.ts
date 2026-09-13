@@ -47,7 +47,7 @@ interface Harness {
  *
  * Inputs: none. Output: Harness.
  */
-function setup(): Harness {
+function setup(over?: Partial<SearchHost>): Harness {
     document.body.innerHTML = `
         <button type="button" id="terminalSearchBtn" class="btn-icon"></button>
         <div id="terminal-screen" class="screen active">
@@ -89,7 +89,7 @@ function setup(): Harness {
             calls.focusTerm += 1;
         },
     };
-    const controller = mountTerminalSearch(host);
+    const controller = mountTerminalSearch({ ...host, ...(over ?? {}) });
     if (!controller) throw new Error('the panel did not mount');
     flushSync();
 
@@ -154,6 +154,95 @@ describe('mounting', () => {
         h.controller.open();
         flushSync();
         expect(h.panel().style.top).toBe('');
+    });
+});
+
+/* ---------------------------------------------------------------------
+ * Autofocus
+ *
+ * THE DEFECT THIS PINS IS NOT "focus was never called". It always was,
+ * on the line it is on now. `opened` is a rune, so Svelte applied
+ * `.is-open` on a MICROTASK - and until it did the panel was still
+ * `display: none`, where `HTMLElement.focus()` is a specified no-op that
+ * throws nothing and logs nothing. The caret stayed in the pane.
+ *
+ * jsdom performs no layout, so it will happily focus a hidden input and
+ * CANNOT reproduce that by itself. So these tests assert the MECHANISM
+ * instead: what the DOM said at the instant focus was called. Move the
+ * `flushSync()` out of `open()` and the first one goes red.
+ * ------------------------------------------------------------------- */
+describe('autofocus', () => {
+    test('the field is focused by the time open() returns, with no flush from the caller', () => {
+        h = setup();
+        h.controller.open();
+        expect(document.activeElement).toBe(h.input());
+    });
+
+    test('the panel is already painted open at the moment focus is called', () => {
+        h = setup();
+        const seen: boolean[] = [];
+        const input = h.input();
+        const real = input.focus.bind(input);
+        vi.spyOn(input, 'focus').mockImplementation((opts) => {
+            seen.push(input.closest('.terminal-search-panel')!.classList.contains('is-open'));
+            real(opts);
+        });
+        h.controller.open();
+        // One focus, and the panel was VISIBLE for it. `[false]` is what
+        // the pre-fix code produced, and a hidden field cannot take focus
+        // in a real browser.
+        expect(seen).toEqual([true]);
+    });
+
+    test('focus lands before the history load resolves, not after', () => {
+        // A load that never settles: if focus were chained onto it, the
+        // field would never get the caret at all.
+        h = setup({ history: () => ({ ensureLoaded: () => new Promise(() => {}) }) });
+        h.controller.open();
+        expect(document.activeElement).toBe(h.input());
+        expect(h.controller.history).toBe('pending');
+    });
+
+    test('re-opening refocuses and SELECTS the existing text', () => {
+        h = setup();
+        h.controller.open();
+        const input = h.input();
+        input.value = 'needle';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+        (document.getElementById('terminal') as HTMLElement).focus();
+
+        h.key(document, { key: 'f', metaKey: true });
+        expect(document.activeElement).toBe(input);
+        expect(input.selectionStart).toBe(0);
+        expect(input.selectionEnd).toBe('needle'.length);
+    });
+});
+
+/* ---------------------------------------------------------------------
+ * The toast stack's offset
+ *
+ * The VALUE is a measurement and jsdom has no layout, so what is proven
+ * here is the CONTRACT: the variable exists while the panel is open and
+ * is gone the moment it closes. The rule that reads it is itself gated
+ * on `body:has(...is-open)`, so a leaked value could not move the stack
+ * anyway - that gate and this clear are two independent guards on the
+ * same failure, which is toasts stranded halfway down the screen.
+ * ------------------------------------------------------------------- */
+describe('the toast offset', () => {
+    /** The published offset, or null when none is set. */
+    const offset = (): string | null =>
+        document.documentElement.style.getPropertyValue('--terminal-search-toast-top') || null;
+
+    test('it is published while open and removed on close', () => {
+        h = setup();
+        expect(offset()).toBeNull();
+        h.controller.open();
+        flushSync();
+        expect(offset()).toMatch(/^-?\d+px$/);
+        h.controller.close();
+        flushSync();
+        expect(offset()).toBeNull();
     });
 });
 
