@@ -50,6 +50,7 @@ from src.core.archive_db_partition import (
     orphaned_reference_counts,
     unclassified_objects,
 )
+from src.core.archive_db_attach import attach_archive
 from src.core.archive_db_copy import (
     copy_table,
     drop_order,
@@ -198,8 +199,13 @@ def _apply_split(
     """
     with closing(connect(source, create=False)) as conn:
         install_id = _meta(conn, META_INSTALL_ID)
-        conn.execute(f"ATTACH DATABASE ? AS {ARCHIVE_SCHEMA}", (str(dest),))
-        conn.execute(f"PRAGMA {ARCHIVE_SCHEMA}.journal_mode=WAL")
+        # IDEMPOTENT, because connect() now attaches an archive that
+        # already exists. A resumed run reaches here with the schema
+        # already present, and a second raw ATTACH of the same name is
+        # an error in sqlite.
+        if not attach_archive(conn, source, archive_path=dest):
+            conn.execute(f"ATTACH DATABASE ? AS {ARCHIVE_SCHEMA}", (str(dest),))
+            conn.execute(f"PRAGMA {ARCHIVE_SCHEMA}.journal_mode=WAL")
 
         objects = classify_objects(conn)
         create_archive_schema(conn, objects, report)

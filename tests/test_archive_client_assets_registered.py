@@ -138,10 +138,25 @@ def test_api_archive_is_loaded_and_after_api() -> None:
         "api-archive.js is an eager <script> tag again - it belongs only "
         "in window.ModuleFamilies.ARCHIVE now (issue #48), or it loads twice"
     )
-    assert "api-archive.js" in _archive_family_basenames(), (
-        "api-archive.js is not listed in module-families.js's ARCHIVE array, "
-        "so the archive's API extension never loads at all"
-    )
+    # GATED ON THE FILE'S MEASURED PRESENCE, not deleted outright. The
+    # Svelte client slices retire api-archive.js, and a registration
+    # assertion for a module that no longer exists is vacuous. But the
+    # file is still here on branches that have not taken those slices,
+    # and on those the guarantee is real, so asserting unconditionally
+    # and deleting unconditionally are both wrong on one branch or the
+    # other. Reading the disk answers it on either.
+    if (CLIENT_JS / "api-archive.js").is_file():
+        assert "api-archive.js" in _archive_family_basenames(), (
+            "api-archive.js is on disk but is not listed in "
+            "module-families.js's ARCHIVE array, so the archive's API "
+            "extension never loads at all"
+        )
+    else:
+        assert "api-archive.js" not in _archive_family_basenames(), (
+            "api-archive.js has been deleted from client/js but is still "
+            "listed in module-families.js's ARCHIVE array, so the lazy "
+            "loader will request a file that does not exist"
+        )
 
 
 def test_every_archive_css_file_on_disk_is_loaded() -> None:

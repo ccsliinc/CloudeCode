@@ -50,6 +50,7 @@ from typing import Iterator, Optional
 
 import structlog
 
+from src.core.archive_db_attach import assert_no_shadowing, attach_archive
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
 from src.core.message_body_codec import register_body_functions
 
@@ -162,6 +163,25 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
             f"{exc}",
             path,
         ) from exc
+    # THE ENTIRE ARCHIVE WIRING IS THIS ONE CALL, and it is here for the
+    # same reason register_body_functions is: this is the ONE place
+    # cloude.db is opened, so attaching here is what makes the archive
+    # reachable without each of the 68 archive modules remembering to.
+    #
+    # No call site needs a schema prefix. MEASURED on sqlite 3.53.4: a
+    # table that exists ONLY in an attached database is reached by an
+    # unqualified name, for reads AND writes. After the migration drops
+    # the archive tables from main, every existing query keeps working
+    # and silently reaches the right file.
+    #
+    # A table present in BOTH is the one dangerous state, because main
+    # wins with no error. assert_no_shadowing raises the alarm rather
+    # than refusing the connection: the sessions live in this file, and
+    # taking a running server down over a condition that only affects
+    # archive queries would be the worse failure. The migration refuses
+    # hard; this warns loudly. See src/core/archive_db_attach.py.
+    if attach_archive(conn, path):
+        assert_no_shadowing(conn)
     return conn
 
 

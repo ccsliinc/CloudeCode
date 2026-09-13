@@ -50,6 +50,7 @@ from src.core.archive_db_partition import (
     archive_db_path_for,
     classify_objects,
 )
+from src.core.archive_db_attach import attach_archive
 from src.core.archive_db_copy import drop_order
 from src.core.archive_db_split import ORIGIN_TABLE, PROGRESS_TABLE, table_count
 from src.core.db import connect, db_path_for
@@ -126,7 +127,9 @@ def run_unsplit(state_dir: Path, *, apply: bool = False) -> UnsplitReport:
         return report
 
     with closing(connect(source, create=False)) as conn:
-        conn.execute(f"ATTACH DATABASE ? AS {ARCHIVE_SCHEMA}", (str(archive),))
+        # Idempotent: connect() attaches an archive that already exists,
+        # and the reverse is only ever run when one does.
+        attach_archive(conn, source, archive_path=archive)
         try:
             origin = {
                 r[0]: (r[1], r[2])
