@@ -1271,3 +1271,46 @@ The cold-load cost of 218 requests is therefore accepted until client/js goes.
 
 STILL OPEN: nothing from this round. The 7 unreachable module imports are a
 known residual, not a defect.
+
+## [BACKLOG] 2026-09-13 - dependency graph applied to every open issue
+
+Adam asked for the P levels of his open issues, then for the whole board to be
+ordered by dependency. Three changes landed on GitHub, nothing in the code.
+
+**#64 closed as not planned.** CI is off on purpose and the jobs were refused
+for billing before they ever ran, so nothing was failing. The `p0` label came
+off it. There is no P0 on the board now.
+
+**#175 created: the front end redesign.** Adam is rebuilding the entire UI in
+Svelte himself, by hand. Labels `enhancement p1 blocked owner-only roadmap`.
+The new `owner-only` label means exactly one thing: Adam owns it personally, no
+agent starts it, plans it, refactors toward it or opens a PR against it. It is
+blocked by Adam, a human gate, and only he closes it or unblocks what waits on
+it. Its scope is style, design and layout; architecture, server contracts, the
+WebSocket protocol and xterm are unchanged.
+
+**Dependency graph applied across all 78 open issues.** 44 bodies rewritten, 30
+issues gained the `blocked` label. Board went from 66 startable to 36.
+- 26 hard blockers, where the issue consumes another issue's output and
+  building it first means building a stub.
+- 15 issues blocked by #175 because their deliverable is a new visible surface
+  that the redesign would throw away: 36, 50, 51, 58, 66, 124, 134, 135, 136,
+  142, 148, 149, 157, 167, 168.
+- 13 soft orderings recorded as `## Depends on` with NO `blocked` label,
+  because they can be built standalone without waste: 50, 51, 63, 66, 120, 138,
+  139, 140, 142, 149, 153, 166, 171.
+- Bodies that carried a hard gate under a `## Depends on` heading were promoted
+  to `## Blocked by`, not duplicated.
+
+Three dependency cycles were found and broken: #123 before #140 (a digest that
+classifies using a lying counter just delivers the lie on a timer), #125 before
+#133 (a tier computed from catalog activity that does not exist yet is a guess),
+#148 before #149 (both come from one git read and #148 owns the reader).
+
+Five dependencies point at work that has no issue number and were stated rather
+than invented: the cheap model summarizer seam, the server side plugin runtime,
+the blackboard MCP server, worktree per session, and the BBS front door.
+
+STILL OPEN: nothing from this round. #173 is ccsliinc's claim and was left
+untouched. Soft orderings deliberately did not get the `blocked` label so the
+board keeps telling the truth about what can actually be picked up.
