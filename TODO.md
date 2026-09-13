@@ -7,6 +7,35 @@ via `gh issue list --state open --json number --jq 'length'`).
   #36 #37 #50 #51 #58 #66 (re-verified 2026-09-11 by label)
 - the rest are ours
 
+## In flight: #123 passive attention detection, zero hooks (branch attention-passive-123, draft PR #176)
+
+Baseline on the clean tree before any change, 2026-09-13, `-p no:randomly -m "not real_tmux"`:
+**7040 passed, 0 failed, 56 skipped, 351 deselected** in 233.73s. Tests are DELETED in step 6
+of the plan (the whole hook suite goes with the hook code), so the count is expected to DROP.
+
+Root cause proven, not hypothesised: `CLOUDECODE_SESSION_ID` is a pane-wide env var, so every
+background agent posts hook events under the parent's `ses_*` id. A sub-agent's own `PreToolUse`
+clears the 180s latch and re-opens the turn in one event. Over 50.8h of the live server log:
+410 of 459 attributable Stop/Notification toasts (89.3%) fired while the transcript's own
+turn-end record said background agents were still pending. The latch suppressed 1 toast in 184
+opportunities. The older out-of-order `SubagentStop` hypothesis is REFUTED: zero observable cases.
+
+Plan (approved 2026-09-13): /Users/Adam/.claude/plans/research-and-design-task-sharded-neumann.md
+
+Steps:
+- [ ] 1. `src/core/attention/registry_read.py` + tests
+- [ ] 2. `src/core/attention/transcript_facts.py` + tests
+- [ ] 3. `evidence.py`, `resolve.py`, `display.py`, `pane_markers.py` + per-rung tests
+- [ ] 4. `ledger.py`, `raise_gate.py`, `watcher.py` + the replay harness
+- [ ] 5. Wire: main.py task, listing pass, uuid writer, startup gate, status source, change notice
+- [ ] 6. Delete: hook route, signals, gate, idle watcher, tracker internals, hook block builder
+- [ ] 7. Docs: DECISIONS, session-status-model, session-status, notifications, LESSONS,
+      jsonl-shape-inventory, alert-state-model, CLAUDE.md rule
+- [ ] 8. Re-measure, security review, commit, push
+- [ ] 9. Version bump and local install refresh
+
+### Sub-agent findings
+
 ## Done and merged to master
 
 - [x] #55 split toast.js -> toast-grouping / toast-render / toast-lifecycle (b932252)
