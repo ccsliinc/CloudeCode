@@ -282,8 +282,8 @@ LINES_HREF = "/api/v1/archive/transcripts/{transcript_id}/lines?cursor={cursor}"
 #: A SECOND query, issued ONLY for a body layer 1 cleared; SUBSTR cuts
 #: inside SQLite so a 60 KB body is never transferred here.
 _SNIPPET_SQL = """
-SELECT SUBSTR(body_json, :start_1based, :length) AS window,
-       LENGTH(body_json) AS total_chars
+SELECT SUBSTR(cloude_body_text(body_json), :start_1based, :length) AS window,
+       cloude_body_chars(body_json) AS total_chars
   FROM message_bodies WHERE id = :body_id
 """
 

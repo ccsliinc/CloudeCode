@@ -42,6 +42,7 @@ from src.core.archive_search import (
     SCOPE_TRANSCRIPT,
     search_scoped,
 )
+from src.core.archive_search_fts import ORDER_POSITION
 
 router = APIRouter(tags=["archive"])
 
@@ -78,6 +79,25 @@ async def get_search(
         description="false withholds every preview. The default gate is "
                     "best effort; see meta.snippet_gate.",
     ),
+    role: Optional[str] = Query(
+        None, description="Narrow to one message role, e.g. assistant."),
+    block_type: Optional[str] = Query(
+        None,
+        description="Narrow to one content block type: tool_result, "
+                    "tool_use, text, thinking, image, document, "
+                    "_string_content."),
+    tool_name: Optional[str] = Query(
+        None, description="Narrow to one tool, e.g. Bash. Exact match."),
+    is_error: Optional[bool] = Query(
+        None,
+        description="Narrow to failed (true) or successful (false) tool "
+                    "results. Omit for both. NULL is a real third state "
+                    "on 39.6 percent of tool_result blocks and neither "
+                    "value selects it."),
+    order: str = Query(
+        ORDER_POSITION,
+        description="position (default, the ordering this endpoint has "
+                    "always had) or relevance (BM25)."),
 ) -> JSONResponse:
     """Substring search inside ONE project or ONE transcript.
 
@@ -103,6 +123,11 @@ async def get_search(
         snippets: false returns NO preview text on any hit. The
             default gate is best effort (see meta.snippet_gate);
             this is the only hard no-disclosure guarantee.
+        role: narrow to one message role.
+        block_type: narrow to one content block type.
+        tool_name: narrow to one tool name, exact.
+        is_error: narrow to failed or successful tool results.
+        order: position (default) or relevance.
 
     Returns:
         The envelope. A zero-hit COMPLETE scan and a zero-hit EXHAUSTED
@@ -128,7 +153,8 @@ async def get_search(
         subject="datastore", unreadable_result=None,
         limit=limit, scan_budget=scan_budget, cursor=cursor,
         scan_bytes=scan_bytes, case_sensitive=case_sensitive,
-        snippets=snippets,
+        snippets=snippets, role=role, block_type=block_type,
+        tool_name=tool_name, is_error=is_error, order=order,
     )
     scan = (result.get("meta") or {}).get("scan") or {}
     return respond(
@@ -137,6 +163,8 @@ async def get_search(
         # operator is hunting for, and a log line is a second copy.
         query_length=len(q or ""),
         scan_status=scan.get("status"),
+        scan_method=scan.get("method"),
+        index_state=((result.get("meta") or {}).get("index") or {}).get("state"),
         transcripts_scanned=scan.get("transcripts_scanned"),
     )
 

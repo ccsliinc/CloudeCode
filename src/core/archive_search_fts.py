@@ -127,46 +127,66 @@ class BlockFilters:
 
 
 def phrase_query(q: str) -> str:
-    """Turn a caller's literal string into one FTS5 phrase.
+    """Turn a caller's literal string into one FTS5 phrase, prefix-matched.
 
     Description: the ONE place a user string becomes MATCH syntax. Every
       FTS5 operator loses its meaning inside a quoted phrase, and an
       embedded double quote is escaped by doubling it, which is FTS5's
       own rule. Without this a query containing a colon or an asterisk is
       a syntax error the caller cannot have predicted.
+
+      THE TRAILING STAR IS NOT DECORATION, IT IS RECALL, AND IT WAS
+      MEASURED. A bare phrase matches whole tokens, so a query that is
+      the PREFIX of a longer token finds nothing at all. On the
+      400-transcript projection ``msg_01`` occurs as a substring in 27
+      blocks and a bare phrase returned ZERO of them, because the text
+      holds ``msg_01ABC...`` and ``unicode61`` makes that one token.
+      Recall against a pure substring scan of the same block text, 12
+      real queries, bare phrase then prefixed:
+
+        msg_01                  0.0% ->  100.0%
+        resize                 88.1% ->   97.0%
+        the                    92.6% ->   96.7%
+        claude-opus-4         100.0% ->  100.0%
+        /Users/jsugamele      100.0% ->  100.0%
+
+      Eight of the twelve are exact and the worst is 96.7 percent. The
+      residue is the gap this index cannot close: a query that begins
+      INSIDE a token (``resize`` against ``sendResize``) needs a trigram
+      index, measured at 332.3 MiB against this one's 51.4 MiB and
+      refused. That residue is REPORTED on an empty result rather than
+      left to be discovered.
+
+      The cost is small and one-sided: a query ending in a very short
+      token scans a wide term range (``claude-opus-4`` went 1.4 ms to
+      11.2 ms, its last token being ``4``). Everything else moved by
+      under a millisecond.
     Inputs: q (str) - the caller's literal string.
     Output: str - a MATCH argument.
-    Example: phrase_query('a "b" c') -> '"a ""b"" c"'
+    Example: phrase_query('a b') -> '"a b"*'
     """
-    return '"' + q.replace('"', '""') + '"'
+    escaped = q.replace('"', '""')
+    return f'"{escaped}"*'
 
 
-def query_has_tokens(conn: sqlite3.Connection, q: str) -> bool:
-    """Say whether the query string produces any indexable token.
+def query_is_tokenizable(q: str) -> bool:
+    """Say whether the query can produce an indexable token at all.
 
-    Description: a query made only of punctuation tokenises to nothing,
-      and an empty phrase is an FTS5 syntax error rather than an empty
-      result. Asking the index itself is the only way to know, because
-      the answer depends on the tokenizer rather than on any rule this
-      module could restate.
-    Inputs: conn (sqlite3.Connection), q (str).
-    Output: bool - False when the index refused the phrase as empty.
-    Raises: nothing for a tokenising problem; a sqlite3.Error that is not
-      the empty-phrase refusal is re-raised, because swallowing it would
-      turn a broken index into "your query had no words in it".
-    Example: query_has_tokens(conn, "...") -> False
+    Description: ``unicode61`` tokenises on Unicode alphanumerics, so a
+      string with none of them - ``...``, ``->``, ``{}`` - produces no
+      token and can never match anything in this index, however common
+      those characters are in the text. The old substring scan DID find
+      them, so this is a REAL loss of capability and it has to be a named
+      refusal rather than a result of zero hits.
+
+      A pure rule rather than a round trip to the index: FTS5 answers an
+      all-punctuation phrase with zero rows rather than an error, so
+      asking it cannot tell "no such token" from "not present here".
+    Inputs: q (str).
+    Output: bool - False when nothing in q can become a token.
+    Example: query_is_tokenizable("...") -> False
     """
-    try:
-        conn.execute(
-            f"SELECT rowid FROM {BLOCK_SEARCH_TABLE} "
-            f"WHERE {BLOCK_SEARCH_TABLE} MATCH ? LIMIT 1",
-            (phrase_query(q),),
-        ).fetchone()
-    except sqlite3.OperationalError as exc:
-        if "syntax error" in str(exc).lower():
-            return False
-        raise
-    return True
+    return any(ch.isalnum() for ch in q)
 
 
 #: The scope-wide hit query. ``f`` is driven by MATCH (the plan reads
@@ -189,7 +209,12 @@ SELECT t.id           AS transcript_id,
        cloude_body_chars(b.body_json) AS body_bytes,
        cb.id          AS block_id,
        cb.seq         AS block_seq,
-       cb.text        AS block_text,
+       -- NOT cb.text. The ORDER BY materialises every selected column of
+       -- every matching row into a temp b-tree before the LIMIT applies,
+       -- and a tool_result block runs to megabytes; the preview window is
+       -- cut with SUBSTR inside SQLite instead, which is the same reason
+       -- archive_snippet_gate cuts its own window there.
+       LENGTH(cb.text) AS block_chars,
        cb.tool_name   AS tool_name,
        cb.is_error    AS is_error,
        bt.value       AS block_type,

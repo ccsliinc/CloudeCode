@@ -273,7 +273,8 @@ def resolve_titles(
         bodies = {
             int(row["id"]): row["body_json"]
             for row in conn.execute(
-                "SELECT id, body_json FROM message_bodies WHERE id IN "
+                "SELECT id, cloude_body_text(body_json) AS body_json "
+                "FROM message_bodies WHERE id IN "
                 f"({','.join('?' * len(body_ids))})",
                 body_ids,
             ).fetchall()

@@ -180,7 +180,8 @@ def ingest_lines(
             if created:
                 result.bodies_created += 1
                 body_json = conn.execute(
-                    "SELECT body_json FROM message_bodies WHERE id = ?",
+                    "SELECT cloude_body_text(body_json) "
+                    "FROM message_bodies WHERE id = ?",
                     (body_id,)
                 ).fetchone()[0]
                 # The derived content-block index is built in the SAME

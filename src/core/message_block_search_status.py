@@ -3,8 +3,9 @@
 They are SEPARATE QUESTIONS and folding them into one boolean is how a
 search comes to render "no results" for three different reasons.
 
-LADDER ONE, THE INDEX. Four states, the same four-word vocabulary
-``corpus_ingest_state`` and ``db_integrity_status`` already use:
+LADDER ONE, THE INDEX. Five states, built on the same four-word
+vocabulary ``corpus_ingest_state`` and ``db_integrity_status`` already
+use, plus one this path needed:
 
   ``missing``      the FTS table is not there. An install that has not
                    reached v27, or one whose archive flag is off.
@@ -12,23 +13,29 @@ LADDER ONE, THE INDEX. Four states, the same four-word vocabulary
                    exist. The migration CREATES and does not POPULATE,
                    so this is the normal state of a freshly migrated
                    install, and it is a REFUSAL rather than zero hits.
-  ``stale``        the table holds a different number of rows than the
-                   blocks say it should. Hits are still returned, with
-                   the discrepancy named, because a partly built index
-                   answering some questions beats refusing all of them.
-  ``current``      the counts agree.
+  ``present``      the table holds rows and NOBODY COUNTED whether it
+                   covers all of them. See INDEX_PRESENT below: counting
+                   costs 37 ms against a 0.07 ms query, so the request
+                   path does not, and says it did not.
+  ``stale``        the counts were taken and disagree. Hits are still
+                   returned, with the discrepancy named, because a
+                   partly built index answering some questions beats
+                   refusing all of them.
+  ``current``      the counts were taken and agree.
 
-ONLY ``current`` AND ``stale`` MAY RETURN HITS. ``missing`` and
-``never_built`` refuse with cannot_determine. Falling back to the old
-``INSTR(body_json, ...)`` scan was considered and rejected outright: it
-would silently restore the 33,805-hit false-positive defect the index
-exists to fix, on exactly the installs least likely to notice.
+``missing`` AND ``never_built`` REFUSE; the other three answer. Falling
+back to the old ``INSTR(body_json, ...)`` scan was considered and
+rejected outright: it would silently restore the 33,805-hit
+false-positive defect the index exists to fix, on exactly the installs
+least likely to notice.
 
 THE COUNT COMPARISON IS THE MEASUREMENT AND THE LIVENESS FILE IS NOT. A
 record saying a build succeeded, over an index that is empty, is a record
-that is wrong. So the verdict is taken from the counts; the record
-contributes its timestamp, which is what an operator needs to know how
-old a ``stale`` is.
+that is wrong. So a verdict is only ever taken from the counts; the
+record contributes its timestamp, which is what an operator needs to know
+how old a ``stale`` is. There are TWO entry points and they differ only
+in whether they pay for counting: :func:`probe_index_state` for a
+request, :func:`resolve_index_state` for a status route or a rebuild.
 
 LADDER TWO, COVERAGE, AND IT IS THE 37 PERCENT. Measured on the
 400-transcript projection, 2026-09-13, over 216,716 bodies:
@@ -42,11 +49,19 @@ LADDER TWO, COVERAGE, AND IT IS THE 37 PERCENT. Measured on the
                                   purely envelope metadata.
 
 36.8 percent of bodies are therefore unsearchable, and they SHOULD be.
-The defect would be for that to look like "not found". So every search
-reports the breakdown, and an EMPTY result set over a scope holding
-unindexed bodies puts a named entry in the envelope's ``unevaluated``
-list - the field the three-outcome contract already says a caller must
-branch on before rendering an empty state.
+The defect would be for that to look like "not found". So an EMPTY result
+set over a scope holding unindexed bodies carries the breakdown AND a
+named entry in the envelope's ``unevaluated`` list - the field the
+three-outcome contract already says a caller must branch on before
+rendering an empty state.
+
+IT IS MEASURED ON AN EMPTY PAGE ONLY, and that is a cost decision stated
+rather than hidden. The pass is 44.16 ms over the largest project here
+and 3.62 ms over one transcript; a page that RETURNED hits cannot be
+mistaken for "there is nothing here", so it is the page that returned
+NOTHING that needs the answer. On any other page ``coverage.measured`` is
+False and says why - which is the truth, and is not the same as claiming
+everything was indexed.
 
 THE FOUR NOT-INDEXED REASONS ARE NOT INTERCHANGEABLE, and the last one
 is the one that matters most:
@@ -82,9 +97,23 @@ INDEX_NEVER_BUILT: str = "never_built"
 INDEX_STALE: str = "stale"
 INDEX_CURRENT: str = "current"
 
-#: The two states a search may answer hits from. Spelled once so a route,
+#: The FIFTH state, and it exists because counting is not free. Measured
+#: on the 400-transcript projection: the two COUNT(*) queries behind
+#: ``current`` versus ``stale`` cost 37.08 ms, on a search whose own
+#: index query costs 0.07 ms for a miss. Paying 37 ms per request to
+#: decide between two states that are BOTH usable is the shape of defect
+#: this project keeps paying for, so the search path takes
+#: :func:`probe_index_state` and gets ``present``: the index has rows,
+#: and whether it covers every block WAS NOT MEASURED HERE. A reading
+#: that did not happen is not a reading of nothing, so this is its own
+#: word rather than an optimistic ``current``.
+INDEX_PRESENT: str = "present"
+
+#: The states a search may answer hits from. Spelled once so a route,
 #: the search itself and a test cannot disagree about it.
-INDEX_USABLE: frozenset = frozenset({INDEX_CURRENT, INDEX_STALE})
+INDEX_USABLE: frozenset = frozenset(
+    {INDEX_CURRENT, INDEX_STALE, INDEX_PRESENT}
+)
 
 COVERAGE_INDEXED: str = "indexed"
 COVERAGE_NO_MESSAGE_CONTENT: str = "no_message_content"
@@ -114,7 +143,8 @@ class IndexState:
     def usable(self) -> bool:
         """Whether a search may return hits from this index.
 
-        Output: bool - True for ``current`` and ``stale`` only.
+        Output: bool - True for every state except ``missing`` and
+          ``never_built``.
         """
         return self.state in INDEX_USABLE
 
@@ -217,6 +247,84 @@ INDEXABLE_BLOCKS_SQL: str = (
 )
 
 
+#: Existence probes. ``LIMIT 1`` against a rowid-ordered table is an
+#: O(1) seek where COUNT(*) is a full traversal; these are what make the
+#: search path's verdict cost nothing measurable.
+_ANY_INDEXED_SQL: str = f"SELECT 1 FROM {BLOCK_SEARCH_TABLE} LIMIT 1"
+_ANY_INDEXABLE_SQL: str = (
+    "SELECT 1 FROM message_content_blocks "
+    "WHERE text IS NOT NULL AND text <> '' LIMIT 1"
+)
+
+
+def probe_index_state(
+    conn: sqlite3.Connection, liveness: Optional[Dict[str, Any]] = None,
+) -> IndexState:
+    """Decide usability WITHOUT counting, for the request path.
+
+    Description: three rungs - ``missing``, ``never_built``, and
+      ``present`` - resolved by two existence probes rather than two
+      COUNT(*) traversals. It CANNOT answer ``current`` or ``stale``,
+      and it does not pretend to: ``present`` says the index has rows and
+      says its coverage was not measured here. :func:`resolve_index_state`
+      is the one that counts, and it belongs on a status route or a
+      rebuild, where 37 ms is affordable and a request is not.
+    Inputs: conn (sqlite3.Connection). liveness (dict|None) - contributes
+      only the build timestamp.
+    Output: IndexState with ``indexed_rows`` and ``block_rows`` None,
+      because they were not counted and 0 would be a measurement.
+    Raises: nothing - a sqlite error becomes ``missing`` with the error
+      named, because a table this code cannot interrogate is one it may
+      not search.
+    Example: probe_index_state(conn).state -> 'present'
+    """
+    built_at = _built_at(liveness)
+    try:
+        if not index_table_exists(conn):
+            return IndexState(
+                INDEX_MISSING,
+                f"{BLOCK_SEARCH_TABLE} does not exist; this install has not "
+                f"reached schema v27, or the message archive is off",
+                built_at=built_at,
+            )
+        has_rows = conn.execute(_ANY_INDEXED_SQL).fetchone() is not None
+        has_work = conn.execute(_ANY_INDEXABLE_SQL).fetchone() is not None
+    except sqlite3.Error as exc:
+        return IndexState(
+            INDEX_MISSING,
+            f"the block-search index could not be interrogated: "
+            f"{type(exc).__name__}: {exc}",
+            built_at=built_at,
+        )
+    if not has_rows and has_work:
+        return IndexState(
+            INDEX_NEVER_BUILT,
+            "the index holds no rows while content blocks carry text; it is "
+            "created by the migration and populated by "
+            "scripts/rebuild_block_search_index.py, which has not run here",
+            built_at=built_at,
+        )
+    return IndexState(
+        INDEX_PRESENT,
+        "the index holds rows; whether it covers every content block was "
+        "not measured on this request, because counting both sides costs "
+        "37 ms against a 0.07 ms query. GET /api/v1/archive/search/index "
+        "takes that measurement.",
+        built_at=built_at,
+    )
+
+
+def _built_at(liveness: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Pull the build timestamp out of a liveness record, or None.
+
+    Inputs: liveness (dict|None). Output: str or None.
+    """
+    if isinstance(liveness, dict):
+        value = liveness.get("finished_at")
+        return value if isinstance(value, str) else None
+    return None
+
+
 def resolve_index_state(
     conn: sqlite3.Connection, liveness: Optional[Dict[str, Any]] = None,
 ) -> IndexState:
@@ -234,10 +342,7 @@ def resolve_index_state(
       may not search.
     Example: resolve_index_state(conn).usable -> True
     """
-    built_at = None
-    if isinstance(liveness, dict):
-        value = liveness.get("finished_at")
-        built_at = value if isinstance(value, str) else None
+    built_at = _built_at(liveness)
     try:
         if not index_table_exists(conn):
             return IndexState(

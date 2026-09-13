@@ -36,9 +36,10 @@ An added key cannot break a caller that does not read it.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from src.core.archive_cursor import CURSOR_LINES, CURSOR_VERSION, encode_cursor
+from src.core.archive_read import RESULT_CANNOT_DETERMINE
 from src.core.archive_snippet_gate import (
     BODIES_HREF,
     LINES_HREF,
@@ -52,43 +53,62 @@ from src.core.archive_snippet_gate import (
 )
 
 
+#: A SECOND query, issued ONLY for a block whose body cleared layer 1.
+#: SUBSTR cuts inside SQLite, so a megabyte tool_result is never
+#: transferred here - the same method and the same reason as
+#: ``archive_snippet_gate._SNIPPET_SQL``. 51 of these measured 0.17 ms.
+_BLOCK_WINDOW_SQL: str = """
+SELECT SUBSTR(text, :start_1based, :length) AS window
+  FROM message_content_blocks WHERE id = :block_id
+"""
+
+
 def block_snippet(
-    block_text: Optional[str],
+    conn: sqlite3.Connection,
+    block_id: int,
+    block_chars: Optional[int],
     match_offset: int,
     match_length: int,
     index: Optional[KnownSecretIndex],
-) -> tuple:
+) -> Tuple[Optional[str], str]:
     """Cut a context window out of a block's text, then GATE it.
 
     Description: the window is read in order to be cleared, and it is
       dropped unreturned and never logged when the gate refuses. Layer 1
       has already run in :func:`build_fts_hit`; this is layers 2 and 3.
-    Inputs: block_text (str|None) - the block's own projected text.
-      match_offset (int, 0-based, in that text). match_length (int).
-      index (KnownSecretIndex|None) - None means the gate could not be
-      built, which WITHHOLDS rather than permits.
-    Output: (snippet or None, snippet_state).
-    Example: block_snippet("hello world", 6, 5, idx)[1] -> 'included'
+    Inputs: conn (sqlite3.Connection). block_id (int). block_chars
+      (int|None) - the block's own length, used only to decide whether an
+      ellipsis is truthful. match_offset (int, 0-based, in that text).
+      match_length (int). index (KnownSecretIndex|None) - None means the
+      gate could not be built, which WITHHOLDS rather than permits.
+    Output: (snippet or None, snippet_state). ``(None,
+      "cannot_determine")`` when the row vanished between the two queries
+      or carries no text at all - never an empty preview.
+    Example: block_snippet(conn, 7, 40, 6, 5, idx)[1] -> 'included'
     """
-    if block_text is None:
+    if block_chars is None:
         # The block row exists and its text is NULL: an image or a
         # document, whose payload is bytes and is deliberately not
-        # projected. There is nothing to preview and nothing was
-        # withheld, so this is reported as the gate's own could-not-
-        # evaluate rather than as an empty string.
-        return None, "cannot_determine"
+        # projected. Nothing to preview and nothing withheld.
+        return None, RESULT_CANNOT_DETERMINE
     start = max(0, match_offset - SNIPPET_CONTEXT_CHARS)
     end = match_offset + match_length + SNIPPET_CONTEXT_CHARS
-    window = block_text[start:end]
-    withheld = evaluate_window(window, index)
+    row = conn.execute(_BLOCK_WINDOW_SQL, {
+        "start_1based": start + 1, "length": end - start,
+        "block_id": block_id,
+    }).fetchone()
+    if row is None or row["window"] is None:
+        return None, RESULT_CANNOT_DETERMINE
+    withheld = evaluate_window(row["window"], index)
     if withheld is not None:
         return None, withheld
     prefix = "..." if start > 0 else ""
-    suffix = "..." if end < len(block_text) else ""
-    return f"{prefix}{window}{suffix}", SNIPPET_INCLUDED
+    suffix = "..." if end < block_chars else ""
+    return f"{prefix}{row['window']}{suffix}", SNIPPET_INCLUDED
 
 
 def build_fts_hit(
+    conn: sqlite3.Connection,
     row: sqlite3.Row,
     q: str,
     index: Optional[KnownSecretIndex],
@@ -101,23 +121,27 @@ def build_fts_hit(
       anyway, with its transcript, line, offset and length, because
       dropping it would make the corpus's most sensitive material the
       least findable.
-    Inputs: row (sqlite3.Row) - a hit query row. q (str) - the literal
+    Inputs: conn (sqlite3.Connection) - for the preview window query.
+      row (sqlite3.Row) - a hit query row. q (str) - the literal
       matched, whose length is the match length. index
       (KnownSecretIndex|None). snippets (bool) - False withholds every
       preview, which is the only HARD guarantee here.
     Output: dict - the hit.
-    Example: build_fts_hit(row, "tmux", idx, True)["block_type"]
+    Example: build_fts_hit(conn, row, "tmux", idx, True)["block_type"]
     """
     secret_count = int(row["secret_finding_count"])
     body_id = int(row["body_id"])
     offset = int(row["match_offset"])
-    block_text = row["block_text"]
+    raw_chars = row["block_chars"]
+    block_chars = None if raw_chars is None else int(raw_chars)
+    block_id = int(row["block_id"])
     if not snippets:
         snippet, state = None, SNIPPET_WITHHELD_BY_REQUEST
     elif layer_one_state(secret_count) is not None:
         snippet, state = None, SNIPPET_WITHHELD_FLAGGED_BODY
     else:
-        snippet, state = block_snippet(block_text, offset, len(q), index)
+        snippet, state = block_snippet(
+            conn, block_id, block_chars, offset, len(q), index)
     line_no = int(row["line_no"])
     transcript_id = int(row["transcript_id"])
     href_cursor = encode_cursor(
@@ -140,10 +164,10 @@ def build_fts_hit(
         # the same number an uncompressed one does.
         "body_chars": int(row["body_bytes"]),
         "body_bytes": int(row["body_bytes"]),
-        "block_id": int(row["block_id"]),
+        "block_id": block_id,
         "block_seq": int(row["block_seq"]),
         "block_type": row["block_type"],
-        "block_chars": None if block_text is None else len(block_text),
+        "block_chars": block_chars,
         "tool_name": row["tool_name"],
         "is_error": None if is_error is None else bool(is_error),
         "role": row["role"],

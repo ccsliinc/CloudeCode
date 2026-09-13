@@ -301,8 +301,9 @@ def body(
         SELECT id, identity_key, message_uuid, body_sha256, body_bytes_sha256,
                parent_uuid, ts, origin_session_ref, is_compact_boundary,
                secret_finding_count, first_seen_at,
-               LENGTH(body_json) AS body_bytes,
-               CASE WHEN LENGTH(body_json) > :cap THEN NULL ELSE body_json END
+               cloude_body_chars(body_json) AS body_bytes,
+               CASE WHEN cloude_body_chars(body_json) > :cap THEN NULL
+                    ELSE cloude_body_text(body_json) END
                  AS body_json
           FROM message_bodies
          WHERE id = :body_id

@@ -42,12 +42,12 @@ from src.core.archive_snippet_gate import (  # noqa: F401  re-exported
     snippet_gate_meta,
 )
 from src.core.archive_search_fts import (
-    LINE_DONE,
+    LINE_DONE,  # noqa: F401  re-exported; declared beside its keyset
     ORDER_MODES,
     ORDER_POSITION,
     ORDER_RELEVANCE,  # noqa: F401  re-exported for the route
     BlockFilters,
-    query_has_tokens,
+    query_is_tokenizable,
     run_hit_query,
 )
 from src.core.archive_search_hit import build_fts_hit
@@ -57,8 +57,8 @@ from src.core.message_block_search_status import (
     COVERAGE_INDEXED,
     INDEX_STALE,
     Coverage,
+    probe_index_state,
     resolve_coverage,
-    resolve_index_state,
 )
 from src.core.archive_read import (
     MAX_PAGE_LIMIT,
@@ -288,7 +288,8 @@ def _run_scan(
         order=order,
     )
     overflow = len(rows) > limit
-    hits = [build_fts_hit(row, q, index, snippets) for row in rows[:limit]]
+    hits = [build_fts_hit(conn, row, q, index, snippets)
+            for row in rows[:limit]]
     if overflow:
         last = rows[limit - 1]
         return (hits, 0, 0, SCAN_LIMIT_REACHED,
@@ -417,7 +418,7 @@ def search_scoped(
                "elapsed_seconds": None, "resume_cursor": None}
     no_paging = {"limit": limit, "returned": 0, "has_more": None,
                  "next_cursor": None}
-    index_state = resolve_index_state(conn, read_liveness_for(conn))
+    index_state = probe_index_state(conn, read_liveness_for(conn))
 
     def refuse(subject: str, reason: str, res: str, sco: str,
                result: Any) -> Dict[str, Any]:
@@ -447,19 +448,26 @@ def search_scoped(
             return refuse(f"{scope}:{scope_id}",
                           f"no row in message_{scope}s with id {scope_id}",
                           RESULT_NOT_FOUND, SCOPE_NOT_FOUND, [])
-        if not query_has_tokens(conn, q):
+        if not query_is_tokenizable(q):
             return refuse(
                 "q",
-                f"q produced no indexable token: the tokenizer "
-                f"({BLOCK_SEARCH_TOKENIZER}) found no word in it, so it "
-                f"cannot be looked up. This is not a result of zero.",
+                f"q holds no alphanumeric character, so the tokenizer "
+                f"({BLOCK_SEARCH_TOKENIZER}) produces no term from it and "
+                f"the index cannot be asked. The substring scan this "
+                f"replaced COULD find such a string; that capability is "
+                f"gone and this is the refusal saying so, rather than a "
+                f"result of zero.",
                 RESULT_CANNOT_DETERMINE, SCOPE_RESOLVED, None)
         index = load_index(conn) if snippets else None
         gate = snippet_gate_meta(index)
         hits, scanned, used, status, position = _run_scan(
             conn, q, scope, scope_id, limit, scan_budget, scan_bytes,
             case_sensitive, resume, index, snippets, filters, order)
-        coverage = resolve_coverage(conn, scope, scope_id)
+        # Measured only on an empty page. See the coverage ladder's own
+        # module docstring: 44.16 ms over the largest project here, and a
+        # page that returned hits cannot be mistaken for "nothing here".
+        coverage = (resolve_coverage(conn, scope, scope_id) if not hits
+                    else Coverage(complete=False))
     except sqlite3.Error as exc:
         # Specific, and deliberately not re-raised: a route needs a
         # payload. The message names the operation, never a body value.
@@ -488,6 +496,18 @@ def search_scoped(
         unevaluated.append({
             "subject": f"{scope}:{scope_id}",
             "reason": _coverage_reason(coverage)})
+    # The second thing an empty page must be told, and it is about the
+    # MATCHER rather than about the corpus. See archive_search_fts's
+    # phrase_query for the measured recall this quotes.
+    if not hits:
+        unevaluated.append({"subject": "q", "reason": (
+            f"the index matches whole tokens and prefixes of tokens, so a "
+            f"query beginning INSIDE a word cannot be found by it: "
+            f"'resize' does not reach 'sendResize'. Measured recall "
+            f"against a full substring scan of the same text is 96.7 to "
+            f"100 percent over twelve real queries. If {q!r} begins "
+            f"mid-word, an empty result here is a limit of the index "
+            f"rather than an absence in the corpus.")})
     if index_state.state == INDEX_STALE:
         unevaluated.append({"subject": "index", "reason": index_state.reason})
 

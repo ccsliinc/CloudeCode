@@ -256,7 +256,9 @@ def rebuild_all(
     bodies = 0
     blocks = 0
     unreadable = 0
-    cursor = conn.execute("SELECT id, body_json FROM message_bodies ORDER BY id")
+    cursor = conn.execute(
+        "SELECT id, cloude_body_text(body_json) FROM message_bodies "
+        "ORDER BY id")
     while True:
         rows = cursor.fetchmany(batch)
         if not rows:

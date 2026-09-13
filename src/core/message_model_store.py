@@ -38,6 +38,7 @@ from src.core.message_model_serialize import (
     split_record,
     stored_body_json,
 )
+from src.core.message_body_compress import stored_value_for
 
 #: Which lookup table each normalized scalar interns into. One mapping,
 #: so a new lookup column is one row here rather than a fifth branch in
@@ -187,13 +188,23 @@ def upsert_body(
     if uuid is not None:
         stored = [
             json.loads(row[0]) for row in conn.execute(
-                "SELECT body_json FROM message_bodies WHERE message_uuid = ?",
+                "SELECT cloude_body_text(body_json) FROM message_bodies "
+                "WHERE message_uuid = ?",
                 (uuid,))
         ]
         if stored:
             verdict = duplicate_verdict(split.body, stored, uuid)
 
     body_json = stored_body_json(split.body)
+    # WHAT GOES IN THE COLUMN IS NOT ALWAYS WHAT body_json HOLDS. A body
+    # over the threshold that actually shrinks is stored as this codec's
+    # compressed frame, and the row declares which it is through
+    # typeof(body_json). Every reader goes through cloude_body_text /
+    # cloude_body_chars, which are the identity on a TEXT value, so this
+    # is a storage decision and not a format the rest of the code sees.
+    # The hashes above are taken over the TEXT, always, so identity is
+    # unaffected by whether a row happens to be compressed.
+    stored_body = stored_value_for(body_json)
     cur = conn.execute(
         "INSERT INTO message_bodies "
         "(identity_key, message_uuid, body_sha256, body_bytes_sha256, "
@@ -203,7 +214,8 @@ def upsert_body(
         " secret_finding_count, first_seen_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
         (
-            key, uuid, split.body_sha256, split.body_bytes_sha256, body_json,
+            key, uuid, split.body_sha256, split.body_bytes_sha256,
+            stored_body,
             intern_value(conn, "message_record_types", scalars["record_type"]),
             intern_value(conn, "message_roles", scalars["role"]),
             intern_value(conn, "message_models", scalars["model"]),

@@ -121,7 +121,7 @@ _TURNS_SQL = """
            a.body_id,
            b.message_uuid, b.parent_uuid, b.ts, b.origin_session_ref,
            b.is_compact_boundary, b.secret_finding_count,
-           LENGTH(b.body_json) AS body_chars,
+           cloude_body_chars(b.body_json) AS body_chars,
            rt.value AS record_type, ro.value AS role, mo.value AS model,
            cs.value AS compact_subtype,
            st.status AS block_status, st.block_count, st.detail AS block_detail
