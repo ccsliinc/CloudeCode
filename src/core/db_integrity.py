@@ -72,6 +72,7 @@ from src.core.corpus_ingest_state import (
     classify_freshness,
     utc_now_iso,
 )
+from src.core.db_integrity_pair import check_every_database
 from src.core.db import (
     DatastoreUnreadableError,
     connect,
@@ -317,6 +318,7 @@ def run_integrity_check_once(
             state_dir, RUN_CANCELLED, db_path, started,
             "the check was asked to stop before it opened the database",
         )
+    parts: list = []
     try:
         with closing(connect(db_path, create=False)) as conn:
             # Read BEFORE the pragma: it is the identity of the file about
@@ -326,6 +328,7 @@ def run_integrity_check_once(
             # raising, and None is published as None.
             install_id = get_meta(conn, META_INSTALL_ID)
             verdict = integrity_check(conn)
+            parts = check_every_database(conn, state_dir, verdict)
     except DatastoreUnreadableError as exc:
         return publish_run(
             state_dir, RUN_CANNOT_DETERMINE, db_path, started, str(exc),
@@ -344,17 +347,18 @@ def run_integrity_check_once(
     if verdict == "ok":
         return publish_run(
             state_dir, RUN_OK, db_path, started, None, install_id=install_id,
+            parts=parts,
         )
     return publish_run(
         state_dir, RUN_FAILED, db_path, started, verdict,
-        install_id=install_id,
+        install_id=install_id, parts=parts,
     )
 
 
 def publish_run(
     state_dir: Path, status: str, db_path: Path, started: float,
     detail: Optional[str], *, install_id: Optional[str] = None,
-    source: str = SOURCE_SCHEDULED,
+    source: str = SOURCE_SCHEDULED, parts: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Build one run record, write it, and return it.
 
@@ -383,6 +387,10 @@ def publish_run(
         "install_id": install_id,
         "db_size_bytes": db_size_bytes(db_path),
         "source": source,
+        # One entry per database actually checked. A reader folds this
+        # through db_integrity_pair.fold_pair rather than reading the
+        # scalar status above, which describes the state database alone.
+        "databases": parts or [],
     }
     written = write_verdict(state_dir, record)
     logger.info(

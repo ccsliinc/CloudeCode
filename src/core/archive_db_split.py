@@ -99,6 +99,25 @@ CREATE TABLE IF NOT EXISTS {ARCHIVE_SCHEMA}.{PROGRESS_TABLE} (
 )
 """
 
+#: The pre-strip DDL of every object that moved, recorded at the moment
+#: it moved. THIS IS WHAT MAKES THE REVERSE EXACT rather than
+#: reconstructed: the reverse recreates each table in main from the
+#: string the forward pass actually read out of sqlite_master, so the
+#: three crossing constraints come back exactly as they were rather than
+#: as this code's best guess at how to spell them. Kept in the ARCHIVE
+#: file so it travels with the data it describes.
+ORIGIN_TABLE = "archive_split_origin"
+
+ORIGIN_DDL = f"""
+CREATE TABLE IF NOT EXISTS {ARCHIVE_SCHEMA}.{ORIGIN_TABLE} (
+  object_name   TEXT PRIMARY KEY,
+  object_kind   TEXT NOT NULL,
+  original_sql  TEXT NOT NULL,
+  stripped_sql  TEXT NOT NULL,
+  recorded_at   TEXT NOT NULL
+)
+"""
+
 
 @dataclass
 class SplitReport:
@@ -265,12 +284,20 @@ def create_archive_schema(
     Example: create_archive_schema(conn, archive_objects, report)
     """
     conn.execute(PROGRESS_DDL)
+    conn.execute(ORIGIN_DDL)
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for obj in objects:
         if obj.side != SIDE_ARCHIVE or not obj.sql:
             continue
         sql, removed = strip_crossing_references(obj.sql)
         if removed:
             report.references_removed[obj.name] = removed
+        conn.execute(
+            f"INSERT OR REPLACE INTO {ARCHIVE_SCHEMA}.{ORIGIN_TABLE} "
+            "(object_name, object_kind, original_sql, stripped_sql, recorded_at) "
+            "VALUES (?,?,?,?,?)",
+            (obj.name, obj.kind, obj.sql, sql, stamp),
+        )
         residual = residual_app_references(sql)
         if residual:
             # Static guard. It cannot prove writability (see the module
