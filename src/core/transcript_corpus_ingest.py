@@ -150,6 +150,10 @@ except ImportError:  # pragma: no cover - see transcript_archive.py's own guard
 
     logger = _NoOpLogger()
 
+from src.core.db_connection_shape import (
+    require_archive_only,
+    require_pair,
+)
 from src.core.db import transaction
 from src.core.db_models import DEDUPE_KIND_CONTENT_DUPLICATE
 from src.core.message_gate_contract import (
@@ -297,6 +301,11 @@ def ingest_one(conn, entry: CorpusEntry) -> FileOutcome:
       other write path in transcript_archive.py). entry (CorpusEntry).
     Output: FileOutcome.
     """
+    # THE GUARD LIVES WITH THE FUNCTION THAT KNOWS WHAT IT NEEDS, not
+    # with the caller that routes it. A caller handed the wrong
+    # connection writes the right rows and takes cloude.db's write
+    # lock with them, which no assertion about results can see.
+    require_archive_only(conn, "ingest_one")
     try:
         current_sha, size = hash_file(entry.abs_path)
     except OSError as exc:
@@ -437,6 +446,10 @@ def root_pending_archives(
       session_unrooted_no_session_row, session_unrooted_ambiguous,
       session_unrooted_no_uuid.
     """
+    # Rooting JOINS transcript_archives to sessions, so it needs both
+    # files. On an archive-only connection the join would resolve
+    # against one file and root nothing while reporting "ran".
+    require_pair(conn, "root_pending_archives")
     counts: Dict[str, int] = {
         "subagent_rooted": 0,
         "subagent_unrooted_no_parent": 0,
