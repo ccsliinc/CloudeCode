@@ -90,7 +90,7 @@ async def list_session_records(
         Output: list[dict] - raw session rows, minus the automated ones
           unless the caller asked for them.
         """
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             return session_store.list_sessions(
                 conn, include_automated=include_automated
             )
@@ -155,7 +155,7 @@ async def delete_session_record(request: Request, session_uuid: str):
         Output: bool - True when this call performed the delete.
         Raises: session_store.SessionNotFoundError, DatastoreUnreadableError.
         """
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             return session_store.archive_session(conn, session_uuid)
 
     try:
@@ -251,7 +251,7 @@ async def set_session_notification_policy(
           session_store.SessionInstanceMismatchError,
           DatastoreUnreadableError.
         """
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             return session_store.set_notification_mute(
                 conn,
                 session_uuid,
@@ -382,7 +382,7 @@ async def unarchive_session_record(request: Request, session_uuid: str):
         Output: bool - True when this call performed the restore.
         Raises: session_store.SessionNotFoundError, DatastoreUnreadableError.
         """
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             return session_store.unarchive_session(conn, session_uuid)
 
     try:

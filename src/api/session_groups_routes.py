@@ -166,7 +166,7 @@ def _read_groups() -> List[store.SessionGroup]:
     Output: list[store.SessionGroup].
     Raises: DatastoreUnreadableError, store.GroupsUnavailable, OSError.
     """
-    with closing(connect(_db_path(), create=False, attach_archive=False)) as conn:
+    with closing(connect(_db_path(), create=False)) as conn:
         return store.list_groups(conn)
 
 
@@ -240,7 +240,7 @@ async def _write(operation, *args, **kwargs):
     """
 
     def _run():
-        with closing(connect(_db_path(), create=False, attach_archive=False)) as conn:
+        with closing(connect(_db_path(), create=False)) as conn:
             return operation(conn, *args, **kwargs)
 
     try:

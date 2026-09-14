@@ -318,7 +318,7 @@ async def _mark_closed_in_datastore(
         return 0
 
     def _write() -> int:
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             moved = session_close_lifecycle.mark_closed(
                 conn, socket=socket, name=name
             )

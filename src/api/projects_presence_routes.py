@@ -63,7 +63,7 @@ async def get_projects_presence() -> dict:
         Output: list[dict] - see project_store.refresh_and_list_presence.
         Raises: DatastoreUnreadableError - propagated to the caller.
         """
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             return project_store.refresh_and_list_presence(conn)
 
     db_path = db_path_for(settings.get_state_dir())

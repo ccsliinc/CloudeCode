@@ -50,10 +50,7 @@ from typing import Iterator, Optional
 
 import structlog
 
-from src.core.archive_db_attach import (
-    assert_no_shadowing,
-    attach_archive as _attach_archive,
-)
+from src.core.archive_db_attach import assert_no_shadowing, attach_archive
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
 from src.core.message_body_codec import register_body_functions
 
@@ -108,9 +105,7 @@ def db_path_for(state_dir: Path) -> Path:
     return Path(state_dir) / DB_FILENAME
 
 
-def connect(
-    path: Path, *, create: bool = True, attach_archive: bool = True,
-) -> sqlite3.Connection:
+def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
     """Open a connection to cloude.db with this module's pragmas applied.
 
     Description: uses ``isolation_level=None`` so transactions are
@@ -121,16 +116,6 @@ def connect(
       a missing file raises rather than being created; use False for any
       read path so a typo'd directory cannot silently manufacture an
       empty database that renders as a healthy install with no data.
-      attach_archive (bool) - attach cloude-archive.db when one exists.
-      DEFAULT TRUE so nothing changes by accident, but pass False on a
-      connection that will not touch an archive table. MEASURED: a
-      connection with the archive attached participates in write-lock
-      contention with archive writes even when its own statements only
-      touch main. Over a long archive write, foreground app writes
-      completed 123 and 96 times with the archive UNATTACHED against 19
-      and 16 attached, with mean waits of 39 and 50 ms against 275 and
-      148. Only 9 of the 28 modules that open a connection touch an
-      archive table; the other 19 pay that for nothing.
     Output: sqlite3.Connection with row_factory set to sqlite3.Row.
     Raises: DatastoreUnreadableError - the file is missing (create=False)
       or sqlite3 refused to open it.
@@ -195,7 +180,7 @@ def connect(
     # taking a running server down over a condition that only affects
     # archive queries would be the worse failure. The migration refuses
     # hard; this warns loudly. See src/core/archive_db_attach.py.
-    if attach_archive and _attach_archive(conn, path):
+    if attach_archive(conn, path):
         assert_no_shadowing(conn)
     return conn
 

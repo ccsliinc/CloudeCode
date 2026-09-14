@@ -127,7 +127,7 @@ async def list_recent_sessions(
           ``lifecycle='stopped'``, and to ``archived_at IS NULL`` unless
           the caller asked for archived rows too.
         """
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             rows = session_store.list_sessions(
                 conn,
                 lifecycle=SESSION_LIFECYCLE_STOPPED,

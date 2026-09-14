@@ -85,7 +85,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 3
     try:
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             version = get_schema_version(conn)
     except DatastoreUnreadableError as exc:
         print(f"CANNOT DETERMINE: {exc}", file=sys.stderr)

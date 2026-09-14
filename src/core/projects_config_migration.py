@@ -342,7 +342,7 @@ def migrate_projects_out_of_config(
     entries = _entries_from(doc)
 
     try:
-        with closing(connect(db_path_for(state_dir), create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path_for(state_dir), create=False)) as conn:
             return _migrate_with_db(conn, doc, entries, config_path)
     except Exception as exc:  # noqa: BLE001 - never raises past this point
         logger.warning(

@@ -131,7 +131,7 @@ def _read_row(session_uuid: str) -> Dict[str, Any]:
     Output: dict - ``{'row': dict|None, 'row_read_ok': bool}``.
     """
     try:
-        with closing(connect(_db_path(), create=False, attach_archive=False)) as conn:
+        with closing(connect(_db_path(), create=False)) as conn:
             found = conn.execute(
                 "SELECT * FROM sessions WHERE session_uuid = ?", (session_uuid,)
             ).fetchone()

@@ -144,7 +144,7 @@ def take_backup(
     target = _uniquify(target)
 
     try:
-        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_path, create=False)) as conn:
             # VACUUM INTO takes a read lock and serialises a consistent
             # snapshot including everything committed to the -wal. It
             # cannot run inside a transaction, hence no transaction()
@@ -187,7 +187,7 @@ def verify_backup(path: Path, expect_version: int) -> tuple:
     if path.stat().st_size == 0:
         return False, f"{path.name} is zero bytes"
     try:
-        with closing(connect(path, create=False, attach_archive=False)) as conn:
+        with closing(connect(path, create=False)) as conn:
             verdict = integrity_check(conn)
             if verdict != "ok":
                 return False, f"{path.name} failed integrity_check: {verdict}"

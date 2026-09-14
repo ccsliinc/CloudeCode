@@ -213,7 +213,7 @@ def resolve_projects(
     db_file = db_path_for(state_dir)
 
     try:
-        with closing(connect(db_file, create=False, attach_archive=False)) as conn:
+        with closing(connect(db_file, create=False)) as conn:
             rows = list_projects_ordered(
                 conn, include_archived=include_archived
             )
