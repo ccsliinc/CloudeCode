@@ -74,7 +74,7 @@ async def fork_session(request: Request, session_name: str):
 
     def _resolve():
         """Read the parent row on one pooled thread."""
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             return session_fork.resolve_fork_source(
                 conn, socket=socket, tmux_name=session_name
             )
@@ -170,7 +170,7 @@ async def fork_session(request: Request, session_name: str):
 
     def _stamp():
         """Record lineage on the child row, in its own transaction."""
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             child_uuid = session_fork.newest_anchor_uuid(
                 conn, socket=socket, tmux_name=child_tmux or ""
             )

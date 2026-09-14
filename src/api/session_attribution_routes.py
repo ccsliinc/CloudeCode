@@ -105,7 +105,7 @@ async def session_attribution_prompt(request: Request):
           nothing (the labels are read here, on this same connection, so
           the render pass below needs no second open).
         """
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             record = get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED)
             settled_now = attribution_settled_instances(conn, socket=socket)
             # Read every candidate's label on this connection. Parsing the
@@ -280,7 +280,7 @@ async def session_attribution_decline(
     def _write():
         """Record every decline in ONE transaction, then rebuild the list."""
         declined, not_eligible, unknown = [], [], []
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             raw = get_meta(conn, META_SESSION_IMPORT_UNATTRIBUTED)
             try:
                 records = _json.loads(raw) if raw else []

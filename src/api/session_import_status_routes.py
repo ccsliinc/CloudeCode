@@ -72,7 +72,7 @@ async def session_import_status(request: Request):
         Inputs: none (closes over db_path).
         Output: tuple[str | None, str | None, int].
         """
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             return (
                 get_meta(conn, META_IMPORTED_FROM_JSON_AT),
                 get_meta(conn, META_SESSION_IMPORT_PENDING_REASON),
