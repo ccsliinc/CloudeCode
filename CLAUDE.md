@@ -87,6 +87,7 @@ not read all 27.
 | `docs/perf-baseline-2026-09-10.md` | You need a number to judge a performance change against. Read its machine-load note before quoting any absolute figure. |
 | `docs/webui-performance-and-session-menu-plan.md` | You picked up an issue carrying a `phase:N` label. This is the plan those issues were cut from, with the audit that justified it. |
 | `docs/message-browser-api.md` | You are building the archive browser's server. DESIGN SPEC, not implemented. |
+| `docs/archive-blob-api.md` | You are reading or exporting ORIGINAL transcript bytes out of `transcript_archives`. Read it BEFORE reaching for `/archive/transcripts/{id}/export`, which is a different store with a different id space and will not find an archive id. |
 | `docs/message-browser-ui.md` | You are building the archive browser's client. DESIGN SPEC, not implemented. |
 | `docs/message-model-gate.md` | You are touching the message model's ingest gate or `src/core/message_gate_contract.py`. |
 | `docs/jsonl-shape-inventory.md` | You are writing a test against the transcript archive and need a real exemplar of a given line shape. |
