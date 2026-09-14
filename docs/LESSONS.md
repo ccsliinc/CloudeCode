@@ -467,3 +467,71 @@ something that merely imports the module.
 step.** "It imports" proves the module's top level is sound and nothing more,
 and reaching for it after editing a function body is measuring the wrong thing
 on purpose because it is the cheap thing to measure.
+
+## A budget checked between units is not a budget
+
+**`_project_pass` takes `max_seconds=30`. Measured, one call held the archive's
+write lock for 7.5 minutes.**
+
+The budget is honest about what it does - `if index and time.monotonic() >=
+deadline: break` - and it is checked BETWEEN files, never inside one. So the
+bound it actually provides is "thirty seconds, plus however long the next file
+takes", and the next file is unbounded. `project_one` opens `BEGIN IMMEDIATE`,
+reads the whole transcript, ingests every line, secret-scans every line, and
+commits. On a large transcript that is minutes, and for all of it the archive's
+write lock is held and nothing can interrupt it.
+
+**On this corpus that is the common case, not the tail.** The queue is ordered
+`ingested_at DESC` and the newest transcripts are much the largest: measured at
+784 archives drained, the head of the queue averaged 2.218 MB against 0.502 MB
+for the rest. So the file most likely to blow the budget is the one the pass
+reaches first.
+
+**How it presented.** A corpus drain, running in its own process, sat on
+`BEGIN IMMEDIATE` at `message_projection.py:216` with 0.0% CPU for seven and a
+half minutes while the server's own budgeted slice worked through one transcript
+inside `ingest_lines -> store_secret_findings -> scan_text`. The drain's liveness
+artifact went 435 seconds without an update, which from the outside is
+indistinguishable from a dead drain - and is exactly why that artifact has a
+staleness window at all.
+
+**The general shape: a time budget only bounds anything if the work can be
+interrupted at the granularity the budget is checked at.** Where the unit of
+work is unbounded, the budget bounds nothing and the number in it is
+decoration. Either make the unit small enough that the check is meaningful, or
+bound the unit itself, or say plainly that the pass runs to the end of the
+current item and size the item accordingly.
+
+**And do not hold a write lock across CPU-bound work.** The transaction here
+spans the parse, the fidelity round trip and the secret scan, none of which
+touch the database. Narrowing it to the writes would cap the lock-hold at the
+writes' own duration regardless of how long the scan takes.
+
+## Two writers on one queue is waste, and saying which kind matters
+
+**Both the corpus drain and the server's own 15-minute projection slice select
+from the same `select_pending` head and project the same archives.** Measured:
+server passes reporting `replaced` counts of 12, 32 and 18 while a drain was
+running, which are transcripts one projector redoing what the other had just
+finished, plus the 7.5 minute lock starvation above.
+
+**It is WASTE, NOT CORRUPTION, and the schema is why.**
+`message_transcripts.source_ref` is UNIQUE and `message_appearances.transcript_id`
+is `REFERENCES message_transcripts(id) ON DELETE CASCADE`, so `project_one`'s
+`DELETE FROM message_transcripts WHERE source_ref = ?` inside its own
+transaction removes the loser's rows before re-inserting. Two projectors
+serialise on the write lock, and the second one to commit leaves exactly one
+transcript with exactly one set of appearances. No row is double-counted.
+
+Say that explicitly when this is reported, because "two writers raced over the
+same rows" reads like a data-integrity incident and costs the next reader an
+hour of fear before they reach the schema.
+
+**The fix is sequencing, not locking.** `CLOUDE_MESSAGE_PROJECTION=0` switches
+the server's slice off and `projection_enabled` reads it per pass, describing
+itself as "the knob an operator wants when a backfill is running from a script".
+It has to be set BEFORE the backfill, because changing a running process's
+environment means restarting it, which is the one thing nobody wants to do to a
+drain already in flight. That sequencing now lives in
+`scripts/drain_preflight.py` as a gate that refuses to start, rather than in a
+runbook nobody reads at 3am.

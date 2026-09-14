@@ -84,6 +84,16 @@ REQUIRED_MARGIN_GIB = 5.0
 #: Live tmux sessions expected on the `cloude` socket.
 EXPECTED_SESSIONS = 19
 
+#: The environment variable that switches the SERVER's own budgeted
+#: projection pass off. message_projection_report.projection_enabled
+#: reads it per pass and documents itself as "the knob an operator wants
+#: when a backfill is running from a script"; this gate is what makes
+#: sure the operator actually turns it.
+PROJECTION_ENV = "CLOUDE_MESSAGE_PROJECTION"
+
+#: Values that mean off. Anything else, including absent, means ON.
+PROJECTION_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
 
 def open_readonly(path: Path) -> sqlite3.Connection:
     """Open a database read-only so a gate can never write to it.
@@ -204,6 +214,78 @@ def gate_live_healthy(failures: List[str]) -> None:
         )
 
 
+
+def server_projection_state() -> tuple:
+    """Say whether the RUNNING server still projects, and how that was learned.
+
+    Description: reads the listening process's OWN environment rather
+      than a config file or an assumption, because the switch is read
+      from ``os.environ`` on every pass and only the process can say what
+      it inherited. No server listening is reported separately from a
+      server whose setting could not be read: the first is safe (nothing
+      to contend with) and the second is not.
+    Inputs: none.
+    Output: tuple[str, str] - (state, detail) where state is "off",
+      "on", "no_server" or "cannot_determine".
+    Example: server_projection_state()[0] -> 'off'
+    """
+    pid = subprocess.run(
+        ["lsof", "-nP", "-iTCP:8000", "-sTCP:LISTEN", "-t"],
+        capture_output=True, text=True,
+    ).stdout.split()
+    if not pid:
+        return ("no_server", "nothing is listening on :8000")
+    proc = subprocess.run(
+        ["ps", "-Eww", "-p", pid[0]], capture_output=True, text=True,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return ("cannot_determine",
+                f"the environment of pid {pid[0]} could not be read")
+    for token in proc.stdout.split():
+        if token.startswith(PROJECTION_ENV + "="):
+            value = token.split("=", 1)[1].strip().lower()
+            if value in PROJECTION_OFF_VALUES:
+                return ("off", f"pid {pid[0]} has {PROJECTION_ENV}={value!r}")
+            return ("on", f"pid {pid[0]} has {PROJECTION_ENV}={value!r}")
+    return ("on", f"pid {pid[0]} does not set {PROJECTION_ENV}, which "
+                  f"defaults the projection pass ON")
+
+
+def gate_server_projection_off(failures: List[str]) -> None:
+    """Refuse while the server would project into the archive too.
+
+    Description: TWO PROJECTORS RACE, AND THE DRAIN LOSES. Both select
+      the same pending head of the same queue and both take the
+      archive's write lock; measured 2026-09-14, the drain sat on
+      ``BEGIN IMMEDIATE`` for 7.5 MINUTES behind one server slice, and
+      the server's passes reported ``replaced`` counts of 12, 32 and 18
+      - transcripts one projector redoing what the other had just done.
+
+      That is WASTE, NOT CORRUPTION: ``message_transcripts.source_ref``
+      is UNIQUE and ``message_appearances`` cascades on delete, so
+      re-projecting a transcript replaces it cleanly and cannot
+      double-count a row.
+
+      THE KNOB MUST BE TURNED BEFORE THE RUN, NOT DURING IT. It is read
+      from the environment on every pass, so changing it needs the
+      server restarted - which is exactly what nobody wants to do to a
+      drain already in flight. A comment in a runbook is not read at
+      3am; this refuses to start.
+    Inputs: failures (list) - appended to on refusal.
+    Output: None.
+    Example: gate_server_projection_off([])
+    """
+    print("=== GATE 4: the server's own projector must be OFF ===")
+    state, detail = server_projection_state()
+    print(f"  {state}: {detail}")
+    if state == "off" or state == "no_server":
+        return
+    failures.append(
+        f"the live server would project too ({detail}). Set "
+        f"{PROJECTION_ENV}=0 in its environment and restart it BEFORE "
+        f"starting the drain, then re-enable it afterwards."
+    )
+
 def main() -> int:
     """Run every gate and report, refusing on the first thing that is wrong.
 
@@ -216,6 +298,7 @@ def main() -> int:
     gate_no_shadowing(failures)
     gate_disk(failures)
     gate_live_healthy(failures)
+    gate_server_projection_off(failures)
 
     print()
     if failures:
