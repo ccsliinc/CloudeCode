@@ -91,6 +91,7 @@ from src.core.message_block_ddl import (
     STATUS_NO_MESSAGE_CONTENT,
 )
 from src.core.message_block_search_ddl import BLOCK_SEARCH_TABLE
+from src.core.db import table_exists
 
 INDEX_MISSING: str = "missing"
 INDEX_NEVER_BUILT: str = "never_built"
@@ -231,10 +232,7 @@ def index_table_exists(conn: sqlite3.Connection) -> bool:
     Output: bool.
     Example: index_table_exists(conn) -> True
     """
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (BLOCK_SEARCH_TABLE,),
-    ).fetchone()
+    row = (table_exists(conn, BLOCK_SEARCH_TABLE) or None)
     return row is not None
 
 

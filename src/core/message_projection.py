@@ -106,6 +106,7 @@ from src.core.message_projection_report import (
     resolve_max_seconds,
 )
 from src.core import message_projection_ledger as ledger
+from src.core.db import table_exists
 from src.core.db import DatastoreError, connect, db_path_for, read_schema_version
 from src.core.message_archive_flag import (
     ENABLE_ENV as MESSAGE_ARCHIVE_ENV,
@@ -487,8 +488,6 @@ def _model_present(conn: sqlite3.Connection) -> bool:
     Output: bool.
     Example: _model_present(conn) -> True
     """
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        ("message_transcripts",),
-    ).fetchone()
-    return row is not None
+    # sqlite_master is PER SCHEMA: a bare read means main only and
+    # answers No for a split install. See archive_db_attach.table_exists.
+    return table_exists(conn, "message_transcripts")

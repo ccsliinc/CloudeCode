@@ -53,8 +53,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core import message_projection_ledger as ledger  # noqa: E402
 from src.core.db import (  # noqa: E402
-    DatastoreError, connect, db_path_for, read_schema_version,
+    DatastoreError, connect, db_path_for, read_schema_version, table_exists,
 )
+from src.core import message_drain_liveness as liveness
+from src.core.archive_db_partition import ARCHIVE_DB_FILENAME
 from src.core.message_projection import (  # noqa: E402
     STATUS_OK, run_projection_once,
 )
@@ -108,10 +110,7 @@ def survey(state_dir: Path) -> dict:
         if not version.readable or version.value is None:
             return {"status": "datastore_unavailable",
                     "reason": "meta.schema_version is unreadable"}
-        present = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            ("message_transcripts",),
-        ).fetchone()
+        present = (table_exists(conn, "message_transcripts") or None)
         if present is None:
             return {"status": "model_absent", "schema_version": version.value}
         ledger.ensure_ledger(conn)
@@ -207,8 +206,25 @@ def main(argv: Optional[list] = None) -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    # LIVENESS. A three and a half hour write must not be silent: an
+    # ingester that dies looks exactly like one finding nothing new. The
+    # artifact is stamped after EVERY batch and on EVERY exit path below,
+    # and its AGE is what tells a reader which of those happened.
+    arch_db = args.state_dir / ARCHIVE_DB_FILENAME
+
+    def _arch_bytes():
+        try:
+            return arch_db.stat().st_size
+        except OSError:
+            return None
+
     done = 0
     started = time.monotonic()
+    liveness.publish(
+        args.state_dir, liveness.STATUS_RUNNING, done=0,
+        pending=found["pending"], elapsed_seconds=0.0,
+        archive_bytes=_arch_bytes(), detail="starting",
+    )
     while not cancel.is_set():
         budget = BATCH_ARCHIVES
         if args.limit:
@@ -225,15 +241,37 @@ def main(argv: Optional[list] = None) -> int:
               f"replaced={report.replaced} refused="
               f"{report.could_not_read + report.could_not_ingest} "
               f"pending={report.pending_after}", flush=True)
+        liveness.publish(
+            args.state_dir, liveness.STATUS_RUNNING, done=done,
+            pending=report.pending_after,
+            elapsed_seconds=time.monotonic() - started,
+            archive_bytes=_arch_bytes(),
+        )
         for refusal in report.refusals:
             print(f"    REFUSED {refusal['source_path']}: "
                   f"{refusal['outcome']} {refusal['reason']}")
         if report.status != STATUS_OK:
             print(f"stopping: {report.reason}")
+            liveness.publish(
+                args.state_dir, liveness.STATUS_FAILED, done=done,
+                pending=report.pending_after,
+                elapsed_seconds=time.monotonic() - started,
+                archive_bytes=_arch_bytes(), detail=report.reason,
+            )
             return 1
         if (report.pending_after or 0) == 0:
             break
 
+    liveness.publish(
+        args.state_dir,
+        liveness.STATUS_INTERRUPTED if cancel.is_set()
+        else liveness.STATUS_COMPLETE,
+        done=done, pending=survey(args.state_dir).get("pending"),
+        elapsed_seconds=time.monotonic() - started,
+        archive_bytes=_arch_bytes(),
+        detail="stopped at a file boundary; re-run to resume"
+        if cancel.is_set() else None,
+    )
     print("\nafter:")
     _print_survey(args.state_dir, survey(args.state_dir))
     return 0

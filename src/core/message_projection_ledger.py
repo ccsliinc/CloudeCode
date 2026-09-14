@@ -38,6 +38,8 @@ as its own conversation, which is not a thing the reader asked to see.
 from __future__ import annotations
 
 import sqlite3
+
+from src.core.archive_db_schema_target import execute_archive_ddl
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -187,8 +189,13 @@ def ensure_ledger(conn: sqlite3.Connection) -> None:
     Raises: sqlite3.Error - the caller decides whether that is fatal.
     Example: ensure_ledger(conn)
     """
-    conn.execute(LEDGER_DDL)
-    conn.execute(LEDGER_SCAN_INDEX_DDL)
+    # THROUGH THE ARCHIVE SEAM, because both objects are archive-side:
+    # the ledger is a message_* table and the index is ON
+    # transcript_archives. An unqualified CREATE goes to MAIN whatever
+    # the target table's real home, so after the split this raised
+    # "no such table: main.transcript_archives" and stopped the drain
+    # before it read a single row.
+    execute_archive_ddl(conn, (LEDGER_DDL, LEDGER_SCAN_INDEX_DDL))
 
 
 def select_pending(

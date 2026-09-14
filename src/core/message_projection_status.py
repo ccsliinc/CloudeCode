@@ -29,6 +29,7 @@ from src.core import message_projection_state as state_io
 from src.core.db import DatastoreError, connect, db_path_for, read_schema_version
 from src.core.message_projection_ledger import LEDGER_TABLE, ledger_summary
 from src.core.message_projection_report import MIN_HOST_SCHEMA
+from src.core.db import table_exists
 
 #: Statuses this block may report. ``never_projected`` is deliberately
 #: distinct from ``measured`` with a zero count: the first says the join
@@ -92,10 +93,7 @@ def projection_block(
                 ),
             }
         try:
-            exists = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (LEDGER_TABLE,),
-            ).fetchone()
+            exists = (table_exists(conn, LEDGER_TABLE) or None)
             if exists is None:
                 return {
                     **base, "status": STATUS_NEVER_PROJECTED,

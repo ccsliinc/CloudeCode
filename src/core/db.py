@@ -50,7 +50,11 @@ from typing import Iterator, Optional
 
 import structlog
 
-from src.core.archive_db_attach import assert_no_shadowing, attach_archive
+from src.core.archive_db_attach import (
+    assert_no_shadowing,
+    attach_archive,
+    which_database,
+)
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
 from src.core.message_body_codec import register_body_functions
 
@@ -241,13 +245,23 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     Description: every migration step inspects sqlite_master before it
       acts, so re-running a step after an interrupted attempt finishes
       the remaining work or no-ops rather than erroring.
+
+      IT LOOKS IN THE ATTACHED ARCHIVE TOO, and that is not a nicety.
+      ``sqlite_master`` is PER SCHEMA: unlike a table NAME in a query,
+      which resolves across attached databases, a bare
+      ``SELECT ... FROM sqlite_master`` means ``main.sqlite_master`` and
+      nothing else. After the archive split, six presence checks written
+      that way reported the whole message model absent while every query
+      against it would have worked, and the corpus drain refused with
+      ``model_absent`` on a datastore that had the model.
+
+      For an app-side table the answer is unchanged, because the archive
+      never holds one. For an archive-side table this is the difference
+      between seeing it and denying it exists.
     Inputs: conn (sqlite3.Connection), name (str) - table name.
     Output: bool.
     """
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone()
-    return row is not None
+    return which_database(conn, name) is not None
 
 
 def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
