@@ -99,6 +99,18 @@ not built. The ceiling (`ARCHIVE_EXPORT_MAX_BYTES`, 256 MiB) and the
 concurrency bound (`MAX_CONCURRENT_ARCHIVE_EXPORTS`, 2) are what keep the
 cost survivable instead.
 
+**The memory cost is about 3x the payload, and that number is measured.**
+Reconstructing the 244 MB row moved process RSS from 34 MB to 800 MB, so
+one worst-case export costs roughly 766 MB and two concurrent ones about
+1.5 GB. zlib builds intermediate buffers on the way to the final object,
+which is why a factor of one would have been wrong. An earlier draft of
+this page reasoned its way to "250-500 MB" and was wrong by threefold;
+the figure here comes from `resource.getrusage` around a real call.
+
+End to end through the route, a 121 MB synthetic row returned
+byte-identical with a correct `X-Archive-Content-Sha256` and
+`Content-Length` in 106 ms.
+
 `GET /archive/archives/{archive_uuid}` returns metadata without
 reconstructing anything, so a caller can read `raw_byte_length` and
 decide before requesting 244 MB.

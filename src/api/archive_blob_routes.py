@@ -65,10 +65,18 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["archive"])
 
 #: How many archive exports may be in flight in this process at once.
-#: Sized against a MEASURED reconstruction: the corpus's largest row is
-#: 244,117,661 bytes and reconstructs in 416.5 ms fully resident, so one
-#: worst-case export is roughly 250-500 MB depending on the decompressor's
-#: own buffer. Two is about a gigabyte on a machine also running the app.
+#: MEASURED, not estimated, and the measurement corrected a guess: one
+#: reconstruction of the corpus's largest row (244,117,661 bytes) moved
+#: process RSS from 34 MB to 800 MB, so it costs about 766 MB - roughly
+#: 3.1x the payload, because zlib builds intermediate buffers on the way
+#: to the final object. An earlier draft of this comment said "250-500
+#: MB" from reasoning rather than measurement and was wrong by threefold.
+#: So two concurrent worst-case exports is about 1.5 GB, NOT a gigabyte.
+#: That is a real cost and it is bounded three ways: this limit, the
+#: 30-second slot wait, and ARCHIVE_EXPORT_MAX_BYTES. It is kept at 2
+#: rather than 1 because reaching the worst case needs two simultaneous
+#: requests for 244 MB transcripts, while dropping to 1 would serialise
+#: every small export behind any large one.
 MAX_CONCURRENT_ARCHIVE_EXPORTS: int = 2
 
 #: How long a request waits for a slot before refusing. A bounded refusal
@@ -376,8 +384,9 @@ async def get_archive_export(archive_ref: str) -> Any:
             f"{MAX_CONCURRENT_ARCHIVE_EXPORTS} archive exports are already "
             f"in flight and no slot came free within "
             f"{ARCHIVE_EXPORT_SLOT_WAIT_SECONDS}s. The bound exists because a "
-            f"reconstruction is fully resident and the largest row in this "
-            f"corpus is 244 MB. Retry.",
+            f"reconstruction is fully resident and costs about 3x the "
+            f"transcript's size; the largest row in this corpus is 244 MB, "
+            f"measured at 766 MB of RSS. Retry.",
             result=None, scope_status=SCOPE_RESOLVED,
             meta={"limit": {
                 "max_concurrent_exports": MAX_CONCURRENT_ARCHIVE_EXPORTS}},
