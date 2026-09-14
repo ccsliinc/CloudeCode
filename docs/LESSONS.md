@@ -435,3 +435,35 @@ fixed:
   nothing, and it cannot bite this install because the step is already applied
   at v26 - but a v25 install split before migrating would skip the CHECK
   relaxation and report success.
+
+## An import edit that appears to apply, and leaves a name unbound
+
+**The edit reported success, the file parsed, the module imported, and the
+function raised `NameError` the first time anything called it.**
+
+Re-pointing the projection at a new connection helper meant adding two names
+to `message_projection.py`'s imports. The edit was applied by matching an
+anchor string, the anchor did not match the line actually in the file, and the
+replacement silently became a no-op while the code that USED those names landed
+perfectly. `python -c "import src.core.message_projection"` printed `import ok`,
+because a module-level import does not execute a function body.
+
+**A silent no-op edit is worse than a failed one.** A failed edit stops you. A
+no-op edit hands back a file that looks edited, compiles, imports, and passes
+every test that does not execute the one path it broke. `py_compile` cannot see
+it. A syntax check cannot see it. Only running that specific line can.
+
+`tests/test_no_unresolved_names.py` saw it immediately, by walking each module's
+AST for names that are USED but bound nowhere in the file, and it named the file
+and both line numbers. That file exists for exactly this and earned its place.
+
+**Two habits follow.** Any scripted edit must ASSERT its anchor matched rather
+than trusting `str.replace`, which returns the original string unchanged when it
+finds nothing - the failure mode is indistinguishable from success at the call
+site. And after an import change, run something that executes the path, not
+something that merely imports the module.
+
+**The general shape: a verification step that cannot fail is not a verification
+step.** "It imports" proves the module's top level is sound and nothing more,
+and reaching for it after editing a function body is measuring the wrong thing
+on purpose because it is the cheap thing to measure.

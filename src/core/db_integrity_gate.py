@@ -34,6 +34,27 @@ too. A boot gate with its own window could skip the check while the
 status block a user is looking at says ``cannot_determine``, and neither
 surface could explain the disagreement.
 
+WHAT A CHECK NOW COSTS, AND WHY THAT COST IS THE POINT. Since the
+archive split there are TWO files, and a complete check walks both:
+cloude.db is 704 KiB and cloude-archive.db is several gigabytes and
+growing. Measured 2026-09-14, the first boot after this gate learned to
+demand pair coverage: 19.935 s, published as
+``{"duration_seconds": 19.935, "source": "boot"}``, and the port took 22 s
+to bind instead of the usual 7.
+
+THAT WAS A ONE-TIME COST AND IT WAS MEASURED SETTLING. The artifact it
+wrote carries archive coverage, so the next boot skipped the pragma and
+bound in 7 s, back to baseline. What remains is the DAILY check walking
+the archive, roughly 20 s of disk once a day.
+
+DO NOT "OPTIMISE" THAT WALK BACK OUT. A bare ``PRAGMA integrity_check``
+is cheap on a 704 KiB file precisely because it is not looking at the
+4.8 GB one, and it answers ``ok`` either way - which is the exact shape of
+the defect this project keeps paying for. Twenty seconds a day is the
+price of the check being true. If it ever needs to be cheaper, make it
+LESS FREQUENT, never less thorough: a check that does not walk the file is
+not a faster check, it is the absence of one wearing its name.
+
 WHICH DATABASE THE VERDICT DESCRIBES. The artifact used to record only
 ``db_path``, which is derived from the state directory on both sides and
 therefore always matches and proves nearly nothing: a restored file lands
