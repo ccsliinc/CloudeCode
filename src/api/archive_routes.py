@@ -42,6 +42,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
+from src.api.archive_blob_routes import router as blob_router
 from src.api.archive_export_routes import router as export_router
 from src.api.archive_messages_routes import router as messages_router
 from src.api.archive_search_index_routes import (
@@ -452,3 +453,11 @@ router.routes.extend(search_router.routes)
 router.routes.extend(search_index_router.routes)
 router.routes.extend(export_router.routes)
 router.routes.extend(messages_router.routes)
+# --- 6.11  The byte-exact archive, addressed by archive_uuid --------------
+# A SECOND STORE, NOT A REPLACEMENT FOR THE EXPORT ROUTES ABOVE. Those
+# read message_transcripts (the parsed, searchable model); these read
+# transcript_archives (the original bytes). Both tables live in
+# cloude-archive.db and both are INTEGER PRIMARY KEY, which is why the
+# blob routes are addressed by archive_uuid and refuse an integer rather
+# than resolving one. See src/core/archive_blob_export.py.
+router.routes.extend(blob_router.routes)

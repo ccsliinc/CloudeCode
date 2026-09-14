@@ -54,6 +54,7 @@ from starlette.types import Receive, Scope, Send
 from src.api.archive_support import state_dir
 from src.api.auth import require_auth
 from src.core import archive_export
+from src.core.archive_blob_export import message_model_not_found
 from src.core.archive_read import (
     API_PREFIX,
     RESULT_CANNOT_DETERMINE,
@@ -61,7 +62,6 @@ from src.core.archive_read import (
     VERIFY_BEFORE_SEND_MAX_BYTES,
     cannot_determine_envelope,
     envelope,
-    not_found_envelope,
     open_read_only,
 )
 from src.core.db import DatastoreUnreadableError
@@ -367,11 +367,8 @@ async def get_export_stream(transcript_id: int) -> Response:
             unevaluated=[{"subject": "datastore", "reason": unreadable}],
         ))
     if head is None:
-        return JSONResponse(status_code=404, content=not_found_envelope(
-            f"transcript:{transcript_id}",
-            f"no row in message_transcripts with id {transcript_id}",
-            result=None,
-        ))
+        return JSONResponse(
+            status_code=404, content=message_model_not_found(transcript_id))
     try:
         await asyncio.wait_for(_slots().acquire(), timeout=EXPORT_SLOT_WAIT_SECONDS)
     except asyncio.TimeoutError:
@@ -435,9 +432,8 @@ async def get_export_verified(transcript_id: int) -> Response:
             unevaluated=[{"subject": "datastore", "reason": result["detail"]}],
         ))
     if status == archive_export.EXPORT_NOT_FOUND:
-        return JSONResponse(status_code=404, content=not_found_envelope(
-            f"transcript:{transcript_id}", result["detail"], result=None,
-        ))
+        return JSONResponse(
+            status_code=404, content=message_model_not_found(transcript_id))
     stream_href = f"{API_PREFIX}/transcripts/{transcript_id}/export"
     if status == archive_export.EXPORT_TOO_LARGE:
         logger.info("archive_export_verified_refused",
