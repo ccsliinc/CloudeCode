@@ -319,3 +319,71 @@ finds the answer in the file. Legs A, B, C, E and F are untouched. Verified on
 the next live deploy, which printed `== DEPLOYED ==` with health 200
 attributable to the new pid, instead of the refusal it had given three times
 running.
+
+## When a mechanism resolves names for you, test the things that opt out
+
+**Splitting the archive into `cloude-archive.db` and attaching it made every
+table reachable by its bare name, and that is precisely what hid the defect.**
+SQLite resolves an unqualified table name across attached databases, so after
+the split `SELECT ... FROM message_transcripts` kept working with no change at
+any of 68 call sites. The seam looked complete because every read of DATA went
+on answering.
+
+`sqlite_master` does not take part in that resolution. It is one table PER
+SCHEMA, so a bare `SELECT name FROM sqlite_master WHERE name = 'x'` means
+`main.sqlite_master` and can only ever describe `cloude.db`. Six presence
+checks were written that way, and after the split all six reported the entire
+message model ABSENT on a datastore that holds every row of it. The drain
+refused to start with `model_absent`, which is a truthful sentence about a
+reading that was taken from the wrong file.
+
+**The reason the tests missed it generalises, and it is the real lesson.**
+Every ATTACH test exercised table reads, which FOLLOW the resolution rule, and
+never a `sqlite_master` read, which does not. A test suite built around the
+mechanism's normal case cannot see the cases that opt out of the mechanism,
+because from inside the mechanism they do not look like a different thing.
+
+**The rule: when something resolves names on your behalf, go looking for what
+opts out of that resolution, and test those specifically.** The candidates are
+metadata surfaces, PRAGMAs, and anything that names a schema explicitly or
+silently defaults to one. Do not reason about which is which. Build a two
+database fixture where a table exists in the ATTACHED file ONLY, then run every
+mechanism you use against it and write down which ones answer.
+
+**Measured that way, on SQLite 3.53.4, the split is clean and not obvious:**
+
+Follow cross-schema resolution, so they answer about the attached file:
+bare table names in a query, `PRAGMA table_info`, `PRAGMA table_xinfo`,
+`PRAGMA foreign_key_list`, `PRAGMA index_list`, and the `pragma_table_info()`
+table-valued function.
+
+Opt OUT, so they answer about `main` alone and say nothing about the attached
+file: `sqlite_master`, `sqlite_schema`, `PRAGMA integrity_check`, and
+`PRAGMA foreign_key_check`.
+
+The PRAGMAs landing on the safe side is the part worth having measured.
+Assuming they behaved like `sqlite_master` would have meant rewriting a dozen
+`PRAGMA table_info` guards in `db_steps.py` that were never broken. Assuming
+they behaved like table names would have left the last two unexamined, and
+those two are the dangerous ones: they do not fail, they return `ok` and an
+empty list, which reads exactly like a database that was checked and found
+sound.
+
+**How to find the siblings: grep for the opt-out names, then judge each site by
+which file its subject now lives in.** `sqlite_master`, `sqlite_schema`,
+`integrity_check`, `foreign_key_check`, plus any string with an explicit
+`main.` prefix. A site is fine if its subject is an app-side table and wrong if
+its subject moved. That audit found two more here, both recorded rather than
+silently fixed:
+
+* `db_integrity_gate.py`, the BOOT gate, runs a bare `PRAGMA integrity_check`,
+  so it now verifies a 704 KiB file and leaves the 4.8 GiB one unexamined. The
+  DAILY check does cover both, through `db_integrity_pair.check_every_database`.
+  The boot gate does not.
+* `message_scheme_repair.stored_table_sql` reads `main.sqlite_master` for
+  `message_transcripts`, which is now archive-side, so it returns `''` and
+  `relax_scheme_check` takes its "the archive is switched off, nothing to do"
+  branch on an install where the table plainly exists. It fails CLOSED, writing
+  nothing, and it cannot bite this install because the step is already applied
+  at v26 - but a v25 install split before migrating would skip the CHECK
+  relaxation and report success.
