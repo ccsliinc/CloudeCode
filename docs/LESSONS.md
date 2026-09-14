@@ -358,28 +358,76 @@ bare table names in a query, `PRAGMA table_info`, `PRAGMA table_xinfo`,
 table-valued function.
 
 Opt OUT, so they answer about `main` alone and say nothing about the attached
-file: `sqlite_master`, `sqlite_schema`, `PRAGMA integrity_check`, and
-`PRAGMA foreign_key_check`.
+file: `sqlite_master` and `sqlite_schema`.
 
-The PRAGMAs landing on the safe side is the part worth having measured.
-Assuming they behaved like `sqlite_master` would have meant rewriting a dozen
-`PRAGMA table_info` guards in `db_steps.py` that were never broken. Assuming
-they behaved like table names would have left the last two unexamined, and
-those two are the dangerous ones: they do not fail, they return `ok` and an
-empty list, which reads exactly like a database that was checked and found
-sound.
+Go FURTHER than either, folding every attached database into ONE unattributed
+answer: `PRAGMA integrity_check` and `PRAGMA foreign_key_check`. These are the
+ones to be careful with, and see the correction below for why.
+
+The `table_info` family landing on the safe side is the part worth having
+measured. Assuming it behaved like `sqlite_master` would have meant rewriting a
+dozen `PRAGMA table_info` guards in `db_steps.py` that were never broken.
+
+### The correction, which is the better half of this lesson
+
+**I reported `PRAGMA integrity_check` as main-only, and it is not. I built the
+fixture, ran it, and read a false negative as a measurement.**
+
+The fixture attached a second database and asked each mechanism about a table
+that lived only there. For `sqlite_master` that is a complete experiment. For
+`integrity_check` it is not, because the attached file was UNDAMAGED: a pragma
+that walks every attachment and a pragma that walks only `main` BOTH answer
+`ok` on a sound pair. The experiment could not distinguish the two hypotheses
+it was run to distinguish, and I reported the one I already believed.
+
+Re-measured with a sound `main` and a deliberately corrupted attachment,
+SQLite 3.53.4:
+
+* `PRAGMA integrity_check` (bare) answered `row 408 missing from index ix`
+* `PRAGMA main.integrity_check` answered `ok`
+* `PRAGMA side.integrity_check` answered `row 408 missing from index ix`
+
+So a bare `integrity_check` walks EVERY attached database and folds the result
+into one string. The prefix is what scopes it, and it is the bare form that is
+surprising.
+
+**A negative result only measures something if the positive case was reachable
+in the same fixture.** Before trusting an experiment that came back negative,
+ask what the fixture would have shown had the answer been the other way. If
+both hypotheses produce the same output, nothing was measured.
+
+**What this meant for the real system, which is not what I first reported.**
+The boot gate was NOT leaving the archive unexamined; `connect()` attaches the
+archive, so its bare pragma had been walking all 4.8 GB of it. The defect was
+different and still ours:
+
+* an archive fault was recorded as `state: failed`, naming the wrong file;
+* the boot path published an EMPTY `databases` list, so every later fold read
+  `cannot_determine` and no cached verdict could ever vouch for a split
+  install; and
+* the archive was walked TWICE per check, once by the bare pragma and again by
+  `check_every_database` attributing it.
+
+Fixed by scoping `db.integrity_check` to `PRAGMA main.integrity_check`, so the
+helper is the state database's own verdict and `check_every_database` is the
+one place that covers the pair and names each file. One file, one walk, one
+attribution. The boot ladder gained one refusal rung, `RUN_PAIR_NOT_COVERED`,
+which refuses to skip on a cached record that does not vouch for every database
+the install actually has.
+
+**The negative control was watched RED before it was trusted:** with the pre-fix
+ladder and the bare pragma restored, all four new tests fail; restored, all four
+pass. The positive control matters as much - a rung that refused every split
+install would satisfy the corrupt-archive test perfectly.
 
 **How to find the siblings: grep for the opt-out names, then judge each site by
 which file its subject now lives in.** `sqlite_master`, `sqlite_schema`,
 `integrity_check`, `foreign_key_check`, plus any string with an explicit
 `main.` prefix. A site is fine if its subject is an app-side table and wrong if
-its subject moved. That audit found two more here, both recorded rather than
-silently fixed:
+its subject moved. That audit found the `integrity_check` mis-attribution
+above, which is fixed, and one more, which is recorded and deliberately not
+fixed:
 
-* `db_integrity_gate.py`, the BOOT gate, runs a bare `PRAGMA integrity_check`,
-  so it now verifies a 704 KiB file and leaves the 4.8 GiB one unexamined. The
-  DAILY check does cover both, through `db_integrity_pair.check_every_database`.
-  The boot gate does not.
 * `message_scheme_repair.stored_table_sql` reads `main.sqlite_master` for
   `message_transcripts`, which is now archive-side, so it returns `''` and
   `relax_scheme_check` takes its "the archive is switched off, nothing to do"

@@ -190,20 +190,37 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
 
 
 def integrity_check(conn: sqlite3.Connection) -> str:
-    """Run PRAGMA integrity_check and return its verdict verbatim.
+    """Run PRAGMA main.integrity_check and return its verdict verbatim.
 
     Description: SQLite returns the single string "ok" when the file is
       sound, and one row per problem otherwise. The rows are joined
       rather than reduced to a boolean so the caller can put the actual
       complaint in front of the user; "integrity check failed" with no
       detail is not actionable.
+
+      THE SCHEMA PREFIX IS LOAD-BEARING, and it is the opposite of what
+      this project assumed. A BARE ``PRAGMA integrity_check`` walks
+      EVERY ATTACHED DATABASE and folds the result into one answer.
+      Since ``connect()`` attaches the archive, a bare pragma here
+      therefore walked the 4.8 GB archive as well as the state database
+      and reported an archive fault as though the state database were
+      damaged - and then :func:`db_integrity_pair.check_every_database`
+      walked the archive a SECOND time to attribute it properly.
+      Measured 2026-09-14 on SQLite 3.53.4 with a sound main and a
+      corrupt attachment: bare answered "row 408 missing from index ix",
+      ``main.`` answered "ok", ``side.`` answered the fault.
+
+      So this function is the STATE DATABASE'S OWN verdict and nothing
+      else. Coverage of the pair belongs to ``check_every_database``,
+      which names the file each verdict is about. One file, one walk, one
+      attribution.
     Inputs: conn (sqlite3.Connection).
     Output: str - "ok", or a newline-joined list of problems. Returns a
       "could not run integrity_check: ..." string when the pragma itself
       raises, which is itself a failure verdict, never an "ok".
     """
     try:
-        rows = conn.execute("PRAGMA integrity_check").fetchall()
+        rows = conn.execute("PRAGMA main.integrity_check").fetchall()
     except sqlite3.Error as exc:
         return f"could not run integrity_check: {exc}"
     return "\n".join(str(row[0]) for row in rows) if rows else "no result"

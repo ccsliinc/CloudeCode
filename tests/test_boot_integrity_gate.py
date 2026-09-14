@@ -51,6 +51,7 @@ if str(ROOT) not in sys.path:
 from src.core import db_integrity_gate as gate
 from src.core.db import connect, db_path_for
 from src.core.db_integrity import ENABLE_ENV, latest_path, read_verdict
+from src.core.archive_db_partition import archive_db_path_for
 from src.core.db_integrity_status import classify_record
 from src.core.db_migration import ensure_db_migrated
 from src.core.db_state import STATUS_DEGRADED_DB_UNREADABLE, STATUS_OK
@@ -214,6 +215,11 @@ def _decide(record: Optional[Dict[str, Any]], **over: Any) -> Any:
         enabled=over.pop("enabled", True),
         record=record,
         reading=classify_record(record),
+        # Defaulted to a PASS *here*, in the test, so each rung test below
+        # still exercises the rung it names. The production signature has
+        # no default at all: see test_the_pair_verdict_has_no_default.
+        pair_verdict=over.pop("pair_verdict", "ok"),
+        pair_reason=over.pop("pair_reason", "both databases verified"),
         db_path=db_path,
         live_install_id=over.pop("live_install_id", "install-abc"),
         live_size_bytes=over.pop("live_size_bytes", 1000),
@@ -435,10 +441,13 @@ def test_exactly_one_rung_skips() -> None:
     """The ladder has ONE way to skip and ten ways to refuse.
 
     A new rung that skips is the defect this whole file guards against,
-    so the count is pinned rather than left to review.
+    so the count is pinned rather than left to review. It went from ten
+    to eleven on 2026-09-14 when RUN_PAIR_NOT_COVERED was added; a new
+    way to REFUSE is safe by construction and a new way to SKIP is not,
+    which is why the first assertion is the one that matters.
     """
     assert gate.SKIP_CACHED_OK not in gate.RUN_RUNGS
-    assert len(set(gate.RUN_RUNGS)) == len(gate.RUN_RUNGS) == 10
+    assert len(set(gate.RUN_RUNGS)) == len(gate.RUN_RUNGS) == 11
 
 
 def test_the_sound_record_is_the_only_one_that_skips() -> None:
@@ -583,3 +592,143 @@ def test_the_published_install_id_is_the_databases_own(
     with connect(db_path_for(state_dir), create=False) as conn:
         live = gate.live_install_id(conn)
     assert live and record["install_id"] == live
+
+
+# ---------------------------------------------------------------------------
+# The archive half of the pair. A bare PRAGMA integrity_check is PER SCHEMA.
+# ---------------------------------------------------------------------------
+
+
+def _make_archive(state_dir: Path, *, damaged: bool) -> Path:
+    """Put a real cloude-archive.db beside the state database.
+
+    Description: builds a genuine SQLite file big enough for _corrupt to
+      have a leaf page to damage, so a test can exercise a REAL failing
+      pragma on the archive rather than a mocked verdict.
+    Inputs: state_dir (Path), damaged (bool) - flip four bytes in a leaf
+      page when True.
+    Output: Path - the archive file.
+    Example: _make_archive(state_dir, damaged=True)
+    """
+    archive = archive_db_path_for(state_dir)
+    seed = sqlite3.connect(str(archive))
+    try:
+        seed.execute("CREATE TABLE transcript_archives(id INTEGER PRIMARY KEY)")
+        seed.commit()
+    finally:
+        seed.close()
+    if damaged:
+        _corrupt(archive)
+    return archive
+
+
+def test_the_pair_verdict_has_no_default() -> None:
+    """A caller CANNOT forget the archive, because there is nothing to fall back on.
+
+    A default of "ok" would be the fail-open shape: the ladder would skip
+    the pragma for any caller that had not been updated, and every log
+    line would read correctly while the archive went unexamined. This
+    asserts the parameter is required rather than trusting the review
+    that added it.
+    """
+    import inspect
+
+    sig = inspect.signature(gate.resolve_boot_integrity)
+    assert sig.parameters["pair_verdict"].default is inspect.Parameter.empty
+    assert sig.parameters["pair_reason"].default is inspect.Parameter.empty
+
+
+def test_a_record_that_does_not_cover_the_pair_refuses() -> None:
+    """The pure rung. A sound record plus an uncovered archive still refuses.
+
+    Everything else about this record passes: fresh, ok, right install,
+    right path, right size. The only thing wrong is that it says nothing
+    about the second database, and that alone must stop the skip.
+    """
+    decision = _decide(
+        _sound_record(Path("/s/cloude.db")),
+        db_path=Path("/s/cloude.db"),
+        pair_verdict="cannot_determine",
+        pair_reason="no verdict for the archive database",
+    )
+    assert decision.skip_pragma is False
+    assert decision.rung == gate.RUN_PAIR_NOT_COVERED
+    assert "archive" in decision.reason
+
+
+def test_a_failed_archive_refuses_even_when_main_is_sound() -> None:
+    """The pure rung again, on a FAILURE rather than an absence."""
+    decision = _decide(
+        _sound_record(Path("/s/cloude.db")),
+        db_path=Path("/s/cloude.db"),
+        pair_verdict="failed",
+        pair_reason="the archive database failed its integrity check",
+    )
+    assert decision.skip_pragma is False
+    assert decision.rung == gate.RUN_PAIR_NOT_COVERED
+
+
+def test_a_sound_pair_is_still_allowed_to_skip() -> None:
+    """THE POSITIVE CONTROL for the rung above.
+
+    Without this, a rung that refused unconditionally would satisfy both
+    tests above and would silently undo the whole point of the gate.
+    """
+    decision = _decide(
+        _sound_record(Path("/s/cloude.db")), db_path=Path("/s/cloude.db"),
+    )
+    assert decision.skip_pragma is True
+    assert decision.rung == gate.SKIP_CACHED_OK
+
+
+def test_a_damaged_archive_is_caught_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checker_on: None,
+) -> None:
+    """THE NEGATIVE CONTROL, and the reason this change exists.
+
+    A SPLIT install: cloude.db is perfectly sound, cloude-archive.db is
+    genuinely corrupt. The cached verdict is fresh, positive, and bound
+    to this install - and it describes the state database ALONE, which is
+    exactly what every artifact written before the split looks like.
+
+    A gate that checks only main passes this file, because main really is
+    fine. It must not. Boot has to re-measure, the re-measure has to walk
+    the ARCHIVE, and the app has to come up degraded.
+    """
+    state_dir = _built_state_dir(tmp_path)
+    _make_archive(state_dir, damaged=True)
+    _rewrite_artifact(state_dir, finished_at=_stamp(30))
+
+    result = ensure_db_migrated(state_dir, 4, APP_VERSION)
+
+    assert result.status == STATUS_DEGRADED_DB_UNREADABLE, (
+        "a corrupt archive was reported as a healthy install"
+    )
+    record = read_verdict(state_dir)
+    assert record is not None
+    roles = {p.get("role"): p.get("status") for p in record.get("databases", [])}
+    assert roles.get("state") == "ok", roles
+    assert roles.get("archive") == "failed", roles
+
+
+def test_a_sound_archive_still_comes_up_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checker_on: None,
+) -> None:
+    """THE POSITIVE CONTROL for the test above.
+
+    Same split install, same stale-in-coverage artifact, but the archive
+    is intact. Boot still re-measures (the artifact does not cover the
+    pair) and must come up OK, with both halves recorded. Without this a
+    gate that failed every split install would pass the negative control.
+    """
+    state_dir = _built_state_dir(tmp_path)
+    _make_archive(state_dir, damaged=False)
+    _rewrite_artifact(state_dir, finished_at=_stamp(30))
+
+    result = ensure_db_migrated(state_dir, 4, APP_VERSION)
+
+    assert result.status == STATUS_OK, result.message
+    record = read_verdict(state_dir)
+    assert record is not None
+    roles = {p.get("role"): p.get("status") for p in record.get("databases", [])}
+    assert roles == {"state": "ok", "archive": "ok"}, roles
