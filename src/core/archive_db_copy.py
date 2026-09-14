@@ -31,6 +31,57 @@ from src.core.archive_db_split import (
 )
 
 
+#: A table whose content this copier must not touch at all.
+STRATEGY_SKIP = "skip"
+#: Copy in one statement, because the table has no rowid to page on.
+STRATEGY_WHOLE = "whole"
+#: The normal path: rowid-ordered, chunked, resumable.
+STRATEGY_CHUNKED = "chunked"
+
+
+def copy_strategy(conn: sqlite3.Connection, table: str, schema: str = "main") -> str:
+    """Decide how one table's rows must be copied.
+
+    Description: MEASURED PER TABLE, not assumed, because the archive
+      family is not uniformly shaped and a wrong assumption here took
+      down a live migration. Three cases:
+
+      VIRTUAL tables (``message_block_search``, an fts5 index) own no
+      storage of their own. Their rows live in shadow tables, and
+      ``CREATE VIRTUAL TABLE`` in the destination creates those shadows
+      empty and ready. Copying the virtual table's own "rows" is
+      meaningless, and on a ``content=''`` contentless fts5 index it is
+      not even expressible. So it is SKIPPED, and the index arrives with
+      its shadows.
+
+      WITHOUT ROWID tables have no ``rowid`` to page on.
+      ``message_block_search_idx`` and ``message_block_search_config``
+      are two of them, and they are what raised
+      ``no such column: rowid`` on the live run. They are copied WHOLE in
+      one statement. That is safe here because they are small (an fts5
+      index's config and b-tree metadata), and the alternative, paging on
+      their declared primary key, is a generic problem not worth solving
+      for two small tables.
+
+      Everything else takes the chunked, resumable path.
+    Inputs: conn (sqlite3.Connection), table (str), schema (str).
+    Output: str - one of the STRATEGY_* constants.
+    Example: copy_strategy(conn, "message_block_search")  # 'skip'
+    """
+    row = conn.execute(
+        f"SELECT sql FROM {schema}.sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    sql = (row[0] or "") if row else ""
+    if "CREATE VIRTUAL TABLE" in sql.upper():
+        return STRATEGY_SKIP
+    try:
+        conn.execute(f'SELECT rowid FROM {schema}."{table}" LIMIT 1').fetchone()
+    except sqlite3.OperationalError:
+        return STRATEGY_WHOLE
+    return STRATEGY_CHUNKED
+
+
 def copy_table(
     conn: sqlite3.Connection, table: str, install_id: Optional[str],
 ) -> int:
@@ -41,11 +92,27 @@ def copy_table(
       the current source count is skipped; anything else is truncated
       and recopied, because reasoning about a partial copy of an unknown
       shape is not worth it while the source is intact.
+      NOT EVERY TABLE TAKES THAT PATH. :func:`copy_strategy` decides per
+      table: a virtual fts5 index is skipped (its shadows carry the
+      data), and a WITHOUT ROWID table is copied whole because there is
+      no rowid to page on.
     Inputs: conn (sqlite3.Connection with the archive attached), table
       (str), install_id (str | None - stamped on the progress row).
     Output: int - rows in the destination when this returns.
     Example: copy_table(conn, "transcript_records", "abc")  # 8317542
     """
+    strategy = copy_strategy(conn, table)
+    if strategy == STRATEGY_SKIP:
+        # A virtual table's CREATE already built its shadows in the
+        # destination; there is nothing of its own to move.
+        conn.execute(
+            f"INSERT OR REPLACE INTO {ARCHIVE_SCHEMA}.{PROGRESS_TABLE} "
+            "(table_name, source_rows, copied_rows, finished_at, install_id) "
+            "VALUES (?,0,0,?,?)",
+            (table, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), install_id),
+        )
+        return 0
+
     source_n = table_count(conn, "main", table)
     done = conn.execute(
         f"SELECT source_rows, copied_rows, finished_at FROM "
@@ -64,6 +131,20 @@ def copy_table(
         "VALUES (?,?,0,NULL,?)",
         (table, source_n, install_id),
     )
+
+    if strategy == STRATEGY_WHOLE:
+        conn.execute("BEGIN")
+        conn.execute(
+            f'INSERT INTO {ARCHIVE_SCHEMA}."{table}" SELECT * FROM main."{table}"'
+        )
+        conn.execute("COMMIT")
+        dest_n = table_count(conn, ARCHIVE_SCHEMA, table)
+        conn.execute(
+            f"UPDATE {ARCHIVE_SCHEMA}.{PROGRESS_TABLE} "
+            "SET copied_rows=?, finished_at=? WHERE table_name=?",
+            (dest_n, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), table),
+        )
+        return dest_n
 
     last_rowid = -1
     copied = 0

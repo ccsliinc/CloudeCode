@@ -162,6 +162,48 @@ def classify_objects(conn: sqlite3.Connection, schema: str = "main") -> List[Obj
     ]
 
 
+def shadow_tables(conn: sqlite3.Connection, schema: str = "main") -> FrozenSet[str]:
+    """Name every table that belongs to a virtual table rather than to us.
+
+    Description: an fts5 index called ``V`` owns ``V_data``, ``V_idx``,
+      ``V_content``, ``V_docsize`` and ``V_config``. SQLite creates and
+      destroys them with the virtual table and lists them in
+      ``sqlite_master`` like any other table, but they are NOT ours to
+      create, copy or drop.
+
+      THIS EXISTS BECAUSE TREATING THEM AS ORDINARY TABLES CORRUPTED A
+      LIVE DATABASE. SQLite stores a shadow table's DDL with its name in
+      SINGLE QUOTES (``CREATE TABLE 'message_block_search_data'(...)``),
+      so a qualifier rewrite keyed on ``TABLE <name>`` does not match,
+      and a fallback that replaced the bare name instead produced
+      ``CREATE TABLE 'archive.message_block_search_data'`` - which sqlite
+      accepted, unqualified, into MAIN, as four junk tables with literal
+      dots in their names. Measured on the owner's live database
+      2026-09-14. The right answer is never to emit their DDL at all:
+      ``CREATE VIRTUAL TABLE`` in the destination builds them.
+    Inputs: conn (sqlite3.Connection), schema (str).
+    Output: frozenset[str] - shadow table names.
+    Example: shadow_tables(conn)  # {'message_block_search_data', ...}
+    """
+    virtual = [
+        r[0] for r in conn.execute(
+            f"SELECT name FROM {schema}.sqlite_master "
+            "WHERE type='table' AND sql LIKE 'CREATE VIRTUAL TABLE%'"
+        )
+    ]
+    if not virtual:
+        return frozenset()
+    names = [
+        r[0] for r in conn.execute(
+            f"SELECT name FROM {schema}.sqlite_master WHERE type='table'"
+        )
+    ]
+    return frozenset(
+        n for n in names
+        if any(n.startswith(f"{v}_") for v in virtual) and n not in virtual
+    )
+
+
 def unclassified_objects(objects: Sequence[ObjectRow]) -> List[str]:
     """Name every object the partition map could not place.
 

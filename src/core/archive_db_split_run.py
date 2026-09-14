@@ -48,10 +48,13 @@ from src.core.archive_db_partition import (
     classify_objects,
     crossing_foreign_keys,
     orphaned_reference_counts,
+    shadow_tables,
     unclassified_objects,
 )
 from src.core.archive_db_attach import attach_archive
 from src.core.archive_db_copy import (
+    STRATEGY_SKIP,
+    copy_strategy,
     copy_table,
     drop_order,
     probe_writability,
@@ -138,8 +141,15 @@ def run_split(
             schema_version = None
 
         objects = classify_objects(conn)
+        # Shadow tables are owned by their virtual table: created by its
+        # CREATE, dropped by its DROP, and never copied on their own. They
+        # are still CLASSIFIED (so an unknown one would still refuse);
+        # they are simply not ours to move.
+        shadows = shadow_tables(conn)
         report.archive_tables = [
-            o.name for o in objects if o.side == SIDE_ARCHIVE and o.kind == "table"
+            o.name for o in objects
+            if o.side == SIDE_ARCHIVE and o.kind == "table"
+            and o.name not in shadows
         ]
         report.app_tables = [o.name for o in objects if o.side == SIDE_APP]
         report.crossings = crossing_foreign_keys(conn)
@@ -252,6 +262,11 @@ def _apply_split(
         drift: Dict[str, Tuple[int, int]] = {}
         mismatches: Dict[str, Tuple[int, int]] = {}
         for table in report.archive_tables:
+            # A virtual fts5 index has no rows of its own to count; its
+            # content lives in shadow tables, which ARE counted. Counting
+            # a contentless fts5 table is not even well defined.
+            if copy_strategy(conn, table) == STRATEGY_SKIP:
+                continue
             now = table_count(conn, "main", table)
             planned = report.source_counts[table]
             if now != planned:
@@ -344,8 +359,15 @@ def _drop_source_tables(
         if obj.side == SIDE_ARCHIVE and obj.kind == "view":
             conn.execute(f'DROP VIEW IF EXISTS main."{obj.name}"')
             dropped.append(obj.name)
+    # Virtual tables first: dropping an fts5 index removes its own shadow
+    # tables, so the shadows' later DROP ... IF EXISTS become no-ops.
+    # Dropping a shadow out from under a live virtual table instead is how
+    # you get a corrupt index.
+    ordered = drop_order(conn, tables)
+    virtual = [t for t in ordered if copy_strategy(conn, t) == STRATEGY_SKIP]
+    ordered = virtual + [t for t in ordered if t not in virtual]
     conn.execute("BEGIN")
-    for table in drop_order(conn, tables):
+    for table in ordered:
         conn.execute(f'DROP TABLE IF EXISTS main."{table}"')
         dropped.append(table)
     conn.execute("COMMIT")

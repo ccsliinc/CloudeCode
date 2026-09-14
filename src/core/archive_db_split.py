@@ -50,7 +50,11 @@ from src.core.archive_db_ddl import (
     residual_app_references,
     strip_crossing_references,
 )
-from src.core.archive_db_partition import ARCHIVE_SCHEMA, SIDE_ARCHIVE
+from src.core.archive_db_partition import (
+    ARCHIVE_SCHEMA,
+    SIDE_ARCHIVE,
+    shadow_tables,
+)
 from src.core.archive_db_split_refusals import Refusal, blocking
 
 logger = structlog.get_logger()
@@ -266,6 +270,31 @@ def table_count(conn: sqlite3.Connection, schema: str, table: str) -> int:
     return int(conn.execute(f'SELECT COUNT(*) FROM {schema}."{table}"').fetchone()[0])
 
 
+def _qualify_create(sql: str, kind: str, name: str) -> Optional[str]:
+    """Rewrite a CREATE statement to target the archive schema, or refuse.
+
+    Description: handles the three spellings sqlite stores a name in -
+      bare, "double quoted", and 'single quoted' - and returns None when
+      none of them match rather than guessing. Refusing is the whole
+      point: the guess it replaces created tables in the WRONG DATABASE.
+    Inputs: sql (str) - the stored CREATE statement. kind (str) - 'table'
+      or 'view'. name (str) - the object name.
+    Output: str | None - the qualified statement, or None to refuse.
+    Example: _qualify_create("CREATE TABLE t(a)", "table", "t")
+      # 'CREATE TABLE archive.t(a)'
+    """
+    head = f"{kind.upper()} "
+    if kind.lower() == "table" and "CREATE VIRTUAL TABLE" in sql.upper():
+        head = "VIRTUAL TABLE "
+    for spelling in (name, f'"{name}"', f"'{name}'", f"[{name}]", f"`{name}`"):
+        needle = f"{head}{spelling}"
+        if needle in sql:
+            return sql.replace(
+                needle, f'{head}{ARCHIVE_SCHEMA}."{name}"', 1
+            )
+    return None
+
+
 def create_archive_schema(
     conn: sqlite3.Connection, objects: Sequence, report: SplitReport,
 ) -> None:
@@ -297,6 +326,11 @@ def create_archive_schema(
             "WHERE type IN ('table','view')"
         )
     }
+    # Shadow tables belong to their virtual table and are built by its
+    # CREATE. Emitting their DDL is what produced four junk tables with
+    # literal dots in their names in a live database; see
+    # archive_db_partition.shadow_tables.
+    shadows = shadow_tables(conn)
     for obj in objects:
         if obj.side != SIDE_ARCHIVE or not obj.sql:
             continue
@@ -317,18 +351,20 @@ def create_archive_schema(
             raise sqlite3.IntegrityError(
                 f"{obj.name} still references {residual} after rewriting"
             )
-        if obj.name in existing:
+        if obj.name in shadows or obj.name in existing:
             # Already created by an earlier run of this same migration.
             # The origin row above was refreshed, so the reverse still has
             # the exact pre-strip DDL; there is nothing else to do.
             continue
-        qualified = sql.replace(
-            f"{obj.kind.upper()} {obj.name}",
-            f"{obj.kind.upper()} {ARCHIVE_SCHEMA}.{obj.name}",
-            1,
-        )
-        if f"{ARCHIVE_SCHEMA}." not in qualified:
-            qualified = sql.replace(
-                obj.name, f"{ARCHIVE_SCHEMA}.{obj.name}", 1
+        qualified = _qualify_create(sql, obj.kind, obj.name)
+        if qualified is None:
+            # REFUSE rather than guess. The old fallback rewrote the first
+            # bare occurrence of the name anywhere in the statement, which
+            # on a quoted DDL produced CREATE TABLE 'archive.<name>' and
+            # sqlite put it, unqualified, in MAIN. A statement this code
+            # cannot confidently qualify must not be executed at all.
+            raise sqlite3.OperationalError(
+                f"cannot qualify the DDL for {obj.name!r} onto the "
+                f"{ARCHIVE_SCHEMA} schema; refusing to execute it unqualified"
             )
         conn.execute(qualified)
