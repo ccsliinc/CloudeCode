@@ -86,7 +86,7 @@ async def restart_session(request: Request, session_uuid: str):
 
     def _resolve():
         """Read the replaced row on one pooled thread."""
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             return session_restart.resolve_restart_source(
                 conn, session_uuid=session_uuid
             )
@@ -195,7 +195,7 @@ async def restart_session(request: Request, session_uuid: str):
         tmux name and is running, which is the thing the user cares
         about, not whether a function said it wrote it.
         """
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             row = conn.execute(
                 "SELECT tmux_name, lifecycle FROM sessions WHERE id = ? "
                 "LIMIT 1",

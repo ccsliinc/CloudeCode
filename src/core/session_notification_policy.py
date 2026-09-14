@@ -542,7 +542,7 @@ def hydrate_from_datastore(
         return False
 
     try:
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             rows = session_store.notification_policy_rows(conn)
     except (DatastoreUnreadableError, sqlite3.Error, OSError) as exc:
         logger.warning(

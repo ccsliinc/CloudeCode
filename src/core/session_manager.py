@@ -4800,6 +4800,18 @@ class SessionManager:
           in-memory set rather than raise into a badge. None means "the
           datastore has no opinion", which is NOT the same as "this app
           owns nothing" - the caller falls back instead of concluding.
+
+          NO ARCHIVE ATTACHED, AND THAT IS LOAD-BEARING, NOT A SAVING.
+          ``BEGIN IMMEDIATE`` takes the write lock on EVERY attached
+          database, so a connection holding cloude-archive.db waits for
+          whatever is writing the archive even when its own statement
+          touches only ``sessions``. Every one of this helper's 24
+          callers is main-only - audited, and none names a
+          ``transcript_``, ``message_`` or ``archive_`` table - and
+          several of them, the hook path above all, run SYNCHRONOUSLY ON
+          THE EVENT LOOP. Attached, that path was measured parked for
+          30.04 s, which is ``busy_timeout`` expiring, with the whole UI
+          dead for the duration.
         Inputs: none (reads ``settings.get_state_dir()``).
         Output: sqlite3.Connection | None.
         """
@@ -4809,7 +4821,7 @@ class SessionManager:
             path = db_path_for(settings.get_state_dir())
             if not Path(path).exists():
                 return None
-            return connect(path, create=False)
+            return connect(path, create=False, attach_archive=False)
         except Exception as exc:  # noqa: BLE001 - never break the render path
             logger.debug("ownership_datastore_unavailable", error=str(exc))
             return None
@@ -4830,6 +4842,12 @@ class SessionManager:
         Output: sqlite3.Connection | None - None when the datastore
           cannot be opened at all, which the caller must report as
           COULD NOT EVALUATE and never as a failed adoption.
+
+          NO ARCHIVE ATTACHED, for the reason on
+          :meth:`_datastore_connection` and with more force: this one
+          WRITES, so every call takes a ``BEGIN IMMEDIATE`` and would
+          take the archive's write lock with it. Its callers are
+          main-only by the same audit.
         """
         try:
             from src.core.db import connect, db_path_for
@@ -4837,7 +4855,7 @@ class SessionManager:
             path = db_path_for(settings.get_state_dir())
             if not Path(path).exists():
                 return None
-            return connect(path, create=False)
+            return connect(path, create=False, attach_archive=False)
         except Exception as exc:  # noqa: BLE001 - adoption must not crash
             logger.warning("adopt_datastore_unavailable", error=str(exc))
             return None

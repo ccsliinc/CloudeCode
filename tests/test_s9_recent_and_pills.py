@@ -551,7 +551,7 @@ def test_recent_route_defends_against_a_non_stopped_row_even_if_the_query_did_no
 
     monkeypatch.setattr("src.core.session_store.list_sessions", _fake_list_sessions)
     monkeypatch.setattr(
-        "src.core.db.connect", lambda path, create=False: _NullConn()
+        "src.core.db.connect", lambda path, create=False, **_kw: _NullConn()
     )
 
     client = _recent_client(_HealthManager(ProbeHealth(ok=True)))

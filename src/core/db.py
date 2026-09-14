@@ -52,8 +52,15 @@ import structlog
 
 from src.core.archive_db_attach import (
     assert_no_shadowing,
-    attach_archive,
+    archive_sibling_for,
+    attach_archive as _attach_archive,
+    attached_schemas,
     which_database,
+)
+from src.core.archive_db_partition import (
+    ARCHIVE_SCHEMA,
+    SIDE_ARCHIVE,
+    side_for_table,
 )
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
 from src.core.message_body_codec import register_body_functions
@@ -77,6 +84,21 @@ class DatastoreError(RuntimeError):
     Description: a small named hierarchy so callers can distinguish "the
       database is unreadable" from "you may not write in this mode"
       without matching on message text or catching bare Exception.
+    Inputs: standard RuntimeError arguments.
+    Output: an exception instance.
+    """
+
+
+class ArchiveNotAttachedError(DatastoreError):
+    """A question was asked that this connection cannot answer.
+
+    Description: raised when an archive-side table's presence is asked
+      of a connection opened with ``attach_archive=False``. It is a
+      CALLER BUG, never a fact about the data, and it is loud on
+      purpose: the alternative is answering False, which is
+      indistinguishable from "the archive holds nothing" and is exactly
+      how the corpus drain came to refuse with ``model_absent`` on a
+      datastore that held every row of the model.
     Inputs: standard RuntimeError arguments.
     Output: an exception instance.
     """
@@ -109,7 +131,9 @@ def db_path_for(state_dir: Path) -> Path:
     return Path(state_dir) / DB_FILENAME
 
 
-def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
+def connect(
+    path: Path, *, create: bool = True, attach_archive: bool = True,
+) -> sqlite3.Connection:
     """Open a connection to cloude.db with this module's pragmas applied.
 
     Description: uses ``isolation_level=None`` so transactions are
@@ -120,6 +144,36 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
       a missing file raises rather than being created; use False for any
       read path so a typo'd directory cannot silently manufacture an
       empty database that renders as a healthy install with no data.
+      attach_archive (bool) - attach cloude-archive.db when one exists.
+      DEFAULT TRUE so nothing changes by accident, but pass False on any
+      connection that will not touch an archive table.
+
+      WHY THIS FLAG EXISTS, AND IT IS NOT THE REASON FIRST GIVEN.
+      ``BEGIN IMMEDIATE`` ACQUIRES THE WRITE LOCK ON EVERY ATTACHED
+      DATABASE, not only on the one the statements touch. So a
+      connection that writes a single row to ``sessions`` in cloude.db,
+      while holding the archive attached, must wait for whatever is
+      writing the archive. Isolated measurement, identical write both
+      ways, with another writer holding the attached file: 1.1 ms
+      unattached against 3,772.1 ms attached, the difference being
+      exactly how long the other writer held its transaction.
+
+      THAT IS NOT ACADEMIC. ``claude_event_hook`` handles Claude Code
+      lifecycle hooks SYNCHRONOUSLY ON THE EVENT LOOP and its
+      ``_persist_activity_state`` opens one of these connections and
+      calls :func:`transaction`. With 19 live panes firing hooks and a
+      corpus drain writing the archive, py-spy caught the loop parked in
+      ``transaction (db.py) -> _persist_activity_state ->
+      record_hook_event -> claude_event_hook``, and the ``/health``
+      probe beside it timed out at 30.04 s - which is
+      ``busy_timeout=30000`` expiring exactly. The whole UI goes dead
+      for that long: no keystrokes, no pane output.
+
+      The FIRST justification offered for this flag was per-connection
+      attach cost. That was measured and is real but trivial: 78 opens,
+      the number one listing pass makes, cost 24.9 ms attached against
+      9.1 ms unattached. It could never have produced a 30 second stall,
+      and the flag was nearly abandoned on the strength of it.
     Output: sqlite3.Connection with row_factory set to sqlite3.Row.
     Raises: DatastoreUnreadableError - the file is missing (create=False)
       or sqlite3 refused to open it.
@@ -184,7 +238,7 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
     # taking a running server down over a condition that only affects
     # archive queries would be the worse failure. The migration refuses
     # hard; this warns loudly. See src/core/archive_db_attach.py.
-    if attach_archive(conn, path):
+    if attach_archive and _attach_archive(conn, path):
         assert_no_shadowing(conn)
     return conn
 
@@ -275,10 +329,63 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
       For an app-side table the answer is unchanged, because the archive
       never holds one. For an archive-side table this is the difference
       between seeing it and denying it exists.
+
+      AND IT REFUSES RATHER THAN ANSWERING "NO" WHEN IT COULD NOT LOOK.
+      A connection opened with ``attach_archive=False`` cannot see the
+      archive, so asked about an archive-side table it would answer
+      False - the exact ``model_absent`` lie described above,
+      reintroduced by the very flag that fixes the lock contention. That
+      is a caller bug, not a fact about the data, so it raises.
+
+      THE TWO CASES ARE NOT THE SAME AND CONFLATING THEM BREAKS EVERY
+      FRESH INSTALL. "This install has no archive file" is a real
+      measurement and the honest answer to it is False: an unsplit
+      datastore genuinely does not have ``message_transcripts``, and
+      ``apply_message_model_schema`` asks precisely that before creating
+      it. "An archive file exists and this connection was told not to
+      attach it" is the caller bug. So the refusal is conditioned on the
+      FILE being present, not on the schema being absent. Getting that
+      backwards turned a fresh migration into 615 failures.
     Inputs: conn (sqlite3.Connection), name (str) - table name.
     Output: bool.
+    Raises: ArchiveNotAttachedError - ``name`` is archive-side, an
+      archive file exists beside this database, and it is not attached.
     """
+    if (
+        side_for_table(name) == SIDE_ARCHIVE
+        and ARCHIVE_SCHEMA not in attached_schemas(conn)
+        and _archive_file_exists_for(conn)
+    ):
+        raise ArchiveNotAttachedError(
+            f"{name!r} lives in the archive database, an archive file "
+            f"exists beside this datastore, and this connection was opened "
+            f"with attach_archive=False - so its presence cannot be decided "
+            f"here. Open the connection with the archive attached, or ask "
+            f"about a table this connection can see."
+        )
     return which_database(conn, name) is not None
+
+
+def _archive_file_exists_for(conn: sqlite3.Connection) -> bool:
+    """Is there an archive file beside the database this connection holds?
+
+    Description: private. Reads ``PRAGMA database_list``, which is the
+      only authority on what a connection actually has open, and asks
+      the filesystem about the sibling. An in-memory or unnamed database
+      has no sibling and answers False, which is correct: there is no
+      archive for it to be hiding.
+    Inputs: conn (sqlite3.Connection).
+    Output: bool - False whenever it cannot be established, because a
+      refusal built on a guess would break installs that have no archive.
+    Example: _archive_file_exists_for(conn) -> True
+    """
+    try:
+        for row in conn.execute("PRAGMA database_list"):
+            if row[1] == "main" and row[2]:
+                return archive_sibling_for(Path(row[2])).exists()
+    except sqlite3.Error:
+        return False
+    return False
 
 
 def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
