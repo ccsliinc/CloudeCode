@@ -41,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import os
 import signal
 import sys
@@ -53,10 +54,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.core import message_projection_ledger as ledger  # noqa: E402
 from src.core.db import (  # noqa: E402
-    DatastoreError, connect, db_path_for, read_schema_version, table_exists,
+    DatastoreError, connect, connect_archive_only, db_path_for,
+    read_schema_version, table_exists,
 )
 from src.core import message_drain_liveness as liveness
-from src.core.archive_db_partition import ARCHIVE_DB_FILENAME
+from src.core.archive_db_partition import ARCHIVE_DB_FILENAME, archive_db_path_for
 from src.core.message_projection import (  # noqa: E402
     STATUS_OK, run_projection_once,
 )
@@ -101,15 +103,27 @@ def survey(state_dir: Path) -> dict:
       'pending_bytes', 'archives' and 'modelled'.
     Example: survey(Path("/nope"))["status"] -> 'datastore_unavailable'
     """
+    # TWO CONNECTIONS, for the reason in db.connect_archive_only: the
+    # schema version is in cloude.db and every row this surveys is in
+    # the archive. Holding both on one connection is what made a
+    # projection transaction take cloude.db's write lock.
     try:
-        conn = connect(db_path_for(state_dir), create=False)
+        with closing(connect(db_path_for(state_dir), create=False)) as app:
+            version = read_schema_version(app)
+    except DatastoreError as exc:
+        return {"status": "datastore_unavailable", "reason": str(exc)}
+    if not version.readable or version.value is None:
+        return {"status": "datastore_unavailable",
+                "reason": "meta.schema_version is unreadable"}
+    try:
+        conn = (
+            connect_archive_only(state_dir)
+            if archive_db_path_for(state_dir).exists()
+            else connect(db_path_for(state_dir), create=False)
+        )
     except DatastoreError as exc:
         return {"status": "datastore_unavailable", "reason": str(exc)}
     with conn:
-        version = read_schema_version(conn)
-        if not version.readable or version.value is None:
-            return {"status": "datastore_unavailable",
-                    "reason": "meta.schema_version is unreadable"}
         present = (table_exists(conn, "message_transcripts") or None)
         if present is None:
             return {"status": "model_absent", "schema_version": version.value}

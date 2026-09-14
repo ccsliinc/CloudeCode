@@ -59,6 +59,7 @@ from src.core.archive_db_attach import (
 )
 from src.core.archive_db_partition import (
     ARCHIVE_SCHEMA,
+    archive_db_path_for,
     SIDE_ARCHIVE,
     side_for_table,
 )
@@ -280,6 +281,80 @@ def integrity_check(conn: sqlite3.Connection) -> str:
     return "\n".join(str(row[0]) for row in rows) if rows else "no result"
 
 
+
+def connect_archive_only(state_dir: Path) -> sqlite3.Connection:
+    """Open cloude-archive.db AS MAIN, with cloude.db not attached at all.
+
+    Description: the connection for a long archive WRITE, and the reason
+      it exists is lock scope, not convenience.
+
+      ``BEGIN IMMEDIATE`` acquires the write lock on EVERY ATTACHED
+      DATABASE. :func:`connect` opens cloude.db as main and attaches the
+      archive, so a projection pass running through it holds
+      **cloude.db's** write lock for the length of every transcript it
+      ingests - and cloude.db is where the hook path writes
+      ``sessions.activity_state``, synchronously on the event loop.
+      Measured on live with the corpus drain running through
+      :func:`connect`: a main-only ``BEGIN IMMEDIATE`` on cloude.db,
+      archive deliberately NOT attached, blocked for **63,927 ms**. The
+      app's own corpus ingest pass died outright at 18:57:00Z with
+      ``OperationalError: database is locked``.
+
+      THIS IS THE SECOND HALF OF ONE DEFECT. The ``attach_archive=False``
+      flag on :func:`connect` stopped main-only READERS taking the
+      archive's lock. This stops the archive WRITER taking main's. Either
+      half alone leaves one direction open.
+
+      SAFE ONLY BECAUSE THE PROJECTION NEEDS NOTHING FROM cloude.db, and
+      that was audited rather than assumed: every table the projection
+      path names is archive-side. The one ``sessions`` read in
+      :mod:`src.core.transcript_archive` is inside
+      ``list_unrooted_archives``, which ``export_archive`` never reaches.
+      THE ROOTING PASS IS DIFFERENT AND IS NOT ON THIS CONNECTION: it
+      joins ``transcript_archives`` to ``sessions`` and ``projects`` by
+      design, it runs only inside ``corpus_ingest_service.run_ingest_once``
+      on the connection opened there, and that connection is deliberately
+      left alone. A rooting pass re-pointed here would stop finding the
+      rows it exists to join and, because a skipped rooting pass reports
+      a NAMED status rather than zeros, would be visible - but it would
+      still be wrong, so it is not moved.
+    Inputs: state_dir (Path) - the install's state directory.
+    Output: sqlite3.Connection with row_factory set to sqlite3.Row, the
+      same pragmas as :func:`connect`, and the body codec registered.
+    Raises: DatastoreUnreadableError - the archive is missing or sqlite3
+      refused it. A MISSING ARCHIVE RAISES rather than creating one: on
+      an unsplit install the archive tables live in cloude.db and the
+      caller must use :func:`connect`, so manufacturing an empty file
+      here would produce a pass that projected nothing and said ok.
+    Example: with closing(connect_archive_only(state_dir)) as conn: ...
+    """
+    archive = archive_db_path_for(state_dir)
+    if not archive.exists():
+        raise DatastoreUnreadableError(
+            f"{archive.name} does not exist at {archive}; this install has "
+            f"not been split, so the archive tables are in cloude.db and "
+            f"connect() is the right entry point",
+            archive,
+        )
+    try:
+        conn = sqlite3.connect(str(archive), isolation_level=None, timeout=30.0)
+    except sqlite3.Error as exc:
+        raise DatastoreUnreadableError(
+            f"could not open {archive.name}: {exc}", archive
+        ) from exc
+    conn.row_factory = sqlite3.Row
+    try:
+        for pragma in CONNECTION_PRAGMAS:
+            conn.execute(pragma)
+        register_body_functions(conn)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise DatastoreUnreadableError(
+            f"could not prepare {archive.name}: {exc}", archive
+        ) from exc
+    return conn
+
+
 @contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Run a block inside one BEGIN IMMEDIATE ... COMMIT, rolling back on error.
@@ -351,6 +426,11 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     Raises: ArchiveNotAttachedError - ``name`` is archive-side, an
       archive file exists beside this database, and it is not attached.
     """
+    found = which_database(conn, name)
+    if found is not None:
+        # It is right here. How the connection was opened is irrelevant:
+        # an archive-only connection holds these tables in `main`.
+        return True
     if (
         side_for_table(name) == SIDE_ARCHIVE
         and ARCHIVE_SCHEMA not in attached_schemas(conn)
@@ -363,7 +443,7 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
             f"here. Open the connection with the archive attached, or ask "
             f"about a table this connection can see."
         )
-    return which_database(conn, name) is not None
+    return False
 
 
 def _archive_file_exists_for(conn: sqlite3.Connection) -> bool:

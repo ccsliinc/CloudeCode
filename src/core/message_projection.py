@@ -106,7 +106,8 @@ from src.core.message_projection_report import (
     resolve_max_seconds,
 )
 from src.core import message_projection_ledger as ledger
-from src.core.db import table_exists
+from src.core.archive_db_partition import archive_db_path_for
+from src.core.db import connect_archive_only, table_exists
 from src.core.db import DatastoreError, connect, db_path_for, read_schema_version
 from src.core.message_archive_flag import (
     ENABLE_ENV as MESSAGE_ARCHIVE_ENV,
@@ -338,15 +339,29 @@ def _run_inner(
             )
             return
 
+    # THE SCHEMA VERSION LIVES IN cloude.db AND THE WORK LIVES IN THE
+    # ARCHIVE, so they are read on two connections and the cloude.db one
+    # is closed before any archive write begins. A single connection
+    # holding both files would take cloude.db's write lock on every
+    # BEGIN IMMEDIATE - measured at 63,927 ms of blocked event loop, and
+    # an ingest pass killed outright with "database is locked". See
+    # db.connect_archive_only.
     try:
-        conn = connect(db_path_for(state_dir), create=False)
+        with closing(connect(db_path_for(state_dir), create=False)) as app:
+            version = read_schema_version(app)
+    except DatastoreError as exc:
+        report.status = STATUS_DATASTORE_UNAVAILABLE
+        report.reason = str(exc)
+        return
+
+    try:
+        conn = _projection_connection(state_dir)
     except DatastoreError as exc:
         report.status = STATUS_DATASTORE_UNAVAILABLE
         report.reason = str(exc)
         return
 
     with closing(conn):
-        version = read_schema_version(conn)
         report.schema_version = version.value
         if not version.readable or version.value is None:
             report.status = STATUS_DATASTORE_UNAVAILABLE
@@ -476,6 +491,25 @@ def _project_pass(
     report.budget_spent = spent
     report.pending_after = ledger.pending_count(conn)
 
+
+
+def _projection_connection(state_dir: Path):
+    """Open the connection the projection writes through.
+
+    Description: the archive AS MAIN when this install is split, so a
+      long ingest transaction never holds cloude.db's write lock; the
+      ordinary connection otherwise, because an unsplit install keeps
+      the archive tables in cloude.db and there is no second file to
+      open. The split case is the one that matters and the unsplit case
+      is unchanged.
+    Inputs: state_dir (Path).
+    Output: sqlite3.Connection.
+    Raises: DatastoreError - neither file could be opened.
+    Example: _projection_connection(state_dir)
+    """
+    if archive_db_path_for(state_dir).exists():
+        return connect_archive_only(state_dir)
+    return connect(db_path_for(state_dir), create=False)
 
 def _model_present(conn: sqlite3.Connection) -> bool:
     """Report whether the v16 message model's tables exist here.
