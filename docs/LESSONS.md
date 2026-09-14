@@ -37,6 +37,16 @@ and found nothing" from "I could not look".
 - The `unknown` status itself: a real answer, never `idle`.
 - The uuid matcher: "a matcher that always finds something is worse than
   useless", with a mandatory negative control.
+- **A DDL rewriter that could not parse a statement guessed instead**
+  (2026-09-14, live `cloude.db`). Qualifying archive DDL onto an attached
+  schema matched `TABLE <bare name>`; sqlite stores fts5 shadow DDL
+  single-quoted, so it missed, and the fallback rewrote the first bare
+  occurrence of the name ANYWHERE in the statement. That produced
+  `CREATE TABLE 'archive.message_block_search_data'`, which sqlite accepted,
+  UNQUALIFIED, into main: four junk tables with literal dots in their names,
+  in the owner's live database. The new twist on this shape is that the
+  guess did not merely answer wrongly, it WROTE to the wrong file. A parser
+  that cannot parse must return None and let the caller refuse.
 - **GitHub's linkage index.** Measured by ccsliinc on an idle repo with zero
   contention: `gh issue view N --json closedByPullRequestsReferences` returns
   `[]` on the FIRST read every time, and the link appears about twelve
@@ -209,3 +219,50 @@ Neither dominates. A mechanical check answers about paths and is silent on a
 design contradiction that shares no file; a human read catches the
 contradiction and misses the glob. Keep both, and know which question each
 one answers.
+
+## A correct check nobody can afford to leave on
+
+**One occurrence, and it was mine, so it is here before it becomes two.**
+
+`assert_no_shadowing` detects the one state where the archive split is
+silently wrong: a table present in BOTH databases, where sqlite resolves the
+unqualified name to main and every archive read comes from the stale copy. It
+found exactly that on live within 70 seconds of the migration, which is the
+whole argument for having it.
+
+It also ran on EVERY connection the app opens, and logged the full table list
+every time. Measured on live: **448 identical lines in 20 seconds, 73.6 MB per
+hour, 1.73 GB per day.** Memoised on the shadow set it measured 1.03 MB/hour.
+
+The check was right. Its cost was the defect, and the failure mode is social
+rather than technical: an alarm that fills a disk gets switched off, and then
+the condition it was built to catch ships unobserved. A check is not finished
+when it is correct; it is finished when someone can afford to leave it on.
+
+**Do:** memoise on the SIGNATURE of what was found, not on "have I logged".
+A change in the finding must report again. Never memoise the RETURN VALUE:
+callers that act on the condition still need the true current answer.
+
+## A check that can only say "I do not know"
+
+**Three for three on the same run, which is not a sampling edge case.**
+
+`deploy-mini.sh`'s post-restart up-check proves process identity by resolving
+the new PID's working directory. On this machine it cannot: the server is
+spawned by the Electron supervisor and the cwd is not sampleable. Every one of
+three live deploys on 2026-09-14 returned `exit 3 CANNOT DETERMINE`, and each
+time the restart had in fact succeeded, verified by hand in seconds.
+
+A gate that never reaches a verdict is worse than no gate. It trains its
+reader to treat the refusal as noise, which is exactly the habit that makes a
+REAL `CANNOT DETERMINE` invisible. The discipline this project applies to
+measurement (a reading that did not happen is not a reading of nothing) cuts
+both ways: a check that can never take its reading should not be the check.
+
+**Do, and this is a recommendation for that script rather than a fix already
+made:** drop the cwd leg. The two legs that DID answer are sufficient and were
+what I verified by hand each time. The PID changed, and the new PID owns the
+listener on the port. The script already re-hashes the whole server dir after
+the restart, which proves the running tree is the deployed tree far more
+directly than a cwd ever could, so the identity leg is redundant with a check
+already present three lines below it.

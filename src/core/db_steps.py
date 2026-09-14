@@ -74,6 +74,7 @@ from src.core.message_block_ddl import DDL_V18
 from src.core.message_block_search_ddl import DDL_V27
 from src.core.message_host_ddl import DDL_V17
 from src.core.message_archive_flag import message_archive_enabled
+from src.core.archive_db_schema_target import execute_archive_ddl
 from src.core.message_model_ddl import DDL_V16
 from src.core.migration_trail import utc_now
 from src.core.session_group_membership_migrate import carry_memberships
@@ -886,8 +887,7 @@ def _apply_v16_ddl(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: _apply_v16_ddl(conn)
     """
-    for statement in DDL_V16:
-        conn.execute(statement)
+    execute_archive_ddl(conn, DDL_V16)
 
 
 def _apply_v17_ddl(conn: sqlite3.Connection) -> None:
@@ -905,12 +905,14 @@ def _apply_v17_ddl(conn: sqlite3.Connection) -> None:
         str(row[1])
         for row in conn.execute("PRAGMA table_info(message_transcripts)")
     }
-    for statement in DDL_V17:
-        if statement.startswith("ALTER TABLE message_transcripts ADD COLUMN"):
-            column = statement.split("ADD COLUMN", 1)[1].split()[0]
-            if column in existing:
-                continue
-        conn.execute(statement)
+    wanted = [
+        statement for statement in DDL_V17
+        if not (
+            statement.startswith("ALTER TABLE message_transcripts ADD COLUMN")
+            and statement.split("ADD COLUMN", 1)[1].split()[0] in existing
+        )
+    ]
+    execute_archive_ddl(conn, wanted)
 
 
 def _apply_v18_ddl(conn: sqlite3.Connection) -> None:
@@ -922,8 +924,7 @@ def _apply_v18_ddl(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: _apply_v18_ddl(conn)
     """
-    for statement in DDL_V18:
-        conn.execute(statement)
+    execute_archive_ddl(conn, DDL_V18)
 
 
 def _apply_v27_ddl(conn: sqlite3.Connection) -> None:
@@ -941,8 +942,7 @@ def _apply_v27_ddl(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: _apply_v27_ddl(conn)
     """
-    for statement in DDL_V27:
-        conn.execute(statement)
+    execute_archive_ddl(conn, DDL_V27)
 
 
 def apply_message_model_schema(conn: sqlite3.Connection) -> None:

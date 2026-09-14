@@ -291,11 +291,31 @@ def verify_content_sample(
 
     Description: a row count proves arity and nothing else. This re-reads
       ``content_gzip`` on both sides for a spread of rows and compares
-      the bytes, and separately confirms each side agrees with the
-      ``content_sha256`` already recorded on the row. Sampled rather than
-      exhaustive because the source is 3.7 GB of blob and an exhaustive
-      compare would double the migration's runtime for a check the
-      destination integrity pragma largely covers.
+      THE TWO SIDES TO EACH OTHER: blob against blob, and the recorded
+      ``content_sha256`` column against the recorded column. Sampled
+      rather than exhaustive because the source is 3.7 GB of blob and an
+      exhaustive compare would double the migration's runtime for a
+      check the destination integrity pragma largely covers.
+
+      IT DELIBERATELY DOES NOT HASH THE BLOB AND COMPARE IT TO
+      ``content_sha256``, and an earlier version of this docstring said
+      it did, which is how the next person would have written the bug.
+      That check asks the wrong question: ``transcript_prefix_dedupe``
+      replaces a SUPERSEDED row's blob with an 8-byte empty sentinel and
+      deliberately leaves ``content_sha256`` and ``raw_byte_length``
+      alone, because the bytes live forward along
+      ``superseded_by_archive_id``. Measured over the whole live table,
+      16.5 percent of rows are in that state BY DESIGN and all 23,429
+      reconstruct correctly. A naive blob-versus-hash check reports them
+      as corrupt forever.
+
+      The correct whole-row check is
+      ``src.core.transcript_archive.export_archive`` plus BOTH the hash
+      and the length; see ``docs/transcript-archive-integrity.md`` and
+      ``scripts/transcript-archive/verify_archive_integrity.py``. It is
+      not what this function needs: comparing the two SIDES answers "did
+      the copy move the bytes faithfully", which is chain-agnostic by
+      construction, and is the only question a migration has to settle.
     Inputs: conn (sqlite3.Connection with the archive attached), limit
       (int) - how many rows to compare.
     Output: tuple[int, list[str]] - rows checked, and the archive_uuids

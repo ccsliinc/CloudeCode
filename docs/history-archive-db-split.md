@@ -438,35 +438,49 @@ shrinks `CHUNK_ROWS` to 2 and points its forward references at the LAST
 row, and only then does reverting the fix reproduce
 `sqlite3.IntegrityError: FOREIGN KEY constraint failed`.
 
-### A pre-existing data condition, found in passing and NOT caused by this
+### The 16.5 percent that looked wrong and is NOT corrupt
 
-Auditing all 23,420 archived transcripts against their own recorded
-hashes: **19,557 match their `content_sha256` (83.51 percent) and 3,863
-do not.** All 23,420 decompress cleanly.
+**CORRECTED. Do not act on the earlier version of this section.** While
+this migration was running, a parallel investigation settled it against
+every row rather than a sample, and the answer inverts the finding.
 
-It is not a migration defect and that was verified rather than assumed:
-the same rows fail identically when read from the LIVE database, and the
-stored blobs are **byte-identical on both sides, 4 of 4 on the sampled
-failures**. The migration copied them faithfully, preserving a
-discrepancy that was already there.
+What was observed here: auditing all 23,420 archived transcripts by
+decompressing `content_gzip` and hashing it, 19,557 matched their
+`content_sha256` and 3,863 did not, correlating perfectly with
+`raw_byte_length`.
 
-The shape is coherent: the mismatch correlates PERFECTLY with
-`raw_byte_length`. Every one of the 19,557 sound rows also has
-`len(content) == raw_byte_length`; every one of the 3,863 has
-`len(content) != raw_byte_length`. So for those rows BOTH recorded
-facts describe content the blob does not hold. It does not track
-`growth_kind` (both `initial` and `append` appear on both sides), and the
-recorded hash is not the hash of the compressed blob either (0 rows).
+**That check asks the wrong question.** `transcript_prefix_dedupe` and
+`transcript_content_dedupe` replace a SUPERSEDED row's `content_gzip`
+with the 8-byte sentinel `zlib.compress(b"", 9)` and DELIBERATELY leave
+`content_sha256` and `raw_byte_length` alone, because the bytes live
+forward along `superseded_by_archive_id`. The mismatch set is exactly the
+superseded set. Measured: **23,429 of 23,429 reconstruct to their
+recorded hash AND length** through `export_archive`, zero broken chains,
+zero cycles, chains reaching depth 262. Against real files on disk:
+19,591 byte-identical, 1,314 correct historical prefixes, 0 mismatch,
+2,524 whose source file no longer exists (not a fault).
 
-Note this also qualifies an earlier claim in this document: the
-"400 of 400 byte-exact" figure was measured on a fixture subset selected
-by `parent_archive_id IS NULL AND superseded_by_archive_id IS NULL`,
-which turns out to correlate with the healthy population. It was true of
-that subset and is not representative of the whole corpus. The
-migration's OWN content check compares main against archive and is the
-right check for "did the copy work"; it passed with 0 of 200 mismatched.
+**The correct refusal condition**, for anything checking this family:
+call `export_archive(conn, archive_id)` and refuse only if it raises, or
+the hash disagrees, or the LENGTH disagrees. Both halves are
+load-bearing. A missing source file is NOT a refusal condition. See
+`docs/transcript-archive-integrity.md` and
+`scripts/transcript-archive/verify_archive_integrity.py`, which are
+chain-aware and carry a self-test proving they can fail.
 
-This is worth an owner decision on its own and is out of scope here.
+**This migration was never affected**, and that is worth stating
+precisely rather than reassuringly. `verify_content_sample` compares the
+TWO SIDES to each other, blob against blob and recorded column against
+recorded column. It never hashes a blob against the recorded sha, so it
+is chain-agnostic by construction, and "did the copy move the bytes
+faithfully" is the only question a migration has to settle. Its DOCSTRING
+did describe the wrong check, and that has been fixed: a docstring is how
+the next person writes the bug.
+
+The earlier "400 of 400 byte-exact" figure in this document was also
+narrower than it looked, for the same reason: that fixture selected on
+`parent_archive_id IS NULL AND superseded_by_archive_id IS NULL`, which
+is precisely the non-superseded population.
 
 ## What is NOT done
 
