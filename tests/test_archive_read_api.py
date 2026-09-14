@@ -66,6 +66,12 @@ from src.core.db_migration import ensure_db_migrated
 from src.core.message_model_export import export_transcript
 from src.core.message_model_serialize import render_line, sha256_text
 
+#: A well-formed archive_uuid for the blob routes. It matches no row in
+#: the shared fixture on purpose: these paths exist here to prove auth
+#: and the cannot_determine contract, and a value that PARSES is what
+#: gets the request past routing to the handler that must refuse it.
+BLOB_UUID: str = "00000000-0000-4000-8000-000000000000"
+
 #: Every archive path, with a concrete id substituted, so a test can hit
 #: ALL of them without hand-maintaining a second list per test. Kept in
 #: one place: a route missing from here is a route nobody proved needs a
@@ -97,13 +103,45 @@ ALL_ROUTES: List[str] = [
     "/api/v1/archive/search/index",
     "/api/v1/archive/transcripts/1/export",
     "/api/v1/archive/transcripts/1/export/verified",
+    # The BYTE-EXACT archive, a different store and a different id space:
+    # addressed by archive_uuid, never by an integer. See
+    # src/core/archive_blob_export.py and tests/test_archive_blob_routes.py.
+    "/api/v1/archive/archives/by-rowid/1",
+    f"/api/v1/archive/archives/{BLOB_UUID}",
+    f"/api/v1/archive/archives/{BLOB_UUID}/export",
 ]
 
-#: Routes whose 200 body is the three-outcome envelope. The two export
-#: routes are excluded because a SUCCESSFUL export is a file, not an
-#: envelope - their failure paths ARE envelopes and are asserted
-#: separately.
-ENVELOPE_ROUTES: List[str] = ALL_ROUTES[:-2]
+#: Routes whose 200 body is a FILE rather than the three-outcome
+#: envelope. Named EXPLICITLY rather than carved off the end of
+#: ALL_ROUTES with a slice: that slice was ``ALL_ROUTES[:-2]`` and needed
+#: two separate comments warning people not to append to the list, which
+#: is a rule that holds only while everyone remembers it. A membership
+#: test cannot be broken by adding a route in the wrong place.
+NON_ENVELOPE_ROUTES: List[str] = [
+    "/api/v1/archive/transcripts/1/export",
+    "/api/v1/archive/transcripts/1/export/verified",
+    f"/api/v1/archive/archives/{BLOB_UUID}/export",
+]
+
+#: Envelope routes the shared ``archive`` fixture seeds no row for, so
+#: they answer a truthful 404 rather than a 200. They are still envelope
+#: routes and still carry the cannot_determine contract, so they stay in
+#: ENVELOPE_ROUTES; they are only held out of the test that asserts a
+#: 200 against seeded data. Their 200 path is proven in
+#: tests/test_archive_blob_routes.py against rows it ingests itself.
+UNSEEDED_ENVELOPE_ROUTES: List[str] = [
+    "/api/v1/archive/archives/by-rowid/1",
+    f"/api/v1/archive/archives/{BLOB_UUID}",
+]
+
+ENVELOPE_ROUTES: List[str] = [
+    path for path in ALL_ROUTES if path not in NON_ENVELOPE_ROUTES
+]
+
+#: Envelope routes that DO have a row behind them in the shared fixture.
+SEEDED_ENVELOPE_ROUTES: List[str] = [
+    path for path in ENVELOPE_ROUTES if path not in UNSEEDED_ENVELOPE_ROUTES
+]
 
 
 def _app(authed: bool = True) -> FastAPI:
@@ -315,7 +353,7 @@ def test_every_route_is_401_without_a_token(archive, path):
 # --- The envelope on every route ------------------------------------------
 
 
-@pytest.mark.parametrize("path", ENVELOPE_ROUTES)
+@pytest.mark.parametrize("path", SEEDED_ENVELOPE_ROUTES)
 def test_every_envelope_route_returns_a_permitted_result_status(archive, path):
     """Every key of section 3 present, and the status from the vocabulary."""
     with TestClient(_app()) as client:
