@@ -66,6 +66,7 @@ This table is the routing layer. Read the one that answers your question.
 | `docs/message-browser-api.md` | You are building the archive browser's server. DESIGN SPEC, not implemented. |
 | `docs/message-browser-ui.md` | You are building the archive browser's client. DESIGN SPEC, not implemented. |
 | `docs/message-model-gate.md` | You are touching the message model's ingest gate or `src/core/message_gate_contract.py`. |
+| `docs/transcript-archive-integrity.md` | Before you tell anyone a transcript is corrupt, or write code that reads `transcript_archives.content_gzip`. The 16.5 percent of rows that fail a naive checksum are SUPERSEDED rows carrying an 8-byte sentinel, and all 23,429 reconstruct byte-exactly through `export_archive`. Carries the refusal rule an implementer codes against, and the reason a missing source file is NOT a refusal. |
 | `docs/jsonl-shape-inventory.md` | You are writing a test against the transcript archive and need a real exemplar of a given line shape. |
 | `docs/help-content-audit.md` | You are rewriting the launchpad help copy. |
 | `docs/ui-preferences-inventory.md` | You are building the typed `ui_preferences` sync (or its partial-update or import step). Every durable browser-stored preference, classified as shared / per-viewer-only / already server-owned / secret, with the exact key, composition, writer and reader. |
@@ -388,8 +389,16 @@ Record: `docs/maintenance-history.md`.
   only to `message_model_secrets.py`, never print or store a matched value, and
   remember **exit 2 from `scripts/scan_secrets.py` means could-not-scan, not a
   pass** (`docs/secret-scanning.md`).
-- **A byte-exact archive of `~/.claude/projects` lives in `cloude.db`**, kept by a
-  fail-soft loop (`corpus_ingest_*.py`): a steady-state pass must stay invisible, a
+- **A byte-exact archive of `~/.claude/projects` lives in `cloude-archive.db`**
+  (it was in `cloude.db` until schema **v27**, which ran on live 2026-09-14 and
+  moved 19 tables plus 2 views into a second file ATTACHed at one seam; measured
+  the same day, `cloude.db` **720,896 bytes** beside a **5,364,752,384 byte**
+  archive). The split ships on `feat/173-archive-db-split` and is NOT yet on
+  trunk. Before you move a table between the two, add one to either, or write
+  cross-database DDL, read the split's own document, which that branch adds as
+  `history-archive-db-split.md` under `docs/` (it is not on this tree, which is
+  why there is no row for it in the index table above).
+  It is kept by a fail-soft loop (`corpus_ingest_*.py`): a steady-state pass must stay invisible, a
   skipped rooting pass is a NAMED STATE rather than zeros, and liveness is
   published on every terminating path including failures.
 - **The `real_tmux` marker** is applied AUTOMATICALLY by `tests/conftest.py`, and
@@ -400,7 +409,16 @@ Record: `docs/maintenance-history.md`.
   20 s; `tests/test_db_integrity_verdict.py` booby-traps every binding.
 - **ONLY A POSITIVE, FRESH, `ok` VERDICT TAKEN ON THIS DATABASE MAY SKIP THE
   PRAGMA** (`db_integrity_gate.py`), and a cached FAILURE runs the live pragma
-  rather than short-circuiting.
+  rather than short-circuiting. **AND ON A SPLIT INSTALL THE VERDICT MUST COVER
+  BOTH FILES**: a bare `PRAGMA integrity_check` walks every ATTACHed database
+  and folds the answers into ONE unattributed string (measured on SQLite
+  3.53.4), so the helper is scoped `PRAGMA main.integrity_check` and
+  `check_every_database` is the one place that covers the pair and names each
+  file. The gate gained a `RUN_PAIR_NOT_COVERED` rung that refuses to skip on a
+  cached record which does not vouch for every database the install has. That
+  fix is `aa6f973` on `feat/173-archive-db-split` and, measured 2026-09-14, is
+  NOT deployed: the running server still writes `"databases": []` into
+  `<state_dir>/db-integrity/latest.json`.
 
 ## Refreshing the local install on a new version
 
@@ -466,12 +484,24 @@ Record, and the full test-baseline history: `docs/maintenance-history.md`.
 - **`node --check`** every JS file you touch, before you claim it works.
 - **Voice**: no em-dashes, no en-dashes, no emojis, anywhere, including commit
   messages. UI copy is lowercase and plain.
-- **Push only to `Adoom666/CloudeCodeDev`. It is the only repository: nothing is
-  pushed, mirrored or released anywhere else. NEVER to `upstream`
-  (Adoom666/CloudeCode)** (owner's ruling, `docs/DECISIONS.md`). On Adam's clone
-  that remote is `origin`, so check `git remote -v` first; the `upstream` push
-  URL is `DISABLED_do_not_push_to_Adoom666_CloudeCode` and must be re-applied on
-  a fresh clone.
+- **NEVER push to `upstream` (Adoom666/CloudeCode).** Its push URL is
+  `DISABLED_do_not_push_to_Adoom666_CloudeCode` and must be re-applied on a
+  fresh clone. This part is not in dispute and never has been.
+- **`Adoom666/CloudeCodeDev` is the trunk.** On Adam's clone that remote is
+  `origin`, so check `git remote -v` before you push anything.
+- **THE REST OF THIS RULE IS IN DISPUTE AND #122 IS WHERE IT GETS SETTLED.**
+  `docs/DECISIONS.md` ("One repository: Adoom666/CloudeCodeDev", 2026-09-12,
+  Adam's ruling, verbatim "never work in any other repo") says nothing is
+  pushed, mirrored or released anywhere else, naming `ccsliinc/CloudeCode`.
+  MEASURED 2026-09-14 with `git ls-remote` per remote: all seven `feat/173-*`
+  branches are on `ccsliinc/CloudeCode` at SHAs identical to `adamdev`, pushed
+  after that ruling, and the owner's standing instruction is that
+  `ccsliinc/CloudeCode` remains HIS backup mirror while `CloudeCodeDev` is the
+  trunk. **Issue #122 asks Adam to rule on exactly this and has zero comments.**
+  Do not delete or rewrite his entry in `docs/DECISIONS.md`: it is his and that
+  file is append-only. Until #122 is answered, follow the owner's instruction
+  for his own mirror (push `adamdev` first, then `origin`) and record it, rather
+  than quietly picking a side. Full context: `.claude/notes/HANDOFF.md` 0.5.
 - **`gh`'s active account is GLOBAL TO THE MACHINE and does not hold still**,
   because other agents run `gh` under other accounts: never `gh auth switch`, and
   assert your own on EVERY call with

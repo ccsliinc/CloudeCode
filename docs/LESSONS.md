@@ -37,6 +37,16 @@ and found nothing" from "I could not look".
 - The `unknown` status itself: a real answer, never `idle`.
 - The uuid matcher: "a matcher that always finds something is worse than
   useless", with a mandatory negative control.
+- **A DDL rewriter that could not parse a statement guessed instead**
+  (2026-09-14, live `cloude.db`). Qualifying archive DDL onto an attached
+  schema matched `TABLE <bare name>`; sqlite stores fts5 shadow DDL
+  single-quoted, so it missed, and the fallback rewrote the first bare
+  occurrence of the name ANYWHERE in the statement. That produced
+  `CREATE TABLE 'archive.message_block_search_data'`, which sqlite accepted,
+  UNQUALIFIED, into main: four junk tables with literal dots in their names,
+  in the owner's live database. The new twist on this shape is that the
+  guess did not merely answer wrongly, it WROTE to the wrong file. A parser
+  that cannot parse must return None and let the caller refuse.
 - **GitHub's linkage index.** Measured by ccsliinc on an idle repo with zero
   contention: `gh issue view N --json closedByPullRequestsReferences` returns
   `[]` on the FIRST read every time, and the link appears about twelve
@@ -209,3 +219,247 @@ Neither dominates. A mechanical check answers about paths and is silent on a
 design contradiction that shares no file; a human read catches the
 contradiction and misses the glob. Keep both, and know which question each
 one answers.
+
+## A correct check nobody can afford to leave on
+
+**One occurrence, and it was mine, so it is here before it becomes two.**
+
+`assert_no_shadowing` detects the one state where the archive split is
+silently wrong: a table present in BOTH databases, where sqlite resolves the
+unqualified name to main and every archive read comes from the stale copy. It
+found exactly that on live within 70 seconds of the migration, which is the
+whole argument for having it.
+
+It also ran on EVERY connection the app opens, and logged the full table list
+every time. Measured on live: **448 identical lines in 20 seconds, 73.6 MB per
+hour, 1.73 GB per day.** Memoised on the shadow set it measured 1.03 MB/hour.
+
+The check was right. Its cost was the defect, and the failure mode is social
+rather than technical: an alarm that fills a disk gets switched off, and then
+the condition it was built to catch ships unobserved. A check is not finished
+when it is correct; it is finished when someone can afford to leave it on.
+
+**Do:** memoise on the SIGNATURE of what was found, not on "have I logged".
+A change in the finding must report again. Never memoise the RETURN VALUE:
+callers that act on the condition still need the true current answer.
+
+## Green while measuring the wrong build
+
+**One occurrence, six rounds of wasted investigation, 2026-09-14.**
+
+A variant of "a test that cannot fail", and worth its own name because the
+check here was not weak, it was reading a DIFFERENT ARTEFACT than the one on
+disk.
+
+`_apply_v16_ddl` kept writing to the wrong database while its source plainly
+called the new code path. `inspect.getsource` showed the new call. Six rounds
+of tracing later, `__code__.co_names` gave it away: `('DDL_V16', 'execute')`,
+the OLD loop. Python had loaded a stale `.pyc`. An edit, a revert during a
+negative control, and a restore had left the cached bytecode with the SAME
+mtime AND the SAME size as the source, and mtime plus size is the whole cache
+key, so the cache looked valid. 404 stale `.pyc` files were sitting under
+`src/`.
+
+**The generalisable form: introspecting a module tells you what Python
+LOADED, not what the file says.** `inspect.getsource` reads the FILE and so
+agrees with your editor; the bytecode is what actually ran. When those two
+disagree there is no warning anywhere.
+
+**Detect it.** When a change cannot be observed where the source says it must
+be, compare the two directly before suspecting your logic:
+
+    python3 -c "import mod; print(mod.fn.__code__.co_names)"   # what RAN
+    sed -n '/def fn/,/^def /p' mod.py                          # what is WRITTEN
+
+`co_names` lists the globals a function actually references, so a call you
+added appears there or it did not compile. `co_firstlineno` against the real
+line number catches the same thing.
+
+**Clear it.** Delete the caches and re-run, do not reason about it:
+
+    python3 -c "import pathlib; [q.unlink() for q in pathlib.Path('src').rglob('__pycache__/*.pyc')]"
+
+or run the suite once with `PYTHONDONTWRITEBYTECODE=1`.
+
+**Most at risk: an edit-revert-restore cycle**, which is exactly what watching
+a negative control go red and then restoring the fix does. That is now a
+routine step here, so this will recur.
+
+**The deployed server was NOT affected, and that was checked rather than
+assumed:** its `.pyc` mtime (1789394626) is newer than its source
+(1789330671), which is the normal healthy case. Live was never running stale
+bytecode. Only the development worktree was.
+
+## A check that can only say "I do not know"
+
+**Three for three on the same run, which is not a sampling edge case.**
+
+`deploy-mini.sh`'s post-restart up-check proves process identity by resolving
+the new PID's working directory. On this machine it cannot: the server is
+spawned by the Electron supervisor and the cwd is not sampleable. Every one of
+three live deploys on 2026-09-14 returned `exit 3 CANNOT DETERMINE`, and each
+time the restart had in fact succeeded, verified by hand in seconds.
+
+A gate that never reaches a verdict is worse than no gate. It trains its
+reader to treat the refusal as noise, which is exactly the habit that makes a
+REAL `CANNOT DETERMINE` invisible. The discipline this project applies to
+measurement (a reading that did not happen is not a reading of nothing) cuts
+both ways: a check that can never take its reading should not be the check.
+
+**Done, 2026-09-14, in `scripts/deploy-restart-check.sh`:** leg D removed. The two legs that DID answer are sufficient and were
+what I verified by hand each time. The PID changed, and the new PID owns the
+listener on the port. The script already re-hashes the whole server dir after
+the restart, which proves the running tree is the deployed tree far more
+directly than a cwd ever could, so the identity leg is redundant with a check
+already present three lines below it.
+
+The removal is recorded in a comment at the deleted leg's own site, not just
+in the diff, so the next reader who wonders why identity is not checked there
+finds the answer in the file. Legs A, B, C, E and F are untouched. Verified on
+the next live deploy, which printed `== DEPLOYED ==` with health 200
+attributable to the new pid, instead of the refusal it had given three times
+running.
+
+## When a mechanism resolves names for you, test the things that opt out
+
+**Splitting the archive into `cloude-archive.db` and attaching it made every
+table reachable by its bare name, and that is precisely what hid the defect.**
+SQLite resolves an unqualified table name across attached databases, so after
+the split `SELECT ... FROM message_transcripts` kept working with no change at
+any of 68 call sites. The seam looked complete because every read of DATA went
+on answering.
+
+`sqlite_master` does not take part in that resolution. It is one table PER
+SCHEMA, so a bare `SELECT name FROM sqlite_master WHERE name = 'x'` means
+`main.sqlite_master` and can only ever describe `cloude.db`. Six presence
+checks were written that way, and after the split all six reported the entire
+message model ABSENT on a datastore that holds every row of it. The drain
+refused to start with `model_absent`, which is a truthful sentence about a
+reading that was taken from the wrong file.
+
+**The reason the tests missed it generalises, and it is the real lesson.**
+Every ATTACH test exercised table reads, which FOLLOW the resolution rule, and
+never a `sqlite_master` read, which does not. A test suite built around the
+mechanism's normal case cannot see the cases that opt out of the mechanism,
+because from inside the mechanism they do not look like a different thing.
+
+**The rule: when something resolves names on your behalf, go looking for what
+opts out of that resolution, and test those specifically.** The candidates are
+metadata surfaces, PRAGMAs, and anything that names a schema explicitly or
+silently defaults to one. Do not reason about which is which. Build a two
+database fixture where a table exists in the ATTACHED file ONLY, then run every
+mechanism you use against it and write down which ones answer.
+
+**Measured that way, on SQLite 3.53.4, the split is clean and not obvious:**
+
+Follow cross-schema resolution, so they answer about the attached file:
+bare table names in a query, `PRAGMA table_info`, `PRAGMA table_xinfo`,
+`PRAGMA foreign_key_list`, `PRAGMA index_list`, and the `pragma_table_info()`
+table-valued function.
+
+Opt OUT, so they answer about `main` alone and say nothing about the attached
+file: `sqlite_master` and `sqlite_schema`.
+
+Go FURTHER than either, folding every attached database into ONE unattributed
+answer: `PRAGMA integrity_check` and `PRAGMA foreign_key_check`. These are the
+ones to be careful with, and see the correction below for why.
+
+The `table_info` family landing on the safe side is the part worth having
+measured. Assuming it behaved like `sqlite_master` would have meant rewriting a
+dozen `PRAGMA table_info` guards in `db_steps.py` that were never broken.
+
+### The correction, which is the better half of this lesson
+
+**I reported `PRAGMA integrity_check` as main-only, and it is not. I built the
+fixture, ran it, and read a false negative as a measurement.**
+
+The fixture attached a second database and asked each mechanism about a table
+that lived only there. For `sqlite_master` that is a complete experiment. For
+`integrity_check` it is not, because the attached file was UNDAMAGED: a pragma
+that walks every attachment and a pragma that walks only `main` BOTH answer
+`ok` on a sound pair. The experiment could not distinguish the two hypotheses
+it was run to distinguish, and I reported the one I already believed.
+
+Re-measured with a sound `main` and a deliberately corrupted attachment,
+SQLite 3.53.4:
+
+* `PRAGMA integrity_check` (bare) answered `row 408 missing from index ix`
+* `PRAGMA main.integrity_check` answered `ok`
+* `PRAGMA side.integrity_check` answered `row 408 missing from index ix`
+
+So a bare `integrity_check` walks EVERY attached database and folds the result
+into one string. The prefix is what scopes it, and it is the bare form that is
+surprising.
+
+**A negative result only measures something if the positive case was reachable
+in the same fixture.** Before trusting an experiment that came back negative,
+ask what the fixture would have shown had the answer been the other way. If
+both hypotheses produce the same output, nothing was measured.
+
+**What this meant for the real system, which is not what I first reported.**
+The boot gate was NOT leaving the archive unexamined; `connect()` attaches the
+archive, so its bare pragma had been walking all 4.8 GB of it. The defect was
+different and still ours:
+
+* an archive fault was recorded as `state: failed`, naming the wrong file;
+* the boot path published an EMPTY `databases` list, so every later fold read
+  `cannot_determine` and no cached verdict could ever vouch for a split
+  install; and
+* the archive was walked TWICE per check, once by the bare pragma and again by
+  `check_every_database` attributing it.
+
+Fixed by scoping `db.integrity_check` to `PRAGMA main.integrity_check`, so the
+helper is the state database's own verdict and `check_every_database` is the
+one place that covers the pair and names each file. One file, one walk, one
+attribution. The boot ladder gained one refusal rung, `RUN_PAIR_NOT_COVERED`,
+which refuses to skip on a cached record that does not vouch for every database
+the install actually has.
+
+**The negative control was watched RED before it was trusted:** with the pre-fix
+ladder and the bare pragma restored, all four new tests fail; restored, all four
+pass. The positive control matters as much - a rung that refused every split
+install would satisfy the corrupt-archive test perfectly.
+
+**How to find the siblings: grep for the opt-out names, then judge each site by
+which file its subject now lives in.** `sqlite_master`, `sqlite_schema`,
+`integrity_check`, `foreign_key_check`, plus any string with an explicit
+`main.` prefix. A site is fine if its subject is an app-side table and wrong if
+its subject moved. That audit found the `integrity_check` mis-attribution
+above, which is fixed, and one more, which is recorded and deliberately not
+fixed:
+
+* `message_scheme_repair.stored_table_sql` reads `main.sqlite_master` for
+  `message_transcripts`, which is now archive-side, so it returns `''` and
+  `relax_scheme_check` takes its "the archive is switched off, nothing to do"
+  branch on an install where the table plainly exists. It fails CLOSED, writing
+  nothing, and it cannot bite this install because the step is already applied
+  at v26 - but a v25 install split before migrating would skip the CHECK
+  relaxation and report success.
+
+### The sibling in the same family: a DDL that is accepted and can never be honoured
+
+**Same shape one layer down, added 2026-09-14.** It is filed here rather than
+as its own entry because the shape is the one above: a mechanism answers about
+something other than what you meant, and the checker that should have caught it
+says nothing.
+
+Measured on SQLite 3.53.4 while writing the archive split:
+
+* `CREATE TABLE archive.t(sid INTEGER REFERENCES main.sessions(id))` is a
+  DDL-time **syntax error**, which is the safe case and the one people expect.
+* `CREATE TABLE archive.t2(sid INTEGER REFERENCES sessions(id))` is
+  **ACCEPTED at DDL time**. The unqualified name binds to `archive.sessions`,
+  same-database resolution, and every INSERT then fails forever with
+  `no such table: archive.sessions`.
+* `PRAGMA archive.foreign_key_check` returns `[]` on that table. It does not
+  report the dangling target.
+
+So a migration that copied the DDL verbatim would create every table
+successfully, pass every integrity check, report success, and leave an archive
+nothing can ever write to.
+
+**The defence is a REAL write, not a read of the schema.**
+`archive_db_ddl.strip_crossing_references` removes the crossing constraints and
+`archive_db_split.probe_writability` proves the strip worked by issuing an
+actual INSERT. Reading the DDL back cannot distinguish the accepted-but-dead
+form from the working one, because both read exactly the same.

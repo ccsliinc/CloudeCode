@@ -1,30 +1,330 @@
 # HANDOFF - CloudeCode app development
 
-Written 2026-09-07, UPDATED 2026-09-08 (late round, `07bbbb8..54731f9`,
-closed out and confirmed live), UPDATED AGAIN 2026-09-09 (status-light and
-housekeeping round, `922e400..dfddbdc`, closed out and confirmed live), and
-UPDATED AGAIN 2026-09-12 for the 1.4.0 release, deploy and integration round.
+Written 2026-09-07 and updated on 2026-09-08, 2026-09-09 and 2026-09-12.
+**REWRITTEN AT THE HEAD ON 2026-09-14** for the archive round, ahead of a
+conversation compaction.
 
-**READ SECTION 0 FIRST. IT SUPERSEDES SECTION 8.** Section 8 describes the
-tree as it stood on 2026-09-09 at `dfddbdc`, which is four days and one
-release out of date; it is kept below because its commit tables are history,
-not because its "CURRENT GIT STATE" heading is still true.
-Re-scoped from
-`Infrastructure/.claude/notes/handoff-2026-09-06-cloudecode-migration.md`, which
-was written for someone continuing the MacBook-to-mini MIGRATION. This one is
-written for someone continuing APP DEVELOPMENT.
+**READ SECTION 0 FIRST. IT SUPERSEDES EVERY DATED SECTION BELOW IT**, including
+the old section 0 (2026-09-12) and section 8 (2026-09-09), both of which are
+kept because their commit tables are history, not because their "CURRENT" and
+"STATE AS OF" headings are still true.
 
 Everything below was measured on the dates given, not inferred. Where something
-is unproven it says so in those words.
+is REPORTED rather than measured it says so in those words. Where a figure
+could not be verified this round it is marked UNVERIFIED rather than repeated
+as fact.
 
-Read `CLAUDE.md` in the repo root first - it is the architecture and the
-conventions, and this file deliberately does not repeat it. Read
-`.claude/TODO.md` second, starting with its `## OPEN - index`. This file is the
-operational half: where things run, how to deploy, and what will lie to you.
+Read `CLAUDE.md` in the repo root first: it is a ROUTING LAYER as of `cecebf5`
+(2026-09-13), carrying the rules and a pointer to the document holding the
+evidence for each. Read `.claude/TODO.md` second, and
+`.claude/notes/BRANCH-INVENTORY.md` third if you are about to touch a branch.
+`.claude/notes/NEXT-SESSION.md` is the short version of this file.
 
 ---
 
-## 0. STATE AS OF 2026-09-12 - read this before section 8
+## 0. STATE AS OF 2026-09-14 - read this before anything else
+
+Measured 2026-09-14 between 15:50Z and 16:10Z against git, the GitHub API, the
+live state directory and the deployed server copy. Method is named at each row.
+
+**EVERY `docs/history-archive-*.md`, `docs/archive-*.md`,
+`src/core/archive_*`, `src/core/message_projection*`, `src/api/archive_blob_routes.py`
+AND `scripts/drain_preflight.py` PATH NAMED BELOW EXISTS ONLY ON A `feat/173-*`
+BRANCH, NOT ON TRUNK.** `.claude/notes/BRANCH-INVENTORY.md` says which branch
+carries which. A path that resolves to nothing on `master` is expected here,
+not a broken citation. The two exceptions, named where they appear, are
+`docs/transcript-archive-integrity.md`, which this branch commits, and
+`scripts/transcript-archive/verify_archive_integrity.py`, which is in no git
+object at all.
+
+### 0.1 WHAT IS RUNNING RIGHT NOW
+
+**A corpus drain is in flight and it is long.** `scripts/project_archive_to_message_model.py --apply`,
+**pid 42032**, started 2026-09-14 11:59:02 local (15:59:02Z), cwd
+`.../scratchpad/wt-archive-db-split`. It is projecting the transcript archive
+into the v16 `message_*` model.
+
+Read its progress, do not guess at it:
+
+    cat "$HOME/Library/Application Support/CloudeCode/message-drain/latest.json"
+
+At 16:06:22Z that file read: `archives_done` 256, `archives_pending` 19,305,
+`archives_per_second` 0.582, `eta_seconds` 33,146, `archive_db_bytes`
+5,708,038,144, `status` running.
+
+**THAT ETA IS 9.2 HOURS, AND THE PLANNING FIGURE WAS 3.7.** The 3.7 hour and
+15.4 GiB projection in `docs/history-archive-join.md`, and the
+`PROJECTED_GROWTH_GIB = 15.6` constant in `scripts/drain_preflight.py`, were
+EXTRAPOLATED from a 300-archive sample and are labelled as such in both places.
+The running drain's own self-reported ETA at its first few minutes is 2.5x
+that. One sample at one moment is not a refutation of an extrapolation, and
+early archives may not be representative. **Re-read the file before you quote
+either number.** The disk figure moves the same way: the archive database grew
+452 MB in the first 439 seconds.
+
+**The live server is pid 99158 on port 8000**, started from
+`/Applications/Cloude Code.app` at 10:40:57 local. Its derived server copy is
+`~/Library/Application Support/cloude-code-menubar/server/`, whose `VERSION`
+file reads **1.4.0** (the version string is stamped at install time; the code
+in that directory is newer than the string, which is the trap section 0 of the
+2026-09-12 record already names).
+
+### 0.2 THE DATABASE SPLIT IS LIVE. IT HAPPENED TODAY.
+
+The state directory is `~/Library/Application Support/CloudeCode/`. NOT
+`cloude-code-menubar/`, which is the Electron user-data directory and holds
+the derived server copy but no database.
+
+| Measurement | Value | How |
+|---|---|---|
+| `cloude.db` before the split | **5,584,809,984 bytes** | named in `/Volumes/Backup/cloude-db-20260914/MANIFEST.txt` |
+| `cloude.db` now | **720,896 bytes** | `stat -f %z`, 2026-09-14 16:03Z |
+| `cloude-archive.db` now | **5,364,752,384 bytes** | same, and GROWING as the drain runs |
+| Schema migration | v26 to **v27**, started 2026-09-14T13:50:04.290943Z, completed 13:50:32.617374Z, **28.3 seconds** | `migration_trail.jsonl` in the state directory |
+| Pre-migration backup | `cloude.db.bak-v26-20260914T135004Z`, `backup_verified: 1` | same file |
+
+**Do not quote 5.65 GB, 712,704 bytes or 4.8 GB for these.** 712,704 was the
+`cloude.db` size at 14:03Z and it has grown since; 4.8 GB and the 56-second
+forward run in `docs/history-archive-db-split.md` are the REHEARSAL numbers,
+taken against a 5.57 GB snapshot, not the live run.
+
+### 0.3 THE BACKUPS
+
+| Backup | Where | Verified |
+|---|---|---|
+| Pre-split, 2026-09-14 09:44 local | `/Volumes/Backup/cloude-db-20260914/cloude.db`, 5,485,260,800 bytes | Yes, and it says how: `VACUUM INTO` with the source opened `mode=ro`, sha256 recorded, `integrity_check ok`, `foreign_key_check clean`, schema 26, seven row counts matched against live. `MANIFEST.txt` beside it. |
+| Earlier, 2026-09-11 | archive-nas 10.0.1.237, `/mnt/ARCHIVE/vault/85_cloud-exports/claude/` | REPORTED here; the NAS copy was not re-verified this round. |
+
+The local backup **deliberately excludes** `refresh_tokens.db` and
+`hook_tokens.json`: they are live credential material and that drive is not
+encrypted. The NAS copy covers them.
+
+### 0.4 WHAT IS ACTUALLY DEPLOYED, WHICH IS NOT WHAT YOU WOULD GUESS
+
+Measured by looking for marker files in the derived server copy, 2026-09-14.
+The headline "nothing of the archive work is on live except the split" is
+**wrong**: three of the four archive branches are substantially live.
+
+| Marker | In the deployed copy | Means |
+|---|---|---|
+| `src/core/message_projection.py` | PRESENT | the join (`feat/173-archive-join-sqlite`) is live |
+| `src/core/archive_search_fts.py` | PRESENT | FTS5 search and body compression (`feat/173-archive-fts-compress`) are live |
+| `src/core/archive_db_split.py`, `archive_db_attach.py` | PRESENT | the split (`feat/173-archive-db-split`) is live |
+| `src/core/db_integrity_gate.py` containing `RUN_PAIR_NOT_COVERED` | **0 occurrences** | `aa6f973`, the integrity-gate pair fix, is **NOT** live |
+| `src/api/archive_blob_routes.py` | **ABSENT** | `feat/173-archive-http-surface` is **NOT** live |
+
+**The pre-fix integrity gate is observably still running.**
+`~/Library/Application Support/CloudeCode/db-integrity/latest.json`, written at
+2026-09-14T14:03:53Z, carries `"databases": []` and
+`"db_size_bytes": 712704`. That empty list is precisely the defect `aa6f973`
+fixes: a boot check that publishes no per-database attribution, so no later
+fold can vouch for a split install. Nothing is silently wrong with the data;
+what is wrong is that the gate cannot say so.
+
+### 0.5 THE REPOSITORY QUESTION IS OPEN AND THE WRITTEN RULE CONTRADICTS PRACTICE
+
+This is the one governance item that will trip an agent immediately.
+
+- `docs/DECISIONS.md`, entry "One repository: Adoom666/CloudeCodeDev",
+  2026-09-12, Adam verbatim: "We should only ever be working in our one single
+  repo" and "never work in any other repo. I don't care what Joe says." It says
+  nothing is pushed, mirrored or released anywhere else, naming
+  `ccsliinc/CloudeCode` explicitly. `CLAUDE.md` carries that rule.
+- **Measured practice disagrees.** All seven `feat/173-*` branches are on
+  `origin` (`ccsliinc/CloudeCode`) at SHAs identical to `adamdev`, verified with
+  `git ls-remote` per remote on 2026-09-14, and they were pushed after that
+  ruling.
+- **The owner's own position**, given 2026-09-14: `Adoom666/CloudeCodeDev`
+  master is the single TRUNK ("his is the master repo for now ... he doesnt
+  need to access my repo"), and `ccsliinc/CloudeCode` remains HIS backup
+  mirror. A write invitation to `ccsliinc/CloudeCode` was extended to Adam and
+  then WITHDRAWN at his instruction.
+- **Issue #122 asks Adam to rule on exactly this and has ZERO comments.**
+  Verified 2026-09-14 via the GitHub API.
+
+Until #122 is answered: push `adamdev` first, then `origin`, and **never**
+`upstream` (`Adoom666/CloudeCode`), whose push URL is
+`DISABLED_do_not_push_to_Adoom666_CloudeCode` by construction. Do not delete or
+rewrite Adam's ruling in `docs/DECISIONS.md`; it is append-only and it is his.
+
+`ccsliinc/CloudeCode` is **PUBLIC** (`private: false`), default branch `main`.
+Branch protection on `main` and `master`: force-push blocked, deletion blocked,
+**no review requirement**, admin enforcement OFF. One ruleset, "protect release
+tags", active, targeting tags. All read from the API 2026-09-14.
+
+**Its default branch is 267 commits behind `origin/master` and 282 behind
+`adamdev/master`**, and contains none of v1.2.1, v1.4.0, v1.4.1, v1.4.2,
+v1.4.3 or v1.4.4 (each checked with `git merge-base --is-ancestor`). Anyone
+landing on the public repo sees v1.2.0. **That is unresolved and it is the
+owner's call.**
+
+### 0.6 THE TRUNK, THE VERSIONS, AND WHERE ADAM IS
+
+| Thing | Value |
+|---|---|
+| Trunk | `adamdev/master`, tip `5b61b59`, **2026-09-13 10:26:57 -0400**, author `psyance`. He has pushed nothing since. |
+| Version on trunk | `macOS/package.json` reads **1.4.4** |
+| Tags on `adamdev` only | `v1.4.3` (`b5de6ef`), `v1.4.4` (`5369fb8`) |
+| Our last merged work | PR #108, `integration/1.3.0`, **110 commits** (counted with `git rev-list --count` across the merge commit `3316855`, because the GitHub API caps its own `commits` array at 100), merged by `Adoom666` 2026-09-12T15:07:21Z |
+
+`CLAUDE.md` is now 552 lines and is a routing layer (`cecebf5`). The record it
+used to carry lives in twelve documents under `docs/`, listed in its own table,
+and `tests/test_docs_index.py` fails the build if a `docs/*.md` file has no row.
+
+### 0.7 OPEN WITH ADAM, ALL UNANSWERED
+
+Verified 2026-09-14 via the GitHub API; comment counts are from the API, not
+from memory.
+
+| Item | Kind | State |
+|---|---|---|
+| #122 one trunk, a structural-change rule, the repository question | issue | OPEN, **0 comments** |
+| #173 our claim on the history and archive browser | issue | OPEN, 3 comments, **all ours** |
+| PR #174 the claim's draft PR | PR | OPEN, **0 comments, 0 reviews** |
+| #175 "front end redesign: the whole ui rebuilt in svelte" | issue | OPEN, **0 comments**, labelled `owner-only`, `blocked` |
+| #115 four environmental test failures | issue | OPEN |
+| #116 shim gaps / PR #117 | issue + PR | OPEN |
+| #118 launchpad citations in tooling / PR #119 | issue + PR | OPEN |
+| #120 a place to share skills | issue | OPEN |
+| #121 two mutation scripts still red | issue | OPEN, labelled `blocked` |
+
+**The boundary question between #173 and #175 is the one that actually blocks
+work.** #175's scope explicitly names "the archive screens" and it is
+`owner-only`. Our proposed split, put to him and unanswered: he owns style,
+visual design and layout; we own module structure, routing, the data path and
+the plugin surface. On that split slices 1, 2 and 4 are uncontested and BUILT;
+slice 3 and slices 5 to 9 are contested and NOT started.
+
+**NEW SINCE the owner's last summary:** Adam opened **PR #176**,
+"claim #123: kill the crying wolf, passive attention detection", branch
+`attention-passive-123`. It is his claim on an issue he filed.
+
+### 0.8 THE ARCHIVE ROUND, WHAT IT FOUND AND WHAT IS TRUE
+
+Full detail lives in the branch documents. The one-line versions, each with
+where to verify it:
+
+- **The archive browser was reading empty tables.** The ingester writes
+  `transcript_archives` / `transcript_records`; browse, read, search, turn and
+  export read the v16 `message_*` model. **22 of the 44 server archive modules
+  read that side and not one references the archive tables.** Measured: 22,828
+  archive rows and 3,703,771,340 compressed bytes against **0 rows** in
+  `message_transcripts`. `docs/history-archive-join.md`.
+- **Search was a correctness defect, not a speed one.** `INSTR(b.body_json, ...)`
+  scanned whole jsonl records including `cwd`, `sessionId` and `timestamp`;
+  `claude-opus-4` returned **33,805 hits of which 165 were real message text**.
+  FTS5 over `message_content_blocks` returns 165; a miss went **919 ms to
+  0.02 ms**. Index **51.4 MiB** with `unicode61`. Trigram was measured at
+  **332.3 MiB** and refused. `docs/archive-search-index.md`.
+- **`body_json` compressed per row** once search stopped scanning it, with a
+  decode cost of **6.30 microseconds mean**. Same document. The doc's own
+  saving figure is "358.7 MiB of body plus 51.4 MiB of index"; read it there
+  rather than from a summary.
+- **The database split.** 19 tables plus 2 views moved, 8 app tables stayed.
+  Three crossing foreign keys, **all with zero orphans**, dropped to plain
+  columns and enforced in code. ATTACH with one connection, **zero call-site
+  changes across 68 modules**. `docs/history-archive-db-split.md`. The live
+  numbers are in 0.2 above; the doc's are the rehearsal's.
+- **The 16.5 percent checksum "mismatch" is not corruption.** 3,872 superseded
+  rows whose `content_gzip` is an 8-byte sentinel while `content_sha256` and
+  `raw_byte_length` still describe the full content, which lives forward along
+  `superseded_by_archive_id`. **23,429 of 23,429 reconstruct to their recorded
+  hash AND length.** Against real files: 19,591 byte-identical, 1,314 correct
+  historical prefixes, **0 mismatch**, 2,524 whose source file is gone. The
+  refusal rule: reconstruct via `export_archive`, never `content_gzip`, and
+  refuse if the hash OR the length disagrees; a missing source file is NOT a
+  refusal condition. `docs/transcript-archive-integrity.md`, committed on this
+  branch after sitting untracked.
+- **The old "400 of 400 byte-exact" claim was narrow, and the bias was the
+  harness rather than a WHERE clause.**
+  `scripts/transcript-archive/corpus_roundtrip_harness.py` imports only the
+  standard library plus `transcript_archive.py` loaded by file path; the string
+  "dedupe" appears in it **zero times**, verified 2026-09-14. It could not
+  create a supersession chain at all.
+- **The new HTTP surface** (`feat/173-archive-http-surface`, `0439526`). Both
+  id spaces are `INTEGER PRIMARY KEY` in the same database, so an integer would
+  return a real WRONG transcript once the drain lands. The archive is addressed
+  by `archive_uuid`; an integer gets **409** naming both spaces with a retry
+  link. Measured: the 244 MB row peaks at about **766 MB** and costs **392.4 ms
+  on-loop against 3.5 ms threaded**; a **depth-267** chain row costs **28.0 ms
+  for 92 KB** because the walk is one SELECT per link.
+  `docs/archive-blob-api.md`.
+
+### 0.9 THE CLIENT MIGRATION
+
+Nine slices, ordered by risk rather than size, in `docs/history-archive-scope.md`.
+**Slices 1, 2 and 4 are built; 3 and 5 to 9 are blocked on Adam** (see 0.7).
+
+- **Slice 1** (`feat/173-slice1-app-screen`, `dc58507`): the `app-screen`
+  surface plus four routing modules moved into
+  `web/src/lib/plugins/history/`. **Four deviations from the scope**, named in
+  the commit message. The one that means the SCOPE was wrong:
+  **`PluginContext.flags` reads an absent key as ON**, which is backwards for a
+  feature whose routes 404 when it is off, and the gate has three states where
+  a flag has two; the availability probe moved to `history/availability.ts`.
+  Grant ENFORCEMENT moved forward from slice 2, because a declared but
+  unenforced grant is decoration.
+- **Slices 2 and 4** (`feat/173-slice2-4-granted-client-state`, `fcba547`): the
+  granted client, state, keys, help modal, formatters. Verified in a real
+  browser. **Nothing in them turned out to be contested layout.**
+- The plugin registry already existed with four surfaces and one shipped plugin
+  (mark-unread). **"Plugin" is the wrong word** for a compile-time module
+  boundary under `script-src 'self'`; the scope proposes **"feature module"**.
+- **Standing it up alone** is section 10 of the scope ON CHAIN A ONLY. All 54
+  modules reach for exactly **eight host globals**; the nine slices already
+  remove five as a side effect. The server has **three genuinely ambiguous
+  modules**, all in the ingester. The scope's own estimate: "closer to a
+  weekend than a month". An import-direction test landed in slice 1 and its
+  first run failed on two files that only MENTION `window.API` in a comment, so
+  it reads code rather than prose.
+
+### 0.10 THE TWO TRAPS THAT WILL COST THE NEXT SESSION TIME
+
+**1. Every `feat/173-*` branch carries a 5,000-line `CLAUDE.md`.** They fork at
+`917835f`, one commit BEFORE `cecebf5` stripped the file to its 552-line
+routing layer. Merging any of them conflicts across the whole file, and both
+obvious resolutions are wrong. The mechanical fix and the exact line counts are
+in `.claude/notes/BRANCH-INVENTORY.md`. `docs/history-archive-scope.md` has the
+same problem: **1,668 lines on chain A, 1,040 on chain B**, with different
+section numbering and neither a superset of the other.
+
+**2. `docs/LESSONS.md` is four entries behind on trunk.** Trunk carries 211
+lines and 7 entries. `feat/173-archive-db-split` carries 437 lines and 11.
+This branch brings trunk up to the db-split text so the two cannot diverge
+further. The file is shared with the other party and
+`.claude/skills/work/SKILL.md` sends every session to it, so a stale trunk copy
+is the gotcha-8 failure aimed at the file whose job is preventing it.
+
+### 0.11 WHAT WAS NOT MEASURED THIS ROUND, SAID OUT LOUD
+
+- **The test suite was not re-run.** `CLAUDE.md` still quotes 2026-09-12 on
+  `master` with `-p no:randomly`: 7365 passed / 0 failed / 60 skipped, node 203
+  suites, vitest 1430. A drain is saturating this box, so any number taken now
+  would be load-skewed, and the rule in `CLAUDE.md` stands: TAKE YOUR OWN
+  BASELINE ON A CLEAN TREE. Treat that figure as UNVERIFIED as of 2026-09-14.
+- **The NAS backup of 2026-09-11 was not re-verified.** It is REPORTED.
+- **The live migration's wall-clock and row count.** The conversation reported
+  "2m 01s, 10,474,651 rows". `migration_trail.jsonl` records the schema step at
+  **28.3 seconds** and no row count. The 2m 01s figure is plausibly the whole
+  operator script including backup and VACUUM, and the row count is plausibly
+  the sum across the 19 moved tables, but **neither is verifiable from any
+  artifact on disk**, so both are UNVERIFIED here.
+- **The 1.4.2 login 404** was OUR false alarm and it is already recorded on
+  trunk in the repo-root `TODO.md` (Adam's commit `1b48cf9`, "todo: record P6,
+  the 1.4.2 login 404, fixed in 1.4.3"). `/login` and `/api/v1/auth/login`
+  never existed in either tree, all five auth routes were healthy, and the
+  route-registration defect Adam found was real but LATENT because the
+  installed fastapi resolves includes lazily. Not re-verified this round.
+
+### 0.12 THERE ARE TWO TODO FILES AND THEY ARE DIFFERENT FILES
+
+`TODO.md` at the repo root is Adam's, 1,273 lines. `.claude/TODO.md` is ours,
+10,653 lines before this round, APPEND ONLY. His `1b48cf9` edited the root
+file, which is why the P6 record is invisible if you only read ours.
+`.gitignore` carries `.claude/*`, so ours needs `git add -f`.
+
+---
+## 0-HISTORY. STATE AS OF 2026-09-12 - SUPERSEDED BY SECTION 0 ABOVE, KEPT AS HISTORY
 
 Measured on 2026-09-12 against git, the GitHub API and the code at `b5de919`,
 in a clean worktree, then UPDATED LATER THE SAME DAY for the 1.4.1 cut. Where

@@ -10651,3 +10651,221 @@ APPEND ONLY. Nothing above is deleted.
       `v0.8.1` from August, with 1.2.0 and 1.0.3x sitting as drafts, exactly as
       HANDOFF already recorded. **Only `origin` builds a DMG**, which also
       means origin is the only place a tag push can be verified by a build.
+
+## 2026-09-13/14 - THE ARCHIVE ROUND, and the docs pass before a compaction
+
+APPENDED, nothing above this line was changed. Written by the documentation
+pass on 2026-09-14 between 15:50Z and 16:15Z, ahead of a conversation
+compaction. Every figure below was measured this round unless it says
+REPORTED or UNVERIFIED.
+
+### Coordination, state as of 2026-09-14
+
+- [x] **`Adoom666/CloudeCodeDev` master is the single trunk.** Owner, verbatim:
+      "his is the master repo for now. its just the 2 of us during development.
+      he doesnt need to access my repo." Tip `5b61b59`, 2026-09-13 10:26:57
+      -0400, author `psyance`. Version 1.4.4. He has pushed nothing since.
+- [x] **A write invitation to `ccsliinc/CloudeCode` was extended and then
+      WITHDRAWN** at the owner's instruction.
+- [x] **`ccsliinc/CloudeCode` measured**: PUBLIC (`private: false`), default
+      branch `main`. Branch protection on `main` and `master`: force-push
+      blocked, deletion blocked, NO review requirement, admin enforcement OFF.
+      One active ruleset, "protect release tags", targeting tags. Tags present:
+      v1.2.0, v1.2.1, v1.4.0, v1.4.1, v1.4.2. `v1.4.3` and `v1.4.4` exist on
+      `adamdev` only.
+- [ ] **OPEN, OWNER'S CALL: `origin/main` is 267 commits behind `origin/master`
+      and 282 behind `adamdev/master`**, and contains none of v1.2.1, v1.4.0,
+      v1.4.1, v1.4.2, v1.4.3 or v1.4.4 (each checked with `git merge-base
+      --is-ancestor`). It is the DEFAULT branch of the public mirror, so a
+      visitor sees v1.2.0.
+- [ ] **OPEN, CONTRADICTION ON RECORD.** `docs/DECISIONS.md` "One repository:
+      Adoom666/CloudeCodeDev" (2026-09-12) says nothing is pushed, mirrored or
+      released anywhere else, naming `ccsliinc/CloudeCode`. Measured 2026-09-14:
+      all seven `feat/173-*` branches are on `origin` at SHAs identical to
+      `adamdev`, pushed after that ruling. The owner's own position is that
+      `ccsliinc/CloudeCode` remains his backup mirror. **#122 asks Adam to rule
+      and has ZERO comments.** Adam's ruling was NOT edited: it is his and the
+      file is append-only. `CLAUDE.md` now carries the contradiction as a dated
+      note rather than silently agreeing with one side.
+- [x] **Open with Adam, all unanswered, comment counts read from the API**:
+      #122 (0 comments), #173 (3, all ours), PR #174 (0 comments, 0 reviews),
+      #175 (0 comments, `owner-only`, scope names "the archive screens"), plus
+      #115, #116/PR #117, #118/PR #119, #120, #121.
+- [x] **NEW: Adam opened PR #176**, "claim #123: kill the crying wolf, passive
+      attention detection", branch `attention-passive-123`. Not in any earlier
+      summary.
+- [x] **PR #108 was 110 commits**, counted with `git rev-list --count` across
+      merge commit `3316855`. `gh pr view --json commits` reports 100 because
+      the GitHub API caps that array at 100. Merged by `Adoom666`
+      2026-09-12T15:07:21Z.
+
+### The archive work, seven branches, two chains
+
+- [x] **Branch inventory written to `.claude/notes/BRANCH-INVENTORY.md`**, with
+      tip SHA, ahead/behind, contents and deployed status per branch, measured
+      2026-09-14T16:07:48Z with `git ls-remote` per remote.
+- [x] All seven `feat/173-*` branches fork at `917835f` and are pushed to BOTH
+      remotes at identical SHAs. They are TWO chains that diverged at
+      `49fd571`: a client chain (`-history-archive` > `-slice1-app-screen` >
+      `-slice2-4-granted-client-state`) and an archive chain
+      (`-archive-join-sqlite` > `-archive-fts-compress` > `-archive-db-split`,
+      with `-archive-http-surface` forked off `75afdb9` before the last two
+      commits of `-archive-db-split`).
+- [x] **The archive browser was reading empty tables.** 22 of the 44 server
+      archive modules read the v16 `message_*` model; not one references the
+      archive tables. 22,828 archive rows and 3,703,771,340 compressed bytes
+      against 0 rows in `message_transcripts`.
+- [x] **Search was a correctness defect.** `claude-opus-4` returned 33,805 hits
+      of which 165 were real message text. FTS5 returns 165; a miss went 919 ms
+      to 0.02 ms. Index 51.4 MiB `unicode61`; trigram measured at 332.3 MiB and
+      refused.
+- [x] **`body_json` compressed per row**, decode 6.30 microseconds mean.
+- [x] **The database split shipped to live today.** Schema v26 to v27,
+      2026-09-14T13:50:04.290943Z to 13:50:32.617374Z, **28.3 seconds**, backup
+      `cloude.db.bak-v26-20260914T135004Z` verified, all from
+      `migration_trail.jsonl`. Live sizes measured 16:03Z: `cloude.db`
+      **720,896 bytes**, `cloude-archive.db` **5,364,752,384 bytes** and
+      growing. Pre-split `cloude.db` was **5,584,809,984 bytes** per the backup
+      manifest.
+- [x] **CORRECTED: the numbers 5.65 GB, 712,704 bytes, 4.8 GB and a 2-minute
+      window are not the live figures.** 712,704 was `cloude.db` at 14:03Z and
+      it has grown; 4.8 GB and the 56-second forward run in
+      `docs/history-archive-db-split.md` are the REHEARSAL, run against a
+      5.57 GB snapshot. The "2m 01s / 10,474,651 rows" figures are UNVERIFIED:
+      no artifact on disk carries them.
+- [x] **The 16.5 percent checksum "mismatch" is not corruption.** 3,872
+      superseded rows carrying an 8-byte sentinel; 23,429 of 23,429 reconstruct
+      to their recorded hash AND length; against real files 19,591
+      byte-identical, 1,314 correct prefixes, 0 mismatch, 2,524 whose source is
+      gone. Chains reach depth 262 (267 in a later same-day reading; the table
+      is live).
+- [x] **The old "400 of 400 byte-exact" claim was narrow, and the bias was the
+      HARNESS.** `scripts/transcript-archive/corpus_roundtrip_harness.py`
+      imports only the standard library plus `transcript_archive.py` by file
+      path; the string "dedupe" appears zero times. It could not build a
+      supersession chain.
+- [x] **`docs/transcript-archive-integrity.md` RESCUED.** It was untracked, in
+      no git object, in a main working copy sitting on the stale
+      `release/1.2.1` branch. Committed here with two dated corrections
+      appended and a row added to `CLAUDE.md`'s document index.
+- [ ] **OPEN: `scripts/transcript-archive/verify_archive_integrity.py` is still
+      untracked** and exists in no git object. It is the script that re-runs
+      that measurement. Left for whoever owns `scripts/**`, because an agent was
+      working there.
+- [x] **The HTTP surface** (`feat/173-archive-http-surface`, `0439526`):
+      addressed by `archive_uuid` because both id spaces are `INTEGER PRIMARY
+      KEY` in the same database and an integer would return a real WRONG
+      transcript once the drain lands. An integer gets 409 naming both spaces
+      with a retry link. The 244 MB row peaks at about 766 MB and costs
+      392.4 ms on-loop against 3.5 ms threaded; a depth-267 chain row costs
+      28.0 ms for 92 KB.
+
+### The drain, which is IN FLIGHT
+
+- [ ] **RUNNING: pid 42032**, started 2026-09-14T15:59:02Z from
+      `.../scratchpad/wt-archive-db-split`, gated twice by
+      `scripts/drain_preflight.py` whose GATE 0 proves the DEPLOYED tree carries
+      the fix rather than the committed one (gates 1 to 3 are shadowing, disk
+      and live health).
+- [ ] **WATCH: the live ETA is 2.5x the projection.** At 16:06:22Z:
+      `archives_done` 256, `archives_pending` 19,305, 0.582/s, `eta_seconds`
+      **33,146 (9.2 hours)**, archive db 5,708,038,144 bytes, up 452 MB in the
+      first 439 seconds. The planning figures, 3.7 hours and ~15.4 GiB in
+      `docs/history-archive-join.md` and `PROJECTED_GROWTH_GIB = 15.6` in
+      `scripts/drain_preflight.py`, are EXTRAPOLATIONS from a 300-archive
+      sample and labelled as such in both places. One early sample does not
+      refute an extrapolation. Re-read `message-drain/latest.json` rather than
+      quoting either.
+
+### What is actually deployed, which is not what the summary said
+
+- [x] **CORRECTED: "nothing of the archive work is on live except the split" is
+      wrong.** Measured by marker file in the derived server copy at
+      `~/Library/Application Support/cloude-code-menubar/server/`:
+      `message_projection.py` PRESENT (the join is live),
+      `archive_search_fts.py` PRESENT (FTS and compression are live),
+      `archive_db_split.py` and `archive_db_attach.py` PRESENT (the split is
+      live). NOT live: `src/api/archive_blob_routes.py` is ABSENT (the HTTP
+      surface), and `RUN_PAIR_NOT_COVERED` appears **0 times** in the deployed
+      `db_integrity_gate.py` (the `aa6f973` integrity-gate pair fix).
+- [ ] **OPEN: the pre-fix integrity gate is observably still running.**
+      `db-integrity/latest.json`, written 2026-09-14T14:03:53Z, carries
+      `"databases": []`. That empty list IS the defect `aa6f973` fixes. No data
+      is wrong; the gate cannot vouch for a split install. Deploying is the
+      owner's call and a drain is in flight.
+
+### The client migration
+
+- [x] Nine slices, ordered by risk rather than size,
+      `docs/history-archive-scope.md`. **Slices 1, 2 and 4 built; 3 and 5 to 9
+      blocked on Adam** (#175 vs #173).
+- [x] **Slice 1** (`dc58507`): the `app-screen` surface plus four routing
+      modules. Four deviations from the scope, in the commit message. The one
+      that means the SCOPE was wrong: **`PluginContext.flags` reads an absent
+      key as ON**, backwards for a feature whose routes 404 when off, and the
+      gate has three states where a flag has two. Grant enforcement moved
+      forward from slice 2. Also in that commit: a bug the unit tests could not
+      see, `/features` going out as `/api/v1/api/v1/features`, found by driving
+      a real page against a real server.
+- [x] **Slices 2 and 4** (`fcba547`): granted client, state, keys, help modal,
+      formatters. Verified in a real browser. Nothing turned out to be
+      contested layout.
+- [x] The plugin registry already existed with four surfaces and one shipped
+      plugin (mark-unread). **"Plugin" is the wrong word** for a compile-time
+      module boundary under `script-src 'self'`; the scope proposes "feature
+      module".
+- [x] **Standing it up alone** is section 10 of the scope ON THE CLIENT CHAIN
+      ONLY: eight host globals across 54 modules, the nine slices remove five,
+      three genuinely ambiguous server modules, "closer to a weekend than a
+      month". An import-direction test landed in slice 1 and its first run
+      failed on two files that only MENTION `window.API` in a comment.
+
+### Documentation, this pass
+
+- [x] **`.claude/notes/HANDOFF.md` rewritten at the head** with a new section 0
+      for 2026-09-14; the 2026-09-12 section 0 was DEMOTED to `0-HISTORY` and
+      kept, nothing deleted. 1,188 lines to 1,478.
+- [x] **`.claude/notes/NEXT-SESSION.md` written** (new): what is running, what
+      is blocked and on whom, what needs the owner, seven traps.
+- [x] **`.claude/notes/BRANCH-INVENTORY.md` written** (new).
+- [x] **`docs/LESSONS.md` brought forward on trunk**, 211 lines to 437, taking
+      the `feat/173-archive-db-split` text verbatim. Trunk was FOUR ENTRIES
+      behind a file that `.claude/skills/work/SKILL.md` sends every session to
+      and that is shared with the other party. Verified a strict superset chain
+      first: trunk's 7 entries are contained in `-archive-http-surface`'s 10,
+      which are contained in `-archive-db-split`'s 11, with zero lines lost at
+      either step.
+- [x] **`CLAUDE.md` corrected in place, NOT re-inflated.** It is a routing
+      layer as of `cecebf5` and stays one.
+
+### THE MERGE HAZARD, recorded before anyone hits it
+
+- [ ] **OPEN: every `feat/173-*` branch carries a 5,000-line `CLAUDE.md`.**
+      Measured: trunk 552 lines; the three client branches 5,080; the archive
+      branches 5,139 / 5,140 / 5,141 / 5,142. They fork at `917835f`, ONE
+      COMMIT BEFORE `cecebf5` stripped the file to its routing layer. A merge
+      conflicts across the whole file and both obvious resolutions are wrong:
+      taking the branch side undoes `cecebf5`, taking the trunk side drops the
+      archive routing rows. The mechanical fix, `git diff 917835f..<branch> --
+      CLAUDE.md` and re-apply only the added rows in the routing file's style,
+      is written up in `.claude/notes/BRANCH-INVENTORY.md`.
+- [ ] **OPEN: `docs/history-archive-scope.md` is two different documents**,
+      1,668 lines on the client chain and 1,040 on the archive chain, with
+      different section numbering and neither a superset.
+
+### Not measured this round, said out loud
+
+- [ ] **The test suite was NOT re-run.** `CLAUDE.md` still quotes 2026-09-12 on
+      `master`: 7365 passed / 0 failed / 60 skipped, node 203, vitest 1430. A
+      drain is saturating the box, so any figure taken now is load-skewed.
+      Treat it as UNVERIFIED as of 2026-09-14 and take your own baseline.
+- [ ] The NAS backup of 2026-09-11 is REPORTED, not re-verified. The local
+      backup at `/Volumes/Backup/cloude-db-20260914/` WAS verified: its
+      `MANIFEST.txt` records `VACUUM INTO` from a `mode=ro` source, a sha256,
+      `integrity_check ok`, `foreign_key_check clean`, schema 26 and seven row
+      counts matched against live. It deliberately excludes `refresh_tokens.db`
+      and `hook_tokens.json` because the drive is unencrypted.
+- [x] The 1.4.2 login 404 was OUR false alarm and is ALREADY RECORDED on trunk,
+      in the repo-ROOT `TODO.md`, by Adam's commit `1b48cf9`. **There are two
+      TODO files**: his at the root (1,273 lines), ours at `.claude/TODO.md`.
+      That is why the P6 record looks missing from ours. Not re-verified here.
