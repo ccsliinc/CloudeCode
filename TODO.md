@@ -23,16 +23,18 @@ opportunities. The older out-of-order `SubagentStop` hypothesis is REFUTED: zero
 Plan (approved 2026-09-13): /Users/Adam/.claude/plans/research-and-design-task-sharded-neumann.md
 
 Steps:
-- [ ] 1. `src/core/attention/registry_read.py` + tests
-- [ ] 2. `src/core/attention/transcript_facts.py` + tests
-- [ ] 3. `evidence.py`, `resolve.py`, `display.py`, `pane_markers.py` + per-rung tests
-- [ ] 4. `ledger.py`, `raise_gate.py`, `watcher.py` + the replay harness
-- [ ] 5. Wire: main.py task, listing pass, uuid writer, startup gate, status source, change notice
-- [ ] 6. Delete: hook route, signals, gate, idle watcher, tracker internals, hook block builder
-- [ ] 7. Docs: DECISIONS, session-status-model, session-status, notifications, LESSONS,
+- [x] 1. `src/core/attention/registry_read.py` + tests (54631b5)
+- [x] 2. `src/core/attention/transcript_facts.py` + tests (54631b5)
+- [x] 3. resolver, display, pane markers + per-rung tests (fbb8081)
+- [x] 4. ledger, raise gate, watcher + replay harness (fbb8081)
+- [x] 5. Wire: listing pass, side effects, composition root (c996f7b, a1373d5)
+- [x] 6. Delete: route, signals, gate, idle watcher, tracker, block builder (a1373d5)
+- [x] 7. Docs: DECISIONS, session-status-model, session-status, notifications, LESSONS,
       jsonl-shape-inventory, alert-state-model, CLAUDE.md rule
-- [ ] 8. Re-measure, security review, commit, push
-- [ ] 9. Version bump and local install refresh
+- [x] 8. Suite 7113 passing / 0 failed (baseline 7040). Secret scan clean, detector proven
+      able to fire. Six commits pushed to origin. Live soak 5 of 5 PASS at b1e56b6.
+- [ ] 9. Version bump and local install refresh  <-- HELD, needs Adam: it restarts his app
+      and swaps code under 12 live sessions.
 
 ### Sub-agent findings
 
