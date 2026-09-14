@@ -163,8 +163,15 @@ def shadowed_tables(conn: sqlite3.Connection) -> List[str]:
     return sorted(in_main & in_archive)
 
 
+#: Shadow signatures this process has already reported. The guard runs on
+#: EVERY connection the app opens, and the condition it reports is a
+#: property of the two FILES, not of the connection, so reporting it once
+#: per process says everything a reader needs.
+_REPORTED_SHADOWS: Set[tuple] = set()
+
+
 def assert_no_shadowing(conn: sqlite3.Connection) -> List[str]:
-    """Log loudly about any shadowed table, and return the list.
+    """Log any shadowed table ONCE PER PROCESS, and return the list.
 
     Description: deliberately a LOG plus a return value rather than a
       raise. This runs on a connection the app is about to use for real
@@ -174,23 +181,40 @@ def assert_no_shadowing(conn: sqlite3.Connection) -> List[str]:
       alarm. The bookkeeping tables the migration keeps in the archive
       (``archive_split_progress``, ``archive_split_origin``) never exist
       in main, so they cannot appear here.
+
+      THE ONCE-PER-PROCESS RULE IS NOT COSMETIC, IT WAS MEASURED. Logging
+      on every connection produced 448 lines in 20 seconds on the owner's
+      live install, which is 73.6 MB per hour and 1.73 GB per day of
+      identical text. An alarm nobody can afford to leave on is an alarm
+      that gets switched off. The signature is the shadow SET, so a
+      CHANGE in what is shadowed is reported again rather than swallowed
+      by the memo.
+
+      The return value is NOT memoised: every caller still gets the true
+      current answer, and callers that act on it are unaffected.
     Inputs: conn (sqlite3.Connection).
     Output: list[str] - the shadowed names, empty when healthy.
     Example: assert_no_shadowing(conn)  # []
     """
     shadowed = shadowed_tables(conn)
     if shadowed:
-        logger.error(
-            "archive_db_shadowed_tables",
-            tables=shadowed,
-            detail=(
-                "these tables exist in BOTH cloude.db and cloude-archive.db. "
-                "sqlite resolves an unqualified name to main, so every "
-                "archive query is silently reading the stale pre-split copy. "
-                "This is the state a migration that copied but did not drop "
-                "leaves behind"
-            ),
-        )
+        signature = tuple(shadowed)
+        if signature not in _REPORTED_SHADOWS:
+            _REPORTED_SHADOWS.add(signature)
+            logger.error(
+                "archive_db_shadowed_tables",
+                tables=shadowed,
+                count=len(shadowed),
+                detail=(
+                    "these tables exist in BOTH cloude.db and "
+                    "cloude-archive.db. sqlite resolves an unqualified name "
+                    "to main, so every archive query is silently reading the "
+                    "copy in main. This is the state a migration that copied "
+                    "but did not drop leaves behind, and also the state the "
+                    "schema chain recreates if it owns these tables. Logged "
+                    "ONCE per process per distinct set"
+                ),
+            )
     return shadowed
 
 
