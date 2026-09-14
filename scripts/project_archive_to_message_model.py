@@ -219,10 +219,13 @@ def main(argv: Optional[list] = None) -> int:
             return None
 
     done = 0
+    raw_done = 0
+    raw_left = found["pending_bytes"]
     started = time.monotonic()
     liveness.publish(
         args.state_dir, liveness.STATUS_RUNNING, done=0,
         pending=found["pending"], elapsed_seconds=0.0,
+        bytes_done=0, bytes_pending=raw_left,
         archive_bytes=_arch_bytes(), detail="starting",
     )
     while not cancel.is_set():
@@ -236,6 +239,8 @@ def main(argv: Optional[list] = None) -> int:
             max_seconds=BATCH_SECONDS, respect_flag=False,
         )
         done += report.projected + report.replaced
+        raw_done += report.raw_bytes_read
+        raw_left = max(0, raw_left - report.raw_bytes_read)
         print(f"[{time.monotonic() - started:8.1f}s] "
               f"status={report.status} projected={report.projected} "
               f"replaced={report.replaced} refused="
@@ -245,17 +250,29 @@ def main(argv: Optional[list] = None) -> int:
             args.state_dir, liveness.STATUS_RUNNING, done=done,
             pending=report.pending_after,
             elapsed_seconds=time.monotonic() - started,
+            bytes_done=raw_done, bytes_pending=raw_left,
             archive_bytes=_arch_bytes(),
         )
         for refusal in report.refusals:
             print(f"    REFUSED {refusal['source_path']}: "
                   f"{refusal['outcome']} {refusal['reason']}")
+        # THE INTERRUPT BRANCH IS TESTED FIRST, AND THAT ORDER IS THE
+        # WHOLE POINT. A cancelled pass returns a status that is not
+        # STATUS_OK, so a bare `!= STATUS_OK` check catches a deliberate
+        # SIGTERM and publishes FAILED for it. Measured 2026-09-14: a
+        # clean operator pause at a file boundary was recorded as
+        # `status: failed`, which is how a reader learns to distrust the
+        # artifact, and it was reported upward as a crash. An asked-for
+        # stop is a named outcome, never a fault.
+        if cancel.is_set():
+            break
         if report.status != STATUS_OK:
             print(f"stopping: {report.reason}")
             liveness.publish(
                 args.state_dir, liveness.STATUS_FAILED, done=done,
                 pending=report.pending_after,
                 elapsed_seconds=time.monotonic() - started,
+                bytes_done=raw_done, bytes_pending=raw_left,
                 archive_bytes=_arch_bytes(), detail=report.reason,
             )
             return 1
@@ -268,6 +285,7 @@ def main(argv: Optional[list] = None) -> int:
         else liveness.STATUS_COMPLETE,
         done=done, pending=survey(args.state_dir).get("pending"),
         elapsed_seconds=time.monotonic() - started,
+        bytes_done=raw_done, bytes_pending=raw_left,
         archive_bytes=_arch_bytes(),
         detail="stopped at a file boundary; re-run to resume"
         if cancel.is_set() else None,

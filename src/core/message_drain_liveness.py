@@ -77,7 +77,8 @@ def latest_path(state_dir: Path) -> Path:
 def publish(
     state_dir: Path, status: str, *,
     done: int, pending: Optional[int], elapsed_seconds: float,
-    bytes_done: int = 0, detail: Optional[str] = None,
+    bytes_done: int = 0, bytes_pending: Optional[int] = None,
+    detail: Optional[str] = None,
     archive_bytes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Stamp one progress record, whatever the outcome.
@@ -90,25 +91,47 @@ def publish(
     Inputs: state_dir (Path), status (str - one of the STATUS_*
       constants), done (int - archives projected so far), pending (int |
       None - archives still to do, None when it could not be read),
-      elapsed_seconds (float), bytes_done (int - raw transcript bytes
-      processed, for the rate), detail (str | None), archive_bytes (int |
-      None - current size of cloude-archive.db, so growth is observable
-      without a second tool).
+      elapsed_seconds (float), bytes_done (int - RAW TRANSCRIPT BYTES
+      projected so far, which is what the rate and the ETA are computed
+      from), bytes_pending (int | None - raw bytes still to do), detail
+      (str | None), archive_bytes (int | None - current size of
+      cloude-archive.db, so growth is observable without a second tool).
     Output: dict - the record as written.
     Example: publish(Path("/s"), STATUS_RUNNING, done=10, pending=90,
         elapsed_seconds=60.0)["status"]  # 'running'
     """
-    rate = (done / elapsed_seconds) if elapsed_seconds > 1 and done else None
-    eta = (pending / rate) if (rate and pending) else None
+    # THE ETA IS IN BYTES, NOT ARCHIVES, AND THAT IS NOT A REFINEMENT.
+    # The queue is ORDER BY ingested_at DESC, so it is processed
+    # NEWEST FIRST and the newest transcripts are much the largest.
+    # Measured on the owner's corpus at 784 archives drained: the ones
+    # done averaged 2.218 MB of raw transcript and the 18,777 left
+    # averaged 0.502 MB, a 4.42x bias. An archives-per-second rate taken
+    # off the head of that queue said 9.2 hours remained while the byte
+    # rate said 2.4, and the same arithmetic applied to disk growth
+    # produced a false alarm about running the boot volume out of space.
+    # A rate over a size-sorted queue must be taken in the unit the work
+    # is actually proportional to.
+    rate = (
+        (bytes_done / elapsed_seconds)
+        if elapsed_seconds > 1 and bytes_done else None
+    )
+    eta = (bytes_pending / rate) if (rate and bytes_pending) else None
+    archive_rate = (done / elapsed_seconds) if elapsed_seconds > 1 and done else None
     record: Dict[str, Any] = {
         "status": status,
         "finished_at": utc_now_iso(),
         "archives_done": done,
         "archives_pending": pending,
         "elapsed_seconds": round(elapsed_seconds, 1),
-        "archives_per_second": round(rate, 3) if rate else None,
-        "eta_seconds": round(eta) if eta else None,
         "bytes_done": bytes_done,
+        "bytes_pending": bytes_pending,
+        "mb_per_second": round(rate / 1e6, 3) if rate else None,
+        # Kept because it is a true statement about throughput; it is
+        # simply not what the ETA may be built on.
+        "archives_per_second": (
+            round(archive_rate, 3) if archive_rate else None
+        ),
+        "eta_seconds": round(eta) if eta else None,
         "archive_db_bytes": archive_bytes,
         "detail": detail,
         "pid": os.getpid(),
