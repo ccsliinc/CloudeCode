@@ -188,12 +188,28 @@ def preflight_refusals(
             "backup policy treats as rebuildable",
         ))
 
-    if tuple(sorted(crossings)) != tuple(sorted(expected_crossings)):
+    # SUBSET, NOT EQUALITY, AND THE ASYMMETRY IS THE WHOLE POINT.
+    # An UNKNOWN crossing is the danger this rung exists for: a foreign
+    # key this code has never seen, whose handling nobody has decided.
+    # A MISSING one is not dangerous at all, it means that table has
+    # already moved to the archive, which is exactly what a second run
+    # over a partly-split install looks like.
+    #
+    # Equality was the first version and it was WRONG: measured on the
+    # owner's live install after a successful split, a re-run refused
+    # with "measured [] expects [3 keys]" because transcript_archives
+    # and transcript_root_decisions were no longer in main to carry
+    # them. That made the migration un-re-runnable precisely when a
+    # re-run was the correct tool, and I had claimed it was idempotent
+    # without testing it.
+    unknown = sorted(set(map(tuple, crossings)) - set(map(tuple, expected_crossings)))
+    if unknown:
         out.append(Refusal(
             CROSSING_FK_SET_CHANGED, KIND_MEASURED,
-            f"the crossing foreign keys measured now are {sorted(crossings)!r} "
-            f"and this migration expects {sorted(expected_crossings)!r}; the "
-            "line has moved and a human has to decide each one",
+            f"crossing foreign keys this migration has never seen: "
+            f"{unknown!r}. It knows how to handle "
+            f"{sorted(expected_crossings)!r} and nothing else, so a human "
+            "has to decide what happens to each new one",
         ))
 
     orphaned = {k: v for k, v in orphans.items() if v}

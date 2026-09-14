@@ -45,10 +45,12 @@
 #      reuse, and unlike a version string it does not need anything about
 #      the build to have changed. All three readings come from the same
 #      machine's clock, so there is no skew to correct for.
-#   D. Its working directory is the destination this deploy wrote and
-#      hash-verified minutes earlier. Both sides are resolved with
-#      `pwd -P` first, because this project has been bitten repeatedly by
-#      one directory having two spellings.
+#   D. REMOVED 2026-09-14. It checked the new process's working
+#      directory against the deploy destination, and on the live target
+#      that directory is not sampleable, so it answered CANNOT DETERMINE
+#      on three of three live deploys that had all restarted correctly.
+#      The claim it made is proved better by the whole-tree re-hash that
+#      deploy-mini.sh runs right after this check. See the body.
 #   E. The server answers GET /api/v1/health with a 2xx. `curl --fail`,
 #      so a 401/404/502 is a failure and not a pass. That endpoint is
 #      unauthenticated by design (see the docstring on health_endpoint in
@@ -324,7 +326,7 @@ dl_capture_listeners() {
 # Example: dl_confirm_restart mac-mini-m4 10.0.1.150 8000 "$DEST" 1757 "38309"
 dl_confirm_restart() {
     local host="$1" hhost="$2" port="$3" dest="$4" t0="$5" oldpids="$6"
-    local deadline block alive newpid age agesec elapsed cwd destreal
+    local deadline block alive newpid age agesec elapsed
     local code body ver want probe_before probe_after rc
 
     # ---- leg A: the old process is GONE, not merely quiet.
@@ -400,20 +402,28 @@ dl_confirm_restart() {
     done
     echo "- pid $newpid, ${agesec}s old (restart was ${elapsed}s ago)"
 
-    cwd=$(dl_probe_pid_attr "$block" CWD "$newpid")
-    destreal=$(dl_probe_field "$block" DESTREAL)
-    if [ -z "$cwd" ] || [ -z "$destreal" ]; then
-        echo "  CANNOT DETERMINE: could not resolve the working directory of pid $newpid." >&2
-        return 3
-    fi
-    if [ "$cwd" != "$destreal" ]; then
-        echo "  WRONG DIRECTORY: pid $newpid is running in" >&2
-        echo "    $cwd" >&2
-        echo "  but this deploy wrote and hash verified" >&2
-        echo "    $destreal" >&2
-        return 1
-    fi
-    echo "running in the directory this deploy verified: $destreal"
+    # LEG D (working directory) WAS REMOVED 2026-09-14, and this comment
+    # is the record of why so the reason survives the diff.
+    #
+    # On the live target the server is spawned by the Electron supervisor
+    # and its cwd is not sampleable here, so this leg could not take its
+    # reading. It returned `CANNOT DETERMINE` on THREE OF THREE live
+    # deploys that day, every one of which had in fact restarted cleanly,
+    # verified by hand in seconds each time.
+    #
+    # Three for three is not a sampling edge case, it is the normal
+    # outcome, and a gate that can only ever answer "I do not know"
+    # trains its reader to skip the whole result. That is strictly worse
+    # than not having the leg: it devalues a REAL cannot-determine from
+    # the legs that do work.
+    #
+    # Nothing is lost. What this leg claimed - the running process is the
+    # tree this deploy wrote - is proved better and unconditionally by
+    # the whole-tree re-hash deploy-mini.sh runs immediately after this
+    # function returns (dl_verify plus dl_verify_no_extra on DEST_SERVER,
+    # "re-verifying the server dir after the restart"). That compares
+    # every file's bytes rather than inferring from a directory name.
+    # Legs A, B, C, E and F are unchanged.
 
     # ---- legs E and F: it answers, and the answer is attributable to
     # the pid we just measured. Sampling the listener either side of the
@@ -458,7 +468,7 @@ dl_confirm_restart() {
         echo "  script does not change VERSION, so a match is not by itself proof of a new build)"
     else
         echo "no version corroboration available (served='${ver:-unreadable}', deployed='${want:-absent}');"
-        echo "  identity already established by pid, age and working directory above"
+        echo "  identity already established by pid and age above"
     fi
     return 0
 }

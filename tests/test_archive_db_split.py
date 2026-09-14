@@ -351,7 +351,6 @@ def test_every_measured_schema_version_is_accepted(version: int) -> None:
         # control below.
         ({"schema_version": 99}, SCHEMA_VERSION_UNEXPECTED),
         ({"unclassified": ["mystery_table"]}, UNCLASSIFIED_OBJECT),
-        ({"crossings": []}, CROSSING_FK_SET_CHANGED),
         ({"orphans": {"transcript_archives.project_id": 4}}, ORPHANED_REFERENCE),
     ],
 )
@@ -361,6 +360,29 @@ def test_each_measured_defect_refuses(override: dict, rung: str) -> None:
     assert rung in [r.rung for r in refusals]
     assert all(r.kind == KIND_MEASURED for r in refusals if r.rung == rung)
     assert blocking(refusals)
+
+
+def test_an_unknown_crossing_key_refuses() -> None:
+    """The danger this rung exists for: a key nobody has decided about."""
+    refusals = _preflight(crossings=list(EXPECTED_CROSSING_FKS) + [
+        ("transcript_archives", "mystery_id", "sessions"),
+    ])
+    assert [r.rung for r in refusals] == [CROSSING_FK_SET_CHANGED]
+    assert blocking(refusals)
+
+
+def test_a_missing_crossing_key_does_NOT_refuse() -> None:
+    """REGRESSION: a second run over an already-split install must work.
+
+    After a successful split, transcript_archives and
+    transcript_root_decisions are no longer in main, so main carries NONE
+    of the three crossings. Equality refused that outright, measured on
+    the owner's live install, making the migration un-re-runnable exactly
+    when a re-run was the right tool. A missing crossing means the table
+    already moved; only an UNKNOWN one is dangerous.
+    """
+    assert _preflight(crossings=[]) == []
+    assert _preflight(crossings=list(EXPECTED_CROSSING_FKS)[:1]) == []
 
 
 def test_an_unmeasurable_volume_records_but_does_not_refuse() -> None:

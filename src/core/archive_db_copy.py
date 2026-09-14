@@ -323,6 +323,20 @@ def verify_content_sample(
     Example: verify_content_sample(conn, 10)  # (10, [])
     """
     mismatches: List[str] = []
+    # A SECOND RUN OVER AN ALREADY-SPLIT INSTALL HAS NO transcript_archives
+    # IN MAIN, and hardcoding it crashed exactly there: the copy had
+    # succeeded, verification raised, and the drop never ran. Safe, but it
+    # made the migration un-re-runnable. Nothing to sample is reported as
+    # zero rows checked rather than as zero mismatches found, so a reader
+    # can tell "there was nothing to compare" from "I compared and all
+    # matched": the report prints content_checked alongside the mismatch
+    # count for that reason.
+    present = conn.execute(
+        "SELECT COUNT(*) FROM main.sqlite_master "
+        "WHERE type='table' AND name='transcript_archives'"
+    ).fetchone()[0]
+    if not present:
+        return 0, []
     rows = conn.execute(
         "SELECT archive_uuid FROM main.transcript_archives "
         "ORDER BY id LIMIT ?", (limit,),

@@ -243,6 +243,53 @@ when it is correct; it is finished when someone can afford to leave it on.
 A change in the finding must report again. Never memoise the RETURN VALUE:
 callers that act on the condition still need the true current answer.
 
+## Green while measuring the wrong build
+
+**One occurrence, six rounds of wasted investigation, 2026-09-14.**
+
+A variant of "a test that cannot fail", and worth its own name because the
+check here was not weak, it was reading a DIFFERENT ARTEFACT than the one on
+disk.
+
+`_apply_v16_ddl` kept writing to the wrong database while its source plainly
+called the new code path. `inspect.getsource` showed the new call. Six rounds
+of tracing later, `__code__.co_names` gave it away: `('DDL_V16', 'execute')`,
+the OLD loop. Python had loaded a stale `.pyc`. An edit, a revert during a
+negative control, and a restore had left the cached bytecode with the SAME
+mtime AND the SAME size as the source, and mtime plus size is the whole cache
+key, so the cache looked valid. 404 stale `.pyc` files were sitting under
+`src/`.
+
+**The generalisable form: introspecting a module tells you what Python
+LOADED, not what the file says.** `inspect.getsource` reads the FILE and so
+agrees with your editor; the bytecode is what actually ran. When those two
+disagree there is no warning anywhere.
+
+**Detect it.** When a change cannot be observed where the source says it must
+be, compare the two directly before suspecting your logic:
+
+    python3 -c "import mod; print(mod.fn.__code__.co_names)"   # what RAN
+    sed -n '/def fn/,/^def /p' mod.py                          # what is WRITTEN
+
+`co_names` lists the globals a function actually references, so a call you
+added appears there or it did not compile. `co_firstlineno` against the real
+line number catches the same thing.
+
+**Clear it.** Delete the caches and re-run, do not reason about it:
+
+    python3 -c "import pathlib; [q.unlink() for q in pathlib.Path('src').rglob('__pycache__/*.pyc')]"
+
+or run the suite once with `PYTHONDONTWRITEBYTECODE=1`.
+
+**Most at risk: an edit-revert-restore cycle**, which is exactly what watching
+a negative control go red and then restoring the fix does. That is now a
+routine step here, so this will recur.
+
+**The deployed server was NOT affected, and that was checked rather than
+assumed:** its `.pyc` mtime (1789394626) is newer than its source
+(1789330671), which is the normal healthy case. Live was never running stale
+bytecode. Only the development worktree was.
+
 ## A check that can only say "I do not know"
 
 **Three for three on the same run, which is not a sampling edge case.**
@@ -259,10 +306,16 @@ REAL `CANNOT DETERMINE` invisible. The discipline this project applies to
 measurement (a reading that did not happen is not a reading of nothing) cuts
 both ways: a check that can never take its reading should not be the check.
 
-**Do, and this is a recommendation for that script rather than a fix already
-made:** drop the cwd leg. The two legs that DID answer are sufficient and were
+**Done, 2026-09-14, in `scripts/deploy-restart-check.sh`:** leg D removed. The two legs that DID answer are sufficient and were
 what I verified by hand each time. The PID changed, and the new PID owns the
 listener on the port. The script already re-hashes the whole server dir after
 the restart, which proves the running tree is the deployed tree far more
 directly than a cwd ever could, so the identity leg is redundant with a check
 already present three lines below it.
+
+The removal is recorded in a comment at the deleted leg's own site, not just
+in the diff, so the next reader who wonders why identity is not checked there
+finds the answer in the file. Legs A, B, C, E and F are untouched. Verified on
+the next live deploy, which printed `== DEPLOYED ==` with health 200
+attributable to the new pid, instead of the refusal it had given three times
+running.
