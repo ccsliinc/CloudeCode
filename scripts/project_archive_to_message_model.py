@@ -11,12 +11,20 @@ front of it, measured 2026-09-10.
 THE TWO NUMBERS YOU NEED BEFORE YOU RUN THIS, both measured on 300 real
 archives sampled from that corpus rather than estimated:
 
-  * THROUGHPUT 0.84 MB/s of raw transcript (202.65s for 169,333,023
-    bytes), of which only 0.23s was decompression - the cost is JSON
-    parsing and the model's own per-line fidelity round trip. So the full
-    corpus is on the order of 3.6 HOURS of CPU.
-  * SIZE 1.50x the raw bytes on disk. So the full corpus is on the order
-    of 16.5 GB ADDED to a database that is already 5.2 GB.
+  * THROUGHPUT 1.19 MB/s of raw transcript, MEASURED over the full run
+    on 2026-09-14: 7,882,265,700 bytes in 6,630 s, 19,587 archives, one
+    hour and fifty minutes. (The older figure here was 0.84 MB/s from a
+    300-archive sample, which was pessimistic by 40 percent.) The cost is
+    JSON parsing, the model's own per-line fidelity round trip, and the
+    secret scan, which alone runs at 3.51 MB/s of GIL-holding Python.
+  * SIZE 0.95x the raw bytes on disk, MEASURED OVER THE WHOLE CORPUS on
+    2026-09-14: 10.42 GiB of raw transcript added 9.89 GiB of file. The
+    model is SMALLER than the transcripts it holds, because
+    message_bodies dedupes. The 1.50x this line used to carry came from
+    a 300-archive sample and was wrong by 58 percent - it predicted 15.6
+    GiB of growth against the 9.89 GiB that actually landed. A sample
+    taken off the head of a queue ordered `ingested_at DESC` is not a
+    sample of the corpus; see LESSONS.md.
 
 That second number is why this is a script you run on purpose and not
 something an upgrade does to your disk while you are not looking. The

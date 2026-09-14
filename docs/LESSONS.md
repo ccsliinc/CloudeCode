@@ -535,3 +535,63 @@ environment means restarting it, which is the one thing nobody wants to do to a
 drain already in flight. That sequencing now lives in
 `scripts/drain_preflight.py` as a gate that refuses to start, rather than in a
 runbook nobody reads at 3am.
+
+## `asyncio.to_thread` does not protect the event loop from CPU-bound Python
+
+**The GIL is what is contended, and a worker thread running Python holds it.**
+Moving work into a thread protects the loop from anything that RELEASES the GIL
+while it waits - sqlite executing a statement, a file read, a socket, a
+subprocess, zlib and hashlib on a decent-sized buffer. It protects the loop from
+nothing at all when the work is a Python loop or a regex over a large string,
+because the loop thread cannot run until the worker gives the GIL back.
+
+**Caught, with the stack saying so.** py-spy on the live server during a corpus
+drain showed the event-loop thread IDLE at `asyncio/runners.py:128` while a
+second thread was marked `active+gil`:
+
+```
+scan_text (message_model_secrets.py:465)
+store_secret_findings (message_model_store.py:140)
+ingest_lines (message_model_ingest.py:204)
+project_one (message_projection.py:226)
+run_projection_once (message_projection.py:299)
+run (concurrent/futures/thread.py:73)      <- asyncio.to_thread
+```
+
+Requests timed out at 4 seconds with the loop having nothing to do but no chance
+to do it. THAT `active+gil` MARKER IS THE WHOLE DIAGNOSIS: a loop thread blocked
+in a lock looks completely different (it is `active` and sitting in the blocking
+call), and the two need different fixes.
+
+**Measured cost of the offender:** `scan_text` runs at **3.51 MB/s** over 400
+real content blocks, 1,782,997 chars in 508.5 ms. A 29 MB transcript therefore
+holds the GIL for about **8.3 seconds**, and the projection path scans every
+line of every transcript.
+
+**The audit, and the answer is the boring one, which is why it had to be
+measured.** Every `asyncio.to_thread` / `run_in_executor` in `src/` was
+classified by what the work actually does:
+
+* MATERIAL, one site: the projection slice
+  (`corpus_ingest_task._project_slice` -> `run_projection_once`), for the reason
+  above.
+* NOT MATERIAL: `archive_snippet_gate` also calls `scan_text`, but on a
+  `SNIPPET_CONTEXT_CHARS = 60` window, roughly 120 characters, about 34
+  microseconds - and it is already inside `to_thread` on the search route.
+* NOT MATERIAL: everything else on the list is sqlite (`archive_routes`,
+  `archive_search_routes`, `db_integrity_task`, `archive_messages_routes`),
+  subprocess (`listing_gather`, `session_manager`), sockets (`local_servers`),
+  file I/O (`upload_sweeper`, `config_files_routes`) or compression
+  (`static_serving`). All of those release the GIL while they work - a
+  documented property of those C extensions, not something measured here.
+
+**So: one real instance, not a pattern.** That is a fine answer, and it is only
+worth anything because the alternative - "probably fine" - was available for
+free and would have read identically.
+
+**The rule to carry: before moving work to a thread and calling the loop safe,
+ask what the work DOES, not where it runs.** If it is Python computing, the
+thread bought concurrency with I/O and nothing else. The fixes that do work are
+a process pool, chunking with explicit yields, or pushing the hot loop into a C
+extension - and all three are real work, which is exactly why "just use
+to_thread" is so tempting.
