@@ -595,3 +595,52 @@ thread bought concurrency with I/O and nothing else. The fixes that do work are
 a process pool, chunking with explicit yields, or pushing the hot loop into a C
 extension - and all three are real work, which is exactly why "just use
 to_thread" is so tempting.
+
+### What the budget defect actually costs, and why the obvious fix is not a small one
+
+**Measured on the largest real transcript in the corpus (244 MB, 17,486 lines):
+ONE call to `project_one` holds the archive's write lock for 516.4 SECONDS.**
+The slice budget is `max_seconds=30`. Nothing can interrupt it. The harness is
+`scripts/measure_projection_lock_hold.py`, which builds a throwaway database
+from the live archive's own bytes and times `BEGIN IMMEDIATE` to `COMMIT`.
+
+**Where that time goes, profiled inside the lock on a 116 MB transcript
+(47.0 s hold):**
+
+```
+tottime  cumtime   ncalls  function
+  40.33    40.35    13732  message_model_secrets.py:411 scan_text
+   2.54     2.54   124697  json encoder.iterencode
+   0.90     0.90    11842  zlib.compress
+   0.62     0.77   126795  sqlite3.Connection.execute
+```
+
+**`scan_text` is 86% of the lock-hold. SQLite is 1.6%.** The database is barely
+involved: the transaction is held open almost entirely so that a regex pass can
+finish. Hoisting the scan out would cut 516 s to roughly 72 s.
+
+**So the fix direction is right and the payoff is large - and it is still not a
+narrow change, for a reason worth writing down.** `store_secret_findings` needs
+two things the transaction produces: the `body_id` from the INSERT that created
+the body, and the canonical `body_json` read back through
+`cloude_body_text()`. Two ways out, and both cost more than they look:
+
+* PRE-COMPUTE the scan before the transaction, keyed by body content. Requires
+  the in-memory canonical text to be byte-identical to the database round trip
+  - which is precisely the fidelity property this project guards hardest, and
+  proving it is its own piece of work.
+* WRITE THE FINDINGS AFTER the commit, in a second short transaction. This
+  leaves a window where bodies exist with NO secret findings, and
+  `archive_snippet_gate` consults those findings to decide
+  `withheld_secret_bearing`. A reader in that window could be served a snippet
+  the gate would otherwise have withheld. The gate does run its own
+  `scan_text` over the 60-character window as a second layer, so the exposure
+  is bounded rather than total - but "bounded" is a claim that needs measuring,
+  not asserting, before anyone ships it.
+
+**Recorded rather than fixed, deliberately.** The scoping rule that produced
+this was: if the change turns out to need a schema change, a new table or a
+rework of the ingest path, stop and hand over a clean unfixed defect with its
+measurement rather than a half-done fix. This needs the third one plus a
+security argument, so it stops here with the RED number, the profile, and the
+harness to prove a future fix green.
