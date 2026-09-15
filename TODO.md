@@ -33,8 +33,14 @@ Steps:
       jsonl-shape-inventory, alert-state-model, CLAUDE.md rule
 - [x] 8. Suite 7113 passing / 0 failed (baseline 7040). Secret scan clean, detector proven
       able to fire. Six commits pushed to origin. Live soak 5 of 5 PASS at b1e56b6.
-- [ ] 9. Version bump and local install refresh  <-- HELD, needs Adam: it restarts his app
-      and swaps code under 12 live sessions.
+- [x] 9. Released as 1.5.0 and the local install refreshed on 2026-09-15. PR #176 merged to
+      master as 3deabc3, issue #123 closed. Verified on the live install by grep, not by
+      timestamp: the derived server copy carries src/core/attention/ and no hook route;
+      ~/.claude/settings.json went from 10 managed hook entries to ZERO; all 13 tmux sessions
+      byte-identical across the restart; the database matches its pre-refresh baseline at 47
+      sessions and 55 projects; and a session is already bound with
+      claude_session_uuid_source = registry, which is the new path working on real data.
+      Zero attention failures in the live log.
 
 ### Sub-agent findings
 
