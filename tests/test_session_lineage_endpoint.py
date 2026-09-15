@@ -1,13 +1,23 @@
-"""The hook endpoint writes lineage, end to end, through HTTP.
+"""Lineage lands on the right row, end to end, against the real database.
 
 The unit tests in tests/test_session_lineage.py prove the write path is
-right. These prove the CORRELATION is right: that a POST carrying only
-``X-Cloudecode-Session`` and a Claude ``session_id`` in the body lands on
-the correct tmux-keyed row, via the env trio that already existed.
+right. These prove the CORRELATION is right: that a lifecycle event
+carrying only a cloudecode session id and a Claude ``session_id`` lands
+on the correct tmux-keyed row.
 
-Every assertion is a SELECT against the database after the request, never
-a mock recording that a function was reached. A lineage feature whose
-tests assert on calls would pass just as happily with the INSERT deleted.
+REHOMED OFF THE HTTP ENDPOINT ON 2026-09-13. These used to POST to
+``/hooks/claude-event``, which is deleted: the hooks reported under a
+pane-wide session id that every background agent also posted under.
+``SessionManager.record_claude_lifecycle_event`` is unchanged and is
+what the attention watcher calls on a confirmed registry join, so the
+correlation these guard is the same correlation, one layer down. The
+cases that tested the ROUTE rather than the write - the token check and
+the 200-on-failure contract - went with the route.
+
+Every assertion is a SELECT against the database afterwards, never a
+mock recording that a function was reached. A lineage feature whose
+tests assert on calls would pass just as happily with the INSERT
+deleted.
 """
 
 from __future__ import annotations
@@ -147,22 +157,15 @@ def harness(monkeypatch, tmp_path):
     return client, token, tmp_path, anchor, mgr
 
 
-def _post(client, token, event, body):
-    """POST one hook event the way the installed curl one-liner does.
+def _event(mgr, event, body):
+    """Apply one Claude lifecycle event, as the watcher does.
 
-    Inputs: client (TestClient). token (str). event (str). body (dict).
-    Output: httpx.Response.
+    Inputs: mgr (SessionManager). event (str) - "SessionStart" or
+      "SessionEnd". body (dict) - the payload, carrying the Claude
+      ``session_id`` and its ``source`` or ``reason``.
+    Output: str - the writer's own outcome token.
     """
-    return client.post(
-        "/api/v1/hooks/claude-event",
-        headers={
-            "X-Cloudecode-Session": APP_SESSION_ID,
-            "X-Cloudecode-Token": token,
-            "X-Cloudecode-Event": event,
-            "Content-Type": "application/json",
-        },
-        json=body,
-    )
+    return mgr.record_claude_lifecycle_event(APP_SESSION_ID, event, body)
 
 
 def _rows(state_dir):
@@ -176,15 +179,14 @@ def _rows(state_dir):
 
 
 def test_session_start_is_accepted_at_all(harness):
-    """v1.0.3 rejected SessionStart with 400; it must now be a valid event."""
-    client, token, _state, _anchor, _mgr = harness
-    resp = _post(
-        client,
-        token,
+    """v1.0.3 refused SessionStart outright; it must be a valid event."""
+    _client, _token, state, _anchor, mgr = harness
+    _event(
+        mgr,
         "SessionStart",
         {"session_id": "uuid-A", "source": "startup", "cwd": "/tmp"},
     )
-    assert resp.status_code == 200
+    assert any(r["claude_session_uuid"] == "uuid-A" for r in _rows(state))
 
 
 # SUPERSEDED. This asserted fork_kind == "fork" for a SessionStart(fork)
@@ -204,10 +206,10 @@ def test_session_start_is_accepted_at_all(harness):
 # and never consults classify_fork_kind.
 def test_a_fork_with_no_session_end_is_a_background_agent(harness):
     """The /fork shape: the pane never left the previous conversation."""
-    client, token, state, anchor, _mgr = harness
+    _client, _token, state, anchor, mgr = harness
 
-    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
-    _post(client, token, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
 
     rows = _rows(state)
     assert len(rows) == 2
@@ -225,11 +227,11 @@ def test_a_fork_PRECEDED_BY_A_SESSION_END_is_a_branch(harness):
     background, which would stop the head ever advancing and break
     /branch and /clear.
     """
-    client, token, state, anchor, _mgr = harness
+    _client, _token, state, anchor, mgr = harness
 
-    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
-    _post(client, token, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
-    _post(client, token, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _event(mgr, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
 
     by_uuid = {r["claude_session_uuid"]: r for r in _rows(state)}
     assert by_uuid["uuid-B"]["parent_session_id"] == anchor
@@ -243,12 +245,12 @@ def test_one_session_end_cannot_promote_two_later_forks(harness):
     session look like a pane-move, which is the original bug with extra
     steps.
     """
-    client, token, state, _anchor, _mgr = harness
+    _client, _token, state, _anchor, mgr = harness
 
-    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
-    _post(client, token, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
-    _post(client, token, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
-    _post(client, token, "SessionStart", {"session_id": "uuid-C", "source": "fork"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _event(mgr, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-B", "source": "fork"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-C", "source": "fork"})
 
     by_uuid = {r["claude_session_uuid"]: r for r in _rows(state)}
     assert by_uuid["uuid-B"]["fork_kind"] == "fork", "the branch consumed it"
@@ -257,65 +259,39 @@ def test_one_session_end_cannot_promote_two_later_forks(harness):
 
 def test_session_end_is_accepted_and_writes_no_lineage_row(harness):
     """SessionEnd is a real event; it must not manufacture a fork."""
-    client, token, state, _anchor, _mgr = harness
-    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
-    resp = _post(
-        client, token, "SessionEnd", {"session_id": "uuid-A", "reason": "other"}
-    )
-    assert resp.status_code == 200
+    _client, _token, state, _anchor, mgr = harness
+    _event(mgr, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _event(mgr, "SessionEnd", {"session_id": "uuid-A", "reason": "other"})
     assert len(_rows(state)) == 1
 
 
-def test_a_bad_token_writes_nothing(harness):
-    """The existing HMAC gate still guards the new events."""
-    client, _token, state, _anchor, _mgr = harness
-    resp = _post(
-        client, "not-the-token", "SessionStart", {"session_id": "uuid-A"}
-    )
-    assert resp.status_code == 403
-    assert all(r["claude_session_uuid"] is None for r in _rows(state))
+def test_a_broken_tmux_listing_writes_nothing_and_does_not_raise(
+    harness, monkeypatch
+):
+    """CANNOT DETERMINE must not become an exception, or a guessed row.
 
-
-def test_a_broken_tmux_listing_returns_200_and_writes_nothing(harness, monkeypatch):
-    """CANNOT DETERMINE must not become a 500 on a live session's hook.
-
-    A listing that could not RUN is the third outcome. The endpoint has to
-    absorb it: the hook is fire-and-forget, but a 500 here would mean the
-    lineage layer can disturb the request path at all, which is the
-    property this whole feature is not allowed to have.
+    A listing that could not RUN is the third outcome. The writer has to
+    absorb it: its caller is a background pass whose other work must
+    continue, and a row written from a listing that never ran would
+    attach a conversation to whichever instance happened to be guessed.
     """
-    client, token, state, _anchor, mgr = harness
+    _client, _token, state, _anchor, mgr = harness
     monkeypatch.setattr(
         mgr,
         "list_attachable_sessions_with_socket",
         lambda: (SOCKET, _Listing(False, reason="tmux not running")),
     )
-    resp = _post(
-        client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"}
-    )
-    assert resp.status_code == 200
+
+    _event(mgr, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+
     assert all(r["claude_session_uuid"] is None for r in _rows(state))
-
-
-def test_a_raising_lineage_writer_still_returns_200(harness, monkeypatch):
-    """Even an unexpected exception must not reach the hook as a 500."""
-    client, token, _state, _anchor, mgr = harness
-
-    def _boom(*_args, **_kwargs):
-        raise RuntimeError("datastore exploded")
-
-    monkeypatch.setattr(mgr, "record_claude_lifecycle_event", _boom)
-    resp = _post(
-        client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"}
-    )
-    assert resp.status_code == 200
 
 
 def test_the_anchor_row_is_still_the_live_tmux_instance_after_a_fork(harness):
     """Forking must not move which row the tmux instance resolves to."""
-    client, token, state, anchor, _mgr = harness
-    _post(client, token, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
-    _post(client, token, "SessionStart", {"session_id": "uuid-B", "source": "clear"})
+    _client, _token, state, anchor, mgr = harness
+    _event(mgr, "SessionStart", {"session_id": "uuid-A", "source": "startup"})
+    _event(mgr, "SessionStart", {"session_id": "uuid-B", "source": "clear"})
 
     with closing(connect(db_path_for(state))) as conn:
         live = get_instance(conn, socket=SOCKET, name=TMUX_NAME, epoch=EPOCH)

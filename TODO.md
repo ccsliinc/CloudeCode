@@ -1,11 +1,103 @@
-# TODO — closing out the open issue board
+# TODO - closing out the open issue board
 
 Repo: Adoom666/CloudeCodeDev. 53 open at start, 29 now (re-derived 2026-09-11
 via `gh issue list --state open --json number --jq 'length'`).
-- 11 are ccsliinc's (their draft PRs) — not ours
+- 11 are ccsliinc's (their draft PRs) - not ours
 - 9 carry `blocked` (waiting on ccsliinc PR #19, Adam's ruling): #31 #32 #35
   #36 #37 #50 #51 #58 #66 (re-verified 2026-09-11 by label)
 - the rest are ours
+
+## In flight: #123 passive attention detection, zero hooks (branch attention-passive-123, draft PR #176)
+
+Baseline on the clean tree before any change, 2026-09-13, `-p no:randomly -m "not real_tmux"`:
+**7040 passed, 0 failed, 56 skipped, 351 deselected** in 233.73s. Tests are DELETED in step 6
+of the plan (the whole hook suite goes with the hook code), so the count is expected to DROP.
+
+Root cause proven, not hypothesised: `CLOUDECODE_SESSION_ID` is a pane-wide env var, so every
+background agent posts hook events under the parent's `ses_*` id. A sub-agent's own `PreToolUse`
+clears the 180s latch and re-opens the turn in one event. Over 50.8h of the live server log:
+410 of 459 attributable Stop/Notification toasts (89.3%) fired while the transcript's own
+turn-end record said background agents were still pending. The latch suppressed 1 toast in 184
+opportunities. The older out-of-order `SubagentStop` hypothesis is REFUTED: zero observable cases.
+
+Plan (approved 2026-09-13): /Users/Adam/.claude/plans/research-and-design-task-sharded-neumann.md
+
+Steps:
+- [x] 1. `src/core/attention/registry_read.py` + tests (54631b5)
+- [x] 2. `src/core/attention/transcript_facts.py` + tests (54631b5)
+- [x] 3. resolver, display, pane markers + per-rung tests (fbb8081)
+- [x] 4. ledger, raise gate, watcher + replay harness (fbb8081)
+- [x] 5. Wire: listing pass, side effects, composition root (c996f7b, a1373d5)
+- [x] 6. Delete: route, signals, gate, idle watcher, tracker, block builder (a1373d5)
+- [x] 7. Docs: DECISIONS, session-status-model, session-status, notifications, LESSONS,
+      jsonl-shape-inventory, alert-state-model, CLAUDE.md rule
+- [x] 8. Suite 7113 passing / 0 failed (baseline 7040). Secret scan clean, detector proven
+      able to fire. Six commits pushed to origin. Live soak 5 of 5 PASS at b1e56b6.
+- [x] 9. Released as 1.5.0 and the local install refreshed on 2026-09-15. PR #176 merged to
+      master as 3deabc3, issue #123 closed. Verified on the live install by grep, not by
+      timestamp: the derived server copy carries src/core/attention/ and no hook route;
+      ~/.claude/settings.json went from 10 managed hook entries to ZERO; all 13 tmux sessions
+      byte-identical across the restart; the database matches its pre-refresh baseline at 47
+      sessions and 55 projects; and a session is already bound with
+      claude_session_uuid_source = registry, which is the new path working on real data.
+      Zero attention failures in the live log.
+
+### Sub-agent findings
+
+[ORCHESTRATOR] 2026-09-13: baseline on the clean tree before any change, -p no:randomly -m "not real_tmux":
+7040 passed / 0 failed / 56 skipped / 351 deselected in 233.73s.
+
+[ORCHESTRATOR] 2026-09-13: TRANSCRIPT TIER SCORED AGAINST THE REAL 50.8h PRODUCTION WINDOW
+(500 labelled toasts, scratchpad/replay/): 0 false toasts raised, 0 legit toasts missed.
+Held 375 of the lying toasts, raised all 83 real ones, refused on 42 with no evidence either way.
+Per-episode: a_subagents_pending_then_really_done expected 1 / production raised 7;
+d_reinvoked_after_production_said_done 1 / 3; e (see correction below) ; b and c 1 / 1.
+
+[ORCHESTRATOR] 2026-09-13: TWO DEFECTS FOUND AND VERIFIED BEFORE SHIPPING.
+D1, the pending-count rule. Measured across 40 recent transcripts, 300 turn_duration records on
+2.1.266: 236 carry a POSITIVE pendingBackgroundAgentCount, 64 have the KEY ABSENT, ZERO have a
+literal null, ZERO have a literal 0. The harness OMITS the key when the count is zero. The
+research note saying "null when zero" was jq printing a missing key as null. So on a record whose
+own version is >= 2.1.241, ABSENT MEANS ZERO, i.e. the turn genuinely finished. Reading it as
+unknown makes done_idle unreachable and loses all 83 legitimate toasts.
+D2, the rung order. blocked_on_tool sat BELOW the subagent rungs, so a session blocked on
+AskUserQuestion with a background agent still running answered busy(subagents) and never raised a
+question toast. Verified real shape: a replay of a real AskUserQuestion tail gives
+blocked_on_tool=AskUserQuestion WITH pending_background_agents=1. An unanswered user-facing dialog
+at EOF must outrank the subagent rungs: background agents do not unblock a human.
+
+[ORCHESTRATOR] 2026-09-13: THIRD DEFECT, found by resolving every live session end to end.
+Rule (c) made a registry record older than 900s answer unknown(registry_stale), but the registry
+is WRITE-ON-CHANGE: a session idle for two days has a two-day-old idle stamp precisely BECAUSE
+nothing happened. Age is not doubt. Measured: cloude_LeaveIt (37.3h), cloude_Ob (98.5h) and
+cloude_Shopify (37.3h) all had the transcript independently confirming turn ended, 0 pending, no
+async, no re-invoke, yet all three painted unknown, so their lights would never settle. Fix
+narrows rule (c) to the UNCORROBORATED case only.
+
+[ORCHESTRATOR] 2026-09-13: the registry file is rewritten IN PLACE (read from the 2.1.266 updater,
+which declares publishDiscipline inPlace). Consequence, proved by test: a kqueue directory watch
+fires on a session file appearing (52 ms) and being removed (52 ms) but NOT on a status change.
+Registration and exit are event-driven; a status change is caught by the 2s tick. So "your turn"
+latency is up to 2s against the old hook's 80 ms. Accepted: the hook was wrong 89% of the time.
+
+[ORCHESTRATOR] 2026-09-13: four CLAUDE.md statements are now FALSE and still need fixing
+(gotcha 8, a stale doc is worse than no doc). The adoption bullet says an invented id "makes the
+hook route answer 403, not 410" and that route is deleted. The conversation-uuid bullet still
+calls it a hook-fed field when the registry is the writer. Gotcha 10 is phrased around a synthetic
+hook and a tracker flag; the lesson generalises but the mechanism is gone. The 1.4.0 seam table
+still lists _mint_hook_token. Fix after the deletion step lands, to avoid editing CLAUDE.md while
+two agents are in the same worktree.
+
+[ORCHESTRATOR] 2026-09-13: the macOS "would like to access data from other apps" prompt (52 in 6h)
+is NOT caused by this app's own reads. The claude CLI binary walks other apps' data under
+~/Library (488 denials on Group Containers, 144 Application Support, 96 Caches, 86 Containers,
+ZERO naming ~/.claude), and macOS attributes it to Cloude Code.app as the responsible parent. The
+grant never sticks because /Applications/Cloude Code.app is ad-hoc signed (no Team ID) while TCC
+still holds a stale Apple Development requirement that fails to match, so authorisation degrades
+to one per-process slot that concurrent CLI processes steal from each other ("Session scoped auth
+is invalid for client", once per prompt). Read frequency does NOT drive the prompt rate (335
+requests produced 52 prompts), so the 2s registry poll adds nothing. Fix is to re-sign with the
+existing Developer ID (Team 3ZVEJNEQ9G). NOT DONE, awaiting Adam.
 
 ## Done and merged to master
 
@@ -74,7 +166,7 @@ via `gh issue list --state open --json number --jq 'length'`).
 - [ ] #30 file-tree scan off the event loop
 - [ ] #42 inventory durable browser preferences (phase 5 prerequisite)
 
-## Held — needs Adam
+## Held - needs Adam
 
 - #54 phase 7 control-mode input channel. MEASURED AND NOT PROMOTED, pending a
   ruling. The 5 ms bar is cleared comfortably: delivery to the pane process is
@@ -1202,3 +1294,115 @@ evidence is in the workflow journal.
   collision radar); cross-provider bus on a blackboard MCP server; BBS
   front door + handles + tiers.
 - Claim a tier 1 track by draft PR per docs/DECISIONS.md before starting.
+
+## [ROADMAP] 2026-09-13 - brainstorm filed as GitHub issues
+
+Adam annotated docs/ROADMAP.md section 3 (kept, cut, and tagged which items
+ship as plugins). The surviving items are now issues on Adoom666/CloudeCodeDev.
+
+- 49 feature issues, #123 through #171, all labelled `enhancement` + `roadmap`.
+- #172 "plugins, all of them" is the single aggregate plugins issue, 30
+  checklist entries, labelled `blocked` and blocked by #126.
+- #126 is the plugins catalog. Nothing in #172 starts until it lands.
+- p1 sits on five: #123 crying-wolf notifications, #124 multi-pane grid,
+  #125 skills catalog, #128 provider account ledger, #129 live usage.
+- #136 follow-the-action is blocked by #123 per Adam's note.
+- Two labels were created for this: `roadmap` and `plugin`.
+
+Nothing is started. Claim a track by draft PR per docs/DECISIONS.md first.
+
+Note for anyone picking up a UI item: Adam is rebuilding the entire front end
+in Svelte (style, design and layout only; architecture, server contracts,
+WebSocket and xterm all unchanged). Build no new surface against client/js.
+
+## [PERF] 2026-09-13 - the "30 seconds to show sessions" report, diagnosed and fixed
+
+Adam signed in on a second computer on the LAN and waited 30+ seconds for the
+session list. Forensics on the server log found NO server stall and NO sign-in:
+the browser arrived at 11:56:23Z already holding a valid token, and the 37.5
+seconds was three full page reloads at 4.4 to 5.0 s each. Reload two was 100
+percent 304 Not Modified and still cost 4.4 s. Every page load revalidated 220
+subresources through the 6-connection HTTP/1.1 cap. Login was never involved
+and costs about 2 ms. The database integrity walk never ran; cloude.db on the
+dev box is 224 KB.
+
+Shipped, uncommitted at the time of writing:
+
+- Content-keyed static asset URLs plus real cache headers
+  (src/core/static_asset_keys.py, wired through src/main.py's static region
+  and src/core/static_serving.py). Measured warm reload: 218 revalidations to
+  7, 65,400 bytes to 2,100. The 7 are ES module imports inside
+  client/js/i18n/boot.js, specifiers inside JavaScript and therefore
+  unreachable by an HTML rewrite. Cold load unchanged at 218 requests.
+- Launchpad first paint: five serial round trips to ONE, pinned by a test that
+  measures DEPTH rather than count (a count would have passed pre-fix).
+- GET /themes moved off the event loop (themes_routes.py::_scan_both_roots),
+  structural loop-blocking test with its negative control.
+- Per-request access logging (src/api/request_log.py): one http_request event
+  carrying method, path without the query string, status, client_ip and
+  duration_ms. Static paths at debug, everything else at info. This exists
+  because today's diagnosis had to be reconstructed from the nearest structlog
+  timestamp.
+- Adopting a MEASURED-dead tmux husk now answers 409 session_gone with
+  refresh, not a bare 500. cloude_cloudecode-4 produced seven identical 500s
+  in ninety minutes because the listing kept offering a husk that
+  remain-on-exit keeps alive. A probe that could not RUN still answers 500.
+- The duplicate "project .claude" root is gone from the file editor drawer;
+  the project's .claude is reachable through "project files" as before.
+- Terminal search panel: 560 px wide, anchored top right, toast stack pushed
+  below it while open, and autofocus fixed. ROOT CAUSE of the autofocus bug,
+  worth keeping: `opened` is a rune, so the .is-open class lands on a
+  microtask, and until it does the panel is display:none, where
+  HTMLElement.focus() is a specified no-op that throws nothing and logs
+  nothing. One flushSync between the assignment and the focus call.
+
+CANCELLED THE SAME DAY, deliberately: a serve-time bundle concatenating the
+159 legacy script tags. It was built and then removed because Adam is
+rebuilding the front end in Svelte, so it would have been deleted on arrival.
+The cold-load cost of 218 requests is therefore accepted until client/js goes.
+
+STILL OPEN: nothing from this round. The 7 unreachable module imports are a
+known residual, not a defect.
+
+## [BACKLOG] 2026-09-13 - dependency graph applied to every open issue
+
+Adam asked for the P levels of his open issues, then for the whole board to be
+ordered by dependency. Three changes landed on GitHub, nothing in the code.
+
+**#64 closed as not planned.** CI is off on purpose and the jobs were refused
+for billing before they ever ran, so nothing was failing. The `p0` label came
+off it. There is no P0 on the board now.
+
+**#175 created: the front end redesign.** Adam is rebuilding the entire UI in
+Svelte himself, by hand. Labels `enhancement p1 blocked owner-only roadmap`.
+The new `owner-only` label means exactly one thing: Adam owns it personally, no
+agent starts it, plans it, refactors toward it or opens a PR against it. It is
+blocked by Adam, a human gate, and only he closes it or unblocks what waits on
+it. Its scope is style, design and layout; architecture, server contracts, the
+WebSocket protocol and xterm are unchanged.
+
+**Dependency graph applied across all 78 open issues.** 44 bodies rewritten, 30
+issues gained the `blocked` label. Board went from 66 startable to 36.
+- 26 hard blockers, where the issue consumes another issue's output and
+  building it first means building a stub.
+- 15 issues blocked by #175 because their deliverable is a new visible surface
+  that the redesign would throw away: 36, 50, 51, 58, 66, 124, 134, 135, 136,
+  142, 148, 149, 157, 167, 168.
+- 13 soft orderings recorded as `## Depends on` with NO `blocked` label,
+  because they can be built standalone without waste: 50, 51, 63, 66, 120, 138,
+  139, 140, 142, 149, 153, 166, 171.
+- Bodies that carried a hard gate under a `## Depends on` heading were promoted
+  to `## Blocked by`, not duplicated.
+
+Three dependency cycles were found and broken: #123 before #140 (a digest that
+classifies using a lying counter just delivers the lie on a timer), #125 before
+#133 (a tier computed from catalog activity that does not exist yet is a guess),
+#148 before #149 (both come from one git read and #148 owns the reader).
+
+Five dependencies point at work that has no issue number and were stated rather
+than invented: the cheap model summarizer seam, the server side plugin runtime,
+the blackboard MCP server, worktree per session, and the BBS front door.
+
+STILL OPEN: nothing from this round. #173 is ccsliinc's claim and was left
+untouched. Soft orderings deliberately did not get the `blocked` label so the
+board keeps telling the truth about what can actually be picked up.

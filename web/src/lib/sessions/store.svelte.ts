@@ -43,7 +43,11 @@ import {
 } from '../../../../client/js/labels/session-listing.js';
 import { loadFailedNotice } from '../../../../client/js/labels/recent-session.js';
 import type { RecentSessionsPayload, Translate as RecentTranslate } from '../launchpad/recent';
-import { loadAttribution, sortRunningSessionsByWork } from './attribution';
+import {
+    loadAttribution,
+    sortRunningSessionsByWork,
+    type AttributionSnapshot,
+} from './attribution';
 import { hostWindow } from './env';
 import { browserSessionHost, type SessionHost } from './host';
 import { emptyListing, listingReasonFromError, statusFromError } from './listing';
@@ -132,6 +136,45 @@ let host: SessionHost | null = null;
 function activeHost(): SessionHost {
     if (!host) host = browserSessionHost();
     return host;
+}
+
+/**
+ * Start the `GET /sessions/records` read. Does not touch the store.
+ *
+ * Description: SPLIT FROM THE APPLY so the fetch can be in flight while
+ *   the two session probes are, without any of the seven fields it
+ *   writes landing early. `loadAttribution` never rejects and catches a
+ *   synchronous throw out of the host, so the returned promise is always
+ *   safe to hold unawaited beside another one.
+ * Inputs: t - the translator, for the two failure sentences.
+ * Output: Promise<AttributionSnapshot>. Never rejects.
+ * Example: const pending = startAttribution(t);
+ */
+function startAttribution(t: Translate): Promise<AttributionSnapshot> {
+    return loadAttribution(
+        activeHost(), t, recordsMalformedDetail, attributionFailedDetail,
+    );
+}
+
+/**
+ * Publish one attribution snapshot into the store, all seven fields.
+ *
+ * Description: THE ONE WRITER, so no reader can ever see a fresh join
+ *   beside a stale work index. Both callers - the standalone refresh and
+ *   the running-sessions tick - land here, which is what keeps the join
+ *   and the sort key atomic however the fetch was scheduled.
+ * Inputs: snap - what `startAttribution` answered with.
+ * Output: void.
+ * Example: applyAttribution(await startAttribution(t));
+ */
+function applyAttribution(snap: AttributionSnapshot): void {
+    sessionAttribution = snap.byName;
+    sessionAttributionByInstance = snap.byInstance;
+    sessionAttributionAmbiguous = snap.ambiguous;
+    sessionRecords = snap.records;
+    workStampByName = snap.workStamps;
+    sessionAttributionListingOk = snap.listingOk;
+    sessionAttributionListingDetail = snap.listingDetail;
 }
 
 // ---- the store -------------------------------------------------------
@@ -336,20 +379,39 @@ export const sessionStore = {
         includeArchived: boolean,
         t: Translate,
     ): Promise<{ ok: boolean; error: string | null }> {
+        // ALL THREE REQUESTS GO OUT TOGETHER. Neither sidecar takes any
+        // input from the project list - presence and authority are
+        // argument-free endpoints - so the `await` that used to sit
+        // between them bought a whole round trip of nothing. They are
+        // still BOTH JOINED before this resolves, which is the property
+        // that matters: the tree reads all three synchronously when it
+        // paints, so a missing project or a degraded datastore still
+        // cannot flash as normal for one frame.
+        //
+        // The join happens on the failure path too, and neither sidecar
+        // can reject (each records its own failure as a state), so there
+        // is no branch here that leaves a promise unhandled. A host that
+        // throws SYNCHRONOUSLY out of `getProjects` never starts them at
+        // all, exactly as before, because that throw happens on the line
+        // above the fan-out.
+        let sidecars: Promise<unknown> = Promise.resolve();
         try {
-            projects = await activeHost().getProjects(includeArchived);
-            projectsListingOk = true;
-            archivedFetchOk = includeArchived ? true : null;
-            await Promise.all([
+            const listing = activeHost().getProjects(includeArchived);
+            sidecars = Promise.all([
                 this.loadProjectPresence(),
                 this.loadProjectAuthority(),
             ]);
+            projects = await listing;
+            projectsListingOk = true;
+            archivedFetchOk = includeArchived ? true : null;
+            await sidecars;
             return { ok: true, error: null };
         } catch (error) {
             projectsListingOk = false;
             // The archived rows were part of THIS failed fetch, so their
             // outcome is "could not evaluate", not "none".
             archivedFetchOk = includeArchived ? false : null;
+            await sidecars;
             console.error('CloudeWeb: failed to load projects:', error);
             return { ok: false, error: projectsLoadFailed(error, t) };
         }
@@ -369,16 +431,7 @@ export const sessionStore = {
      * Example: await sessionStore.loadSessionAttribution(t)
      */
     async loadSessionAttribution(t: Translate): Promise<void> {
-        const snap = await loadAttribution(
-            activeHost(), t, recordsMalformedDetail, attributionFailedDetail,
-        );
-        sessionAttribution = snap.byName;
-        sessionAttributionByInstance = snap.byInstance;
-        sessionAttributionAmbiguous = snap.ambiguous;
-        sessionRecords = snap.records;
-        workStampByName = snap.workStamps;
-        sessionAttributionListingOk = snap.listingOk;
-        sessionAttributionListingDetail = snap.listingDetail;
+        applyAttribution(await startAttribution(t));
     },
 
     /**
@@ -450,6 +503,14 @@ export const sessionStore = {
         if (flags && typeof flags.ensure === 'function') {
             (flags.ensure as () => void)();
         }
+        // THE RECORDS READ IS STARTED HERE, NOT AFTER THE MERGE. It is a
+        // third independent endpoint: `GET /sessions/records` takes no
+        // input from either session probe, and it was only ever awaited
+        // afterwards because the JOIN needs both. Issuing it now makes
+        // this tick one round trip deep instead of three, and changes
+        // nothing about the order things are PUBLISHED in, which is the
+        // part that was load bearing.
+        const attribution = startAttribution(t);
         const { rows, listing } = await loadRunningRows({
             host: activeHost(),
             t,
@@ -463,7 +524,7 @@ export const sessionStore = {
         // ATTRIBUTION FIRST, because it carries the sort key. The rows stay
         // in a local until then: see the header for what publishing them
         // early cost.
-        await this.loadSessionAttribution(t);
+        applyAttribution(await attribution);
         runningSessions = sortRunningSessionsByWork(rows.slice(), workStampByName);
     },
 

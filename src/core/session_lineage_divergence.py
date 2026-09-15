@@ -93,11 +93,22 @@ from src.core.db_models import (
 SESSION_START_SOURCE_STARTUP = "startup"
 SESSION_START_SOURCE_RESUME = "resume"
 
+#: NOT A CLAUDE CODE SOURCE VALUE. The attention watcher synthesises this
+#: one when it joins a live registry record to a row
+#: (``src/core/attention/side_effects.py``). It belongs in the boot family
+#: for the same reason ``startup`` does, and the reasoning is if anything
+#: stronger: a registry record is a claude PROCESS announcing itself, and
+#: it carries no statement whatsoever about a conversation the pane's
+#: incumbent may have moved to. A divergence measured against one is
+#: therefore never evidence of a fork, and must never mint a row.
+SESSION_START_SOURCE_REGISTRY = "registry"
+
 #: A new process booted. Its conversation is its own; it is not evidence
 #: that the pane's conversation moved anywhere.
 PROCESS_BOOT_SOURCES: Tuple[str, ...] = (
     SESSION_START_SOURCE_STARTUP,
     SESSION_START_SOURCE_RESUME,
+    SESSION_START_SOURCE_REGISTRY,
 )
 
 #: The incumbent process moved to a different conversation. Reusing the

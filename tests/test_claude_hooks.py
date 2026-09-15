@@ -1,27 +1,45 @@
-"""v0.7.0 Part 3 — tests for Claude Code lifecycle hook integration.
+"""CloudeCode takes its hook block back out of ~/.claude/settings.json.
 
-Covers:
-  - Per-session HMAC token mint / validate (constant-time).
-  - ``get_env_for_spawn`` env-var injection trio.
-  - Loopback-only enforcement on the hook POST endpoint.
-  - HMAC validation rejecting wrong / missing tokens.
-  - Event-kind whitelist.
-  - Toast creation on valid hook POST.
-  - Defensive payload parsing (empty body, malformed JSON).
-  - Idempotent merge of ``ensure_hook_settings`` into ``~/.claude/settings.json``.
-  - User-defined hooks preserved across merge.
-  - Re-running merge does NOT duplicate managed hooks.
-  - ``disable_claude_hooks`` flag short-circuits the merge.
+THIS SUITE USED TO PROVE THE OPPOSITE. It asserted that an idempotent
+merge INSTALLED a managed hook block, that re-running it did not
+duplicate one, and that an opt-out flag skipped the install. All of that
+is deleted: the endpoint those hooks POSTed to is gone, because
+``CLOUDECODE_SESSION_ID`` is a pane-wide environment variable and every
+background agent reported under the parent's id, so the signal was wrong
+nine times in ten. What answers the same question now is
+``src/core/attention/``, which reads what the harness already writes to
+disk.
+
+The file left behind on every install that ever ran an older build is the
+problem this suite now guards. It holds our block, aimed at nothing,
+making Claude Code pay for a curl on every lifecycle event forever.
+``strip_managed_hooks`` removes it once at boot.
+
+WHAT THE CASES BELOW ARE REALLY PROTECTING, because "the block is gone"
+is the easy half and a rm -f would satisfy it:
+
+  * **A user's own hooks.** Every case that removes something has a
+    user-authored entry sitting beside it, asserted byte-for-byte
+    afterwards. A strip that took the whole ``hooks`` object would pass
+    every removal assertion in this file and silently delete work the
+    user did by hand.
+  * **A file it cannot parse.** Unreadable JSON is left EXACTLY as it
+    was. Rewriting a file we did not understand is the one failure here
+    that cannot be undone.
+  * **Not writing at all when there is nothing of ours.** Asserted by
+    mtime and by content, because a strip that rewrote every settings
+    file on every boot would churn a file we do not own.
+  * **That the installer is really gone.** The last section asserts the
+    module exports no block builder and no managed-event list, so the
+    subsystem cannot come back by a merge that compiles.
 """
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -36,609 +54,161 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ruff: noqa: E402
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-import src.api.routes as routes_mod
-import src.api.hook_event_routes as hook_routes_mod
-from src.api.auth import require_auth
 from src.core import claude_hooks
 from src.core.claude_hooks import (
     CLOUDECODE_HOOKS_MARKER,
-    _build_hook_block,
-    _build_managed_command,
     _is_managed_command,
-    _merge_hooks,
-    ensure_hook_settings,
+    strip_managed_hooks,
 )
-from src.core.session_manager import SessionManager
-from src.models import Session, SessionStatus
 
 
-# --------------------------------------------------------------------------- #
-# Shared stub settings + bare SessionManager (no tmux side-effects).          #
-# Mirrors test_toast_lifecycle.py's pattern.                                  #
-# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------- #
+# Fixtures and shapes                                                    #
+# --------------------------------------------------------------------- #
 
 
-class _StubSettings:
-    """Just enough of ``Settings`` for SessionManager.__init__ + Part-3 code."""
+def _managed_entry(event: str = "Stop") -> dict:
+    """One matcher entry shaped exactly as the old installer wrote it.
 
-    def __init__(self, pin_path: Path, log_dir: Path, port: int = 5001):
-        self._pin_path = pin_path
-        self._log_dir = log_dir
-        self.port = port
-
-    def get_pinned_themes_path(self) -> Path:
-        return self._pin_path
-
-    def get_unread_state_path(self) -> Path:
-        return self._pin_path.parent / "unread_state.json"
-
-    @property
-    def log_directory(self) -> str:
-        return str(self._log_dir)
-
-    def get_session_metadata_path(self) -> Path:
-        return self._log_dir / "session_metadata.json"
-
-
-def _bare_manager(monkeypatch, tmp_path: Path, port: int = 5001) -> SessionManager:
-    stub = _StubSettings(
-        pin_path=tmp_path / "pinned_themes.json",
-        log_dir=tmp_path / "logs",
-        port=port,
-    )
-    (tmp_path / "logs").mkdir(exist_ok=True)
-    monkeypatch.setattr("src.core.session_manager.settings", stub)
-    return SessionManager()
-
-
-def _register_session(mgr: SessionManager, sid: str, working_dir: Path) -> Session:
-    sess = Session(
-        id=sid,
-        pty_pid=None,
-        working_dir=str(working_dir),
-        status=SessionStatus.RUNNING,
-        tmux_session=None,
-    )
-    mgr._registry.sessions[sid] = sess
-    mgr._registry.subscribers.setdefault(sid, [])
-    return sess
-
-
-# =========================================================================== #
-# 1. SessionManager — hook-token machinery                                    #
-# =========================================================================== #
-
-
-def test_mint_and_get_hook_token(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    work = tmp_path / "proj"
-    work.mkdir()
-    _register_session(mgr, "ses_t1", work)
-
-    token = mgr.hook_tokens.mint("ses_t1")
-    assert isinstance(token, str)
-    # secrets.token_urlsafe(32) -> 43 chars of urlsafe base64.
-    assert len(token) >= 40
-    assert mgr.hook_tokens.get("ses_t1") == token
-
-
-def test_get_hook_token_returns_none_for_unminted_session(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    assert mgr.hook_tokens.get("does_not_exist") is None
-
-
-def test_validate_hook_token_correct(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    _register_session(mgr, "ses_v1", tmp_path)
-    token = mgr.hook_tokens.mint("ses_v1")
-    assert mgr.hook_tokens.validate("ses_v1", token) is True
-
-
-def test_validate_hook_token_wrong_token(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    _register_session(mgr, "ses_v2", tmp_path)
-    mgr.hook_tokens.mint("ses_v2")
-    assert mgr.hook_tokens.validate("ses_v2", "bogus_token_value_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") is False
-
-
-def test_validate_hook_token_unknown_session(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    assert mgr.hook_tokens.validate("never_seen", "any_token") is False
-
-
-def test_validate_hook_token_empty_inputs(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    _register_session(mgr, "ses_e", tmp_path)
-    mgr.hook_tokens.mint("ses_e")
-    assert mgr.hook_tokens.validate("", "anything") is False
-    assert mgr.hook_tokens.validate("ses_e", "") is False
-
-
-def test_validate_hook_token_uses_compare_digest(monkeypatch, tmp_path):
-    """Constant-time compare is non-negotiable for an HMAC bearer."""
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    _register_session(mgr, "ses_ct", tmp_path)
-    token = mgr.hook_tokens.mint("ses_ct")
-
-    called = {"count": 0}
-    original = hmac.compare_digest
-
-    def _spy(a, b):
-        called["count"] += 1
-        return original(a, b)
-
-    monkeypatch.setattr("src.core.session_manager.hmac.compare_digest", _spy)
-    assert mgr.hook_tokens.validate("ses_ct", token) is True
-    assert called["count"] == 1, "expected validate_hook_token to call hmac.compare_digest"
-
-
-# SUPERSEDED 2026-08-28. This asserted the opposite of what is now
-# correct, and the reversal was measured rather than argued.
-#
-# It required `_wipe_session_state` to drop the hook token. That reads as
-# obvious hygiene - a token should not outlive its session - but that
-# function means "forget the IN-MEMORY state for this id", and its
-# callers are startup stale-cleanup, zombie cleanup and a failed create.
-# None of them is "the user ended this session".
-#
-# Once tokens became durable (so a session's hooks survive a server
-# restart), this behaviour revoked the credentials of perfectly live
-# agents on the way down - the very restart the token store exists to
-# survive wiped the store. Caught by a differential: a hand-seeded entry
-# survived a restart untouched while a real session's token vanished.
-#
-# Forgetting state and revoking a credential are two different
-# operations. The token's real lifetime is "as long as a tmux session by
-# that name is still owned", enforced by `_gc_hook_tokens` at load.
-def test_wiping_in_memory_state_does_NOT_revoke_the_token(monkeypatch, tmp_path):
-    """A live agent must keep working when its id is forgotten."""
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    _register_session(mgr, "ses_w", tmp_path)
-    mgr.hook_tokens.mint("ses_w", tmux_name="cloude_w")
-    assert "ses_w" in mgr.hook_tokens.tokens
-
-    mgr._wipe_session_state("ses_w")
-
-    assert mgr.hook_tokens.get("ses_w") is not None, (
-        "wiping in-memory state must not revoke a live agent's credential - "
-        "the agent cannot be re-issued one, its token is baked into the pane"
-    )
-
-
-def test_a_token_is_garbage_collected_when_its_tmux_name_is_gone(monkeypatch, tmp_path):
-    """The other half: tokens must not accumulate forever.
-
-    Asserting only the negative above would be satisfied by a store that
-    never forgets anything, which is a credential leak rather than a fix.
+    Inputs: event (str) - only used to vary the command text.
+    Output: dict - a ``{"matcher", "hooks"}`` entry carrying the marker.
     """
-    from src.core.hook_tokens import load_tokens, save_tokens
-
-    save_tokens(tmp_path, {"ses_gone": "t"}, tmux_names={"ses_gone": "cloude_gone"})
-    kept = load_tokens(tmp_path, live_session_ids=["ses_gone"])
-    assert kept.tokens
-
-    dropped = load_tokens(tmp_path, live_session_ids=[])
-    assert dropped.tokens == {}
-
-
-def test_get_env_for_spawn_includes_all_three_vars(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path, port=5001)
-    _register_session(mgr, "ses_env", tmp_path)
-    env = mgr.get_env_for_spawn("ses_env")
-    assert env["CLOUDECODE_SESSION_ID"] == "ses_env"
-    assert env["CLOUDECODE_HOOK_TOKEN"] == mgr.hook_tokens.get("ses_env")
-    assert env["CLOUDECODE_HOOK_URL"] == (
-        "http://127.0.0.1:5001/api/v1/hooks/claude-event"
-    )
-
-
-def test_get_env_for_spawn_uses_configured_port(monkeypatch, tmp_path):
-    mgr = _bare_manager(monkeypatch, tmp_path, port=9999)
-    _register_session(mgr, "ses_p", tmp_path)
-    env = mgr.get_env_for_spawn("ses_p")
-    assert "http://127.0.0.1:9999/" in env["CLOUDECODE_HOOK_URL"]
-
-
-# =========================================================================== #
-# 2. FastAPI hook endpoint                                                    #
-# =========================================================================== #
-
-
-def _build_hook_app(monkeypatch, tmp_path):
-    """Stand up a minimal FastAPI app for the Part-3 hook endpoint.
-
-    No auth override needed — the hook route INTENTIONALLY does not use
-    Depends(require_auth); auth is loopback + HMAC.
-    """
-    mgr = _bare_manager(monkeypatch, tmp_path)
-    work = tmp_path / "hook_proj"
-    work.mkdir()
-    _register_session(mgr, "ses_hook", work)
-    mgr.hook_tokens.mint("ses_hook")
-
-    app = FastAPI()
-    app.state.session_manager = mgr
-    app.include_router(routes_mod.router, prefix="/api/v1")
-    # Override require_auth so OTHER routes don't bleed into this test
-    # if they're collected — the hook route doesn't use it.
-    app.dependency_overrides[require_auth] = lambda: True
-    return app, mgr
-
-
-def test_hook_endpoint_rejects_non_loopback(monkeypatch, tmp_path):
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.hook_tokens.get("ses_hook")
-
-    # TestClient defaults to "testclient" as client_host. We force it to
-    # an external IP by overriding the request scope via a small ASGI
-    # wrapper. Simpler: pass it through TestClient's transport client.
-    client = TestClient(app)
-    # Starlette's TestClient sets client_host="testclient". Our loopback
-    # whitelist is 127.0.0.1 / ::1 / localhost. So a default call should
-    # be rejected, which is exactly the assertion we want here.
-    resp = client.post(
-        "/api/v1/hooks/claude-event",
-        headers={
-            "X-Cloudecode-Session": "ses_hook",
-            "X-Cloudecode-Token": token,
-            "X-Cloudecode-Event": "Stop",
-            "Content-Type": "application/json",
-        },
-        json={},
-    )
-    assert resp.status_code == 403
-    assert resp.json().get("detail") == "loopback only"
-
-
-def _loopback_client(app):
-    """Build a TestClient whose ASGI calls report client_host=127.0.0.1.
-
-    TestClient defaults to ``client=("testclient", 50000)`` which our
-    loopback whitelist rejects; we explicitly pass 127.0.0.1 so the
-    happy-path tests can exercise the actual endpoint logic.
-    """
-    return TestClient(app, client=("127.0.0.1", 12345))
-
-
-def test_hook_endpoint_rejects_missing_headers(monkeypatch, tmp_path):
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    client = _loopback_client(app)
-    resp = client.post("/api/v1/hooks/claude-event", json={})
-    assert resp.status_code == 400
-
-
-def test_hook_endpoint_rejects_invalid_token(monkeypatch, tmp_path):
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    client = _loopback_client(app)
-    resp = client.post(
-        "/api/v1/hooks/claude-event",
-        headers={
-            "X-Cloudecode-Session": "ses_hook",
-            "X-Cloudecode-Token": "definitely_not_the_real_token_xxxxxxxxxxxxxx",
-            "X-Cloudecode-Event": "Stop",
-        },
-        json={},
-    )
-    assert resp.status_code == 403
-
-
-def test_hook_endpoint_rejects_unknown_event_kind(monkeypatch, tmp_path):
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.hook_tokens.get("ses_hook")
-    client = _loopback_client(app)
-    resp = client.post(
-        "/api/v1/hooks/claude-event",
-        headers={
-            "X-Cloudecode-Session": "ses_hook",
-            "X-Cloudecode-Token": token,
-            "X-Cloudecode-Event": "BogusEvent",
-        },
-        json={},
-    )
-    assert resp.status_code == 400
-
-
-def test_hook_endpoint_creates_toast_for_stop(monkeypatch, tmp_path):
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.hook_tokens.get("ses_hook")
-    client = _loopback_client(app)
-
-    # Stub the WS broadcast so we don't actually need a connection.
-    with patch.object(
-        hook_routes_mod.connection_manager, "broadcast_to_session",
-        new=AsyncMock(return_value=None),
-    ) as mock_bcast:
-        resp = client.post(
-            "/api/v1/hooks/claude-event",
-            headers={
-                "X-Cloudecode-Session": "ses_hook",
-                "X-Cloudecode-Token": token,
-                "X-Cloudecode-Event": "Stop",
-                "Content-Type": "application/json",
-            },
-            json={"stop_reason": "stop"},
-        )
-
-    assert resp.status_code == 200, resp.text
-    payload = resp.json()
-    assert payload["ok"] is True
-    assert "toast_id" in payload
-
-    stored = mgr._toast_inbox.get("ses_hook")
-    assert len(stored) == 1
-    assert stored[0].kind == "Stop"
-    assert stored[0].title == "Your turn"
-
-    # WS broadcast fired exactly once.
-    mock_bcast.assert_called_once()
-
-
-def test_hook_endpoint_handles_empty_payload_gracefully(monkeypatch, tmp_path):
-    """No JSON body at all -> still creates a toast with the fallback title."""
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.hook_tokens.get("ses_hook")
-    client = _loopback_client(app)
-
-    with patch.object(
-        hook_routes_mod.connection_manager, "broadcast_to_session",
-        new=AsyncMock(return_value=None),
-    ):
-        resp = client.post(
-            "/api/v1/hooks/claude-event",
-            headers={
-                "X-Cloudecode-Session": "ses_hook",
-                "X-Cloudecode-Token": token,
-                "X-Cloudecode-Event": "Notification",
-            },
-            content=b"",  # truly empty body
-        )
-
-    assert resp.status_code == 200, resp.text
-    stored = mgr._toast_inbox.get("ses_hook")
-    assert len(stored) == 1
-    assert stored[0].kind == "Notification"
-    # Title is the generic fallback even with no message in body.
-    assert stored[0].title == "wants your attention"
-
-
-def test_hook_endpoint_permission_request_extracts_tool_info(monkeypatch, tmp_path):
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.hook_tokens.get("ses_hook")
-    client = _loopback_client(app)
-
-    with patch.object(
-        hook_routes_mod.connection_manager, "broadcast_to_session",
-        new=AsyncMock(return_value=None),
-    ):
-        resp = client.post(
-            "/api/v1/hooks/claude-event",
-            headers={
-                "X-Cloudecode-Session": "ses_hook",
-                "X-Cloudecode-Token": token,
-                "X-Cloudecode-Event": "PermissionRequest",
-                "Content-Type": "application/json",
-            },
-            json={
-                "tool_name": "Bash",
-                "tool_input": {"command": "rm -rf node_modules"},
-            },
-        )
-
-    assert resp.status_code == 200
-    stored = mgr._toast_inbox.get("ses_hook")
-    assert stored[0].kind == "PermissionRequest"
-    assert stored[0].title == "needs your permission"
-    # Body should mention the tool name and command.
-    assert "Bash" in (stored[0].body or "")
-    assert "rm -rf node_modules" in (stored[0].body or "")
-
-
-def test_hook_endpoint_410_when_session_destroyed_mid_flight(monkeypatch, tmp_path):
-    """Token validates BUT session was wiped between mint and record_toast."""
-    app, mgr = _build_hook_app(monkeypatch, tmp_path)
-    token = mgr.hook_tokens.get("ses_hook")
-    # Race simulation: leave the token in _hook_tokens but yank the session.
-    mgr._registry.sessions.pop("ses_hook", None)
-    client = _loopback_client(app)
-    resp = client.post(
-        "/api/v1/hooks/claude-event",
-        headers={
-            "X-Cloudecode-Session": "ses_hook",
-            "X-Cloudecode-Token": token,
-            "X-Cloudecode-Event": "Stop",
-        },
-        json={},
-    )
-    # record_toast raises ValueError -> 410 Gone per the route contract.
-    assert resp.status_code == 410
-
-
-# =========================================================================== #
-# 3. claude_hooks.ensure_hook_settings                                        #
-# =========================================================================== #
-
-
-def _isolate_settings_disabled_flag(monkeypatch, disabled: bool):
-    """Force the disable_claude_hooks flag to a known value for the test."""
-
-    class _Notif:
-        disable_claude_hooks = disabled
-
-    class _Auth:
-        notifications = _Notif()
-
-    class _S:
-        def load_auth_config(self):
-            return _Auth()
-
-    monkeypatch.setattr("src.config.settings", _S())
-
-
-def test_ensure_hook_settings_creates_file_when_missing(monkeypatch, tmp_path):
-    _isolate_settings_disabled_flag(monkeypatch, False)
-    target = tmp_path / "claude" / "settings.json"
-    assert not target.exists()
-
-    ok = ensure_hook_settings(target)
-    assert ok is True
-    assert target.exists()
-
-    data = json.loads(target.read_text())
-    assert "hooks" in data
-    for event in ("Stop", "Notification", "PermissionRequest"):
-        assert event in data["hooks"]
-        # Each event has exactly one cloudecode-managed matcher.
-        matchers = data["hooks"][event]
-        assert len(matchers) == 1
-        cmd = matchers[0]["hooks"][0]["command"]
-        assert CLOUDECODE_HOOKS_MARKER in cmd
-        assert "CLOUDECODE_HOOK_URL" in cmd
-        assert f"X-Cloudecode-Event: {event}" in cmd
-
-
-def test_ensure_hook_settings_preserves_existing_user_hooks(monkeypatch, tmp_path):
-    _isolate_settings_disabled_flag(monkeypatch, False)
-    target = tmp_path / "settings.json"
-
-    user_block = {
-        "hooks": {
-            # PreToolUse is now ALSO a cloudecode-managed event
-            # (feat/hook-driven-status) — the user's existing matcher on it
-            # must be preserved AND our own canonical entry appended, same
-            # merge rule as Stop below.
-            "PreToolUse": [
-                {
-                    "matcher": "Bash",
-                    "hooks": [
-                        {"type": "command", "command": "echo user-pre-tool"}
-                    ],
-                }
-            ],
-            "Stop": [
-                {
-                    "matcher": "*",
-                    "hooks": [
-                        {"type": "command", "command": "echo user-stop"}
-                    ],
-                }
-            ],
-            # feat/session-lineage - this slot used to hold SessionStart,
-            # which WAS unmanaged when this test was written and is now a
-            # lifecycle event we install. Swapped to PreCompact, which
-            # this app still does not manage, so the case the test exists
-            # to cover - a user hook under an event we never touch - is
-            # still actually being covered rather than quietly retired.
-            # The SessionStart pass-through case is asserted separately
-            # below, where it now belongs: preserved AND appended to.
-            "PreCompact": [
-                {
-                    "matcher": "*",
-                    "hooks": [
-                        {"type": "command", "command": "echo user-pre-compact"}
-                    ],
-                }
-            ],
-            "SessionStart": [
-                {
-                    "matcher": "*",
-                    "hooks": [
-                        {"type": "command", "command": "echo user-session-start"}
-                    ],
-                }
-            ],
-        },
-        "someOtherUserKey": "value",
+    return {
+        "matcher": "*",
+        "hooks": [
+            {
+                "type": "command",
+                "command": (
+                    f'(cat | curl -sS -m 2 -X POST "$CLOUDECODE_HOOK_URL" '
+                    f'-H "X-Cloudecode-Event: {event}" --data-binary @-) '
+                    f"> /dev/null 2>&1 ; : {CLOUDECODE_HOOKS_MARKER}"
+                ),
+            }
+        ],
     }
-    target.write_text(json.dumps(user_block))
-
-    ok = ensure_hook_settings(target)
-    assert ok is True
-
-    data = json.loads(target.read_text())
-    # User's PreToolUse hook still intact, PLUS our managed one appended.
-    pre = data["hooks"]["PreToolUse"]
-    assert len(pre) == 2
-    assert pre[0]["hooks"][0]["command"] == "echo user-pre-tool"
-    assert CLOUDECODE_HOOKS_MARKER in pre[1]["hooks"][0]["command"]
-
-    # User's Stop hook still there, PLUS our managed Stop appended.
-    stop_entries = data["hooks"]["Stop"]
-    assert len(stop_entries) == 2
-    assert stop_entries[0]["hooks"][0]["command"] == "echo user-stop"
-    assert CLOUDECODE_HOOKS_MARKER in stop_entries[1]["hooks"][0]["command"]
-
-    # An event we don't manage at all is untouched.
-    assert data["hooks"]["PreCompact"] == user_block["hooks"]["PreCompact"]
-
-    # feat/session-lineage - SessionStart is managed NOW, so the user's
-    # entry must survive and ours must be appended after it. Asserted in
-    # that order deliberately: claude_hooks appends managed matchers last
-    # so a user hook's exit code can short-circuit ours, never the reverse.
-    starts = data["hooks"]["SessionStart"]
-    assert len(starts) == 2
-    assert starts[0]["hooks"][0]["command"] == "echo user-session-start"
-    assert CLOUDECODE_HOOKS_MARKER in starts[1]["hooks"][0]["command"]
-
-    # Non-hooks user keys preserved.
-    assert data["someOtherUserKey"] == "value"
 
 
-def test_ensure_hook_settings_replaces_old_cloudecode_hooks_idempotently(
-    monkeypatch, tmp_path
-):
-    """Running ensure_hook_settings twice yields a SINGLE managed entry."""
-    _isolate_settings_disabled_flag(monkeypatch, False)
-    target = tmp_path / "settings.json"
+def _user_entry(command: str = "echo mine") -> dict:
+    """One matcher entry a human wrote, carrying no marker.
 
-    ensure_hook_settings(target)
-    ensure_hook_settings(target)
-
-    data = json.loads(target.read_text())
-    for event in ("Stop", "Notification", "PermissionRequest"):
-        matchers = data["hooks"][event]
-        managed_count = sum(
-            1
-            for m in matchers
-            for h in m.get("hooks", [])
-            if CLOUDECODE_HOOKS_MARKER in h.get("command", "")
-        )
-        assert managed_count == 1, (
-            f"expected exactly 1 managed {event} hook, got {managed_count}"
-        )
+    Inputs: command (str).
+    Output: dict.
+    """
+    return {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": command}],
+    }
 
 
-def test_ensure_hook_settings_does_not_clobber_unparseable(monkeypatch, tmp_path):
-    """A corrupted user settings file is LEFT ALONE — never overwritten."""
-    _isolate_settings_disabled_flag(monkeypatch, False)
-    target = tmp_path / "settings.json"
-    corrupt = "{ this is not json"
-    target.write_text(corrupt)
+@pytest.fixture()
+def settings_file(tmp_path, monkeypatch):
+    """A settings.json path inside tmp, safe for the write guard.
 
-    ok = ensure_hook_settings(target)
-    assert ok is False
-    assert target.read_text() == corrupt  # untouched
-
-
-def test_disable_claude_hooks_skips_ensure(monkeypatch, tmp_path):
-    _isolate_settings_disabled_flag(monkeypatch, True)
-    target = tmp_path / "claude" / "settings.json"
-    ok = ensure_hook_settings(target)
-    assert ok is True  # disabled = success-no-op
-    assert not target.exists()  # file never created
+    Inputs: tmp_path, monkeypatch (pytest fixtures).
+    Output: Path - the file, which does not exist yet.
+    """
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(claude_hooks.SETTINGS_PATH_ENV_VAR, str(path))
+    return path
 
 
-# =========================================================================== #
-# 4. Build helpers (sanity)                                                   #
-# =========================================================================== #
+def _write(path: Path, payload: dict) -> None:
+    """Write one settings document.
+
+    Inputs: path (Path); payload (dict).
+    Output: None.
+    """
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def test_build_hook_block_has_all_managed_events():
-    """3 toast events + 5 activity-only + 2 lifecycle (feat/session-lineage)."""
-    block = _build_hook_block()
-    assert set(block.keys()) == {
+def _read(path: Path) -> dict:
+    """Read one settings document back.
+
+    Inputs: path (Path).
+    Output: dict.
+    """
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# --------------------------------------------------------------------- #
+# 1. NOTHING IS EVER INSTALLED                                           #
+# --------------------------------------------------------------------- #
+
+
+def test_a_missing_settings_file_is_left_missing(settings_file):
+    """The strip never creates the file it was pointed at.
+
+    The installer used to write one from scratch. A user who has never
+    configured Claude Code must be left with no settings file at all,
+    because creating one is itself a change to their machine.
+    """
+    assert strip_managed_hooks(settings_file) is True
+    assert not settings_file.exists()
+
+
+def test_a_file_with_no_hooks_key_is_untouched(settings_file):
+    """Nothing of ours to remove, so nothing is written.
+
+    Asserted by mtime as well as by content: a strip that rewrote every
+    settings file on every boot would churn a file we do not own.
+    """
+    _write(settings_file, {"model": "opus", "theme": "dark"})
+    before = settings_file.read_text(encoding="utf-8")
+    mtime = settings_file.stat().st_mtime_ns
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert settings_file.read_text(encoding="utf-8") == before
+    assert settings_file.stat().st_mtime_ns == mtime
+
+
+def test_a_file_holding_only_user_hooks_is_untouched(settings_file):
+    """THE NEGATIVE CONTROL for every removal case below.
+
+    A strip that dropped the ``hooks`` object wholesale would pass every
+    "our block is gone" assertion in this file and delete the user's work.
+    """
+    doc = {"hooks": {"PreToolUse": [_user_entry()], "Stop": [_user_entry("ls")]}}
+    _write(settings_file, doc)
+    mtime = settings_file.stat().st_mtime_ns
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert _read(settings_file) == doc
+    assert settings_file.stat().st_mtime_ns == mtime
+
+
+def test_the_strip_is_idempotent(settings_file):
+    """Running it twice reaches the same file, and writes once.
+
+    The second pass finds nothing of ours and must take the no-write
+    path, which is what keeps a boot loop from rewriting the file.
+    """
+    _write(settings_file, {"hooks": {"Stop": [_managed_entry()]}})
+    assert strip_managed_hooks(settings_file) is True
+    after_first = settings_file.read_text(encoding="utf-8")
+    mtime = settings_file.stat().st_mtime_ns
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert settings_file.read_text(encoding="utf-8") == after_first
+    assert settings_file.stat().st_mtime_ns == mtime
+
+
+# --------------------------------------------------------------------- #
+# 2. AN EXISTING MANAGED BLOCK IS FULLY REMOVED                          #
+# --------------------------------------------------------------------- #
+
+
+def test_a_whole_managed_block_is_removed_down_to_the_hooks_key(settings_file):
+    """The upgrade case: every event key goes, and so does ``hooks``.
+
+    A user who never wrote a hook of their own is left with exactly the
+    file they would have had if CloudeCode had never run. Stopping at
+    "the lists are empty" leaves litter that reads like configuration.
+    """
+    events = [
         "Stop",
         "Notification",
         "PermissionRequest",
@@ -647,37 +217,241 @@ def test_build_hook_block_has_all_managed_events():
         "PostToolUse",
         "SubagentStart",
         "SubagentStop",
-        # feat/session-lineage - the only two events that carry the Claude
-        # conversation uuid and how it started. Listed literally rather
-        # than derived from _MANAGED_EVENTS: a test that recomputes the
-        # value under test can never disagree with it.
         "SessionStart",
         "SessionEnd",
+    ]
+    _write(
+        settings_file,
+        {
+            "model": "opus",
+            "hooks": {event: [_managed_entry(event)] for event in events},
+        },
+    )
+
+    assert strip_managed_hooks(settings_file) is True
+
+    doc = _read(settings_file)
+    assert "hooks" not in doc
+    assert doc == {"model": "opus"}
+    assert CLOUDECODE_HOOKS_MARKER not in settings_file.read_text(encoding="utf-8")
+
+
+def test_a_user_hook_survives_beside_a_removed_managed_one(settings_file):
+    """THE LOAD-BEARING CASE. Both entries sit under the same event key.
+
+    This is the shape the old merge produced on a machine where the user
+    already had a ``Stop`` hook: the user's entry first, ours appended
+    after it. Only ours may go, and the user's must come back byte for
+    byte, still a list, still under its own key.
+    """
+    mine = _user_entry("say-done")
+    _write(
+        settings_file,
+        {
+            "hooks": {
+                "Stop": [mine, _managed_entry("Stop")],
+                "PreToolUse": [_managed_entry("PreToolUse")],
+            }
+        },
+    )
+
+    assert strip_managed_hooks(settings_file) is True
+
+    doc = _read(settings_file)
+    assert doc == {"hooks": {"Stop": [mine]}}
+
+
+def test_an_event_key_the_user_owns_outright_keeps_its_empty_list(settings_file):
+    """An empty list WE did not empty is the user's, and stays.
+
+    The rule is "drop a key this strip emptied", not "drop every empty
+    key". Deleting one we never touched would be this function editing
+    something it did not write.
+    """
+    _write(
+        settings_file,
+        {"hooks": {"Notification": [], "Stop": [_managed_entry()]}},
+    )
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert _read(settings_file) == {"hooks": {"Notification": []}}
+
+
+def test_a_matcher_shape_we_never_wrote_is_preserved_verbatim(settings_file):
+    """Anything unrecognisable passes through untouched.
+
+    A settings file is a user's document. A value we cannot classify is
+    not ours to normalise, reorder or drop.
+    """
+    _write(
+        settings_file,
+        {
+            "hooks": {
+                "Weird": {"not": "a list"},
+                "AlsoWeird": ["a bare string", 7],
+                "Stop": [_managed_entry()],
+            }
+        },
+    )
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert _read(settings_file) == {
+        "hooks": {"Weird": {"not": "a list"}, "AlsoWeird": ["a bare string", 7]}
     }
 
 
-def test_build_managed_command_carries_marker():
-    cmd = _build_managed_command("Stop")
-    assert CLOUDECODE_HOOKS_MARKER in cmd
-    assert "X-Cloudecode-Event: Stop" in cmd
-    assert "$CLOUDECODE_HOOK_URL" in cmd
+def test_a_mixed_matcher_entry_is_dropped_whole(settings_file):
+    """One marked command in an entry condemns that entry, and only it.
+
+    Every hook the installer ever wrote lived alone in its own matcher,
+    so this cannot take a user's hook down with it - and the sibling
+    entry in this case proves the blast radius stops at the entry.
+    """
+    mixed = {
+        "matcher": "*",
+        "hooks": [
+            {"type": "command", "command": "echo first"},
+            _managed_entry()["hooks"][0],
+        ],
+    }
+    mine = _user_entry("echo untouched")
+    _write(settings_file, {"hooks": {"Stop": [mixed, mine]}})
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert _read(settings_file) == {"hooks": {"Stop": [mine]}}
 
 
-def test_is_managed_command_detects_marker():
-    assert _is_managed_command(f"echo hi {CLOUDECODE_HOOKS_MARKER}") is True
-    assert _is_managed_command("echo unmanaged") is False
-    assert _is_managed_command(None) is False
-    assert _is_managed_command(123) is False
+# --------------------------------------------------------------------- #
+# 3. A FILE IT CANNOT READ IS NEVER REWRITTEN                            #
+# --------------------------------------------------------------------- #
 
 
-def test_merge_hooks_creates_hooks_key_when_missing():
-    merged = _merge_hooks({}, _build_hook_block())
-    assert "hooks" in merged
-    assert "Stop" in merged["hooks"]
+def test_unparseable_json_bails_without_clobbering(settings_file):
+    """LOG AND BAIL. The one failure here that cannot be undone.
+
+    Returns False so the caller logs it, and leaves the bytes alone.
+    """
+    settings_file.write_text('{"hooks": {"Stop": [', encoding="utf-8")
+    before = settings_file.read_text(encoding="utf-8")
+
+    assert strip_managed_hooks(settings_file) is False
+
+    assert settings_file.read_text(encoding="utf-8") == before
 
 
-def test_merge_hooks_with_non_dict_existing_returns_clean_block():
-    """Defensive: a malformed existing config yields a fresh canonical block."""
-    merged = _merge_hooks({"hooks": "not a dict"}, _build_hook_block())
-    assert isinstance(merged["hooks"], dict)
-    assert "Stop" in merged["hooks"]
+def test_a_top_level_non_object_bails_without_clobbering(settings_file):
+    """A settings file that is a list is not one we can merge into."""
+    settings_file.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert strip_managed_hooks(settings_file) is False
+
+    assert settings_file.read_text(encoding="utf-8") == "[1, 2, 3]"
+
+
+def test_an_empty_file_is_a_no_op_success(settings_file):
+    """Nothing in it, nothing of ours, nothing written."""
+    settings_file.write_text("   \n", encoding="utf-8")
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert settings_file.read_text(encoding="utf-8") == "   \n"
+
+
+def test_a_hooks_value_of_the_wrong_type_is_left_alone(settings_file):
+    """``hooks`` as a string is not a block we wrote, so we do not touch it."""
+    _write(settings_file, {"hooks": "surprise"})
+
+    assert strip_managed_hooks(settings_file) is True
+
+    assert _read(settings_file) == {"hooks": "surprise"}
+
+
+# --------------------------------------------------------------------- #
+# 4. THE DESTINATION IS EXPLICIT, AND THE GUARD IS REAL                  #
+# --------------------------------------------------------------------- #
+
+
+def test_default_settings_path_honours_the_override(settings_file, monkeypatch):
+    """The env override is what keeps a plain pytest run off ~/.claude."""
+    assert claude_hooks.default_settings_path() == settings_file
+
+
+def test_default_settings_path_falls_back_to_the_home_file(monkeypatch):
+    """With no override it names the real Claude Code settings file."""
+    monkeypatch.delenv(claude_hooks.SETTINGS_PATH_ENV_VAR, raising=False)
+    assert claude_hooks.default_settings_path() == (
+        Path.home() / ".claude" / "settings.json"
+    )
+
+
+def test_the_write_guard_refuses_a_destination_outside_tmp(tmp_path):
+    """A harness violation FAILS LOUDLY rather than returning False.
+
+    Deliberately not folded into the handled-failure path: a test that
+    aimed this at a real home directory must stop the run, not log.
+    """
+    from src.core.test_write_guard import OutsideTempWriteError
+
+    with pytest.raises(OutsideTempWriteError):
+        strip_managed_hooks(Path("/definitely/not/tmp/settings.json"))
+
+
+# --------------------------------------------------------------------- #
+# 5. THE MARKER, WHICH IS THE WHOLE BASIS OF "OURS"                      #
+# --------------------------------------------------------------------- #
+
+
+def test_the_marker_identifies_only_our_own_commands():
+    """The classifier the strip is built on, on its own."""
+    assert _is_managed_command(f"curl ... ; : {CLOUDECODE_HOOKS_MARKER}") is True
+    assert _is_managed_command("echo mine") is False
+
+
+@pytest.mark.parametrize("value", [None, 7, {"nested": True}, ["list"]])
+def test_a_non_string_command_is_not_ours_and_does_not_raise(value):
+    """A user's hook with an unexpected shape cannot crash the strip."""
+    assert _is_managed_command(value) is False
+
+
+# --------------------------------------------------------------------- #
+# 6. THE INSTALLER CANNOT COME BACK                                      #
+# --------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ensure_hook_settings",
+        "_build_hook_block",
+        "_build_managed_command",
+        "_merge_hooks",
+        "_MANAGED_EVENTS",
+        "_hooks_disabled",
+    ],
+)
+def test_the_module_exports_no_installer(name):
+    """THE RATCHET. A merge that re-adds any of these fails here.
+
+    Each name is one half of the old install path. The subsystem coming
+    back would be a change somebody makes on purpose, not a name that
+    reappears in a merge from a branch that never heard about this.
+    """
+    assert not hasattr(claude_hooks, name), (
+        f"claude_hooks.{name} is back; the hook installer was deleted on "
+        f"2026-09-13 and nothing may reinstate it without a decision"
+    )
+
+
+def test_the_opt_out_setting_is_gone_from_the_config_model():
+    """``disable_claude_hooks`` must not gate the cleanup.
+
+    Honouring an opt-out here would skip the strip for exactly the users
+    who asked not to have the block - the ones most likely to still be
+    carrying one installed before they set the flag.
+    """
+    from src.config.notifications import NotificationsConfig
+
+    assert "disable_claude_hooks" not in NotificationsConfig.model_fields

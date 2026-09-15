@@ -67,7 +67,7 @@ function needsFetch(node) {
 /**
  * Resolve one directory's children, fetching them only if needed.
  *
- * @param {string} rootId - "user" | "project" | "workdir".
+ * @param {string} rootId - "user" | "workdir".
  * @param {object} node - The server TreeNode being expanded.
  * @param {string|null} projectPath - Working directory, for the two project
  *   roots; null for "user".

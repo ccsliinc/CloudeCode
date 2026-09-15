@@ -44,7 +44,7 @@ from src.core.unique_tmp_path import unique_tmp_path
 logger = structlog.get_logger()
 
 # Five call paths write this store: the ``Stop`` hook branch of
-# ``SessionManager.record_hook_event``, the manual mark-unread control,
+# the attention watcher's ``done_idle`` edge, the manual mark-unread control,
 # the listing pass's transcript turn-end claim in
 # ``session_transcript_status_read``, the WebSocket view-clear in
 # ``session_view_clears``, and the boot reconcile's ``prune``. They

@@ -7,7 +7,7 @@ stopped session can appear anywhere at all.
 MUTING ACKNOWLEDGES NOTHING. The notification policy written here
 suppresses the INTERRUPTION and never the record: a muted session still
 records its hook events, still sets ``permission_open`` and still flips
-unread. See ``src/core/hook_toast_gate.py``.
+unread. See ``src/core/attention/raise_gate.py``.
 """
 
 import structlog

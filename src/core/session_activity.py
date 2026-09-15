@@ -1,113 +1,71 @@
-"""Hook-driven session activity state machine (feat/hook-driven-status).
+"""The claim store the attention seam still reads, and the tmux fallback.
 
-Replaces "poll tmux and guess" with "listen to what Claude Code's own
-lifecycle hooks tell us, and only claim what they actually tell us".
+THIS MODULE USED TO BE THE HOOK-DRIVEN STATE MACHINE. It is not any more.
+Claude Code was made to POST every lifecycle event to a loopback endpoint,
+and this file turned that stream into a display state: a sub-agent depth
+counter, a heartbeat timestamp, a turn-open boolean, a suppression latch.
+All of it is deleted. ``CLOUDECODE_SESSION_ID`` is a PANE-WIDE environment
+variable, so the parent agent and every background agent it spawned posted
+under one session id, and measured over 50.8 hours of the live log the
+counter called 410 of 459 turn-ends finished while the transcript's own
+record said background agents were still pending. The INPUT was mislabeled
+at the source, so no amount of ordering work could move the number.
 
-Why this exists: ``src.core.session_status.resolve_pane_status()`` can only
-see a pane's foreground process name. It cannot tell "the agent is
-thinking" from "the agent is blocked on a permission prompt" - both look
-like "a non-shell command is running" to tmux. Claude Code's lifecycle
-hooks (``Notification`` / ``PermissionRequest`` / ``Stop`` / tool-use /
-subagent events) are the only HONEST source for that distinction, so this
-module is the one place hook events turn into a display state.
+What answers that question now is :mod:`src.core.attention`, which reads
+what the harness already writes to disk and needs nothing posted to it.
 
-TWO KINDS OF WAITING, AND THEY ARE NOT THE SAME CLAIM (split 2026-09-08).
-``PermissionRequest`` means the agent is STOPPED until the user answers a
-yes/no; ``Notification`` means claude wants attention while nothing is
-blocked. They used to share one ``question`` state and one boolean, which
-made a chatty notification light identical to a genuinely parked turn.
-They now set two independent booleans and resolve to ``question`` and
-``notice`` respectively, permission first. Two flags rather than one
-tri-state value is what keeps the pair order-tolerant: neither event kind
-can overwrite the other's claim, so a Notification arriving before, after
-or twice around a PermissionRequest converges on the same answer.
+THREE THINGS SURVIVED, AND EACH HAS A LIVE CALLER OUTSIDE THE HOOK PATH.
 
-Every state string is defined in ``session_status.py`` (single source of
-truth for the vocabulary); this module owns only the state MACHINE.
+**The event-kind vocabulary.** The ``EVENT_*`` strings are the one place
+these names are spelled. :mod:`src.core.attention.raise_gate`,
+:mod:`src.core.attention.watcher` and
+:mod:`src.core.attention.side_effects` all import them, so a typo is a
+failed import rather than a silent no-op in production.
 
-Tolerance to unreliable hook delivery (dropped / duplicated / out-of-order
-events - hooks POST over loopback HTTP with a 3s timeout, backgrounded, and
-Claude Code gives no delivery guarantee):
-  - Every field update is idempotent last-write-wins on a boolean or a
-    floored counter - applying the same event twice, or applying two
-    events in the "wrong" order, converges to the same state a correctly-
-    ordered stream would reach. See ``record_event`` for the field-by-field
-    reasoning.
-  - A CLOSING EVENT IS NEVER A HEARTBEAT ON ITS OWN, and ``SubagentStop``
-    only ever floors ``subagent_depth`` at 0 rather than going negative.
-    See the section below: between them these are what stop a finished
-    turn painting ``working`` for two minutes after it ended.
-  - A missing ``Stop`` (the process died mid-turn, no clean shutdown) is
-    handled by the HEARTBEAT TIMEOUT below, not by trying to detect the
-    death from the hook stream (hooks cannot see a dead process either -
-    only tmux can, which is why ``resolve()`` still takes tmux's dead check
-    as the one authoritative override).
+**:func:`map_tmux_fallback`.** The graceful-degradation path for a session
+with no evidence at all beyond what tmux can see.
 
-A CLOSING EVENT IS NOT A HEARTBEAT (measured 2026-09-08, punchlist item
-4). ``tests/test_led_real_hooks.py`` put a real claude 2.1.265 in a real
-pane and watched what it POSTs: on a turn with NO SUBAGENT ANYWHERE IN
-IT, ``SubagentStop`` arrives about 1.5s AFTER ``Stop``, reproduced twice.
-``Stop`` had just set ``last_tool_event_ts`` to None precisely to say the
-turn was over, and ``SubagentStop`` stamped it again, so the heartbeat
-re-armed and ``resolve`` reported ``working`` for the full 120s on a
-session sitting at an empty prompt. ``finished_unread`` lasted a second
-and a half and ``idle`` was UNREACHABLE in between.
+**The permission and notice claim store.** ``SessionActivityTracker`` now
+holds exactly two claims per session and the stamp that dates one of them.
+Its READERS are live and outside this module:
+:mod:`src.core.session_view_clears` retires both when the user looks at a
+session, and :func:`src.core.session_permission_verify_apply
+.verify_open_permission` reads the stamp to decide whether a session is
+worth one ``capture-pane`` - a verdict the listing pass turns into the
+attention resolver's pane tier.
 
-THE RULE: ``SubagentStop`` NEVER STAMPS THE HEARTBEAT. It reports that
-work ENDED, so the only thing it may move is ``subagent_depth``, and it
-moves that with the floor at 0.
-
-It first shipped gated on ``subagent_depth > 0`` instead - stamp only
-when a subagent was open to close - and THE GATE IS NOT THE CLAIM IT
-STANDS FOR. A DUPLICATED ``SubagentStart`` delivered after ``Stop``
-raises the depth off the floor by itself, and the duplicated
-``SubagentStop`` behind it then passes the gate and stamps. A guard keyed
-on a number the very stream it distrusts can move is not a guard.
-Refusing outright loses nothing: a subagent FINISHING is not work
-happening now, so if the turn really is still running the parent's next
-``PreToolUse`` / ``PostToolUse`` re-arms the heartbeat within one tool
-call, and under-claiming ``working`` is this module's safe direction.
-
-``PostToolUse`` cannot take the same blanket refusal - it is the only
-event some legitimate turns emit late - so it keys on ``turn_open``, and
-the refusal is NARROW: refused ONLY when a ``Stop`` has POSITIVELY been
-seen for this session and no opening event has landed since. Never having
-seen a ``Stop`` (a fresh session, a server restarted mid-turn) is not
-evidence the turn is over, so that case still stamps. The remaining hole
-- a turn whose ``UserPromptSubmit`` AND ``PreToolUse`` were both dropped,
-leaving only a ``PostToolUse`` - costs one under-claimed ``working``,
-corrected by the next opening event.
-
-OPENING events still stamp unconditionally: nothing to be late for.
+**IT HAS NO WRITER TODAY, AND THAT IS A KNOWN GAP RATHER THAN AN
+OVERSIGHT.** ``record_event`` was the only thing that ever opened a claim,
+and it went with the hooks. Until a passive source supplies the
+opened-at - the open question Appendix B item 7 of the attention plan
+records - every read here answers "no claim", and every caller above
+already handles that as its documented absent case. The store is kept
+rather than deleted because deleting it would turn two explicit
+``is not None`` guards into two reads of a name that no longer exists,
+which is the falsy-not-raising failure this codebase numbers as gotcha 12.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 import structlog
 
 from src.core.session_status import (
     STATUS_DEAD,
-    STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
-    STATUS_NOTICE,
-    STATUS_QUESTION,
     STATUS_RUNNING,
     STATUS_UNKNOWN,
-    STATUS_WORKING,
-    STATUS_WORKING_SUBAGENT,
     derive_read_state,
 )
 
 # ---------------------------------------------------------------------------
-# Hook event kind strings. Mirrors the header value the hook endpoint
-# receives (``X-Cloudecode-Event``) and the events claude_hooks.py installs
-# into ~/.claude/settings.json. Centralized here (not re-spelled per
-# caller) so a typo in one place fails a test instead of silently
-# no-op'ing in production.
+# Event kind strings. THE VOCABULARY BRIDGE, and the reason this block
+# outlived the state machine that used to consume it: the attention
+# package names the same three kinds when it decides what a toast is,
+# and one table beats three spellings.
 # ---------------------------------------------------------------------------
 
 EVENT_STOP = "Stop"
@@ -119,136 +77,25 @@ EVENT_POST_TOOL_USE = "PostToolUse"
 EVENT_SUBAGENT_START = "SubagentStart"
 EVENT_SUBAGENT_STOP = "SubagentStop"
 
-#: Events this tracker changes state for. Anything else (a future Claude
-#: Code hook kind we don't know about yet) is ignored defensively in
-#: ``record_event`` rather than raising - a forward-compat hook the user's
-#: Claude Code version adds must never crash the activity tracker.
-KNOWN_EVENTS: frozenset[str] = frozenset(
-    {
-        EVENT_STOP,
-        EVENT_NOTIFICATION,
-        EVENT_PERMISSION_REQUEST,
-        EVENT_USER_PROMPT_SUBMIT,
-        EVENT_PRE_TOOL_USE,
-        EVENT_POST_TOOL_USE,
-        EVENT_SUBAGENT_START,
-        EVENT_SUBAGENT_STOP,
-    }
-)
-
-#: How long a tool-use heartbeat (PreToolUse/PostToolUse/SubagentStart/
-#: SubagentStop) is trusted before we stop calling the session "working".
+#: How long a working claim is trusted before it stops meaning "working".
 #:
-#: Reasoning for 120s: this is the safety net for a dropped ``Stop`` (the
-#: agent process dies mid-tool-call without a clean shutdown hook firing).
-#: It has to be LONGER than the gap between two consecutive tool calls
-#: during normal heavy agentic work - a single tool call (a large file
-#: write, a slow web fetch, a long-running test suite) can legitimately
-#: run for a minute or more with no intermediate hook - or the dot would
-#: flicker back to idle/finished_unread mid-turn, which is worse than a
-#: state going stale for a bit. It has to be SHORT enough that a genuinely
-#: dead process doesn't leave the session stuck showing "working" for the
-#: rest of the day. 120s sits comfortably above realistic single-tool-call
-#: latency and comfortably below "the user will notice something is off".
+#: Reasoning for 120s: it has to be LONGER than the gap between two
+#: consecutive tool calls during normal heavy agentic work - a single call
+#: (a large file write, a slow web fetch, a long test suite) can
+#: legitimately run for a minute or more with nothing in between - or the
+#: light flickers back to idle mid-turn, which is worse than a state going
+#: stale for a bit. It has to be SHORT enough that a genuinely dead
+#: process does not leave the session showing "working" for the rest of
+#: the day. 120s sits comfortably above realistic single-tool-call latency
+#: and comfortably below "the user will notice something is off".
+#:
+#: KEPT HERE, WITH THREE IMPORTERS, because the same window has to govern
+#: the durable row and the transcript read as governs the live one:
+#: ``activity_persist``, ``session_transcript_status`` and
+#: ``alert_state_contract`` all read this exact name.
 WORKING_HEARTBEAT_TIMEOUT_SECONDS: int = 120
 
-_HEARTBEAT_TIMEOUT = timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS)
-
-#: How long a ``Stop`` that was suppressed for sub-agent reasons keeps
-#: suppressing the events that trail it.
-#:
-#: WHY A LATCH IS NEEDED AT ALL. ``Stop`` resets ``subagent_depth`` to 0
-#: (it must - see the field comment), so the toast gate correctly
-#: suppresses that first ``Stop`` at a positive depth and is then blind
-#: for the rest of the same wait. Measured live 2026-09-10 on
-#: ``ses_63beb976``, three times in twelve minutes: an idle
-#: ``Notification`` RAISED about 60s after a suppressed ``Stop`` (plus
-#: 60.09s, plus 60.12s, plus 60.03s), once with a second ``Stop`` raised
-#: at plus 19.22s as well. Each summoned the user to a pane reading
-#: "Waiting for N background agents to finish".
-#:
-#: Reasoning for 180s. It has to be LONGER than the whole trailing burst
-#: claude emits during one background wait, and the longest gap measured
-#: between a suppressed ``Stop`` and a trailing event is about 85s, so
-#: anything under about 120s reintroduces the bug on the slower waits. It
-#: also has to clear ``WORKING_HEARTBEAT_TIMEOUT_SECONDS`` (120s), because
-#: while that window is open the session can still be painting ``working``
-#: from the pre-Stop heartbeat and a toast landing inside it is the same
-#: false summons. 180s is a bit over twice the longest measured gap and
-#: half again the heartbeat window.
-#:
-#: It has to be FINITE, and that is the safety property, not a
-#: convenience: with a TTL an over-long background wait degrades to a
-#: DELAYED notification, never a lost one. A latch with no expiry is an
-#: unbounded mute, and a missed "your turn" is a worse failure than a
-#: spurious one. Silence is only ever bought with evidence, and this
-#: latch is evidence with a shelf life.
-SUBAGENT_WAIT_LATCH_SECONDS: int = 180
-
-_SUBAGENT_WAIT_LATCH = timedelta(seconds=SUBAGENT_WAIT_LATCH_SECONDS)
-
-#: The ``toast_suppressed`` reason string the hook endpoint returns when
-#: ``idle_notification_should_suppress`` is why a ``Notification`` was
-#: withheld. A named constant rather than a literal at both call sites -
-#: the route and the tests that assert on it - so the two cannot drift.
-IDLE_NOTIFICATION_SUPPRESSION_REASON: str = "turn_closed"
-
 logger = structlog.get_logger(__name__)
-
-
-def idle_notification_should_suppress(
-    *, permission_open: bool, turn_open: bool, stop_seen: bool
-) -> bool:
-    """Whether an idle ``Notification`` toast should stay quiet.
-
-    Description: claude fires an idle nudge ``Notification`` about 60s
-        after a turn that already ended cleanly, even with no sub-agent
-        involved - measured live 2026-09-10 on ``ses_63beb976``: twelve
-        consecutive Stop-then-Notification pairs, each at plus 60.1s,
-        each summoning the user to a session that had nothing to ask. The
-        sub-agent gate above (``subagent_depth`` / ``subagent_wait_active``)
-        only covers the case where the trailing wait was for a sub-agent;
-        this is the same false-urgency shape one layer broader.
-
-        Suppress ONLY when all three hold: a ``Stop`` was POSITIVELY seen
-        (``stop_seen``), nothing has reopened the turn since (``turn_open``
-        is False - the same flag ``record_event`` already keeps so a late
-        ``PostToolUse`` can be told from one belonging to the turn running
-        right now), and no permission is currently open. Any single False
-        means "do not suppress": this fails toward notifying, never toward
-        silence.
-    Inputs:
-        permission_open: the session's CURRENT ``permission_open`` flag. A
-            permission prompt is a hard block on the agent, so its
-            presence alone forces the answer False regardless of the
-            other two - ``PermissionRequest`` must never be silenced by
-            this rule (it is also never routed through it - see the
-            caller - but the pure function refuses it too, defensively).
-        turn_open: the session's CURRENT ``turn_open`` flag. True means an
-            opening event (``UserPromptSubmit`` / ``PreToolUse`` /
-            ``SubagentStart``) landed since the last ``Stop`` - the turn is
-            live again and the notification may describe real work.
-        stop_seen: whether a ``Stop`` has EVER been positively observed for
-            this session. False means "not having looked is not evidence
-            the turn ended" - a fresh session, or one whose ``Stop`` was
-            dropped, must still notify.
-    Output: bool. True only when a Stop was seen, nothing has reopened the
-        turn since, and no permission is open.
-    Example:
-        >>> idle_notification_should_suppress(
-        ...     permission_open=False, turn_open=False, stop_seen=True
-        ... )
-        True
-        >>> idle_notification_should_suppress(
-        ...     permission_open=False, turn_open=False, stop_seen=False
-        ... )
-        False
-        >>> idle_notification_should_suppress(
-        ...     permission_open=True, turn_open=False, stop_seen=True
-        ... )
-        False
-    """
-    return stop_seen and not turn_open and not permission_open
 
 
 def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
@@ -320,334 +167,66 @@ def map_tmux_fallback(tmux_status: str, unread: bool = False) -> str:
 
 @dataclass
 class SessionActivitySignal:
-    """Ephemeral, per-session hook-derived signal state.
+    """One session's open attention claims. Ephemeral, never persisted.
 
-    Never persisted to disk - a server restart legitimately forgets this
-    (the process the hooks describe may itself be gone), and on restart
-    every session falls back to ``map_tmux_fallback`` until fresh hook
-    events re-establish signal. The one piece of hook-derived information
-    that DOES need to survive a restart (the unread flag) is intentionally
-    NOT stored here - see ``SessionManager.unread_state`` / the module
-    docstring of ``config.get_unread_state_path``.
+    Description: a server restart legitimately forgets these - the process
+      they describe may itself be gone - and every session then falls back
+      to what the attention resolver can read off disk. The one piece of
+      this information that DOES need to survive a restart, the unread
+      flag, is deliberately NOT stored here; see
+      ``config.get_unread_state_path``.
+    Inputs: n/a.
+    Output: n/a (data holder).
     """
 
-    #: True once at least one event has ever landed for this session.
-    #: Distinguishes "hooks are installed and simply quiet right now" from
-    #: "hooks are not installed / haven't fired yet" - only the latter
-    #: falls back to ``map_tmux_fallback``.
-    hook_seen: bool = False
     #: True while a ``PermissionRequest`` is believed unresolved. THE
     #: AGENT IS STOPPED while this is set - it cannot proceed until the
-    #: user answers. THREE THINGS RETIRE IT, and it needs all three: the
-    #: next UserPromptSubmit / PreToolUse / Stop (the answer being given,
-    #: and the fastest route WHEN the events reach this same key), the
-    #: user viewing the session (``clear_permission`` via
-    #: ``session_view_clears``), and the pane being read and found to hold
-    #: no dialog (``session_permission_verify``). The last two exist
-    #: because the first is a closed loop only while every event lands on
-    #: this key, and on live 2026-09-09 one session's did not.
+    #: user answers. Two things retire it: the user viewing the session
+    #: (``clear_permission`` via ``session_view_clears``), and the pane
+    #: being read and found to hold no dialog
+    #: (``session_permission_verify_apply``).
     permission_open: bool = False
     #: When ``permission_open`` last went False -> True, or None while it
-    #: is clear. It exists because a PermissionRequest is a CLAIM that
+    #: is clear. It exists because a permission claim is a CLAIM that
     #: something is on screen, and the pane is the only thing that can
     #: confirm it - see ``src/core/session_permission_verify.py``. Stamped
-    #: ONLY on the transition, never refreshed by a duplicate: a duplicated
-    #: PermissionRequest means "still blocked", and letting it re-stamp
-    #: would push the verification grace window out for as long as the
-    #: duplicates kept arriving, which is exactly when verification is
-    #: most needed. Cleared to None everywhere the flag clears, so a
-    #: stale stamp can never outlive the claim it dates.
+    #: ONLY on the transition, never refreshed by a duplicate: a duplicate
+    #: means "still blocked", and letting it re-stamp would push the
+    #: verification grace window out for as long as the duplicates kept
+    #: arriving, which is exactly when verification is most needed.
+    #: Cleared to None everywhere the flag clears, so a stale stamp can
+    #: never outlive the claim it dates.
     permission_opened_at: Optional[datetime] = None
-    #: True between an unresolved ``Notification`` and the next
-    #: UserPromptSubmit or PreToolUse event. Claude wants attention and is
-    #: NOT blocked, which is why it is a second boolean rather than a
-    #: second writer of the first one: a Notification arriving while a
-    #: permission prompt is open must not be able to downgrade the claim
-    #: when the permission is later cleared on its own.
+    #: True while claude wants attention and is NOT blocked. A second
+    #: boolean rather than a second writer of the first one: a notice
+    #: raised while a permission prompt is open must not be able to
+    #: downgrade the claim when the permission is later cleared.
     notice_open: bool = False
-    #: Wall-clock time of the most recent PreToolUse/PostToolUse/
-    #: SubagentStart/SubagentStop event, or None if no heartbeat is live
-    #: (fresh session, or a Stop cleared it).
-    last_tool_event_ts: Optional[datetime] = None
-    #: Count of SubagentStart events not yet matched by a SubagentStop.
-    #: Floored at 0 (see module docstring) so a duplicate/out-of-order
-    #: SubagentStop can never make this negative.
-    subagent_depth: int = 0
-    #: True while the hook stream shows a turn IN PROGRESS. Set by every
-    #: OPENING event (UserPromptSubmit / PreToolUse / SubagentStart),
-    #: cleared by ``Stop``. It exists so a late ``PostToolUse`` can be told
-    #: from one belonging to the turn running right now. A boolean rather
-    #: than a counter deliberately: parallel tool calls and a droppable
-    #: ``PreToolUse`` would make a counter drift, and a drifting counter is
-    #: a worse lie than a coarse one. Read TOGETHER WITH ``last_stop_ts``.
-    turn_open: bool = False
-    #: Wall-clock time of the most recent Stop. Consulted by
-    #: ``record_event`` (a Stop we have POSITIVELY seen is what licenses
-    #: refusing a late ``PostToolUse``); not consulted by ``resolve`` -
-    #: the persisted unread flag is the durable record of "a Stop happened
-    #: and nobody's looked".
-    last_stop_ts: Optional[datetime] = None
-    #: When a ``Stop`` was last SUPPRESSED for sub-agent reasons, or None.
-    #: Stamped by the ``Stop`` branch from the depth as it stood BEFORE
-    #: that branch's own reset, because the reset is what destroys the
-    #: evidence the toast gate needs for the rest of the wait. Read
-    #: through ``subagent_wait_active``, which is where the TTL lives.
-    #:
-    #: THE STAMP IS THE TRANSITION, NOT THE EVENT, the same discipline
-    #: ``permission_opened_at`` uses. A duplicate ``Stop`` arrives with
-    #: the depth already 0, so it finds nothing to stamp from and leaves
-    #: the original stamp alone; a repeating hook therefore cannot push
-    #: the mute out indefinitely.
-    #:
-    #: RETIRED BY AN OPENING EVENT OR BY THE TTL, NEVER BY COUNTING DOWN.
-    #: After a ``Stop`` the depth is already 0, so a later
-    #: ``SubagentStop`` hits the floor branch and decrements nothing - any
-    #: retire-by-counting-down design would never retire at all.
-    subagent_wait_since: Optional[datetime] = None
 
 
 class SessionActivityTracker:
-    """Owns the ephemeral hook-derived signal for every live session.
+    """Owns the open attention claims for every live session.
 
-    Pure in-memory state + pure functions - no I/O, no persistence, easily
-    unit-testable in isolation (mirrors the style of
-    ``session_status.resolve_pane_status``, just with mutable state since
-    a hook stream, unlike a single tmux query, is genuinely stateful).
-    ``SessionManager`` owns one instance and is responsible for feeding it
-    events and for the durable (disk-backed) unread flag.
+    Description: pure in-memory state and pure functions - no I/O, no
+      persistence. ``SessionManager`` owns one instance.
+
+      IT HAS NO WRITER TODAY. See the module docstring: the hook stream
+      that opened these claims is deleted, and until a passive source
+      supplies an opened-at every method here answers its absent case.
+      The readers are real and are outside this module.
+    Inputs: n/a.
+    Output: n/a.
+    Example: SessionActivityTracker().permission_open_since("s1") is None
     """
 
     def __init__(self) -> None:
+        """Start with no claims and no I/O of any kind.
+
+        Inputs: none.
+        Output: None.
+        Example: SessionActivityTracker()
+        """
         self._signals: dict[str, SessionActivitySignal] = {}
-
-    def record_event(
-        self, session_id: str, kind: str, now: Optional[datetime] = None
-    ) -> None:
-        """Apply one hook event to ``session_id``'s signal state.
-
-        Description: Idempotent, order-tolerant field updates - see the
-            module docstring for why duplicate/out-of-order/missing events
-            can never wedge the state machine. Unknown ``kind`` values are
-            ignored (forward-compat with a Claude Code hook this app
-            doesn't know about yet).
-        Inputs:
-            session_id: cloudecode session id (the hook endpoint's
-                ``X-Cloudecode-Session`` header value, already validated).
-            kind: one of the ``EVENT_*`` constants (or any string - unknown
-                values are a documented no-op, not an error).
-            now: injectable clock for tests. Defaults to
-                ``datetime.utcnow()``.
-        Output: None (mutates internal state).
-        Example:
-            >>> t = SessionActivityTracker()
-            >>> t.record_event("s1", EVENT_NOTIFICATION)
-            >>> t.record_event("s1", EVENT_USER_PROMPT_SUBMIT)
-        """
-        if kind not in KNOWN_EVENTS:
-            return
-        now = now or datetime.utcnow()
-        state = self._signals.setdefault(session_id, SessionActivitySignal())
-        state.hook_seen = True
-
-        if kind == EVENT_PERMISSION_REQUEST:
-            # Idempotent: setting True when already True is a no-op. A
-            # duplicate, or a second distinct permission prompt before the
-            # first resolved, both just mean "still blocked" - correct
-            # either way.
-            #
-            # THE STAMP IS THE TRANSITION, NOT THE EVENT. Only a
-            # False -> True move dates the claim; a duplicate leaves the
-            # original stamp alone so the pane verification's grace window
-            # cannot be pushed out indefinitely by a repeating hook. See
-            # the field comment on ``permission_opened_at``.
-            if not state.permission_open:
-                state.permission_opened_at = now
-            state.permission_open = True
-        elif kind == EVENT_NOTIFICATION:
-            # Deliberately does NOT touch permission_open. The two flags
-            # are independent because the events are: hooks arrive
-            # unordered, so a Notification landing after the
-            # PermissionRequest it accompanies must leave the blocking
-            # claim exactly as it found it.
-            state.notice_open = True
-        elif kind == EVENT_USER_PROMPT_SUBMIT:
-            state.permission_open = False
-            state.permission_opened_at = None
-            state.notice_open = False
-            # An OPENING event retires the sub-agent wait latch: a new
-            # turn beginning is positive proof the previous wait is over.
-            state.subagent_wait_since = None
-            # An OPENING event: a prompt was submitted, so a turn is live
-            # again even though this event stamps no heartbeat of its own
-            # (a turn that calls no tool never paints ``working``, which
-            # is correct - nothing is running that the user cannot see).
-            state.turn_open = True
-        elif kind == EVENT_PRE_TOOL_USE:
-            # Tool activity starting implies the user answered yes (or no
-            # permission was needed) and has plainly seen the session -
-            # covers the common case where Claude Code emits no distinct
-            # "permission answered" event at all. It clears BOTH for the
-            # same reason: the user showing up is what resolves either.
-            state.permission_open = False
-            state.permission_opened_at = None
-            state.notice_open = False
-            state.turn_open = True
-            state.last_tool_event_ts = now
-            # An OPENING event: see EVENT_USER_PROMPT_SUBMIT above.
-            state.subagent_wait_since = None
-        elif kind == EVENT_POST_TOOL_USE:
-            # A CLOSING event. It is a heartbeat only while a turn is
-            # open, or while we have never seen a Stop for this session
-            # at all - not having looked is not evidence the turn ended,
-            # so a fresh session and a server restarted mid-turn both
-            # still stamp. Refused, it moves NOTHING: no timestamp, no
-            # flag, so applying it twice is the same no-op as applying it
-            # once, and it cannot reorder anything.
-            if state.turn_open or state.last_stop_ts is None:
-                state.last_tool_event_ts = now
-            else:
-                logger.debug(
-                    "tool_result_after_stop",
-                    session_id=session_id,
-                    last_stop_ts=state.last_stop_ts.isoformat(),
-                )
-        elif kind == EVENT_SUBAGENT_START:
-            state.subagent_depth += 1
-            state.turn_open = True
-            state.last_tool_event_ts = now
-            # An OPENING event, and it also raises the depth - so the gate
-            # is covered by the live count from here until the next Stop
-            # and needs no latch in between. Clearing it is the
-            # fail-toward-notifying direction: a straggler SubagentStart
-            # delivered after a Stop costs at most one spurious toast,
-            # where leaving the latch standing would cost a missed one.
-            state.subagent_wait_since = None
-        elif kind == EVENT_SUBAGENT_STOP:
-            # A SubagentStop NEVER STAMPS THE HEARTBEAT. It reports that
-            # work ENDED, so the only thing it may move is the depth, and
-            # it moves that with the floor (a negative depth would
-            # permanently hide a later legitimate Start). See the module
-            # docstring: gating the stamp on ``subagent_depth > 0``, as
-            # this did until it was tightened, gates it on a number a
-            # DUPLICATED SubagentStart delivered after ``Stop`` can raise
-            # off the floor by itself, so the straggler pair Start-then-
-            # Stop re-armed ``working`` on a finished turn through the
-            # very guard meant to stop it.
-            if state.subagent_depth > 0:
-                state.subagent_depth -= 1
-            else:
-                logger.debug(
-                    "subagent_stop_without_start",
-                    session_id=session_id,
-                    turn_open=state.turn_open,
-                )
-        elif kind == EVENT_STOP:
-            # Turn ended cleanly: nothing blocking, nothing asking for
-            # attention, no in-flight tool work, no in-flight subagent. A
-            # duplicate Stop re-applies the exact same reset - harmless.
-            #
-            # THE DEPTH IS CAPTURED BEFORE THE RESET, and the reset below
-            # is deliberately unchanged. Letting SubagentStop decrement it
-            # naturally instead would mean one DROPPED SubagentStop pins
-            # the depth above zero forever and silences that session
-            # permanently, which fails toward SILENCE. So the depth still
-            # resets and the fact that a wait was in progress is latched
-            # separately, with a TTL. See ``subagent_wait_since``.
-            depth_before_stop = state.subagent_depth
-            state.permission_open = False
-            state.permission_opened_at = None
-            state.notice_open = False
-            state.subagent_depth = 0
-            state.last_tool_event_ts = None
-            state.turn_open = False
-            state.last_stop_ts = now
-            if depth_before_stop > 0:
-                state.subagent_wait_since = now
-
-    def resolve(
-        self,
-        session_id: str,
-        tmux_status: str,
-        unread: bool = False,
-        now: Optional[datetime] = None,
-    ) -> str:
-        """Compute the unified display status for one session.
-
-        Description: ``tmux_status`` (dead-check) always wins first - hooks
-            cannot see a process die, only tmux can (see CLAUDE.md hazard
-            list). After that, if no hook has EVER fired for this session,
-            degrade gracefully to ``map_tmux_fallback`` rather than
-            claiming a hook-driven state we have no signal for. Otherwise
-            apply the priority order the user specified: an open
-            permission prompt beats an open notification beats a fresh
-            heartbeat beats "finished and unread" beats idle.
-        Inputs:
-            session_id: cloudecode session id.
-            tmux_status: raw ``resolve_pane_status()`` output for this
-                session's pane (``STATUS_RUNNING``/``IDLE``/``DEAD``/
-                ``UNKNOWN``). The ONLY thing that can report ``dead``.
-            unread: this session's persisted unread flag (auto-from-Stop
-                OR manual), supplied by the caller - this module has no
-                persistence of its own.
-            now: injectable clock for tests. Defaults to
-                ``datetime.utcnow()``.
-        Output:
-            str: one of ``session_status.ALL_ACTIVITY_STATUSES``.
-        Example:
-            >>> t = SessionActivityTracker()
-            >>> t.resolve("unseen", STATUS_RUNNING)
-            'working'
-            >>> t.record_event("s1", EVENT_NOTIFICATION)
-            >>> t.resolve("s1", STATUS_RUNNING)
-            'notice'
-            >>> t.record_event("s1", EVENT_PERMISSION_REQUEST)
-            >>> t.resolve("s1", STATUS_RUNNING)
-            'question'
-        """
-        if tmux_status == STATUS_DEAD:
-            return STATUS_DEAD
-
-        state = self._signals.get(session_id)
-        if state is None or not state.hook_seen:
-            return map_tmux_fallback(tmux_status, unread=unread)
-
-        now = now or datetime.utcnow()
-
-        # PERMISSION OUTRANKS NOTICE, and both outrank a live heartbeat.
-        # A session that is stopped waiting for a yes/no is the most
-        # actionable thing on the screen; one that has merely asked to be
-        # looked at is next; work that proceeds without the user is after
-        # both. Duplicated or out-of-order events cannot reorder this:
-        # each flag is set independently and read in a fixed order, so a
-        # Notification landing either side of a PermissionRequest resolves
-        # to ``question`` both times.
-        if state.permission_open:
-            return STATUS_QUESTION
-
-        if state.notice_open:
-            return STATUS_NOTICE
-
-        heartbeat_fresh = (
-            state.last_tool_event_ts is not None
-            and (now - state.last_tool_event_ts) <= _HEARTBEAT_TIMEOUT
-        )
-        if heartbeat_fresh:
-            return (
-                STATUS_WORKING_SUBAGENT
-                if state.subagent_depth > 0
-                else STATUS_WORKING
-            )
-
-        # AT REST. Which of the two resting states this is, is not a
-        # decision this state machine makes - it is the unread flag,
-        # applied by the one function every other source applies too.
-        # ``unknown`` is untouched by it deliberately: not having
-        # measured a session is not a claim that it is resting, so an
-        # unread flag may not turn it into one.
-        if tmux_status == STATUS_UNKNOWN and not unread:
-            return STATUS_UNKNOWN
-
-        return derive_read_state(STATUS_IDLE, unread=unread)
 
     def clear_notice(self, session_id: str) -> bool:
         """Clear an open ``Notification`` because the user LOOKED. Idempotent.
@@ -681,11 +260,7 @@ class SessionActivityTracker:
             caller can log the difference rather than guess at it; no
             caller is required to act on it.
         Example:
-            >>> t = SessionActivityTracker()
-            >>> t.record_event("s1", EVENT_NOTIFICATION)
-            >>> t.clear_notice("s1")
-            True
-            >>> t.clear_notice("s1")
+            >>> SessionActivityTracker().clear_notice("s1")
             False
         """
         state = self._signals.get(session_id)
@@ -736,11 +311,7 @@ class SessionActivityTracker:
             bool: True when a permission was actually open and has been
             cleared, False when there was nothing to clear.
         Example:
-            >>> t = SessionActivityTracker()
-            >>> t.record_event("s1", EVENT_PERMISSION_REQUEST)
-            >>> t.clear_permission("s1")
-            True
-            >>> t.clear_permission("s1")
+            >>> SessionActivityTracker().clear_permission("s1")
             False
         """
         state = self._signals.get(session_id)
@@ -771,114 +342,16 @@ class SessionActivityTracker:
             return None
         return state.permission_opened_at
 
-    def hooks_seen(self, session_id: str) -> bool:
-        """True iff at least one hook event has ever landed for this session.
-
-        Used by callers (and tests) that want to distinguish "we are in
-        the graceful tmux-fallback path" from "hooks are live" without
-        duplicating ``resolve()``'s internal logic.
-        """
-        state = self._signals.get(session_id)
-        return state is not None and state.hook_seen
-
-    def subagent_depth(self, session_id: str) -> int:
-        """How many ``SubagentStart`` events are still unmatched for a session.
-
-        Description: Read-only view of ``SessionActivitySignal.subagent_depth``
-            for callers outside this module, in the same spirit as
-            ``hooks_seen``. A session this tracker has never seen answers
-            0, which is deliberate: an unknown session is NOT evidence that
-            subagents are running, and every caller of this treats a
-            positive count as licence to stay quiet. Note the value is
-            whatever the LAST event applied left behind - ``Stop`` resets
-            it to 0, so a caller that wants the depth as it stood DURING
-            the turn has to read it before it feeds the ``Stop`` in.
-        Inputs:
-            session_id: cloudecode session id.
-        Output: int, 0 or greater. Never negative (``record_event`` floors
-            it) and never None.
-        Example:
-            >>> tracker.record_event("ses_1", "SubagentStart")
-            >>> tracker.subagent_depth("ses_1")
-            1
-        """
-        state = self._signals.get(session_id)
-        return state.subagent_depth if state is not None else 0
-
-    def subagent_wait_active(
-        self, session_id: str, now: Optional[datetime] = None
-    ) -> bool:
-        """True while a recent ``Stop`` was suppressed for sub-agent reasons.
-
-        Description: The second half of the sub-agent evidence the toast
-            gate reads, and the half that survives ``Stop``'s own reset of
-            ``subagent_depth``. A ``Stop`` that landed at a positive depth
-            stamps ``subagent_wait_since``; this answers True until an
-            OPENING event clears the stamp or
-            ``SUBAGENT_WAIT_LATCH_SECONDS`` elapses, whichever comes
-            first.
-
-            FAIL TOWARD NOTIFYING, exactly as ``subagent_depth`` does. A
-            session this tracker has never seen, one with no stamp, and
-            one whose stamp has expired all answer False, so the toast is
-            raised. Only a stamp inside its window buys silence, and it
-            buys a BOUNDED amount of it: an over-long background wait
-            degrades to a DELAYED notification, never a lost one.
-        Inputs:
-            session_id: cloudecode session id.
-            now: injectable clock for tests. Defaults to
-                ``datetime.utcnow()``, matching ``record_event``.
-        Output: bool. True only when a stamp exists and is younger than
-            ``SUBAGENT_WAIT_LATCH_SECONDS``.
-        Example:
-            >>> tracker.record_event("ses_1", EVENT_SUBAGENT_START)
-            >>> tracker.record_event("ses_1", EVENT_STOP)
-            >>> tracker.subagent_wait_active("ses_1")
-            True
-        """
-        state = self._signals.get(session_id)
-        if state is None or state.subagent_wait_since is None:
-            return False
-        now = now or datetime.utcnow()
-        return (now - state.subagent_wait_since) < _SUBAGENT_WAIT_LATCH
-
-    def should_suppress_idle_notification(self, session_id: str) -> bool:
-        """Whether ``session_id``'s idle ``Notification`` toast should stay quiet.
-
-        Description: Thin read of the session's current signal state,
-            handed to the pure ``idle_notification_should_suppress`` so the
-            rule itself stays independently testable with plain booleans -
-            matching the split ``resolve()`` already uses between state and
-            logic. An unknown session answers False, in the same posture as
-            ``subagent_depth`` / ``subagent_wait_active`` above: not having
-            a record is not evidence a turn ended, and the one caller uses
-            a True only to STAY SILENT.
-        Inputs:
-            session_id: cloudecode session id.
-        Output: bool.
-        Example:
-            >>> tracker = SessionActivityTracker()
-            >>> tracker.record_event("s1", EVENT_USER_PROMPT_SUBMIT)
-            >>> tracker.record_event("s1", EVENT_STOP)
-            >>> tracker.should_suppress_idle_notification("s1")
-            True
-        """
-        state = self._signals.get(session_id)
-        if state is None:
-            return False
-        return idle_notification_should_suppress(
-            permission_open=state.permission_open,
-            turn_open=state.turn_open,
-            stop_seen=state.last_stop_ts is not None,
-        )
-
     def forget(self, session_id: str) -> None:
-        """Drop all ephemeral state for ``session_id``. Idempotent.
+        """Drop every open claim for ``session_id``. Idempotent.
 
-        Called by ``SessionManager._wipe_session_state`` on detach/destroy
-        - a new attach (even to the same tmux session) gets a fresh
-        ``session_id`` and starts this tracker from a clean slate, which is
-        correct: the OLD process's in-flight tool/subagent state is gone
-        the moment its session_id stops being live.
+        Description: called by ``SessionManager._wipe_session_state`` on
+          detach or destroy. A new attach, even to the same tmux session,
+          gets a fresh ``session_id`` and starts from a clean slate, which
+          is correct: the OLD process's open claims are gone the moment
+          its session id stops being live.
+        Inputs: session_id (str) - unknown ids are a no-op.
+        Output: None.
+        Example: SessionActivityTracker().forget("ses_1")
         """
         self._signals.pop(session_id, None)

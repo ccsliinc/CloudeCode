@@ -26,6 +26,8 @@
  * scrollback that erased the scrollback on its way in would be an
  * excellent joke.
  */
+import { flushSync } from 'svelte';
+
 import { countLabel } from './count-label';
 import { RailModel } from './rail-model.svelte';
 import { onAlternateScreen, type SearchHost } from './search-host';
@@ -169,9 +171,22 @@ export class SearchController implements KeyRoutingTarget {
         }
 
         this.rail.show();
+
+        // PAINT BEFORE FOCUSING, AND THIS LINE IS THE WHOLE AUTOFOCUS FIX.
+        // `opened` is a rune, so Svelte applies `.is-open` on a MICROTASK,
+        // not on the assignment above. Until it does, the panel is still
+        // `display: none` - and `HTMLElement.focus()` on an element that is
+        // not being rendered is a no-op that throws nothing and logs
+        // nothing, so the caret stayed in the pane and the first thing the
+        // user typed went to claude. `flushSync` applies the pending update
+        // now, so the field is on screen by the time `focusInput()` runs.
+        // It is NOT a frame wait: gotcha 9 says a bare rAF never resolves in
+        // a hidden tab, and this has to work in one.
+        flushSync();
+        this.focusInput();
+
         this.#loadHistory(term);
         this.refreshDeepDive();
-        this.focusInput();
         this.#watch = setInterval(() => this.#checkSessionStillOurs(), SESSION_WATCH_MS);
     }
 

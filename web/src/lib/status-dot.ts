@@ -54,10 +54,15 @@ export const STATUS_LABELS: Record<string, string> = {
  * nothing measured the status there is nothing to credit.
  */
 export const SOURCE_SUFFIX: Record<string, string> = {
-    hook: 'via hooks',
+    registry: "via claude's own session record",
+    pane: 'via the pane',
     transcript: 'via transcript',
     seed_row: 'via the session record',
     tmux: 'via tmux',
+    // BACK-COMPAT. The server stopped emitting this when the listing's
+    // status moved off the hook counter. A browser holding a response
+    // cached from before that still renders correctly.
+    hook: 'via hooks',
 };
 
 /**

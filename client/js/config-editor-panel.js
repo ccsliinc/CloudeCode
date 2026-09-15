@@ -9,10 +9,13 @@
  * background scroll lock, and focus restore. On a phone the stack takes
  * this one off screen while the editor is up, so exactly one surface is
  * visible at a time and the editor's "back" control brings this one
- * back. Browses THREE roots: `~/.claude`
- * ("user"), the active project's `.claude/` ("project"), and (added
- * 2026-08) the active session's WORKING DIRECTORY itself ("workdir") -
- * general project file browsing, read AND write. All list/read/write
+ * back. Browses TWO roots: `~/.claude`
+ * ("user"), and (added 2026-08) the active session's WORKING DIRECTORY
+ * itself ("workdir") - general project file browsing, read AND write.
+ * The project's own `.claude/` is reachable as an ordinary subdirectory
+ * of "workdir" rather than as its own root - a dedicated "project" root
+ * existed until 2026-09-13 and was removed because it duplicated exactly
+ * that subdirectory. All list/read/write
  * logic and the allowed-roots / hide-list live server-side in
  * src/core/config_files.py; this module only renders the tree. Opening a
  * file hands off to window.ConfigEditorModal
@@ -25,9 +28,9 @@
  * Tree presentation: a classic filesystem-tree look - literal +/-
  * disclosure buttons (real <button>, aria-expanded, the glyph is
  * presentational), left-aligned rows with per-depth indentation GUIDE
- * lines rather than raw padding, and the three ROOTS themselves render as
+ * lines rather than raw padding, and the two ROOTS themselves render as
  * collapsible nodes at depth 0 (same +/- affordance as any directory) so
- * the whole thing reads as one consistent tree instead of three separate
+ * the whole thing reads as one consistent tree instead of two separate
  * sections.
  *
  * Tree rendering is lazy: a directory's (or root's) children are not
@@ -52,7 +55,7 @@ console.log('[ConfigEditorPanel Module] Loading...');
 // window.ConfigEditorTreeState. Split out for the 500-line rule; read its
 // docstring before changing what "collapsed by default" means.
 
-// The three roots this panel browses, the working-directory resolver and
+// The two roots this panel browses, the working-directory resolver and
 // every "why is this root absent" sentence live in config-editor-roots.js
 // (window.ConfigEditorRoots) - pure functions, no DOM, unit-tested. This
 // file only renders what that module decides.
@@ -72,7 +75,7 @@ class ConfigEditorPanelController {
 
     /**
      * Resolve the active project's working directory AND the reason when
-     * it does not resolve, so the tree can say why the project roots are
+     * it does not resolve, so the tree can say why the "workdir" root is
      * absent instead of silently rendering short. See
      * config-editor-roots.js for the unwrap and the reason codes.
      * Inputs: none.
@@ -84,8 +87,7 @@ class ConfigEditorPanelController {
 
     /**
      * Best-effort resolution of the active project's working directory,
-     * used for BOTH the "project" root (its `.claude/` subdirectory) and
-     * the "workdir" root (the directory itself).
+     * used for the "workdir" root.
      * Inputs: none.
      * Output: string|null - absolute working directory, or null when no
      *   session is attached (terminal not open, or on the launchpad).
@@ -199,8 +201,8 @@ class ConfigEditorPanelController {
      * new file in the editor - so "create" lands the user where they were
      * going anyway rather than back at a tree they now have to search.
      * Offers only the roots this panel is actually showing: "user" always,
-     * "project"/"workdir" only when a session is attached, because the
-     * server cannot resolve either without a working directory.
+     * "workdir" only when a session is attached, because the
+     * server cannot resolve it without a working directory.
      * Inputs: none. Output: Promise<void>.
      */
     async createFile() {
@@ -228,16 +230,15 @@ class ConfigEditorPanelController {
      *
      * A COULD-NOT-EVALUATE root is never dropped in silence. When the
      * working directory does not resolve at all, ConfigEditorRoots
-     * .planRoots() returns a notice in the project roots' place; when a
+     * .planRoots() returns a notice in the "workdir" root's place; when a
      * root the panel DID ask for turns out to be genuinely unreachable
      * (see _buildRootEl - workdir vanishing out from under an attached
      * session, or a real 401/403/5xx/network failure), that renders as a
      * named error row too. A MEASURED ABSENCE is the opposite case and is
-     * intentionally silent: a project with no .claude/ subfolder, or a
-     * root that resolved to zero entries, renders no row and no message
-     * at all - the user is not told about a file that was never there,
-     * only about a file the panel could not find out about one way or
-     * the other.
+     * intentionally silent: a root that resolved to zero entries renders
+     * no row and no message at all - the user is not told about a file
+     * that was never there, only about a file the panel could not find
+     * out about one way or the other.
      * Inputs: none. Output: Promise<void>.
      */
     async _loadTree() {
@@ -271,13 +272,10 @@ class ConfigEditorPanelController {
      * Fetch one root's tree and build it as a collapsible depth-0 node,
      * indistinguishable in interaction from a directory node inside it.
      *
-     * THREE OUTCOMES, but only two ever produce visible output. A root
-     * that resolves - even to zero entries - renders as a normal node:
-     * the path/label, and whatever is underneath it (nothing, if that's
-     * the truth). A root that is a MEASURED ABSENCE (the project has no
-     * .claude/ subfolder at all) renders NOTHING - no row, no message;
-     * the user never asked to be told about a folder that was never
-     * there. A root the server could not even evaluate (workdir's own
+     * TWO OUTCOMES, and both produce visible output. A root that
+     * resolves - even to zero entries - renders as a normal node: the
+     * path/label, and whatever is underneath it (nothing, if that's the
+     * truth). A root the server could not even evaluate (workdir's own
      * directory vanished out from under an attached session, or any
      * other real failure - 401/403/5xx, network error) DOES render,
      * as a named error row, because that is the one case a short tree
@@ -285,9 +283,7 @@ class ConfigEditorPanelController {
      *
      * Inputs: rootDef (object) - one entry of CONFIG_EDITOR_ROOTS;
      *   projectPath (string|null).
-     * Output: Promise<Element|null> - the <li> to append, or null when
-     *   this root is a measured absence and the caller should render
-     *   nothing for it at all.
+     * Output: Promise<Element> - the <li> to append.
      */
     async _buildRootEl(rootDef, projectPath) {
         let nodes;
@@ -303,17 +299,7 @@ class ConfigEditorPanelController {
             });
             nodes = resp.tree || [];
         } catch (err) {
-            // A project working directory with no .claude/ subdirectory
-            // is the ordinary case, not a failure: config_files.py's
-            // resolve_roots() only registers the "project" root when the
-            // directory exists, so list_tree() raises "unknown or
-            // unavailable root" (HTTP 400) for every project that simply
-            // hasn't got project-scoped config yet. That is a measured
-            // absence - render nothing for it, the same as an empty root.
-            if (err.status === 400 && rootDef.id === 'project') {
-                return null;
-            }
-            // "workdir" is different: resolve_roots() only registers it
+            // resolve_roots() only registers "workdir"
             // when the session's own working directory still exists on
             // disk, and a session always has one when it starts. A 400
             // here means that directory was deleted, unmounted, or
@@ -393,8 +379,8 @@ class ConfigEditorPanelController {
             // Populate `childList` exactly once, fetching the level from the
             // server when it was not sent with the parent. Lazy-render is
             // about deferring the cost until a node is EXPANDED, not until it
-            // is CLICKED - a node that starts expanded (the `~/.claude` and
-            // project `.claude` roots do) has to be built here at render
+            // is CLICKED - a node that starts expanded (the `~/.claude`
+            // root does) has to be built here at render
             // time, or it shows an open disclosure over an empty list and
             // needs two clicks to reveal anything. `built` is set BEFORE the
             // await so a double-click cannot start two requests; the loading
@@ -494,8 +480,10 @@ class ConfigEditorPanelController {
 
     /**
      * Build a top-level <li> carrying one explanatory notice: a root that
-     * is absent, and why. Not an error - the ordinary "this project has
-     * no .claude/" case lands here too - but never silent either.
+     * is absent, and why (see ConfigEditorRoots.projectRootsNotice - the
+     * ordinary "no session attached" state renders no notice at all;
+     * this is for the anomalous "no working directory" case). Not an
+     * error, but never silent either.
      * Inputs: message (string). Output: Element - <li>.
      */
     _noticeLi(message) {

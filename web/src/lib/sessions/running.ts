@@ -233,6 +233,38 @@ export function rowsFromAttachable(
     return [];
 }
 
+/** A settled probe: the value it answered with, or the reason it did not. */
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+/**
+ * Start a probe now and capture its outcome instead of throwing it.
+ *
+ * Description: THIS IS WHAT MAKES TWO PROBES SAFE TO HAVE IN FLIGHT AT
+ *   ONCE. A rejected promise nobody has awaited yet is an unhandled
+ *   rejection, and `Promise.all` is worse than useless here - it would
+ *   discard the second probe's answer the moment the first one failed,
+ *   turning "one endpoint is down" into "neither ran", which is exactly
+ *   the collapse the three-outcome verdict exists to prevent. Each probe
+ *   keeps its own outcome and the caller classifies them one at a time,
+ *   in the order it always did.
+ *
+ *   The call is made INSIDE the try, so a host that throws synchronously
+ *   is captured here rather than escaping past the caller's own catch.
+ * Inputs: run - a zero-argument call that starts the request.
+ * Output: Promise<Settled<T>>. Never rejects.
+ * Example: const p = settled(() => host.listSessions());
+ */
+function settled<T>(run: () => Promise<T>): Promise<Settled<T>> {
+    try {
+        return run().then(
+            (value): Settled<T> => ({ ok: true, value }),
+            (error): Settled<T> => ({ ok: false, error }),
+        );
+    } catch (error) {
+        return Promise.resolve({ ok: false, error });
+    }
+}
+
 /**
  * Fetch both endpoints and produce this tick's row set and verdict.
  *
@@ -249,6 +281,9 @@ export function rowsFromAttachable(
  *
  *   The dead-pane filter runs last, because a husk can arrive from either
  *   endpoint and membership of the running section is decided once.
+ *
+ *   THE TWO REQUESTS ARE CONCURRENT AND THE TWO VERDICTS ARE NOT: see
+ *   the comment on the first line of the body.
  * Inputs: host, t, and the two copy assemblers, injected so this module
  *   carries no sentence of its own. onReauth fires on a 401 only.
  * Output: Promise of the rows and the tick's verdict. Never rejects.
@@ -269,10 +304,24 @@ export async function loadRunningRows(deps: {
 }): Promise<{ rows: RunningSessionRow[]; listing: ListingState }> {
     const listing = emptyListing();
     let rows: RunningSessionRow[] = [];
-    try {
-        const list = await deps.host.listAttachableSessions();
-        rows = rowsFromAttachable(list, listing, deps.malformedDetail(deps.t));
-    } catch (err) {
+    // BOTH PROBES GO OUT BEFORE EITHER IS AWAITED, AND THAT IS THE ONLY
+    // THING THAT CHANGED HERE. Neither request takes any input from the
+    // other - it is the MERGE below that needs both answers - so awaiting
+    // the first before sending the second spent one whole round trip
+    // waiting for nothing, on the first paint and again on every 5s tick.
+    // The branches underneath are byte for byte what they were, including
+    // the ORDER they report in: attachable is still settled and recorded
+    // first, so a tick on which both fail names them in the order it
+    // always did.
+    const attachable = settled(() => deps.host.listAttachableSessions());
+    const live = typeof deps.host.listSessions === 'function'
+        ? settled(() => deps.host.listSessions!())
+        : null;
+    const answeredAttachable = await attachable;
+    if (answeredAttachable.ok) {
+        rows = rowsFromAttachable(answeredAttachable.value, listing, deps.malformedDetail(deps.t));
+    } else {
+        const err = answeredAttachable.error;
         const status = deps.statusFor(err);
         console.error(
             'CloudeWeb: loadRunningSessions failed:',
@@ -289,8 +338,13 @@ export async function loadRunningRows(deps: {
     }
     try {
         let liveSessions: SessionListItem[] = [];
-        if (typeof deps.host.listSessions === 'function') {
-            liveSessions = await deps.host.listSessions();
+        if (live) {
+            const answeredLive = await live;
+            // RETHROWN rather than classified here, so the catch below
+            // stays the ONE place a live-merge failure is turned into a
+            // verdict - exactly as when this line was a bare await.
+            if (!answeredLive.ok) throw answeredLive.error;
+            liveSessions = answeredLive.value;
         }
         if (!Array.isArray(liveSessions) || liveSessions.length === 0) {
             // Back-compat fallback: single-session server.

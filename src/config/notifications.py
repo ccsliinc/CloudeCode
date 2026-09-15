@@ -21,10 +21,11 @@ class NotificationsConfig(BaseModel):
     - ``public_base_url``: e.g. ``"http://mac.lan:8000"``. When set,
       notifications include a Click deep link back to the session.
       When unset, notifications fire without a Click header.
-    - ``idle_threshold_seconds``: Item 7 - seconds of PTY silence after
-      which an IdleWatcher fires TASK_COMPLETE, provided the tail ends
-      on a Claude Code prompt frame. 30s is the plan v3.1 default;
-      operators may tune downward if false-positive rate is acceptable.
+    - ``idle_threshold_seconds``: RETAINED, READ BY NOBODY. It set the
+      seconds of pane silence after which the per-session idle watcher
+      fired TASK_COMPLETE, and that watcher was deleted with the hook
+      subsystem on 2026-09-13. The field stays so a config.json written
+      by an older build round-trips through a downgrade unchanged.
     - ``pushover_token`` / ``pushover_user_key``: Pushover push backend.
       Both are EMPTY by default and both must be set for the channel to
       activate - see ``NotificationRouter.emit``'s ``has_pushover`` gate.
@@ -44,12 +45,6 @@ class NotificationsConfig(BaseModel):
     rate_limit_global_cap: int = Field(default=10, ge=1)
     rate_limit_window_seconds: float = Field(default=60.0, ge=1.0)
     rate_limit_per_kind_cooldown_seconds: float = Field(default=10.0, ge=0.0)
-    # v0.7.0 Part 3 - opt out of the Claude Code lifecycle hook merger.
-    # When True, ``ensure_hook_settings()`` is a no-op and ~/.claude/settings.json
-    # is left entirely alone (no Stop/Notification/PermissionRequest hooks
-    # are injected). Users who curate their own hook block can set this to
-    # avoid surprise merges. Default False = hooks managed.
-    disable_claude_hooks: bool = False
     # v0.7.0 Part 4 - Slack incoming-webhook fanout. When non-empty, every
     # NotificationEvent dispatched by the router also POSTs a chat message
     # to this webhook URL. Single-channel, no OAuth. Empty default = the

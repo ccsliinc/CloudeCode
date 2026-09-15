@@ -117,12 +117,19 @@ async def adopt_session(request: Request, body: AdoptSessionRequest):
     not run at all is a different answer again and never renders as gone -
     the adoption proceeds and the failure to record it is logged.
 
-    Other failures (pane dead, tmux not running, unsafe session name)
-    propagate as 500 via the app's error middleware; we deliberately do NOT
-    wrap them here.
+    A PANE THE ``#{pane_dead}`` PROBE MEASURED DEAD IS THE SAME OUTCOME.
+    ``remain-on-exit`` keeps a husk on the socket, so the listing above can
+    still name it and the click can still reach ``attach_existing`` before
+    the probe there catches it - a later measurement of the same "gone"
+    fact, answered the same way: 409, ``session_gone``, ``refresh=True``.
+    Other failures (the pane-dead probe itself failing to run, tmux not
+    running, unsafe session name) propagate as 500 via the app's error
+    middleware; we deliberately do NOT wrap them here, because not having
+    measured death is not evidence of it.
 
     Raises:
-        HTTPException: 409 when the target session is no longer there.
+        HTTPException: 409 when the target session is no longer there,
+            whether that was read off the listing or measured on the pane.
     """
     from src.core.session_adopt_persist import AdoptTargetGoneError
 

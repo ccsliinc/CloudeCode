@@ -56,7 +56,7 @@ def create_file(
       requires ``acknowledge_sensitive``, a read-only root is refused, and
       the write itself is atomic.
     Inputs:
-      root_id (str) - "user", "project", or "workdir".
+      root_id (str) - "user" or "workdir".
       rel_path (str) - forward-slash relative path for the NEW file.
       content (str) - initial contents; "" is allowed.
       project_path (str|None) - required when root_id != "user".

@@ -136,17 +136,40 @@ def test_resolve_safe_path_unknown_root_rejected(fake_home):
         cf.resolve_safe_path("nonsense", "CLAUDE.md", None)
 
 
-def test_project_root_requires_existing_claude_dir(tmp_path, fake_home):
+def test_project_root_was_removed_and_is_now_an_unknown_root(tmp_path, fake_home):
+    # The dedicated "project" root (<working_dir>/.claude, labeled "project
+    # .claude" in the file editor drawer) was removed 2026-09-13: it
+    # rendered the exact same directory the "workdir" root already shows
+    # one level down, as a duplicate top-level entry. "project" is no
+    # longer a root resolve_roots() ever produces, so asking for it fails
+    # exactly like any other unrecognized root id - never a "not found"
+    # special-cased to this one name.
     project_dir = tmp_path / "someproject"
     project_dir.mkdir()
-    # No .claude/ under it yet.
+    (project_dir / ".claude").mkdir()
+    (project_dir / ".claude" / "CLAUDE.md").write_text("# project\n")
+    assert "project" not in cf.resolve_roots(str(project_dir))
     with pytest.raises(cf.ConfigFileError):
         cf.resolve_safe_path("project", "CLAUDE.md", str(project_dir))
 
+
+def test_project_claude_dir_still_resolves_as_a_legal_path_under_workdir(tmp_path, fake_home):
+    # The project's .claude/ is not gone - it is reachable as an ordinary
+    # subdirectory of "workdir" (the drawer's "project files" root), which
+    # is the ONLY way the drawer now shows it. Containment must still hold:
+    # this is what proves removing the dedicated root did not touch the
+    # security boundary that makes reads/writes under <project>/.claude
+    # legal.
+    project_dir = tmp_path / "someproject"
+    project_dir.mkdir()
     (project_dir / ".claude").mkdir()
     (project_dir / ".claude" / "CLAUDE.md").write_text("# project\n")
-    resolved = cf.resolve_safe_path("project", "CLAUDE.md", str(project_dir))
-    assert resolved.name == "CLAUDE.md"
+    resolved = cf.resolve_safe_path("workdir", ".claude/CLAUDE.md", str(project_dir))
+    assert resolved == (project_dir / ".claude" / "CLAUDE.md").resolve()
+
+    tree = cf.list_tree("workdir", str(project_dir))
+    claude_node = next(n for n in tree if n["name"] == ".claude")
+    assert claude_node["is_dir"] is True
 
 
 # ---- .env / .credentials / key files: visible + readable, masked on ----
@@ -154,7 +177,7 @@ def test_project_root_requires_existing_claude_dir(tmp_path, fake_home):
 
 def test_read_file_returns_env_flagged_sensitive_not_refused(fake_home, tmp_path):
     # .env is not in ALLOWED_TOP_LEVEL_FILES so it never appears at the
-    # "user"/"project" root's top level (scope, unrelated to sensitivity) -
+    # "user" root's top level (scope, unrelated to sensitivity) -
     # exercised against "workdir", which has no allow-list and is exactly
     # where a project's .env actually lives.
     project_dir = tmp_path / "someproject"
@@ -297,7 +320,7 @@ def test_write_file_refuses_plugins_readonly_root(fake_home):
 
 @pytest.fixture()
 def fake_project(tmp_path):
-    """A tmp project directory to use as project_path for "project"/"workdir"."""
+    """A tmp project directory to use as project_path for "workdir"."""
     project_dir = tmp_path / "someproject"
     project_dir.mkdir()
     return project_dir
@@ -311,7 +334,7 @@ def test_workdir_root_lists_arbitrary_files_no_allowlist(fake_home, fake_project
     tree = cf.list_tree("workdir", str(fake_project))
     names = {n["name"] for n in tree}
     # No allow-list for "workdir" - anything non-hidden shows, unlike
-    # "user"/"project" which only show ALLOWED_TOP_LEVEL_*.
+    # "user" which only shows ALLOWED_TOP_LEVEL_*.
     assert names == {"README.md", "app.py", "random_junk_dir"}
 
 
@@ -403,8 +426,9 @@ def test_workdir_root_write_requires_executable_ack_for_scripts_dir(fake_home, f
 def test_resolve_roots_omits_workdir_when_directory_missing(fake_home, tmp_path):
     roots = cf.resolve_roots(str(tmp_path / "does-not-exist"))
     assert "workdir" not in roots
-    assert "project" not in roots
     assert "user" in roots
+    # Exactly two possible keys exist at all now - "user" and "workdir".
+    assert set(roots) == {"user"}
 
 
 # ---- three-outcome rule: unreadable must never render as empty --------

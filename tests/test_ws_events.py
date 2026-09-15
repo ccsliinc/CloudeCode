@@ -524,6 +524,6 @@ def test_the_status_notice_is_not_gated_by_the_notification_mute():
     visibly staler than before the channel existed."""
     import inspect
 
-    source = inspect.getsource(session_change_notice.publish_hook_status)
+    source = inspect.getsource(session_change_notice.publish_attention_status)
     assert "policy" not in source
     assert "mute" not in source
