@@ -3,10 +3,44 @@
 Claimed by issue #173, draft PR #174, on `feat/173-history-archive` off
 `adamdev/master` at `917835f` (1.4.4).
 
-This is a SCOPE, not an implementation. Nothing in it has been built. Where
-a number appears it was measured on 2026-09-13 and the command that produced
-it is given, so the next reader can re-take it rather than trust it. Where
-something is an inference it says so.
+This is a SCOPE. Where a number appears it was measured on 2026-09-13 and
+the command that produced it is given, so the next reader can re-take it
+rather than trust it. Where something is an inference it says so.
+
+**PARTS OF IT HAVE SINCE BEEN BUILT, AND THE SENTENCE THAT USED TO STAND HERE
+SAID OTHERWISE.** It read "Nothing in it has been built", which was true the
+day it was written and is not true now. Built since: slice 1 of section 8.2,
+the `app-screen` surface and the history browser's registration through it, on
+`feat/173-slice1-app-screen` at `dc58507`, NOT yet merged; the search index of
+section 2.5, merged; and the database split of section 6, merged. Each is
+marked where it appears. Read a section's own marker rather than this header.
+
+**RECONCILED, 2026-09-15.** This document existed in two divergent families
+that split at `49fd571`, and NEITHER was a superset. The long family
+(`4c7bac7`, `04adb19`, on `feat/173-history-archive` and
+`feat/173-slice1-app-screen`) carried the revised full-Svelte-migration plan
+that issue #173 and PR #174 quote. The short family (`5ff3d50`, `6f9aec2`, on
+`feat/173-archive-db-split` and the branches merged into `0eb81f0`) predated
+that revision and independently corrected two things the long family still had
+wrong: section 2.5's search gap, and section 6's claim about cross-database
+foreign keys. This file is the union: the long family's plan, plus every
+correction from the short family, plus the four places where the repository at
+`0eb81f0` had moved past both of them. The divergence was flagged publicly on
+issue #173; this is the follow-through.
+
+**REVISION, 2026-09-13.** Section 8 replaced a seam-only migration
+recommendation with a FULL Svelte migration, on the owner's ruling and on
+information the first pass did not have: the fifty rendering modules are not
+going to be left alone, and migrating before modifying is cheaper than the
+reverse. Section 5, the away bar, is PARKED on his call and is no longer
+scheduled. Everything else stands.
+
+**ADDITION, 2026-09-13.** Section 10 captures what would have to be true for
+the history browser to become a standalone project, split into what is FREE
+NOW and what is EXPENSIVE LATER. It is a capture, not a plan, and it adds five
+things to the slices, all of which are free. It also **corrects the server-side
+module count this document has carried from the start**: the family is 68
+modules and 22,750 lines, not 44 and 14,087.
 
 **If you read only one section, read 2.0.** The background ingester fills
 `transcript_archives` and the browser reads the `message_*` tables, and those
@@ -41,8 +75,10 @@ feature in this application and it already works.
 |---|---|---|
 | client modules matching `archive` | **54** | `git ls-tree -r --name-only adamdev/master client/js \| grep -ci archive` |
 | lines in those, plus `api-archive.js` | **17,387** | `wc -l client/js/*archive*` |
-| server modules matching `archive` or `corpus` | **44** | `git ls-tree -r --name-only adamdev/master src \| grep -ciE 'archive\|corpus'` |
-| lines in those | **14,087** | `wc -l $(git ls-files src \| grep -iE 'archive\|corpus')` |
+| server modules matching `archive` or `corpus` BY NAME | **43** | `git ls-tree -r --name-only adamdev/master src \| grep -ciE 'archive\|corpus'` |
+| lines in those | **13,928** | `wc -l $(git ls-files src \| grep -iE 'archive\|corpus')` |
+| server modules in the family IN FACT | **68** | `archive_* + transcript_* + message_* + corpus_*` |
+| lines in those | **22,750** | see section 10.1 |
 | test files for it | **72**, of which **39** are node suites | `ls tests/ \| grep -icE 'archive\|corpus'` |
 | stylesheets | **14** | `ls client/css/archive-*.css` |
 | modules under `web/src` touching it | **0** | `git ls-tree -r --name-only adamdev/master web/src \| grep -ciE 'archive\|corpus'` |
@@ -262,6 +298,21 @@ green dot over a dead session. **Action: read `archive-search-render.js` and
 confirm the exhausted state is rendered as a named refusal, not as an empty
 tail.**
 
+**ANSWERED, AND NEITHER DOC FAMILY SAID SO.** Both families left this open
+while the branch under them closed it, which is the exact shape of a stale
+doc. Two facts, each traced. First, the exhausted state IS distinguishable
+from an empty answer in the client:
+`tests/test_archive_search_zero_hits.node.mjs` exists for that one question,
+opening "A ZERO-HIT `budget_exhausted` MUST NOT LOOK LIKE A ZERO-HIT
+`complete`", and asserts the two differ on every rendered channel. Second,
+the state is now unreachable on the shipped path at all: one index query
+covers the scope, so nothing can stop short, and
+`tests/test_archive_search_budget.py::test_the_byte_and_transcript_budgets_can_no_longer_bind`
+pins that as a REGRESSION GUARD rather than as a description. The vocabulary
+word stays in `src/core/archive_search.py` because a caller's branch on it is
+still correct, and `src/api/archive_search_routes.py` still documents four
+scan statuses rather than two.
+
 ### 2.5 A recorded known gap in the search JOIN
 
 **ANSWERED, 2026-09-13, and the answer is NARROWED rather than closed.** See
@@ -310,6 +361,14 @@ None of the four existing surfaces fits. `session-card-action` is a menu item,
 `launchpad-panel` is a component in a named container on one screen,
 `sidebar-item` is a row, `status-source` is an opinion about a dot. A screen
 with its own URL namespace is a different kind of thing.
+
+**THE SHIPPED SHAPE OF THIS SURFACE, AND WHAT A SHELL OWES A SCREEN MOUNTED ON
+IT, LIVE IN `docs/archive-shell-contract.md`.** This section is the DESIGN
+ARGUMENT for the surface and stays as written; that document is the INTERFACE,
+written against the code slice 1 actually landed, and it is what whoever
+rebuilds the application shell for issue #175 reads instead of this one. The
+two differ in four named places, because slice 1 changed four things about this
+design while building it.
 
 ### The surface is EXTRACTED, not invented
 
@@ -505,11 +564,24 @@ capability model that works and one that was reasoned about.
 
 ---
 
-## 5. Surface 6: `terminal-overlay`, sketched
+## 5. Surface 6: `terminal-overlay`, PARKED
 
-Specified after the history browser lands, per the ordering ruling. Sketched
-now because the away bar's requirements are what will shape it and they are
-known today.
+**The away bar is dropped for now, on the owner's call, and this section is
+kept as a sketch rather than deleted.** Verbatim: "we dont need the away bar
+right now. we can check in the future if something better fits in."
+
+**It was dropped because the honest finding below said their reasoning was
+right for the pane in front of you.** That is worth recording: the analysis
+that would have justified rebuilding it is the analysis that stopped it being
+rebuilt, and it saved the work rather than costing it. The fleet question
+(#172's U78, "while-you-were-away report across the whole swarm") is PARKED,
+not dead: search cannot answer it by construction, and if it comes back it
+comes back as that rather than as the old bar.
+
+So `terminal-overlay` is not scheduled and is not designed to implementable
+depth. What follows is the sketch, kept because the measurement in it is
+expensive to re-derive and because six other backlog items would use this
+surface.
 
 ### The one non-negotiable, recovered from the deleted module
 
@@ -682,6 +754,32 @@ constraints today and not documentation.
 > verbatim would report success and leave a dead archive. Only a real write
 > detects it. See `docs/history-archive-db-split.md` and
 > `src/core/archive_db_ddl.py`.
+>
+> **RE-MEASURED INDEPENDENTLY 2026-09-15, sqlite 3.53.4, and it reproduces in
+> every clause.** Two files, `PRAGMA foreign_keys=ON`, the archive ATTACHed as
+> `arch`. The QUALIFIED form
+> `CREATE TABLE arch.tq (sid INTEGER REFERENCES main.sessions(id))` is refused
+> at DDL time with `OperationalError: near ".": syntax error`. The UNQUALIFIED
+> form `CREATE TABLE arch.t (... sid INTEGER REFERENCES sessions(id))` is
+> ACCEPTED, and the first `INSERT` into it raises
+> `OperationalError: no such table: arch.sessions`. Then, after creating an
+> `arch.sessions` holding only the value 99 while `main.sessions` holds only
+> 7: inserting 99 is ACCEPTED and inserting 7 is refused with
+> `IntegrityError: FOREIGN KEY constraint failed`, which is what proves the
+> reference binds to the ARCHIVE side rather than to the app side.
+>
+> **AND BOTH INTEGRITY PRAGMAS PASS IT, NOT JUST ONE.**
+> `PRAGMA arch.foreign_key_check` returns the empty list AND
+> `PRAGMA arch.integrity_check` returns `ok`, on the table whose every write
+> is already doomed. The short family named only `foreign_key_check`; the
+> second pragma is the one a maintenance job is more likely to be running, so
+> it is worth naming too.
+>
+> The negative control ships:
+> `tests/test_archive_db_split.py::test_an_unstripped_cross_database_reference_is_the_silent_trap`
+> asserts all three facts against real sqlite and passes. That is why
+> `strip_crossing_references` is mandatory and why its caller must PROVE the
+> strip worked with a real write rather than by reading the DDL back.
 
 Three cross, all pointing from the archive side into the app side:
 
@@ -822,6 +920,16 @@ the thing standing between the owner and a working history browser. Sequence it
 after the archive is switched on and after the surface lands, because both of
 those are cheap and this one touches 5 GB of the user's data on a live machine.
 
+**BUILT, AND MERGED.** `docs/history-archive-db-split.md` is the companion
+that records what was measured once the schema was actually put in front of
+the problem, including the two places this section turned out to be wrong.
+The code is nine modules at `src/core/archive_db_*.py`
+(`attach`, `copy`, `ddl`, `partition`, `schema_target`, `split`,
+`split_refusals`, `split_run`, `unsplit`) with the operator entry point at
+`scripts/split_archive_db.py`, all present at `0eb81f0`. This section is kept
+as written because it is the reasoning the split was decided on; read the
+companion for what was actually done.
+
 ---
 
 ## 7. Is the history browser really a plugin
@@ -889,66 +997,391 @@ third-party permission story with no example to design against.
 
 ---
 
-## 8. Vanilla, Svelte, or in between
+## 8. The Svelte migration, which is the work
 
-54 modules, 17,387 lines, zero Svelte. Three options.
+**This section replaced an earlier recommendation and the reversal is recorded
+rather than quietly made.** The first pass recommended porting only the seam
+and leaving the fifty rendering modules in vanilla, on the grounds that it
+bought the whole architectural benefit at about 5 percent of the porting cost.
+That was right for the inputs it had and wrong for the real ones. The owner
+overruled it, verbatim:
 
-### Option A: port the archive browser to Svelte as the next slice family
+> "well i want to get it running on svelte and i have many changes for it. so
+> i want to get the module work going. this is something i really want and i
+> want to be able to build upon it in the future."
 
-**Cost, honestly.** The launchpad migration was seven slices for one screen.
-The archive is bigger than the launchpad: 54 modules against the launchpad's
-one 3,000-line file plus its satellites, with a virtual list, a body-size gate,
-a resize-able pane, a fuzzy finder, a mask and a keyboard layer, all of which
-are the kind of code that is expensive to port and cheap to break. 72 test
-files would need porting or rewriting with them, 39 of them node suites that
-read the vanilla source as text.
+**The missing input was that the fifty modules are not going to be left
+alone.** The seam-only argument rests entirely on the rendering being frozen.
+It is not: there are many changes planned and this area is meant to be built on
+for a long time. Modifying fifty vanilla modules and then migrating them is
+strictly more work than migrating them and then modifying them, and it pays the
+hybrid tax twice. So the recommendation is withdrawn, and this is a **full
+migration**.
 
-**Benefit.** It ends the hybrid for this area. The hybrid cost real money this
-week: merges repeatedly landed changes in vanilla files the Svelte side had
-stopped calling, and issues #110, #116, #118 and #121 are all that same defect
-in four different disguises.
+The rule that governed the launchpad migration governs this one and is not
+negotiable: **each slice deletes its legacy code in the SAME commit. There is
+no dual path at any point.** That rule is what kept the last one honest, and
+issues #110, #116, #118 and #121 are all what the exceptions cost.
 
-### Option B: extend it in vanilla and migrate later
+### 8.0 The prerequisite, which is not a slice
 
-**Cost.** It grows the vanilla side while the project's direction is the other
-way, and every month makes the eventual port bigger.
+**Nothing here starts until the browser renders the corpus.** Section 2.0: the
+browser reads `message_*` and the ingester fills `transcript_archives`, and the
+message tables are empty. Another agent is on that now, working from this
+document.
 
-**Benefit.** It is what "finish the history browser" actually asks for. None of
-the gaps in section 2 is a rendering problem, and not one of them gets easier
-in Svelte.
+This is a sequencing rule with a hard reason: **a migration of a screen that
+renders nothing cannot be verified.** Every slice below is checked by driving
+the real screen and comparing against what the vanilla version did with the
+same data. With no data, every one of those checks passes vacuously, which is
+`docs/LESSONS.md`'s "a test that cannot fail is not evidence" applied to a
+whole screen at once.
 
-### Option C, RECOMMENDED: migrate the SEAM, not the screen
+What step 1 produces is the **baseline**: a screen rendering 22,828 real
+transcripts, captured before a single module moves, and that recording is what
+each slice is diffed against.
 
-Port exactly the parts the surface needs and leave the rendering alone.
+### 8.1 The inventory, grouped by what it actually does
 
-Concretely, what moves to `web/src/lib/plugins/history/`:
+All 54 modules, 17,387 lines, none unassigned. Re-derived 2026-09-13, not
+quoted.
 
-- `index.ts`, the `Plugin` and its `app-screen` contribution
-- `routes.ts`, a port of `archive-deeplink.js` (it is already pure, already
-  exported in a deliberate order, already covered by two suites)
-- `client.ts`, the granted-fetch wrapper around what `api-archive.js` does
-- `mount.ts`, which calls into the existing vanilla `ArchiveScreen` through the
-  one seam
+| group | modules | lines |
+|---|---|---|
+| routing and the way in | 4 | 1,161 |
+| the API client | 1 | 523 |
+| the shell, its panes, the script loader | 6 | 1,405 |
+| state, keys, format | 4 | 1,310 |
+| the navigation rail | 9 | 3,063 |
+| the transcript list | 4 | 1,325 |
+| the reader and the virtual list | 10 | 3,321 |
+| the chat view | 9 | 2,947 |
+| search, export, outcome, mask | 7 | 2,332 |
+| **total** | **54** | **17,387** |
 
-What stays vanilla, for now: all 50-odd rendering modules, unchanged, called by
-the mount.
+Beside them, 12 stylesheets totalling 4,444 lines. **They are not ported.**
+Slices reuse the existing class names and stylesheets exactly as the launchpad
+slices did, Tailwind is layout only, and no colour literal appears anywhere,
+only `var(--color-*)`. Rewriting 12 stylesheets while porting 17,387 lines of
+logic doubles the risk and puts 26 themes in play for no gain. Revisit after
+the last slice, or never.
 
-**Why this and not A.** It buys the entire architectural benefit, which is the
-module boundary, the route ownership, the capability grant and the single
-enable gate, at roughly 5 percent of the porting cost. It leaves the screen
-working the whole time, which matters because the screen is what the owner
-asked to be finished. And it makes the eventual full port a sequence of small
-independent slices behind a boundary that already exists, instead of one
-seven-slice project.
+### 8.2 The nine slices, ordered by risk and verifiability
 
-**Why this and not B.** Because the boundary is the thing the owner actually
-asked for, and it is the part that does not get cheaper by waiting.
+The ordering is NOT by file count and not smallest-first. It is: **the thing
+most likely to be wrong in design goes first, while it is still cheap to
+change.** Then the things that unblock verification of everything after them.
+Then the bulk, in dependency order. Then the security-sensitive parts last,
+when everything around them is stable.
 
-**The rule the launchpad migration set stands and applies to every later
-slice: each slice deletes its legacy code in the SAME commit. No dual path.**
-Option C does not violate that, because it is not a dual path: the vanilla
-rendering has exactly one caller after the seam moves, and the seam it used to
-have is deleted in the same commit.
+---
+
+**Slice 1. The `app-screen` surface, and the way in. 4 modules, 1,161 lines.**
+
+Moves: `archive-deeplink.js` (469), `archive-entry.js` (311),
+`archive-crumb.js` (260), `archive-crumb-resolve.js` (121) into
+`web/src/lib/plugins/history/`. Adds `app-screen` to `types.ts`, the prefix
+table and the navigation walk to `registry.ts`, and the registration to
+`builtin.ts`.
+
+Deleted in the same commit: those four modules; the `ARCHIVE_PREFIX`,
+`parseArchivePath` and `deliverArchiveRoute` block in `client/js/router.js`;
+and the three inbound call sites (`app.js:683`, `header-menu.js:276`,
+`terminal-search-deep-dive.js:66`), which become one registry lookup each.
+
+**THIS IS THE SLICE THAT PROVES THE SURFACE, AND IT IS FIRST FOR THAT REASON
+ALONE.** It exercises every part of the `app-screen` contract at once:
+`routePrefix`, all three `parse` outcomes, `buildPath` on the way out,
+`screenId`, and `mount` / `show` / `hide`. If the surface is the wrong shape,
+1,161 lines is what it costs to find out, and the other eight slices have not
+been written yet. Putting the rail or the reader first would mean discovering a
+bad contract with 6,000 lines already committed to it.
+
+It is also the slice with the **lowest code risk and the highest design risk**,
+which is the correct thing to do first.
+
+Verified by:
+- Porting `test_archive_deeplink.node.mjs`,
+  `test_archive_deeplink_start_line.node.mjs`,
+  `test_archive_crumb_resolve.node.mjs` and `test_archive_entry_points.node.mjs`
+  to Vitest. These are already pure and already good, and the deeplink suite
+  already proves the PATTERN ORDER saves it rather than proving the anchoring
+  does. Keep that property; it is the best test in the archive suite.
+- **Driving the real screen.** Paste each of the four URL shapes and confirm the
+  screen and the address bar agree. Paste `/archive/t/notanumber` and confirm a
+  visible, specific error naming the segment, and confirm the URL is NOT
+  rewritten to `/archive`.
+- **The negative control, which is the load-bearing test.** A registered screen
+  whose `parse` throws must be skipped with a logged refusal, and navigation
+  must still work for every other screen. A walk that took the whole router
+  down with one bad plugin would pass every positive test.
+- A second negative control: a second contribution claiming a taken
+  `routePrefix` must be refused whole-plugin and logged, the way `registry.ts`
+  already refuses a duplicate contribution id.
+
+---
+
+**Slice 2. The granted client. 1 module, 523 lines. No visual change.**
+
+Moves `api-archive.js` into `history/client.ts` and puts the `apiPrefixes`
+enforcement in the host. The plugin stops seeing `window.API`.
+
+Deleted same commit: `api-archive.js` and its `<script>` tag.
+
+Second in order because **everything after it depends on the data path, and a
+no-visual-change slice is the cheapest place to get a security control wrong
+and notice.**
+
+Verified by:
+- `test_archive_api_calls.node.mjs` ported.
+- **The negative control, which is the entire point of the slice**: a call to a
+  path outside the grant is refused, named and logged, and the refusal is
+  distinguishable from a 404. A test that only proves the granted paths work
+  would pass identically against no enforcement at all.
+- Containment is component-wise: assert that a grant for `/api/v1/archive`
+  refuses `/api/v1/archived-thing` and refuses `/api/v1/archive/../sessions/respawn`.
+
+---
+
+**Slice 3. The shell, its panes, and the end of the script loader. 6 modules,
+1,405 lines.**
+
+Moves `archive-screen.js` (499), `archive-screen-views.js` (155),
+`archive-screen-shell.js` (119), `archive-screen-tools.js` (101),
+`archive-pane-resize.js` (394).
+
+**`archive-loader.js` (137) is DELETED AND NOT PORTED.** It is the same-origin
+script loader from closed issue #48, which exists to lazy-load the archive
+family so the app does not parse 17,387 lines on boot. Vite does code splitting
+natively, so the whole module and the problem it solves both go away. That is a
+real, measurable win from this migration and it belongs in the record.
+
+Verified by: `test_archive_pane_resize.node.mjs`,
+`test_archive_controls_trimmed.node.mjs`, `test_archive_full_page_mode.node.mjs`
+and `test_archive_header_icon.node.mjs` ported; plus **driving the resize
+handle and full-page mode at 330px and at desktop width**, because pane
+geometry is the class of thing a unit test agrees with and a browser does not.
+Plus one measurement: boot-time bytes parsed before and after the loader is
+deleted.
+
+---
+
+**Slice 4. State, keys, format. 4 modules, 1,310 lines.**
+
+Moves `archive-state.js` (359), `archive-keys.js` (386),
+`archive-keys-help.js` (191), `archive-format.js` (374). Creates the store the
+remaining five slices render from.
+
+Verified by: `test_archive_keys.node.mjs` and `test_archive_format.node.mjs`
+ported, plus **driving every key the help overlay documents** and asserting the
+overlay and the handler come from the same source. A key shown in help and
+bound to nothing is exactly the shape `session-status-key.js` exists to
+prevent on the status lights.
+
+---
+
+**Slice 5. The navigation rail. 9 modules, 3,063 lines.**
+
+`archive-nav.js` (493), `-info` (471), `-row` (466), `-order` (447), `-card`
+(437), `-merged` (273), `-fuzzy` (242), `-drill` (135), `-tree` (99).
+
+First of the bulk slices because it is the first thing on screen: if it is
+wrong, you see it immediately rather than three slices later.
+
+Verified by: `test_archive_nav_cards`, `test_archive_nav_list`,
+`test_archive_nav_merged_cache`, `test_archive_nav_names` and
+`test_archive_nav_order` ported, plus a **browser diff against the slice-0
+baseline recording**: the same corpus, the same rail, the same order, the same
+counts.
+
+---
+
+**Slice 6. The transcript list. 4 modules, 1,325 lines.**
+
+`archive-tlist-row.js` (483), `archive-transcript-list.js` (439),
+`archive-tlist-filter.js` (276), `archive-row-cache.js` (127).
+
+Verified by: the tlist suites ported, plus **the first real scale check**: the
+list rendered over the full 22,828 transcripts, with the filter driven, and
+the numbers recorded. Closed issue #52 ("reuse archive row nodes when the
+visible window is unchanged") is a performance property that a port can silently
+lose; assert it survives rather than assuming Svelte's keyed each does it.
+
+---
+
+**Slice 7. The reader and the virtual list. 10 modules, 3,321 lines.**
+
+`archive-reader.js` (605), `archive-screen-reader.js` (499),
+`archive-line-render.js` (497), `archive-virtual-list.js` (493),
+`archive-body-cache.js` (421), `archive-reader-dom.js` (201),
+`archive-body-gate.js` (191), `archive-reader-paging.js` (152),
+`archive-reader-select.js` (137), `archive-reader-body.js` (125).
+
+**The largest and the highest-risk slice, and it is deliberately seventh.** A
+virtualised list over a 233 MB transcript is the kind of code where a port that
+looks correct is off by a row, and it should land on a shell, a store, a rail
+and a list that are all already proven.
+
+Verified by: `test_archive_line_render`, `test_archive_body_size_gates`,
+`test_archive_offset_units`, `test_archive_body_bounds` ported, plus **a real
+scroll drive over the largest transcript in the corpus**, comparing rendered
+line numbers against `transcript_records.line_no` from the database rather than
+against the component's own idea of what it rendered. Plus a frame-cost
+measurement against the baseline.
+
+---
+
+**Slice 8. The chat view. 9 modules, 2,947 lines.**
+
+`archive-chat-view.js` (489), `-subagents` (457), `-block` (414), `-screen`
+(406), `-turn` (352), `-info` (270), `-stack` (219), `-estimate` (185),
+`-clicks` (155).
+
+Verified by: `test_archive_chat_render.node.mjs`,
+`test_archive_chat_view.node.mjs` and the turn and subagent suites ported, plus
+a browser diff against the baseline on a transcript that **actually contains
+sub-agent runs**, since the fold is the part most likely to be silently wrong
+and the part a synthetic fixture will not exercise.
+
+---
+
+**Slice 9. Search, export, outcome, mask. 7 modules, 2,332 lines.**
+
+`archive-outcome-view.js` (499), `archive-export.js` (488),
+`archive-search-render.js` (316), `archive-mask.js` (301),
+`archive-search.js` (263), `archive-fuzzy.js` (239), `archive-outcome.js` (226).
+
+**Last on purpose, for two reasons.** The mask is a security control: it is the
+thing that keeps a credential out of a rendered transcript, and it should move
+when everything around it is stable rather than while the reader underneath it
+is in flux. And search is the module most likely to change shape from step 1's
+data repoint, so porting it early risks porting it twice.
+
+Verified by: `test_archive_mask.node.mjs` and
+**`test_archive_mask_refusal.node.mjs`**, which is already the negative control
+this whole area needs and must be ported first and unchanged, plus
+`test_archive_export_states`, `test_archive_outcome_classify` and
+`test_archive_outcome_prose`. Plus the honest-search check from section 2.4:
+drive a search to `budget_exhausted` and confirm the user is told.
+
+---
+
+### 8.3 What happens to the 72 test files
+
+They are not deleted and they are not left behind. Per slice:
+
+- **The 39 node suites** read the vanilla source or build a DOM around it. Each
+  is ported to Vitest **in the slice that moves its subject**, in the same
+  commit, and the node file is deleted in that commit. A node suite left
+  pointing at a deleted module is exactly issue #118, which this line is
+  already paying for once.
+- **The 33 Python suites** test the server and are **untouched by this
+  migration**, except where step 1's repoint changes what they assert. They are
+  that agent's concern, not a slice's.
+- **Two fixtures**, `tests/archive_fixture.py` and
+  `tests/archive_turn_fixture.py`, are server-side and stay.
+- **A suite is ported, never rewritten from its subject.** Rewriting a test
+  against the new implementation is how a port ships a behaviour change with a
+  green run. Where a node suite asserts on markup that genuinely changes, the
+  ASSERTION is updated and the CASE is kept, and the commit message says which
+  and why.
+
+**And the standing warning from `docs/LESSONS.md`, which this migration is the
+most likely thing in the repo to trip:** "if a test constructs its input and
+its expectation from one source, it proves nothing." The launchpad migration
+shipped changes unit tests could not see because the tests handed in a recorder
+and asserted what was asked for rather than what happened. **So every slice
+above names a real-screen check as well as a suite, and the real-screen check
+is the one that counts.** A slice whose only evidence is a green Vitest run is
+not verified.
+
+### 8.4 Where the 22 server modules sit
+
+They sit **underneath slice 2 and nowhere else.** The client talks to
+`/api/v1/archive/...` and does not know which tables answer. So step 1 can
+repoint 22 modules from `message_*` to the archive layer without touching a
+single slice, provided the **route shapes and the envelope shapes do not
+move**.
+
+That proviso is the whole coordination surface, and it is one sentence rather
+than a schedule: **if step 1 needs to change a response shape, it must land
+before the slice that consumes it, and it must say so.** Concretely, the rail
+shapes gate slice 5, the transcript list shapes gate slice 6, the line and body
+shapes gate slice 7, the turn shapes gate slice 8, and the search and export
+shapes gate slice 9.
+
+**Read what that agent lands before finalising any slice past 2.** Their work
+is in flight as this is written and this document has not seen it.
+
+### 8.5 What "build upon it in the future" needs
+
+This is the actual reason for doing the migration now rather than later, so it
+is stated rather than implied. Four things the migration must leave behind, or
+the next feature pays for the port a second time.
+
+**1. A named mount point for a new view, not a new screen.** The archive has
+three views today (rail, list, reader) plus the chat view over the reader.
+A fourth, a fifth and a timeline (#172's U77, "event-stream timeline of a
+session, built from the transcript already ingested into the archive") are
+plainly coming. So slice 3 gives the shell a `views.ts` array of
+`{id, label, component}` in display order, the same shape section 6 of
+`.claude/notes/svelte-migration-launchpad.md` prescribed for panels, and the
+shell renders from that array. Adding a view is then one entry, not a new
+branch in a switch.
+
+**2. The feature module's PUBLIC SHAPE is the `Plugin` object and nothing
+else.** Everything inside `web/src/lib/plugins/history/` is private to it. What
+the app may rely on is: the id, the contributions, the `routePrefix`, and the
+`apiPrefixes`. No other module may import from inside the directory, and that
+is checkable in one grep, so it should be a test. The moment something outside
+imports `history/reader/VirtualList.svelte`, the boundary is gone and nobody
+will notice until the next port.
+
+**3. Per-line and per-turn decoration must be an extension point, not a
+branch.** The most likely shape of "many changes" here is wanting to put
+something beside a line or a turn: a diff link, a cost figure, a secret
+warning, a jump to the live session. If slices 7 and 8 render decorations from
+a list the way the session row menu renders its items, that is one array entry
+later. If they inline them, every one is a new conditional in a 500-line
+component. **This is the single highest-value thing the migration can leave
+behind** and it costs almost nothing to do while the components are being
+written anyway.
+
+**3b. An import-direction test, pinned in slice 1.** Nothing outside
+`history/` imports into it, nothing inside it imports from `launchpad/`,
+`sessions/` or `terminal-search/`. Thirty lines, written once, and it is what
+keeps items 1 and 2 above true in a year. Section 10.5 explains why this is the
+highest-value free item in the whole scope.
+
+**4. The store is one store, keyed by route.** Not four stores per endpoint.
+The launchpad migration's KISS section made this call and it held. A second
+store is how two parts of one screen come to disagree about which transcript is
+open.
+
+What this deliberately does NOT build: no manifest schema, no loader, no
+consent flow, no settings page, no third-party anything. Those belong to #126
+and building them here would be inventing a catalog inside a screen migration.
+
+### 8.6 What would make this a bad idea, stated so it can be checked
+
+The door stays open in both directions, so here is what would reopen it.
+
+**If the slice-0 repoint turns out to need the client to change shape**, then
+the migration is porting a moving target and slices 5 through 9 should wait for
+it to settle. That is a real possibility: section 2.0 says the two stores are
+not obviously isomorphic. **The signal is step 1 changing an envelope shape
+rather than only a query.** If that happens, slices 1 to 4 still stand, because
+nothing in them depends on a response body.
+
+**If the virtual list in slice 7 cannot be ported without a measurable
+regression**, keeping that one module in vanilla behind the Svelte shell is a
+defensible outcome and is not a failure of the plan. It is the one piece where
+the framework is not obviously an improvement. Say so with numbers if it
+happens rather than shipping a slower reader quietly.
+
+Nothing else looks like a trap. The area is genuinely self-contained, the
+routing is already pure, the tests are unusually good, and the stylesheets are
+staying put.
 
 ### What "finished" means here, separated from "is Svelte"
 
@@ -977,64 +1410,376 @@ Specifically:
 8. The database separation question is answered in writing, whether or not the
    split ships.
 
-"Is Svelte" is item 9 and it is explicitly NOT required for "finished". A
-history browser that works and is vanilla is finished. A history browser that
-is Svelte and shows an empty rail is not.
+**"Is Svelte" is a SECOND definition of done and both are wanted, in order.**
+The owner has ruled he wants the migration, so it is not optional. But the two
+must not be collapsed, because collapsing them is how step 2 gets started
+before step 1 has made it verifiable:
+
+- **Done (feature)** is the eight items above. It is reached by step 1 and by
+  the three small items beside it, and it is reachable with every line of the
+  screen still in vanilla.
+- **Done (module)** is the nine slices of section 8 landed, every node suite
+  ported, every legacy module deleted in the commit that replaced it, and the
+  four things in 8.5 left in place so the next feature is cheap.
+
+A history browser that is Svelte and shows an empty rail is not finished by
+either definition, and it is the outcome to guard against.
 
 ---
 
-## 9. Suggested issue sequence
+## 9. The sequence, which is now fixed
 
-Each is a thing one agent can pick up, claim and close on its own, per the work
-protocol. None is a container.
+Three steps, in this order, and the order is a ruling rather than a preference.
 
-0. **Make the browser show the corpus that is already ingested.** Section 2.0.
-   Fix A (`scripts/message_model_corpus_run.py`) as a same-day stopgap so the
-   UI can be seen at all, then the column-by-column mapping study, then Fix B
-   as its own sequence. **This is the top item and nothing else here is
-   observable until it is done.**
-1. ~~Switch the archive on for the owner.~~ Already on. See section 2.1.
-2. **Measure the browser at 22,828 transcripts**, once item 0 makes that
-   possible. The rail, the transcript list, the virtual list and the search
-   budget. Record the numbers.
-3. ~~**Search tells the truth when it stops early**, plus the
-   `archive_search.py:107` known gap: close it or record it.~~ **Done,
-   2026-09-13.** It cannot stop early any more - one index query covers the
-   scope, so `budget_exhausted` is unreachable and there is a test pinning
-   that. The refusals that replaced it are an unbuilt index, an untokenizable
-   query, and the coverage gap. See `docs/archive-search-index.md`.
-4. **Add the `app-screen` surface** to `types.ts`, `registry.ts` and the host
-   walk in `router.js`, with the negative test for a throwing `parse`.
-5. **Register the archive through it**, porting `archive-deeplink.js` to
-   `routes.ts` and collapsing the three inbound call sites.
-6. **The granted fetch**, with the refusal test.
-7. **Measure whether full scrollback reaches past one screen** on a real
-   claude pane. Decides the shape of item 9.
-8. **Separate the archive database**, forward and reverse, with the three
-   foreign keys resolved and the integrity gate carrying a list.
-9. **The `terminal-overlay` surface, and the away bar on it**, scoped by
-   whatever item 7 measured.
+**Step 1. Connect the browser to its data.** Section 2.0. Another agent holds
+this now. Fix A as a same-day stopgap so the UI can be seen at all, then the
+column mapping study, then Fix B. **It is first and it is not negotiable,
+because a migration of a screen that renders nothing cannot be verified**, and
+because its output is the baseline recording every slice below is diffed
+against.
 
-Items 0 through 3 are "finish history", and item 0 is most of it. Items 4
-through 6 are "make it a module". Items 7 through 9 are the away bar. Item 8 is
-independent of all of them and can run in parallel at any time.
+**Step 2. The full Svelte migration, as a feature module.** Section 8. Nine
+slices, ordered by risk and verifiability rather than by size. Slice 1 proves
+the `app-screen` surface and is first for that reason alone; slice 2 proves the
+`apiPrefixes` grant with a refusal test; slices 3 to 9 are the bulk, with the
+virtual list seventh and the secret mask last. Each slice deletes its legacy
+code in the same commit, ports its own node suites to Vitest in that commit,
+and is proven by driving the real screen and not only by a green Vitest run.
 
----
+**Step 3. Separate the archive database.** Section 6. Independent of both of
+the above and can run in parallel with either, since it moves tables and
+changes no route. Forward and reverse in the same change, the three foreign
+keys resolved explicitly, the integrity gate carrying a list, and the migration
+COPYING rather than re-ingesting because `transcript_root_decisions` holds
+23,023 human decisions that exist nowhere else.
 
-## 10. Open questions
+**Not scheduled:** the `terminal-overlay` surface and the away bar. Section 5.
 
-1. Does a full-history load reach past one screen on a Claude Code pane? See
-   section 5. Must be measured, not argued. Decides whether the away bar is a
-   restoration or a smaller, different feature.
+Each slice in step 2 is a thing one agent can pick up, claim with a draft PR
+and close on its own, per the work protocol. None of them is a container.
+
+Alongside them, three small items that are not slices and do not block
+anything. **TWO OF THE THREE ARE NOW CLOSED**, and this sentence listed all
+three as open for two days after they were not:
+
+- search telling the truth when it stops early (section 2.4): **closed.**
+  `budget_exhausted` is unreachable on the index path and is pinned by
+  `tests/test_archive_search_budget.py`, and the zero-hit distinction is
+  pinned by `tests/test_archive_search_zero_hits.node.mjs`.
+- the recorded `archive_search.py:107` known gap (section 2.5): **closed,
+  narrowed rather than eliminated.** See `docs/archive-search-index.md`.
+- re-measuring the browser at 22,828 transcripts (section 2.3): **still
+  open**, and slice 6 does it anyway.
+
+**Step 3 above is also done**: the split shipped, and its record is
+`docs/history-archive-db-split.md`. Step 1 and step 2 are what remain, and
+step 2 has one slice landed of nine.
+
+## 10. Standing it up alone, some day
+
+The owner, verbatim: "also this can realistically in the future be a standalone
+project. not needed right now, but it probably already is close".
+
+**This is a capture, not a plan, and nothing in it adds work to the nine
+slices** except where it is genuinely free and says so. "Not needed right now"
+is a constraint on this section, not a hedge. What follows is an honest read on
+how close it actually is, and then the only list that matters: what is **free
+now** because the code is being touched anyway, against what is **expensive
+later** once it has set.
+
+### 10.1 How close is it really
+
+**On the client, closer than he thinks. On the server, further, and the
+distance is in one specific layer.**
+
+**First, a correction to a figure this document has carried since its first
+draft.** The server side is not 44 modules. That number came from
+`grep -iE 'archive|corpus'`, which misses every `transcript_*` and most
+`message_*` module. Measured properly:
+
+| group | modules | lines |
+|---|---|---|
+| browse, read, search, export (`archive_*`) | 33 | 10,043 |
+| ingest and import (`corpus_*`, `transcript_*`) | 16 | 6,029 |
+| the v16 message model (`message_*`) | 20 | 6,960 |
+| **total** (one module counted in two groups) | **68** | **22,750** |
+
+So the extraction surface is **68 modules and 22,750 lines, not 44 and
+14,087.** The original figure undercounts it by a little over half. The nine
+slices are unaffected, because they are client-side, but any estimate of a
+standalone split that used 44 was wrong by that much.
+
+**The client is genuinely close and this is the cheapest good news in the
+document.** All 54 modules together reach for exactly **eight host globals**:
+
+```
+ 17 refs / 9 modules   window.API
+ 11 refs / 4 modules   window.ModalStack
+  6 refs / 1 module    window.App
+  6 refs / 1 module    window.ModuleLoader
+  4 refs / 1 module    window.Router
+  2 refs / 1 module    window.Auth
+  2 refs / 1 module    window.ModuleFamilies
+  2 refs / 1 module    window.NavigationGeneration
+```
+
+Four of those eight are touched by exactly one module each, and **the nine
+slices already remove five of them as a side effect of work that is happening
+anyway**: `window.API` becomes the granted client in slice 2, `window.Router`
+and `window.App` are severed in slice 1 when `archive-entry.js` goes,
+`window.ModuleLoader` and `window.ModuleFamilies` disappear in slice 3 when
+`archive-loader.js` is deleted rather than ported. **What is left after slice 3
+is `ModalStack`, `Auth`, and `NavigationGeneration`**, and two of those three
+are single-module, single-purpose reaches. That is a very short list for
+17,387 lines of client code.
+
+**On the server the browse half is also close, and the ingest half is not.**
+Measured by import direction across the whole family:
+
+**Archive reaching OUT into CloudeCode**, twelve distinct targets. Eight are
+shared infrastructure that a standalone project would simply own a copy of:
+`src.core.db` (11 imports, the connection helper), `src.core.trail_entry` (5),
+`src.config` (3), `src.core.db_models` (3), `src.core.json_artifact` (1),
+`src.core.claude_project_dirs` (1, and that one arguably belongs WITH the
+archive since it is Claude Code's transcript-path slug rule). `src.api.auth`
+(7) is a real host dependency and is section 10.4.
+
+**The four that are genuine coupling are all in one layer**, and this is the
+single most useful sentence in the section: `src.core.project_writes`,
+`src.core.project_store`, `src.core.claude_title_sync` and
+`src.core.session_kind` are imported by `project_archive.py`,
+`transcript_project_root.py`, `transcript_import_facts.py` and
+`transcript_import_write.py`. **Every one of them is in the rooting and import
+path, and not one of them is in the browse path.** The thing that reads and
+renders a transcript does not know CloudeCode exists. The thing that decides
+which SESSION a transcript belongs to obviously does, and cannot not.
+
+**CloudeCode reaching IN to the archive**, seventeen targets, of which most are
+bookkeeping that a split dissolves: `main.py` mounting five routers,
+`db_steps.py` importing six DDL modules, and the feature flag read in three
+places. **Two are real and both are worth naming now:**
+
+1. **`src/core/secret_scan.py` imports `src.core.message_model_secrets`.** The
+   secret detectors are a deliberate single source of truth shared between the
+   repository's own secret scanner and the transcript message model. CLAUDE.md
+   says so on purpose. **This module belongs to both projects and is the
+   clearest genuine ambiguity in the whole family.** It is also the easiest to
+   resolve, because it is pure pattern matching with no state: whichever side
+   keeps it, the other vendors it or depends on it as a tiny package.
+2. **`src/core/session_project_binding.py` imports `canonical`,
+   `git_top_level` and `is_scratch` from `src.core.transcript_import_paths`.**
+   CloudeCode's session-to-project binding depends on the archive's path
+   canonicalisation rules. That is the wrong direction for a split and it is
+   the one inward dependency that would actually have to be moved rather than
+   deleted. It is small: three pure functions.
+
+**One trap, found while measuring and worth recording because the name invites
+it.** `src/core/project_archive.py` is NOT part of this. It archives a
+PROJECT, the soft retirement of a shelf in the launcher, and has nothing to do
+with transcripts. Anything that globs `*archive*` on the server picks it up and
+is wrong. It stays with CloudeCode.
+
+**Honest summary of distance.** The browse half, 33 modules and 10,043 lines,
+is close to free-standing today. The message model, 20 modules, is
+self-contained by construction. The ingest and import half, 16 modules, is
+entangled with session and project state **and should be**, because rooting a
+transcript to a session is definitionally a CloudeCode question. So the split
+is not "lift 68 modules out". It is "lift 53, and decide what the other 15
+become". That is a real project and it is not a weekend, but it is also not a
+month of untangling, because the entanglement is concentrated rather than
+spread.
+
+### 10.2 The data boundary, and whether this changes the split
+
+**It does not change the design and it does strengthen the argument, which is
+worth saying because a second independent reason to do something is not the
+same as a better reason.**
+
+Section 6 already recommends separating the archive into its own database file,
+on size, backup asymmetry and boot cost. A standalone project needs its own
+store by definition, so this is the same recommendation reached from a second
+direction. Nothing in section 6's design changes: same `ATTACH`, same three
+foreign keys to resolve, same copy-not-re-ingest rule because
+`transcript_root_decisions` holds 23,023 decisions that exist nowhere else.
+
+**One thing it does sharpen.** Section 6 treats dropping the three cross-boundary
+foreign keys as a cost. Under this lens it is partly a benefit: those three keys
+(`transcript_archives.root_session_id`, `transcript_archives.project_id`,
+`transcript_root_decisions.project_id`) are exactly the schema-level expression
+of "this archive belongs to a CloudeCode session", and a standalone browser
+would need them to be soft references anyway. So the split is not only making
+them unenforceable, it is converting them into the interface. Say that in the
+migration's commit message rather than apologising for losing a constraint.
+
+**Sequencing is unchanged.** Step 3, after the data connection and the slices.
+Doing it earlier for standalone reasons would be optimising for a thing the
+owner has explicitly said is not needed now.
+
+### 10.3 The ingester, which is the part that decides weekend or month
+
+**A standalone history browser needs transcripts to arrive. There are two
+honest answers and they cost very differently.**
+
+**Answer A: it takes the ingest half with it.** The 16 `corpus_*` and
+`transcript_*` modules go, and it gains its own scheduler. That is the clean
+product: point it at `~/.claude/projects` and it works for anyone, with no
+CloudeCode anywhere. The cost is the four genuine couplings in 10.1, all in the
+rooting path, so what it actually loses is the ability to say "this transcript
+belongs to session X". For a standalone browser that is not a loss, it is a
+feature it never had.
+
+**Answer B: it takes only the browse half, and the corpus arrives some other
+way.** Smaller, and it makes the product a viewer over a database somebody else
+fills, which is a much weaker thing.
+
+**A is right, and the split inside those 16 modules is already visible.** The
+rooting and attribution code (`transcript_project_root.py`,
+`transcript_import_facts.py`, `transcript_import_write.py`, and
+`project_archive.py` which is not in the family at all) is CloudeCode's. The
+discovery, hashing, byte-exact archiving and scan-plan code
+(`corpus_ingest_service.py`, `corpus_ingest_scan.py`, `corpus_ingest_state.py`,
+`corpus_ingest_task.py`, `transcript_corpus_discover.py`, `transcript_archive.py`)
+is the browser's, and none of it imports session or project state.
+
+**The ambiguous ones, named now because they are what decides the estimate:**
+
+- `transcript_corpus_ingest.py` (684 lines) is BOTH. It ingests, which is the
+  browser's, and it roots against `sessions` and `projects`, which is
+  CloudeCode's. It is the single file where the two jobs are mixed, and
+  splitting it is the largest single piece of work in any extraction.
+- `transcript_import_paths.py` is the one CloudeCode already imports FROM
+  (10.1). Its three pure functions would most naturally move to CloudeCode and
+  be re-imported, or become a shared two-hundred-line package.
+- `message_model_secrets.py` belongs to both, as above.
+
+**That is the whole ambiguity: three modules.** Everything else partitions on
+inspection. **So the honest estimate is closer to a weekend than a month**, and
+the reason is that the entanglement is three files rather than a diffuse
+pattern. If someone tells you otherwise later, this measurement is the thing to
+re-take.
+
+### 10.4 What it genuinely needs from the host
+
+Five candidates. For each: sever, or define as an interface now.
+
+**Auth. DEFINE AN INTERFACE, and it is already half defined.** Seven archive
+routers import `src.api.auth.require_auth` as a FastAPI dependency. That is
+already the right shape: a dependency injected at the router, not auth logic
+inside archive code. A standalone project supplies its own `require_auth` and
+changes nothing else. **Nothing to do. It is already standalone-shaped by
+accident**, and that is the cheapest kind of good news.
+
+**Themes. SEVER, and it costs nothing because the coupling is a convention, not
+an import.** The 12 archive stylesheets use `var(--color-*)` and existing class
+names, and the slices explicitly keep doing that. A standalone project ships a
+default token set and the same stylesheets work. Nothing imports a theme.
+
+**The string catalog. DEFINE AN INTERFACE, cheaply, and only if a slice is
+touching the string anyway.** `web/src/lib/i18n` exists. A feature module that
+hardcodes English is not extractable without a pass over every component.
+Routing strings through the existing catalog as each slice is written is nearly
+free; going back afterwards is a full re-read of 17,387 ported lines.
+
+**The status model. SEVER. It is not used.** No archive module imports
+`StatusLed` or the session status machinery. The archive has its own outcome
+vocabulary in `archive-outcome.js`. Already clean.
+
+**Navigation. ALREADY BEING SEVERED, by slice 1.** That is what the
+`app-screen` surface is: `routePrefix`, `parse`, `buildPath`, `mount`. A
+standalone project implements four functions of host and the feature module
+does not change. **The surface designed in section 3 for plugin reasons turns
+out to be exactly the extraction seam, which is a coincidence worth noticing
+rather than a plan.**
+
+### 10.5 Free now versus expensive later
+
+**This is the section. Everything above is evidence for this list.**
+
+**FREE NOW, because the code is being rewritten anyway. Fold these into the
+slices and do not treat them as extra scope.**
+
+1. **An import-direction test, pinning `history/` as a leaf.** Nothing outside
+   `web/src/lib/plugins/history/` may import from inside it, and nothing inside
+   it may import from `web/src/lib/launchpad/`, `sessions/` or
+   `terminal-search/`. It pins the dependency arrow **outward-only: the module
+   may depend on the host's published seams, the host may depend only on the
+   `Plugin` object.** Cost: one test file, about thirty lines, written once in
+   slice 1. **This is the single highest-value item here.** During a rewrite it
+   is nearly free; afterwards it is near impossible, because by then there are
+   violations and each one is an argument.
+2. **Strings through the i18n catalog as each component is written.** Cost:
+   minutes per slice. Later: a full pass over every ported line.
+3. **Keep the four host globals out of the new components.** Slices 1, 2 and 3
+   already remove five of the eight. The free part is simply not introducing new
+   ones: any host reach goes through the `PluginContext` or the granted client,
+   never `window`. Cost: zero, it is the design already.
+4. **Name the three ambiguous server modules in their own docstrings.** One
+   paragraph each in `transcript_corpus_ingest.py`, `transcript_import_paths.py`
+   and `message_model_secrets.py` saying which project it would belong to and
+   why. Cost: fifteen minutes, and it is the thing nobody can reconstruct in a
+   year.
+5. **Do not let a slice add a NEW import from archive code into session or
+   project state.** Today there are four and they are all in the rooting path.
+   Free to preserve, expensive to unwind.
+
+**EXPENSIVE LATER, and deliberately NOT done now. Listed so the cost is known
+rather than discovered.**
+
+- **Splitting `transcript_corpus_ingest.py`.** 684 lines mixing ingest and
+  rooting. Real work, no benefit today, and the file is not otherwise being
+  touched. **Optional, and not recommended now.**
+- **Moving `transcript_import_paths`' three functions out of the archive
+  family.** Would remove CloudeCode's one wrong-direction dependency. Small,
+  but it touches `session_project_binding.py`, which is their area and is
+  exactly the kind of unasked-for tidying the work protocol warns about.
+  **Optional. Raise it with them rather than doing it.**
+- **A package boundary for `message_model_secrets`.** Only worth it at
+  extraction time.
+- **Extracting the server at all.** 68 modules. Not now.
+
+### 10.6 Would it be a real product
+
+**Yes, and the reason is specific rather than enthusiastic: the addressable
+set is everyone who uses Claude Code, not everyone who uses CloudeCode.**
+
+CloudeCode's premise is driving live sessions from a phone. The archive
+browser's premise is reading what already happened, and that corpus exists on
+the machine of every Claude Code user whether or not they have ever wanted a
+phone client. On this machine alone that is **22,828 transcripts, 26.4 GB raw**,
+accumulated as a by-product, with no tool that reads it. The corpus is a
+documented on-disk format the browser already parses, so the product needs
+nothing from CloudeCode to be useful to a stranger.
+
+It is also **not a product that only makes sense inside this app**, which is
+the test that matters. The one thing it would lose standalone is the session
+rooting, and that is precisely the part a stranger with no CloudeCode sessions
+would never use.
+
+**So the honest answer to "is any of this worth an hour of extra effort" is:
+the five free items in 10.5 are worth it, and nothing else is yet.** Item 1
+alone, the import test, is worth more than the other four together, and it is
+thirty lines in slice 1. The expensive items stay on this page and off the
+schedule until the owner says otherwise.
+
+## 11. Open questions
+
+1. PARKED with the away bar: does a full-history load reach past one screen on
+   a Claude Code pane? See section 5. If the fleet report is ever picked up,
+   this is the first thing to measure and it is not arguable from either
+   side's source.
 2. Does the ingester ever want its own connection, or is ATTACH enough
    forever? Section 6 recommends ATTACH and names the condition under which
    that changes.
 3. Does `db_integrity` carry a list or grow a second artifact? Section 6
    recommends a list and gives the reason.
-4. Should the `terminal-search` slice be refactored onto `terminal-overlay`
-   when that surface lands? It is their code. Our view is yes, or there will
-   be two ways to put something over a terminal, but that is a question for
-   them.
+4. PARKED with the surface: should the `terminal-search` slice be refactored
+   onto `terminal-overlay` if it ever lands? It is their code and the question
+   is theirs.
+6. **Live, and the only one that can change section 8.** Does step 1's repoint
+   change any response SHAPE, or only the query behind it? Only a shape change
+   reaches the client, and section 8.6 says which slices it would hold up.
+   Whoever holds step 1 should answer this in their own issue rather than
+   leaving it to be discovered by a slice.
 5. Does `ui-flags.js` gain a key for this, or does `enabled(context)` read
    `message_archive` from `/features` directly? The two are different shapes
    and only one should exist.
