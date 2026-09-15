@@ -150,3 +150,46 @@ export { archiveFormat, formatBytes, formatChars, formatCount,
          formatTimestamp, formatRelativeAge, abbreviateSha, shortenSlug,
          renderTranscriptHeader, NOT_KNOWN, SLUG_MAX_CHARS,
          SHA_ABBREV_CHARS } from './format';
+
+/**
+ * SLICE 6, THE TRANSCRIPT LIST. Published here for the same reason the
+ * block above is: `import-direction.test.ts` pins that nothing outside
+ * `history/` reaches past this file, so a composition root mounts
+ * `TranscriptList` through the package rather than by path.
+ *
+ * IT IS DELIBERATELY NOT WIRED TO A SCREEN. Slice 3, the archive screen
+ * SHELL, is not being built - Adam is replacing the entire application
+ * shell (issue #175) and a shell built days before it is replaced is
+ * wasted motion. So this list is a SHELL-INDEPENDENT component with no
+ * mount site yet: it takes its container, its scrollport, its client and
+ * its scope from whoever mounts it, and assumes nothing about what is
+ * around it.
+ */
+export { default as TranscriptList } from './TranscriptList.svelte';
+export { default as TranscriptRow } from './TranscriptRow.svelte';
+export { default as TranscriptListFilter } from './TranscriptListFilter.svelte';
+export { default as TranscriptListFooter } from './TranscriptListFooter.svelte';
+export {
+    CLASS as TLIST_CLASS, COLUMNS as TLIST_COLUMNS, PAGE_SIZE, ROOT_CLASS,
+    SCHEME_DEFS, SCHEME_FILTERS, DEFAULT_SCHEME, TITLE_SOURCES,
+    TITLE_SOURCE_NONE, TITLE_SOURCE_UNKNOWN, UNESTABLISHED_ATTRIBUTION,
+} from './tlist-vocab';
+export type { SchemeDef, TitleSourceDef, FuzzyColumn } from './tlist-vocab';
+export {
+    activeSchemeLabel, describeFilter, displayTitle, fuzzyNote,
+    isUnestablished, nextScheme, rowValue, titleSource, wireScheme,
+} from './tlist-row';
+export type { TranscriptRowData, FilterMeta, DisplayTitle } from './tlist-row';
+export {
+    applyPage, canLoadMore, describeFooter, emptyPaging, fetchPage,
+} from './tlist-paging';
+export type { ListScope, PagingState } from './tlist-paging';
+export {
+    computeWindow, renderedCount, maxRendered, scrollToShow,
+    DEFAULT_OVERSCAN, ROW_GAP_PX,
+} from './tlist-window';
+export type { RenderWindow, WindowInput } from './tlist-window';
+export { isFiltering, visibleRows } from './tlist-fuzzy';
+export type {
+    FuzzyMatcher, MatchSpan, SpanMap, LabelSegment, RankedRow,
+} from './tlist-fuzzy';
