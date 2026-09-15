@@ -215,6 +215,25 @@ owner session and never the `cloude` tmux socket:
 The claim "a timed-out conversation can be resumed" is therefore measured,
 and its negative control is on the record beside it.
 
+## Suite
+
+Measured 2026-09-15 on `feat/transcript-restore-write` with `-p no:randomly`:
+**4 failed / 7681 passed / 48 skipped**, adding 44 tests and no new failures.
+
+The baseline of 4 was taken on the BARE BASE COMMIT in the same directory
+rather than quoted from this file's history, because that figure has gone
+stale before. All four are environmental and pre-existing:
+`test_cold_socket_born_at_depth_real_tmux`,
+`test_cold_socket_options_real_tmux`,
+`test_home_write_guard::test_guard_refuses_the_real_claude_settings_path_by_name`
+and `test_tmux_launch_batching_real_tmux`.
+
+One further failure appeared in a single full run and not in the final one:
+`test_boot_readopt_real_tmux::test_attach_to_a_dead_pane_still_succeeds`,
+which passed 3 of 3 in isolation. It drives the real `cloude` tmux socket,
+which is the known flakiness class; a lone failure there with no code
+change behind it is not a regression.
+
 ## Usage
 
 ```bash
