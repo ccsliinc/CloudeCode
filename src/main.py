@@ -45,6 +45,7 @@ from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
+from src.core.attention_wiring import build_attention_watcher
 from src.core.corpus_ingest_task import CorpusIngestScheduler
 from src.core.db_integrity_task import DatabaseIntegrityScheduler
 from src.core.message_archive_flag import (
@@ -178,8 +179,8 @@ To fix:
 #
 # wrapper_class is a FILTERING bound logger gated on settings.log_level
 # (default "INFO"). Before this, BoundLogger applied no level filter at
-# all - every logger.debug() call (e.g. idle_watcher.poll_suppressed,
-# emitted roughly once per second per open session) was printed
+# all - every logger.debug() call (a per-session poll could emit one
+# roughly once a second) was printed
 # unconditionally, and under launchd that sink is launchd.log with no
 # rotation, so debug-level polling noise was the dominant contributor to
 # its growth. Filtering here keeps debug output available for local dev
@@ -274,7 +275,7 @@ async def lifespan(app: FastAPI):
     # (hardcoded cld/cldor -> user-editable wrappers). MUST run before the
     # first load_auth_config() call below so a freshly-seeded wrapper list
     # is visible immediately. Best-effort / fail-soft, same posture as
-    # claude_hooks.ensure_hook_settings() further down: any failure is
+    # claude_hooks.strip_managed_hooks() further down: any failure is
     # logged, never raised, and NEVER blocks server boot or touches
     # config.json beyond the migration's own backup + atomic write.
     from src.core.config_migration import ensure_config_migrated
@@ -326,8 +327,8 @@ async def lifespan(app: FastAPI):
     await session_manager.lifespan_startup()
     log_monitor = LogMonitor(session_manager)
 
-    # Item 6: notification router. Wired AFTER log_monitor (which is the
-    # signal source for IdleWatcher in Item 7).
+    # Item 6: notification router - the external push queue (ntfy,
+    # Slack, Pushover) that ``record_toast`` fans a raised toast out to.
     auth_cfg = settings.load_auth_config()
 
     # feat/sessions-table (S4) - the ONE first-run import: config
@@ -538,29 +539,33 @@ async def lifespan(app: FastAPI):
     notification_router.attach_policy_store(notification_policy_store)
     await notification_router.start()
 
-    # Item 7: inject the live router into SessionManager so IdleWatcher
-    # instances created via create_session have a valid emit target.
+    # Inject the live router into SessionManager so a recorded toast has
+    # a valid external-push target.
     session_manager.attach_notification_router(notification_router)
     # And the policy the toast path consults before raising anything.
     session_manager.attach_notification_policy_store(notification_policy_store)
 
-    # v0.7.0 Part 3 - idempotent-merge cloudecode's Claude Code lifecycle
-    # hooks into ~/.claude/settings.json. Best effort: a parse error /
-    # write error / disabled-by-config all return without raising, and a
-    # try/except guards against any genuinely unexpected throw so server
-    # boot is NEVER blocked by hook-settings glitches. The hook block
-    # only matters for sessions that spawn ``claude`` AFTER this point
-    # (env vars travel through tmux at spawn time), but the merge itself
-    # is idempotent and re-running is cheap.
+    # THIS USED TO INSTALL A HOOK BLOCK. IT NOW REMOVES ONE. CloudeCode
+    # learned a session's state by making Claude Code POST every lifecycle
+    # event to a loopback endpoint, and that was measured wrong nine times
+    # in ten because ``CLOUDECODE_SESSION_ID`` is pane-wide: every
+    # background agent posted under the parent's id. The endpoint is gone
+    # and the state now comes from what the harness writes to disk
+    # (src/core/attention/), so an install upgraded from any earlier build
+    # still has our block in ~/.claude/settings.json, aimed at nothing,
+    # costing a curl on every event. This takes it back out, ONCE, at
+    # boot. Best effort: a parse error or a write error returns without
+    # raising, and a try/except guards any genuinely unexpected throw so
+    # server boot is NEVER blocked by a settings-file glitch.
     try:
         # The destination is passed EXPLICITLY. It used to be an implicit
-        # fallback inside ensure_hook_settings(), which meant this line
-        # silently merged into the developer's real ~/.claude/settings.json
+        # fallback inside the old installer, which meant this line
+        # silently rewrote the developer's real ~/.claude/settings.json
         # during a plain pytest run. Naming the resolver here makes the
         # destination a decision this call site owns.
-        claude_hooks.ensure_hook_settings(claude_hooks.default_settings_path())
+        claude_hooks.strip_managed_hooks(claude_hooks.default_settings_path())
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("claude_hooks_ensure_failed", error=str(exc))
+        logger.warning("claude_hooks_strip_failed", error=str(exc))
 
     # Plan v3.2 - LocalServersTracker replaces the demolished tunnel
     # subsystem. Hooks into log_monitor pattern callbacks for detection
@@ -659,6 +664,33 @@ async def lifespan(app: FastAPI):
             ttl_seconds=cfg.ttl_seconds,
         )
 
+    # THE ONE TASK THAT RAISES NOTIFICATIONS, AND THE ONLY THING THAT
+    # DOES. The hook endpoint that used to announce a session's state is
+    # gone; the state now comes from what Claude Code writes to disk,
+    # read on a two second tick with an early wake on the sessions
+    # directory (src/core/attention/watcher.py). It is not an
+    # optimisation and it has no second path: without this task nothing
+    # raises a toast, sessions.last_work_at (the session and project sort
+    # key) is never written, the startup gate never reaches ready, and a
+    # /rename typed inside claude is never noticed.
+    #
+    # BUILT HERE, RUN AS A TASK, CANCELLED BELOW. Building it is the
+    # composition (src/core/attention_wiring.py) and creates nothing;
+    # create_task is what starts it. It is unconditional: there is no
+    # configuration that turns notifications off, only the per-session
+    # mute the watcher's own gate reads.
+    attention_watcher = build_attention_watcher(
+        session_manager,
+        app_state=app.state,
+        broadcast=connection_manager.broadcast_to_session,
+    )
+    app.state.attention_watcher = attention_watcher
+    attention_watcher_task = asyncio.create_task(attention_watcher.run())
+    logger.info(
+        "attention_watcher_scheduled",
+        tick_seconds=attention_watcher.tick_seconds,
+    )
+
     # Release self check. Runs on its own daemon thread, first check 30s
     # after boot, so nothing on the startup path or any page load ever waits
     # on a network call. It NEVER upgrades anything; it reports, and the
@@ -684,7 +716,7 @@ async def lifespan(app: FastAPI):
     # and returns; boot never waits on a pass, and a pass that fails
     # resolves to a named status on a report rather than to an
     # exception - the same fail-soft posture as ensure_db_migrated and
-    # claude_hooks.ensure_hook_settings above. Set CLOUDE_CORPUS_INGEST=0
+    # claude_hooks.strip_managed_hooks above. Set CLOUDE_CORPUS_INGEST=0
     # to switch it off; the status route then reports it as disabled
     # rather than implying the archive is current.
     #
@@ -807,6 +839,17 @@ async def lifespan(app: FastAPI):
         await db_integrity_scheduler.aclose()
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("db_integrity_scheduler_stop_failed", error=str(exc))
+
+    # Stop the attention watcher. It reads sessions, the datastore and
+    # the unread store, so it goes down before any of them do. Cancelled
+    # AND AWAITED: the loop re-raises CancelledError out of its own
+    # finally, which is where it releases the kqueue and the directory
+    # descriptor the early wake holds, and a cancel that is not awaited
+    # can return before that runs.
+    attention_watcher_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await attention_watcher_task
+    logger.info("attention_watcher_stopped")
 
     # Stop the upload sweeper first - it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window

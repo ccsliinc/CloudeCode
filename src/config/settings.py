@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     # Minimum structlog level printed to stdout/stderr (captured by launchd
     # into launchd.log under production - see cloude-code.sh). "INFO" is the
     # production default: per-poll-cycle debug events like
-    # idle_watcher.poll_suppressed fire roughly once a second per open
+    # a per-session poll could fire roughly once a second per open
     # session and are the dominant contributor to that file's growth.
     # Set LOG_LEVEL=DEBUG in .env for local troubleshooting.
     log_level: str = "INFO"

@@ -332,18 +332,6 @@ EXEMPTIONS = {
         "here, not fixed here."
     ),
     (
-        "src/core/session_manager.py",
-        "_restored_activity_state",
-    ): (
-        "KNOWN BUG, unfixed by this guard, and NOT one of the sites named "
-        "in this task's brief - found by this scan itself. Reads "
-        "activity_state / activity_state_at off the newest row sharing a "
-        "name; this is the exact 'activity state written to every row "
-        "sharing a name' bug class from this task's own background, one "
-        "call site the brief's enumeration missed. session_manager.py is "
-        "excluded from edits by this task - flagged here, not fixed here."
-    ),
-    (
         "src/core/session_label.py",
         "label_for_name",
     ): (

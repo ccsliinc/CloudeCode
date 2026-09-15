@@ -46,6 +46,8 @@ import structlog
 
 from src.core.db_models import (
     SESSION_CLAUDE_UUID_SOURCE_CORRELATED,
+    SESSION_CLAUDE_UUID_SOURCE_HOOK,
+    SESSION_CLAUDE_UUID_SOURCE_REGISTRY,
     SESSION_CLAUDE_UUID_SOURCES,
 )
 from src.core.session_lineage import row_for_claude_uuid
@@ -53,6 +55,18 @@ from src.core.session_store import get_instance, sessions_table_ready
 from src.core.trail_entry import utc_now
 
 logger = structlog.get_logger()
+
+#: THE PROVENANCES THIS MODULE MAY NOT WRITE, because neither of them is
+#: a correlation: both are Claude Code reporting its own conversation id
+#: directly, one over the SessionStart hook and one out of the session
+#: registry file. THE VOCABULARY IS SHARED AND THIS FUNCTION IS NOT. A
+#: caller that asks for either here has passed the wrong label, so it is
+#: downgraded to the timing default rather than stored verbatim, which is
+#: what stops this path from ever claiming evidence it does not have.
+_NOT_CORRELATED = (
+    SESSION_CLAUDE_UUID_SOURCE_HOOK,
+    SESSION_CLAUDE_UUID_SOURCE_REGISTRY,
+)
 
 #: SUCCESS. The anchor row carried no ``claude_session_uuid`` and now
 #: carries this one, with provenance ``correlated``.
@@ -193,7 +207,7 @@ def bind_correlated_uuid(
             detail="the anchor row already carries a different claude_session_uuid",
         )
 
-    if source not in SESSION_CLAUDE_UUID_SOURCES or source == "hook":
+    if source not in SESSION_CLAUDE_UUID_SOURCES or source in _NOT_CORRELATED:
         logger.warning(
             "claude_uuid_correlate_bind_unknown_source",
             requested_source=source,

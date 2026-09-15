@@ -7,26 +7,63 @@ disagree, one of them is a bug.
 ## The vocabulary lives in one file
 
 Every status string this app can show is spelled once, in
-`src/core/session_status.py`. `src/core/session_activity.py` imports them
-and owns the state MACHINE; it defines no string literals of its own. The
-client mirrors the same set in `client/js/session-status-ui.js`.
+`src/core/session_status.py`. `src/core/attention/` imports them and owns the
+state MACHINE; it defines no string literals of its own, and
+`attention/display.py` is the single place a verdict becomes one of those
+names. The client mirrors the same set in `client/js/session-status-ui.js`.
 
 ## The states
 
-| state | what it claims | what moves it there |
+**NOTHING ANNOUNCES A STATE. EVERY ROW BELOW IS A READING**, taken on a
+2 second tick and on every listing pass. The app installs no Claude Code hooks
+(`docs/DECISIONS.md`, "Zero hooks", 2026-09-13).
+
+| state | what it claims | what is read to get there |
 |---|---|---|
-| `working` | the agent is doing tool work | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` |
-| `working_subagent` | the same, inside a spawned subagent | `SubagentStart` with no matching `SubagentStop` |
-| `question` | BLOCKED on the user: a yes/no nobody has answered | `PermissionRequest` |
-| `notice` | claude wants attention and is NOT blocked | `Notification` |
-| `finished_unread` | a turn ended and nobody has looked | `Stop`, plus the unread flag |
-| `idle` | alive, at rest, already seen | `Stop`, or a bare-shell pane |
+| `working` | the agent is doing tool work | the registry says `busy` or `shell` (`attention/registry_read.py`) |
+| `working_subagent` | the same, waiting on its own background agents | the turn-end record's `pendingBackgroundAgentCount`, the async-launch ledger, or a queued task notification newer than the last turn end (`attention/transcript_facts.py`) |
+| `question` | BLOCKED on the user: a yes/no nobody has answered | the transcript ends on an unanswered `AskUserQuestion` or `ExitPlanMode`, or the registry says `waiting` and the pane shows a dialog |
+| `notice` | claude wants attention and is NOT blocked | the registry's `waitingFor` names an elicitation, a sandbox request, a worker request or an open dialog |
+| `finished_unread` | a turn ended and nobody has looked | the registry says `idle`, the turn-end record is the last word with nothing pending, the transcript has been quiet 3s, and the unread flag is set |
+| `idle` | alive, at rest, already seen | the same reading, with the unread flag clear |
 | `dead` | the pane's process exited | tmux `#{pane_dead}` = 1 |
-| `unknown` | NOT MEASURED | anything else, including a live pane with no hook signal |
+| `unknown` | NOT MEASURED | every refusal: no registry record, a stale one, an unreadable one, two records claiming one pane, or tiers that disagree |
 
 `unknown` is a first-class answer, not a failure mode. "I did not look"
 and "I looked and found rest" are different claims and must never render
-the same way.
+the same way. The resolver contains no `or 0` and no `||` default for this
+reason: a count that was not written is None, None satisfies no rung, and the
+session lands on `unknown`, which raises nothing.
+
+### Where each fact is stored
+
+Four tiers, in precedence order. The full rung table is
+`docs/session-status-model.md` chart 2; the code is
+`src/core/attention/resolve.py`, which is pure and opens no file.
+
+| Tier | The file or query | What it is allowed to answer |
+|---|---|---|
+| registry | `~/.claude/sessions/<pid>.json`, written by stock Claude Code and rewritten IN PLACE on every status change: `status`, `waitingFor`, `sessionId`, `cwd`, `tmux`, `pid`, `startedAt`, `version` | `busy`, `needs_user`, and it is the ONLY tier that may originate rest |
+| transcript | the tail of `~/.claude/projects/<slug>/<uuid>.jsonl`, 256 KB window | background agents pending, a queued re-invoke, an unanswered blocking tool at the end of the file, the newest real user prompt |
+| pane | the last block of `capture-pane` text | that a dialog is on screen. NEVER that a session is finished, by any path |
+| tmux | `#{pane_dead}` | alive, dead, or could not tell |
+
+Three facts are durable and are NOT in the tiers above, because they are ours
+rather than claude's: the unread flag (`UnreadStore`, keyed on the tmux
+instance), `sessions.activity_state` with its stamp (`activity_persist.py`,
+written on every reading), and `sessions.last_work_at` (the session and project
+sort key, stamped on a new user prompt or an edge into busy). The hook token
+store also stays: it is our own ledger of which tmux names we launched, read by
+the boot re-adopt, and it was never a hook.
+
+**The registry is written ON CHANGE, so silence is not doubt.** A session that
+genuinely went idle two days ago carries a two-day-old `idle` stamp precisely
+because nothing has happened since. A heartbeat that stops means the writer
+died; a write-on-change record that stops means the writer had nothing to say.
+Reading the second as the first makes the app LESS certain the longer a session
+stays correctly at rest. So an old stamp alone may not defeat rest when the
+transcript corroborates it, and a stale stamp that NOTHING corroborates still
+refuses (`resolve.py`, rung 8 and the narrowed rule (c)).
 
 ### The legend, in one place
 
@@ -78,26 +115,32 @@ the state that stands out. That is the false-urgency twin of this
 project's recurring false-green problem, and the fix is the same shape -
 say only what was measured.
 
-**Both are cleared by the same three events** (`UserPromptSubmit`,
-`PreToolUse`, `Stop`), because what resolves either one is the user
-showing up, and those are the events that measure it.
+**Neither is a stored flag any more.** They were two booleans set and cleared
+by hook events; they are now two REASONS on a verdict that is re-derived from
+disk on every reading. `needs_user(question | permission | plan_approval)`
+paints `question`; `needs_user(input)` paints `notice`. Nothing has to be
+cleared, because nothing was stored: the moment the evidence stops saying a
+dialog is open, the next reading stops saying it too. The whole class of
+stuck-flag defect this section used to document is gone with the flags.
 
-**They are two independent booleans**, `permission_open` and
-`notice_open`, not one field with three values. Hooks arrive unordered
-and duplicated: a `Notification` landing after the `PermissionRequest` it
-accompanies must not be able to downgrade the blocking claim, and one
-landing before it must not be resurrected when the permission clears.
-Two flags read in a fixed order converge on the same answer whatever
-order the events arrive in, and applying either event twice is a no-op.
+**Precedence comes from the rung order, not from reading one boolean before
+the other.** An unanswered `AskUserQuestion` or `ExitPlanMode` at the end of
+the transcript is rung 2, above both background-agent rungs, so a session
+blocked on a question while its agents run answers `question` and not
+`working_subagent`. A registry `waitingFor` that only names a soft request is
+rung 5c, below the pane confirmation at rung 5.
 
 **Precedence:** `question` outranks `notice` in the same window;
 `notice` outranks `working`. A stopped session is the most actionable
 thing on the screen, and work that proceeds without the user is the least
 of the three.
 
-**The toasts say it too.** `_hook_event_presentation` in
-`src/api/routes.py` titles a `PermissionRequest` **needs your permission**
-and a `Notification` **wants your attention**. The split is only worth
+**The toasts say it too.** The toast presentation titles a
+`PermissionRequest` **needs your permission** and a `Notification` **wants your
+attention**. The two kinds outlived the hooks they were named after: the
+watcher raises a `PermissionRequest` on an edge into
+`needs_user(question | permission | plan_approval)` and a `Notification` on an
+edge into `needs_user(input)`. The split is only worth
 having if it reaches the surface the user actually reads, and the toast is
 that surface on a phone.
 
@@ -111,8 +154,8 @@ owner's screen that day, four cards for two sessions plus a "Dismiss all
 shows, by READING `SUMMARY_PRIORITY` out of
 `client/js/session-status-summary.js` - the same fold, in the same order,
 that the sidebar group headers and the launchpad top bar already use.
-There is no second ranking; the join is only from a hook event name to
-one of that fold's buckets:
+There is no second ranking; the join is only from a toast kind to one of that
+fold's buckets:
 
 | toast kind | bucket | why |
 |---|---|---|
@@ -130,9 +173,10 @@ from a chatty `Notification` and with it the severity-3 cap exemption and
 not a variable.** A permission prompt landing on a session already showing
 "your turn" re-answers the fold on the SAME group key, so the same card
 element becomes the permission card; a `Stop` landing on a session showing
-a permission prompt changes nothing. Hook events arrive unordered,
-duplicated and droppable, and a fold over what is currently held is
-idempotent against all three - a running "current worst" variable would
+a permission prompt changes nothing. Records arrive out of order, more than
+once and sometimes not at all - a browser holds two delivery paths for the same
+toast, the socket and the poll - and a fold over what is currently held is
+idempotent against all three, where a running "current worst" variable would
 not be.
 
 **THE BADGE COUNTS THE KIND ON THE CARD, NOT THE PILE.** `×5` sits against
@@ -166,9 +210,9 @@ state below stay documented and stay implemented - they are what the
 archive and the attachable-session decorator render - but no live
 endpoint is meant to carry a dead row to the client. A round that read
 the same measurement as a bug and made a husk KEEP its row, painted dead,
-was overruled and reverted (`ba2aa5d`);
-`tests/test_led_real_hooks.py::test_a_killed_pane_leaves_the_live_list_rather_than_painting_dead`
-holds the line against a real killed pane.
+was overruled and reverted (`ba2aa5d`). The real-hook harness that held this
+line with a live killed pane went with the hooks; the rule stands as the
+owner's ruling and `_session_info_for` still drops the row.
 
 STILL OPEN, and the test records it rather than asserting it:
 `remain-on-exit` keeps a husk's tmux SESSION in the listing, and
@@ -178,82 +222,53 @@ needs a reaper rung keyed on a MEASURED `#{pane_dead}` - a new durable
 writer, in the one module whose entire premise is never writing a verdict
 nobody measured, so it is its own change and not a footnote to this one.
 
-**Hook events are unordered, duplicated and droppable.** Every consumer in
-`session_activity.py` is idempotent: last-write-wins booleans, counters
-floored at zero (`subagent_depth = max(0, depth - 1)`), and an unknown
-event kind is a documented no-op rather than an error. Applying the same
-event twice, or two events in the wrong order, converges on the same state
-a correctly-ordered stream would reach.
+**A GUESS MUST NEVER OUTRANK A RECORD, AND AN ABSENCE IS NEVER A VALUE.**
+This is the rule the whole resolver is built around. Over the 50.8 hours to
+2026-09-13T18:24Z, 410 of 459 attributable "your turn" and "session done"
+toasts, 89.3 percent, fired while the session's own turn-end record said
+background agents were still pending. Every one of them was a missing number
+read as zero. The count now comes from
+`system`/`turn_duration`.`pendingBackgroundAgentCount`, **which is OMITTED
+when it is zero** (measured across 300 turn ends on Claude Code 2.1.266: 236
+positive, 64 omitted, 0 null, 0 zero), so absent and zero must be told apart or
+the defect comes straight back.
 
-**A CLOSING EVENT IS NOT A HEARTBEAT ON ITS OWN**, and that was punchlist
-item 4. Measured on claude 2.1.265 by `tests/test_led_real_hooks.py`,
-twice: on a turn with **no subagent anywhere in it**, `SubagentStop`
-arrives about 1.5s AFTER `Stop` (Stop+38.96s, SubagentStop+40.46s).
-`Stop` had just cleared `last_tool_event_ts` to say the turn was over and
-`SubagentStop` stamped it again, so the heartbeat re-armed and a finished
-session painted `working` for the full 120s. `finished_unread` was visible
-for about a second and a half and **`idle` was unreachable in between** -
-the light claiming work nothing can see, this time through the hook
-stream rather than through the tmux fallback that was fixed for the same
-lie. The punchlist recorded it as "activity reads working for minutes
-after a resume".
+**A SESSION WAITING ON ITS OWN BACKGROUND AGENTS IS NOT WAITING ON THE USER.**
+That was the claim the old sub-agent counter was built to make, and it could
+not: `CLOUDECODE_SESSION_ID` is a pane-wide environment variable, so the parent
+and every background agent posted under one id and the counter was mislabeled
+before it was ever incremented. Five passes hardened it and the false rate did
+not move. See `docs/LESSONS.md`, "A counter fed by a mislabeled key cannot be
+fixed by ordering", and `docs/status-led-history.md` for the hook-era
+heartbeat record in full, including the `SubagentStop` ratchet.
 
-**The rule: `SubagentStop` never stamps the heartbeat.** It reports that
-work ENDED, so the only thing it may move is `subagent_depth`, and it
-moves that with the floor at 0. At depth 0 it moves nothing at all and
-logs `subagent_stop_without_start` at debug.
+**A READING TAKEN AT A BOUNDARY IS NOT A READING.** At the end of a turn the
+evidence LAGS: claude writes the turn-end record 25 ms after the model stops
+and updates its own status 7 ms after that. At a blocked moment the evidence
+LEADS: the `AskUserQuestion` tool call is written before the status moves to
+`waiting`. So a verdict that was decided by the pane or by the shape of the end
+of the file must be seen TWICE, at least `SETTLE_SECONDS` (1.5) apart, and rest
+additionally needs `DONE_QUIET_SECONDS` (3) of transcript silence
+(`attention/ledger.py`). A different verdict arriving in between resets the
+settle.
 
-It first shipped gated on `subagent_depth > 0` instead - stamp only when
-a subagent was open to close - and **the gate is not the claim it stands
-for**. Hooks are duplicated: a duplicated `SubagentStart` delivered after
-`Stop` raises the depth off the floor by itself, and the duplicated
-`SubagentStop` behind it then passes the gate and stamps, through the
-very guard meant to refuse it. Worse, it stamps at its OWN arrival time,
-so every further duplicated pair pushes the expiry out again - a ratchet
-with no ceiling, driven entirely by strays. A guard keyed on a number the
-stream it distrusts can move is not a guard. Refusing outright loses
-nothing: a subagent FINISHING is not work happening now, so if the turn
-really is still running the parent's next `PreToolUse` / `PostToolUse`
-re-arms the heartbeat within one tool call.
-(`tests/test_session_activity.py::test_a_duplicated_subagent_pair_after_stop_cannot_ratchet_the_heartbeat`)
-
-`PostToolUse` cannot take the same blanket refusal - it is the only event
-some legitimate turns emit late - and it has no counter to key on
-(parallel tool calls and a droppable `PreToolUse` would desynchronise
-one), so it keys on a `turn_open` boolean that every OPENING event
-(`UserPromptSubmit`, `PreToolUse`, `SubagentStart`) sets and `Stop`
-clears. Opening events still stamp unconditionally - there is nothing
-they could be late for - so a stray `SubagentStart` after `Stop` still
-buys ONE bounded window keyed on itself. What no `SubagentStop` can do is
-extend it.
-
-**The refusal is narrow, which is what makes it a measurement.**
-`PostToolUse` is refused ONLY when a `Stop` has POSITIVELY been seen for
-this session and no opening event has landed since. Never having seen a
-`Stop` - a fresh session, a server restarted mid-turn - is not evidence
-the turn ended, so that case still stamps. The remaining hole is a turn
-whose `UserPromptSubmit` AND `PreToolUse` were both dropped, leaving only
-a `PostToolUse`: it costs one under-claimed `working`, corrected by the
-next opening event. Under-claiming is the safe direction.
-
-**A missing `Stop` is handled by a timeout, not by detection.** A
-tool-use heartbeat is trusted for `WORKING_HEARTBEAT_TIMEOUT_SECONDS`
-(120s). Past that, no `working` is claimed. 120s is longer than a
-realistic single tool call (a slow fetch, a long test run) so the light
-does not flicker mid-turn, and short enough that a dead process does not
-read as busy for the rest of the day.
+**A FLICKER THROUGH `unknown` FREEZES THE ENTRY.** `unknown` is a failure to
+observe, not an observation of a different state, so it changes nothing at all:
+not the confirmed verdict, not a settle in progress, not what has already been
+raised. Without that rule a session answering busy, then unknown for one tick
+because a file was mid-rewrite, then busy again, manufactures a second busy
+edge out of nothing.
 
 **A persisted state is judged by its age.** `src/core/activity_persist.py`
 stamps every write and refuses a perishable state (`working`,
-`working_subagent`, `question`) older than the live timeout plus a small
-grace. A stale `working` is a lie about right now, so it returns
-not-measured rather than the stored value and rather than `idle`.
+`working_subagent`, `question`) older than the live timeout plus a small grace.
+A stale `working` is a lie about right now, so it returns not-measured rather
+than the stored value and rather than `idle`.
 
 ## The tmux fallback, and the claim it is not allowed to make
 
-A session with NO hook signal at all falls back to tmux's pane
-classification. That tier maps as follows, and the first row is the one
-that changed:
+tmux is the weakest tier and the only one that can see a pane die. Its
+classification maps as follows:
 
 | tmux says | means | maps to |
 |---|---|---|
@@ -265,134 +280,91 @@ that changed:
 `running` used to map to `working`, and that was a claim tmux cannot
 support. It means only "some non-shell process is in the foreground",
 which is equally true of an agent mid-tool-call and one parked at an empty
-prompt. The fallback carries no timestamp either, so unlike the hook tier
-nothing could ever expire the claim.
+prompt. The fallback carries no timestamp either, so nothing could ever expire
+the claim.
 
 **Measured 2026-09-08 on the reference box:** of 19 live sessions, 15
 report a claude VERSION STRING as `pane_current_command` (`2.1.259`,
 `2.1.261`, `2.1.263` - the binary renames its own process) and only 4
 report `zsh`. So this branch is the common case, not the exotic one an
-older note in `session_status.py` assumed, and every one of those 15
-sessions was reporting a permanent, unexpiring `working` on no evidence.
-That is the stale `working` recorded on the punchlist as lasting minutes
-after a resume: it did not last minutes, it lasted until a hook arrived to
-overrule it.
+older note in `session_status.py` assumed.
 
-## Seeding at boot, and why it may only ever claim rest
+**WHERE THIS MAP STILL RUNS.** Not on the live status path: chart 2 of
+`docs/session-status-model.md` owns that, and a live session is resolved from
+the four tiers. `map_tmux_fallback` is now reached only from
+`SessionManager.list_attachable_sessions`, whose rows have no running process
+bound to them, so there is no registry record and no live transcript to read.
+tmux plus the stored unread flag is genuinely all there is for such a row.
 
-The fallback above is honest and it is not enough. `SessionActivityTracker`
-is an in-memory dict that nothing hydrates at boot or at adopt, so a
-restart leaves every surviving session with no hook signal, and a pane
-running claude has no tmux answer either. **Measured on live 2026-09-08
-22:24Z: 19 live panes, 15 painting `unknown`.** Ten of them had never
-fired a hook and never will - they were started by hand, without the hook
-environment, and their last assistant turns are dated 2026-07-16 and
-2026-08-24. They had been sitting at an idle prompt for weeks and the
-light could not say so. The owner's complaint, verbatim: "on the homepage
-and sidebar many status unknown."
+**THE ONE VALUE tmux MAY STILL OVERRIDE ON A LIVE ROW IS `dead`.**
+`attention/display.py` consults `tmux_status` for exactly that one string, and
+only when the verdict is `unknown`. Letting tmux's `idle` through would turn
+"nothing readable said anything" into "this session is finished", which is the
+false green the whole package exists to remove.
 
-So a second source of evidence is consulted, one that OUTLIVES the
-process. `src/core/session_status_seed.py` is the pure ladder,
-`session_status_seed_records.py` reads what a transcript record means,
-`session_status_seed_store.py` is the cache, and
-`session_status_seed_read.py` does the two reads and holds the seam.
+## The transcript seed, and what replaced it
 
-**IT MAY CLAIM REST. IT MAY NEVER CLAIM WORK.** That asymmetry is the
-whole design and it is not a conservatism knob. Rest is self-evidencing: a
-conversation whose last record ends a turn is at rest until something
-appends to it, and nothing has, which is exactly why
-`activity_persist.PERISHABLE` excludes `idle`. Work is a claim about right
-now and it needs a heartbeat to expire it. Hooks carry one; a file on disk
-does not. A `working` seeded from a transcript could never be expired by
-anything, so it would be a permanent lie the moment it was wrong - the
-identical defect that had a raw tmux `running` painting 15 sessions busy
-on no evidence, one tier further down.
+**This tier is retired.** Until 2026-09-13 a session that had never fired a
+hook was lit by a separate ladder that re-read its transcript and could claim
+rest but never work: `session_status_seed.py`, `session_status_seed_records.py`,
+`session_status_seed_store.py` and `session_status_seed_read.py`, gated on
+`SessionActivityTracker.hooks_seen`. It existed because most sessions on the box
+had no hook plumbing at all - measured 2026-09-09, only 6 of 19 live sessions
+had ever fired one - and their lights could not say anything.
 
-The rungs, in order. Each names what it MEASURED.
+With no hooks anywhere, there is no hooked case to be a fallback FROM. Every
+session now goes down the same four tiers, and the transcript is one of them
+rather than a consolation prize for sessions the hook path could not see.
+`session_status_seed_read.read_instance_row` survives as a plain bulk row
+reader: the listing pass calls it for `claude_session_uuid` and `working_dir`,
+which is how a row's transcript file is located. The status it used to return
+is not consulted.
 
-| Rung | Evidence | Answers |
-|---|---|---|
-| 0 | the transcript AS IT STANDS NOW: its mtime, and its newest turn end | `working` / `finished_unread` / `idle`, and nothing else may |
-| A | `sessions.activity_state` / `activity_state_at` for THIS instance | that state, if `restore_state` still trusts it |
-| B | the last decidable record of the bound transcript | `idle` when it ends a turn; nothing otherwise |
-| C | a bare shell pane | `idle` already, before this ladder is reached |
-| D | everything else | `unknown`, which is a real answer |
+The full record of that ladder, its measurements and the rules it earned lives
+in `docs/status-led-history.md`. Two of those rules were kept and moved into
+the resolver rather than re-derived, and both are still load bearing:
 
-## Sessions without hook plumbing
+- **FIRST SIGHT IS A BASELINE, NOT AN INSTRUCTION.** The first reading of an
+  instance records what it saw and claims nothing. `AttentionLedger` applies it
+  to every verdict, which is what stops a restart from raising a toast for every
+  session that has been sitting finished since last night.
+- **The key is the tmux INSTANCE**, `UnreadStore.compose_key(tmux_name, epoch)`,
+  never the session id. Gotcha 4b and gotcha 10 are both about those two
+  diverging.
+- **One bounded tail reader**, `claude_title_sync.read_tail_records`, still the
+  only one in the codebase. `attention/transcript_facts.py` is built on it at a
+  256 KB window for THIS caller alone, because 3 of 9 live transcripts had their
+  newest turn-end record beyond 64 KB while mid-turn, and every line is parsed
+  under its own try/except so a torn last write costs one line and not the read.
 
-**Measured on live 2026-09-09, f77a978: only 6 of 19 live sessions had
-ever fired a hook.** The other thirteen were started by hand without the
-hook environment, so the state machine above will never hold a signal for
-them and their light rested entirely on rung B, which can say `idle` and
-nothing else. Three of those thirteen had touched their transcript inside
-the previous 36 minutes and painted exactly the same rest as sessions
-last touched in July. A session doing work is the one thing a status
-light exists to show, and for two thirds of the fleet it could not show
-it.
-
-`src/core/session_transcript_status.py` is the ladder that closes it
-(pure), with its reads and its turn ledger next door in
-`session_transcript_status_read.py`. It is reached ONLY through the seed
-seam, which runs only while `SessionActivityTracker.hooks_seen` is False,
-so a hooked session is never touched by it: hooks are that session's
-truth and the first hook of the process retires the seed for good.
-
-**An mtime is a TIMESTAMP, and that is why rung 0 may claim work when
-rung B may not.** The objection above is about the CONTENT of a record,
-which says what happened and carries no clock of its own; it is not an
-objection to a file's modification time. A claim built on an mtime is
-expired by the same `WORKING_HEARTBEAT_TIMEOUT_SECONDS` a hook heartbeat
-uses, so a transcript that stops growing stops claiming work within one
-window whether or not anything else ever happens. `StatusSeed` carries
-`expires_at` and `display_state` refuses a seed whose claim has run out,
-which matters because the seed cache holds a reading for up to sixty
-seconds - without it, a `working` measured at the end of its window would
-be served for another minute.
-
-| Rung | What it measured | Answers |
-|---|---|---|
-| 1 | the transcript file was written inside the heartbeat window | `working`, carrying an expiry |
-| 2 | a turn end NEWER than the one already recorded for this pane | `finished_unread`, and sets the auto unread flag ONCE |
-| 3 | the turn end already recorded | `finished_unread` while unread, `idle` once a view cleared it |
-| 4 | mid-turn when last written, and that was longer ago than a heartbeat | nothing; the session stays `unknown` |
-| 5 | no transcript, or one that could not be read | nothing, and the two are named separately |
-
-**FIRST SIGHT OF A TURN END IS A BASELINE, NOT AN INSTRUCTION.** Rung 2
-is written as "newer than the one already recorded", never "not yet
-recorded", and that is load-bearing. The turn ledger is in memory, so a
-server restart empties it; a first-sighting claim would light every
-hookless session on the box unread on every restart, including
-conversations that ended in July. The first reading for an instance
-records the timestamp and claims nothing. `claude_title_sync` applies the
-same rule to a `custom-title` for the same reason.
-
-The ledger is keyed on the tmux INSTANCE (`<tmux_name>@<epoch>`, composed
-by `UnreadStore.compose_key` rather than re-spelled), its baseline only
-ever moves FORWARD, and only the two turn-end rungs may move it - rung 1
-carries a timestamp too, but it is a file mtime and not a turn boundary,
-and recording it would push the baseline past turn ends nobody observed.
-
-**Why the gate is `hooks_seen` and not the hook token store.** Membership
-in `hook_tokens.json` looks like the stronger gate and is not one:
-measured on live 2026-09-09 it holds 33 entries against 19 live tmux
-sessions, and every externally adopted pane is in it, because an adopt
-mints a token for a pane it never spawned into. A token proves this app
-minted one; it does not prove a hook can ever arrive. Gating on it would
-have refused the ladder to exactly the sessions it was built for.
+The seed's own rung table, its measurements and its negative controls are in
+`docs/status-led-history.md`. Nothing here reads them any more.
 
 ## Where a status came from
 
 `GET /sessions/list` carries `status_source` beside `activity_status` on
-the WRAPPER. Five values, defined once in
+the WRAPPER. Six values, defined once in
 `src/core/session_status_source.py`, in descending strength of evidence:
 
 | Value | Meaning |
 |---|---|
-| `hook` | Claude Code's own lifecycle hooks are live for this session this run. The agent said what it was doing. |
+| `registry` | `~/.claude/sessions/<pid>.json`, the file claude keeps about itself and rewrites on every status change. The agent's own word, read passively off disk. |
+| `pane` | A dialog matched in pane text we actually read. It can only ever say the session is waiting on a human. |
 | `transcript` | Measured off the conversation file: its mtime, or the last decidable record in its tail. |
-| `seed_row` | Restored from `sessions.activity_state`, judged still worth something by `restore_state`. |
+| `seed_row` | Restored from `sessions.activity_state`. The constant stays and the live path no longer writes it: the transcript seed it named was retired on 2026-09-13 with the hooks it was a fallback for. |
 | `tmux` | tmux alone: a dead pane, a bare shell, or the honest `unknown` a non-shell foreground process earns. |
 | `none` | Nothing answered. Said out loud rather than left blank. |
+
+**`hook` WAS A SIXTH VALUE AND IS GONE.** It meant "Claude Code's own
+lifecycle hooks are live for this session this run", and the listing
+reported it whenever an in-memory counter fed by those hooks had
+answered. `CLOUDECODE_SESSION_ID` is a PANE-WIDE environment variable, so
+the parent agent and every background agent it launched posted under one
+session id and the counter was mislabeled at its source; the listing now
+resolves the four passive tiers above (`src/core/attention/`) and nothing
+can write `hook` any more. Both clients keep a `via hooks` tooltip entry
+for it on purpose, so a browser holding a response cached from before the
+swap still renders correctly.
 
 **It is rendered in the tooltip and nowhere else** - `via hooks`, `via
 transcript` - by `SessionStatusUI.labelWithSource`. It never changes a
@@ -420,84 +392,6 @@ fallback timer at the same cadence which stands down whenever the sidebar
 is polling: AT MOST ONE POLLER, EVER. With no session attached it fetches
 nothing and removes the light, because a light left under a header that
 now names the launchpad is a claim about something that is not on screen.
-
-**Rung A is read on the full instance triple**, `(tmux_socket, tmux_name,
-tmux_created_epoch)` - byte-for-byte the WHERE clause
-`activity_persist.write_state` writes on. A tmux name is reused the moment
-its owner dies, so two rows can carry one name at once, and a name-scoped
-read answers for whichever epoch sorts newest, which is a different
-question. No epoch means no instance was identified, and that is refused
-outright rather than guessed at. A stale PERISHABLE state
-(`working`/`question`/`notice`) is refused; a stale `idle` or
-`finished_unread` is kept.
-
-**Rung B walks the tail BACKWARDS and stops at the first decidable
-record**, so the newest evidence wins. An old end-of-turn can never
-outrank a newer prompt - the same ordering the startup gate uses when it
-reads a hook before it reads the scrollback, and for the same reason: old
-evidence is stale evidence. It reads through the one bounded reader this
-codebase has, `claude_title_sync.read_tail_records` (64 KB, 0.27 ms median
-against the real corpus).
-
-Three record shapes end a turn: `system`/`turn_duration`,
-`system`/`stop_hook_summary`, and an assistant whose `message.stop_reason`
-is `end_turn` or `stop_sequence`. A user prompt, a `tool_result`, and an
-assistant that stopped on `tool_use` are in flight and seed nothing.
-Everything else is UNDECIDABLE and the walk continues - collapsing that
-third value into either of the other two is how a ladder starts inventing
-boundaries.
-
-**A SIDECHAIN RECORD IS UNDECIDABLE**, and it is the subtle one. A record
-with `isSidechain` true belongs to a SUBAGENT running inside the parent's
-turn, so its `end_turn` says the subagent finished and says nothing about
-the conversation the user is watching. Reading one as rest would paint
-idle over the longest-running work there is.
-
-**A SLASH COMMAND IS NOT A PROMPT**, and the live measurement is what
-forced that rung. claude intercepts slash commands before they become
-prompts - which is why no hook event carries a `/rename` - but it still
-writes a pseudo-`user` record about one, wrapped in `<command-name>` /
-`<local-command-caveat>` envelopes whose own text says "DO NOT respond to
-these messages". Read as prompts, those pinned two sessions at in-flight
-forever while both sat at an empty `>`. They are now UNDECIDABLE, not
-rest: the walk continues to a boundary claude really wrote, so a slash
-command can never manufacture an idle either.
-
-**Where it is wired.** Warmed at the end of the boot re-adopt
-(`session_boot_readopt.py`, beside `sweep_live_sessions`) and after
-`POST /sessions/adopt`, so the FIRST listing after a restart is already
-right. Applied at the one seam in `SessionManager._session_info_for`,
-reached ONLY while the answer is still `unknown` and the pane was measured
-LIVE - so a seed can add an answer and can never overwrite a measured one.
-
-**A live hook always wins, immediately.** The seam is gated on
-`SessionActivityTracker.hooks_seen`, so the first hook event of the
-process retires the seed for good: there is no expiry to wait out and no
-value to clear. That gate is also what makes seeding idempotent. A seed is
-a cached READING of durable evidence, not an event applied to a state
-machine, so re-deriving it any number of times converges on the same
-answer - unlike the hook consumers, which had to be made idempotent by
-hand.
-
-**The periodic re-seed, and its one honest direction.** A hand-started
-claude has no hook plumbing at all, so its light would freeze at whatever
-the first seed said for the life of the process. The seam re-derives rung
-B every `SEED_REFRESH_INTERVAL_SECONDS` (60s; about 6ms a minute for a
-fleet of twenty). Re-deriving can move a session from `idle` back to
-`unknown` when the transcript grows an in-flight record, which is correct:
-a growing transcript is evidence the rest claim has expired, NOT evidence
-of work. Polling a file more often does not make it a heartbeat. A session
-with live hook signal is never re-seeded.
-
-**Measured read-only against the live database and the real corpus before
-this shipped:** all 15 of the sessions painting `unknown` would read
-`idle`, every one of them via rung B, dated by its own transcript - the
-oldest 2026-04-23, the newest 2026-09-08. Per-session cost 0.27ms median,
-1.09ms max. The negative control that matters is separate, because a
-matcher that always finds something is worse than useless: over 400
-randomly sampled transcripts the ladder splits 172 `at_rest` / 70
-`in_flight` / 158 `no_marker`, so it demonstrably refuses.
-
 
 ## Unread
 
@@ -541,10 +435,8 @@ The callers, all of them applying the same pure function:
 
 | where | what it derives |
 |---|---|
-| `SessionActivityTracker.resolve` | the hook path's resting tail |
-| `session_activity.map_tmux_fallback` | the tmux-only path (attachable rows too) |
-| `session_status_seed.display_state` | the durable row and the transcript seed |
-| `session_transcript_status.resolve_transcript_status` | the hookless ladder, rung 3 |
+| `attention/display.py::to_display` | the one state a verdict can reach at rest |
+| `session_activity.map_tmux_fallback` | the tmux-only path (attachable rows) |
 | `SessionManager._session_info_for` | the assembled answer, against the flag as it stands |
 
 `_session_info_for` re-applying it is not belt and braces for its own
@@ -576,12 +468,14 @@ one definition of what looking at a session resolves.
 **Measured on live 2026-09-09: the session named BHPP painted the
 terracotta `notice` light for 46 minutes ACROSS A VISIT.** The owner
 opened the tab, read it, left, and the light was still asking for
-attention. `notice` is set by claude's `Notification` hook (the one it
-fires after about sixty seconds of waiting for input), it outranks the
-heartbeat, and the only things that cleared it were `UserPromptSubmit`,
-`PreToolUse` and `Stop` - all three the AGENT doing something. None of
-them is the user showing up, and "come and look at me" is a claim only
-the user can answer.
+attention. `notice` was a flag set by claude's `Notification` hook, and the
+only things that cleared it were `UserPromptSubmit`, `PreToolUse` and `Stop` -
+all three the AGENT doing something. None of them is the user showing up, and
+"come and look at me" is a claim only the user can answer. The flag is gone
+(the state is now re-read from the registry's `waitingFor` on every tick, so it
+retires itself when claude stops waiting), and the VIEW CLEAR stays: it is what
+answers a toast the user has now seen, and it is the user's half of the
+contract.
 
 **`question` was deliberately untouched by a view until 2026-09-09, and
 what changed is worth keeping.** The old argument: a `PermissionRequest`
@@ -607,10 +501,11 @@ toast path already survives this exact split (it remaps a stale id onto
 the live one before it stores or acks); the activity tracker does not.
 
 A claim no observation can retire is not a careful claim, it is a stuck
-bit. So the flag now has three retirement paths instead of one: the hook
-events that answer it (unchanged, and still the fastest when the ids line
-up), the user viewing the session, and the pane being read and found to
-hold no dialog.
+bit. The flag it describes is gone: the claim is re-derived from disk on every
+tick, so it retires itself the moment the evidence stops saying a dialog is
+open. Two of its three retirement paths survive as rules rather than as
+clearing code - the user viewing the session, and the pane being read and found
+to hold no dialog, which is rung 5's veto.
 
 ### An open `permission` is verified against the pane after 20 seconds
 
@@ -631,8 +526,8 @@ Three outcomes, and only one clears:
 
 | Pane read | Marker | Verdict |
 |---|---|---|
-| yes | present | keep `question` - the hook was right |
-| yes | absent | clear `permission_open`, log `permission_flag_cleared_no_dialog` once |
+| yes | present | `needs_user`, and the pane is the strongest confirmation there is |
+| yes | absent | VETO a registry `waiting` nothing else corroborates, log it once |
 | no | n/a | KEEP. Not having managed to look is not evidence of absence |
 
 The markers were **measured, not guessed** - a real `claude` on a
@@ -655,8 +550,11 @@ positive case and clear nothing, forever. The stamp that dates the claim
 is written on the False -> True transition ONLY, so a repeating
 `PermissionRequest` cannot push the grace window out indefinitely.
 
-Nothing here can INVENT a permission: only a hook opens this claim, and
-the pane may only close it.
+Nothing here can INVENT a permission: the pane tier may only ever CONFIRM that
+a dialog is on screen, and there is no path in `attention/resolve.py` from a
+pane read to a finished turn. The verifier is now consulted as rung 5, where a
+pane measured clear VETOES a registry `waiting` that nothing else corroborates,
+and a pane that could not be read leaves the verdict failing toward the user.
 
 No time expiry was added either. The owner's rule, verbatim: "a session
 left alone should not go gray. if i dont focus the tab it keeps its
@@ -710,8 +608,8 @@ MEASUREMENT, not a second source: every value in it was read out of a tmux
 listing, it is keyed by tmux NAME rather than by session_id, and every
 listing the manager performs refreshes it (`remember` / `remember_listing`),
 so a recycled name cannot keep its predecessor's epoch for longer than one
-poll. A probe is spent only on a miss, which is what keeps this callable
-from the hook path. A failed probe changes nothing - a transient tmux
+poll. A probe is spent only on a miss, which is what keeps this callable from
+a per-tick path. A failed probe changes nothing - a transient tmux
 failure is not evidence an epoch moved - and an unmeasurable epoch
 degrades to the legacy bare-name key rather than minting a second entry.
 
@@ -775,10 +673,11 @@ duplicated.
 **A mute is a delivery preference, and nothing else.** "mute
 notifications" on the session action menu suppresses the ALERTS a session
 raises; it changes no status, answers no question, and acknowledges
-nothing. The state model above is untouched by it: a muted session still
-records every hook event, still resolves to `question` when it is blocked
-on a permission prompt, still flips unread on a `Stop`, and still paints
-its LED exactly as it would have. What is skipped is the interruption.
+nothing. The state model above is untouched by it: a muted session is still
+read on every tick, still resolves to `question` when it is blocked on a
+permission prompt, still flips unread when its turn ends, and still paints its
+LED exactly as it would have. What is skipped is the interruption, never the
+record.
 
 **THE CONTROL IS THE ROW'S ACTION MENU.** "mute notifications" is one of
 the eight items in a session row's three-dot menu, and it is the only one
@@ -798,7 +697,7 @@ row draws inline restart and remove and no menu at all.
 |---|---|
 | The three-value policy, the generation rule, and the in-memory index | `src/core/session_notification_policy.py` |
 | The durable columns and their one writer | `src/core/session_store.py` (`set_notification_mute`), schema v26 |
-| The web-alert gate | `src/api/routes.py`, in `claude_event_hook` beside the sub-agent gate |
+| The web-alert gate | `src/core/attention/raise_gate.py`, consulted by the watcher before it raises |
 | The external-push gate | `src/core/notifications/router.py` |
 | `PATCH /sessions/records/{session_uuid}/notifications` | `src/api/routes.py` |
 
@@ -811,18 +710,20 @@ and nothing copies the column, so existing rows, new sessions and forks
 all start unmuted - the absence of a decision on a row IS the answer,
 because a mute can only ever be recorded there.
 
-**Two gates, and each has a different job.** The hook route refuses to
-RAISE a web alert for a muted session: no toast is recorded and nothing
-is broadcast. Because `record_toast` is also what feeds the push router,
-that alone stops the external push for hook-driven events - and the
-router gates again at drain time, which is where the GENERATION is
-checked and where the `IdleWatcher`'s own events are caught.
+**Two gates, and each has a different job.** `attention/raise_gate.py` refuses
+to RAISE a web alert for a muted session: no toast is recorded and nothing is
+broadcast. Because `record_toast` is also what feeds the push router, that alone
+stops the external push - and the router gates again at drain time, which is
+where the GENERATION is checked. An UNREADABLE policy suppresses, which is the
+opposite posture from every refusal in the resolver, and deliberately: silence
+there is only ever bought with evidence, silence here was bought in advance by
+an instruction.
 
-**`PermissionRequest` IS muted, and this is the one place the mute gate
-differs from the sub-agent gate beside it.** That gate exempts permission
-prompts because a session waiting on its own background agents genuinely
-does still want the user when claude blocks. A mute is the user answering
-that in advance, for this session, so exempting a kind from it would mean
+**`PermissionRequest` IS muted, and it is the ONLY thing that suppresses one.**
+The resolver never suppresses a permission-class notification: a session waiting
+on its own background agents is answered by the rung order, not by a gate. A
+mute is the user answering that in advance, for this session, so exempting a
+kind from it would mean
 the control does not do what its label says. What must NEVER follow is
 acknowledging the permission: claude is still stopped mid-turn and the
 row still reports `question`. A mute that quietly marked it answered
@@ -1378,47 +1279,42 @@ slots, they still reach the repaint signature, and
 
 ## A silent degradation worth knowing about
 
-A hook POST with a stale token is rejected at
-`src/api/routes.py` and logged as `hook_post_rejected_invalid_token`.
-Nothing surfaces it to the user. The session then has no hook signal at
-all, falls into the tmux tier above, and its light goes quiet - which
-looks exactly like a session that is genuinely idle.
+Every tier can fail quietly, and each failure has to land on `unknown` rather
+than on a confident answer. These are the ones that will actually happen.
 
-Measured 2026-09-08 in the live server log: 4,325 rejections from
-`adopted:cloude_Agent_-_Cloude_Code` and 364 from `ses_68c185ce`, whose
-run was on 2026-08-28 and whose pane is long gone.
+**A Claude Code version that stops writing the registry.** The file
+`~/.claude/sessions/<pid>.json` is undocumented. `claude agents --json` prints
+the same data and IS documented, and it is the cross-check. If a future version
+stops writing the file, or writes a status outside the four this app knows, the
+reader answers `REG_UNREADABLE` or the resolver falls to its last rung, and the
+session goes `unknown`: no toasts, no lights that claim anything. It degrades to
+saying nothing, never to saying something false.
+`registry_version_unseen` is logged once per unrecognised version string.
 
-**The cause was a MINT LANDING ON A RUNNING AGENT, and it is now
-recoverable.** `_mint_hook_token` REPLACES the token held for an id. The
-same value was baked into the pane's environment at `new-session` time
-and is read from there at hook-fire time, so it is fixed for the life of
-that process and cannot be re-issued to it: the agent keeps presenting a
-credential the store has moved on from, with no retry and no error
-surface. Traced to the millisecond - an adopt registered the live pane
-under a derived id and minted at 16:16:40.633984Z, and the first
-rejection for that id was logged at 16:16:40.763005Z, 130 ms later. The
-same id had been ACCEPTED minutes earlier (`toast_recorded` 16:11:28Z,
-16:12:56Z), which is what makes this a rotation rather than a
-misconfiguration. It ran for 4h24m and ended only when the owner
-restarted the pane by hand at 20:40:23Z, so a new process inherited the
-current environment.
+**A version too old to write the background-agent count.** Below 2.1.241 the
+turn-end record carries no `pendingBackgroundAgentCount`, so the count is
+UNKNOWN rather than zero, the async-launch ledger answers in its place, and rest
+is unreachable for that session. State the floor rather than guessing under it.
 
-Two changes close it. `src/core/hook_token_recovery.py` keeps a bounded,
-in-memory ring of tokens this process minted and then superseded; when
-the route's ordinary validation rejects, `recover_hook_token` accepts a
-token ONLY if this server minted it for THAT id on THAT pane and
-replaced it, re-binds the store to the value the running process holds,
-logs `hook_token_rebound_from_superseded` once, and NEVER mints. A token
-matching nothing still rejects, and so does one superseded on a
-different pane. Separately, the respawn path and the boot re-adopt now
-push the current control variables onto the pane's session environment
-BEFORE a new process starts, because tmux copies that environment at
-spawn - a write afterwards reaches the next restart instead of this one.
+**A record that has not been updated for a long time.** The registry is written
+on change, so age is not decay. A stamp older than
+`REGISTRY_STALE_AFTER_SECONDS` (900) may SUSTAIN a verdict the ledger already
+holds and may never ORIGINATE rest on its own. Measured on this Mac, three live
+sessions carried `idle` stamps 37.3, 98.5 and 37.3 hours old while their own
+transcripts recorded the turn ending with nothing pending, which is why the
+transcript is allowed to corroborate an old stamp.
 
-Two bounds worth stating. The ring is in memory only, so a mint followed
-by a server restart is not recoverable this way (the restart has its own
-answer: the store is reloaded and the boot re-adopt re-keys the pane to
-the id its agent presents). And the SURFACING gap is still open: nothing
-tells the user that a session's hooks are being rejected, so one that
-stays broken still falls to the tmux tier and looks calm. The honest
-treatment there is `unknown` with a reason.
+**Two claude processes in one pane.** The index refuses
+(`unknown(ambiguous_pane)`) and raises nothing. Picking one of two records at
+random is how a session gets told about another session's question.
+
+**A straggler hook from a claude started before the upgrade.** It keeps POSTing
+to a route that no longer exists, gets a 404 in a few milliseconds, and nothing
+happens: the curl carries no failure flag, so it exits 0 and claude logs
+nothing. It stops when that process restarts. See `docs/notifications.md`.
+
+The hook token store's own failure mode - a mint landing on a running agent, and
+the 4,325 rejections it produced on 2026-09-08 - is recorded in
+`docs/session-identity-history.md`. The store stays (the boot re-adopt reads it)
+and the route that could reject a token is gone, so that degradation can no
+longer occur.

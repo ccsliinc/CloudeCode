@@ -91,38 +91,32 @@ async def _drain_viewer(
 
             raw_bytes = base64.b64decode(frame.payload)
 
-            # Pattern detection + idle watching, scoped to THIS session.
-            # We skip both when the backend is in replay mode so replayed
-            # scrollback doesn't look like "new" activity downstream.
+            # Pattern detection, scoped to THIS session. Skipped while the
+            # backend is in replay mode so replayed scrollback doesn't look
+            # like "new" activity downstream.
             # THROUGH THE COMPOSITION ROOT, NOT THE MANAGER. This arrived
-            # reading ``sm.get_backend`` and ``sm.idle_watchers``, neither
-            # of which exists on this line: the registry owns the backend
-            # map and AttachmentSidecars owns the watchers. Left as it
-            # arrived, ``hasattr`` and ``getattr(..., {})`` would both
-            # have answered falsy rather than raising, so pattern
-            # detection and idle watching would have gone quietly dead on
-            # every session while every test still passed.
+            # reading ``sm.get_backend``, which does not exist on this
+            # line: the registry owns the backend map. Left as it arrived,
+            # ``hasattr`` and ``getattr(..., {})`` would both have answered
+            # falsy rather than raising, so pattern detection would have
+            # gone quietly dead on every session while every test still
+            # passed.
+            #
+            # THE SECOND CONSUMER OF THESE BYTES IS GONE. A per-session
+            # idle watcher used to be handed every chunk here and guess a
+            # session's state from the shape of the pane. The state now
+            # comes from what the harness writes to disk
+            # (src/core/attention/), which is read on its own schedule and
+            # needs nothing from the byte stream, so the drain is back to
+            # one job: hand the viewer its bytes.
             _services = getattr(websocket.app.state, "services", None)
             _registry = getattr(_services, "registry", None)
-            _sidecars = getattr(_services, "sidecars", None)
             _backend = None
-            _idle_watcher = None
             if _registry is not None:
                 if session_id:
                     _backend = _registry.get_backend(session_id)
-                    _idle_watcher = (
-                        _sidecars.watcher(session_id)
-                        if _sidecars is not None
-                        else None
-                    )
                 else:
                     _backend = _registry.current_backend()
-                    current = _registry.current_session()
-                    _idle_watcher = (
-                        _sidecars.watcher(current.id)
-                        if current is not None and _sidecars is not None
-                        else None
-                    )
             in_replay = (
                 _backend is not None
                 and getattr(_backend, "replay_in_progress", False)
@@ -134,14 +128,6 @@ async def _drain_viewer(
                 except Exception as e:
                     # Don't let pattern detection errors break streaming.
                     logger.debug("pattern_detection_error", error=str(e))
-
-            if _idle_watcher is not None and not in_replay:
-                try:
-                    await _idle_watcher.handle_chunk(raw_bytes)
-                except Exception as e:
-                    # Terminal streaming is load-bearing, notifications
-                    # are not.
-                    logger.debug("idle_watcher_chunk_error", error=str(e))
 
             await websocket.send_bytes(raw_bytes)
     except asyncio.CancelledError:

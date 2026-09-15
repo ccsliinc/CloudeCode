@@ -1,0 +1,1500 @@
+{
+ "name": "e_pending_field_absent_means_zero_pending",
+ "session": {
+  "session_id": "ses_7c8fe36f",
+  "tmux_name": "cloude_DarkFiber",
+  "conversation_uuid": "9a1ccac9-3448-433c-8d39-da552a0d64db",
+  "agent_family": "claude",
+  "harness_version": "2.1.266"
+ },
+ "window": {
+  "from": "2026-09-12T01:49:00Z",
+  "to": "2026-09-12T01:54:00Z"
+ },
+ "events": [
+  {
+   "t": "2026-09-12T01:51:23.590224Z",
+   "transcript_records": [
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T00:48:12.349Z",
+     "uuid": "ad6eacfb-7a87-433d-9a2a-45e5672b3505",
+     "parentUuid": "fde44e38-cc9b-468a-b76e-cfbd48b30706",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T00:48:12.351Z",
+     "uuid": "499fcad5-85ab-4616-8a44-7ca42d3b85f4",
+     "parentUuid": "ad6eacfb-7a87-433d-9a2a-45e5672b3505",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:50:59.953Z",
+     "uuid": "e747c044-3422-4e65-94b5-7d6df10f472f",
+     "parentUuid": "499fcad5-85ab-4616-8a44-7ca42d3b85f4",
+     "isSidechain": false,
+     "promptSource": "typed",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "human"
+     },
+     "message": {
+      "content": "flip the photo-lib button and then push to testflight. min work necesssary to ma"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:50:59.953Z",
+     "uuid": "82682363-730e-4182-8210-ce2a8ef1c40e",
+     "parentUuid": "e747c044-3422-4e65-94b5-7d6df10f472f",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:50:59.953Z",
+     "uuid": "84b7f0d0-8821-4f52-8555-ca96e8a559dd",
+     "parentUuid": "82682363-730e-4182-8210-ce2a8ef1c40e",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:50:59.999Z",
+     "uuid": "2bd6daa2-852a-464b-807d-c604b618ac99",
+     "parentUuid": "84b7f0d0-8821-4f52-8555-ca96e8a559dd",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:51:22.785Z",
+     "uuid": "4db58836-9819-40dd-95e6-00d86588d728",
+     "parentUuid": "2bd6daa2-852a-464b-807d-c604b618ac99",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:51:23.858Z",
+     "uuid": "26bd0689-f2b8-4852-8a0d-87c994130cdc",
+     "parentUuid": "4db58836-9819-40dd-95e6-00d86588d728",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nPhoto button only, no paste field. Build 13.\n\n\ud83e\udd16 **[photo-picker]**: ena"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:52:05.602Z",
+     "uuid": "8b0edf5f-3995-4404-9d65-572af958cd40",
+     "parentUuid": "26bd0689-f2b8-4852-8a0d-87c994130cdc",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Agent",
+        "id": "toolu_01B6zjYHfxa5s3Z9Y1aDcQAR"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:52:06.177Z",
+     "uuid": "7c869dfa-3328-4aaa-bf34-9f42e82185ce",
+     "parentUuid": "8b0edf5f-3995-4404-9d65-572af958cd40",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "toolUseResult": {
+      "isAsync": true,
+      "agentId": "ac69dee87c15a23f0"
+     },
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01B6zjYHfxa5s3Z9Y1aDcQAR"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:52:06.211Z",
+     "uuid": "eff0f97e-430f-44ac-a2bc-da624d7419c6",
+     "parentUuid": "7c869dfa-3328-4aaa-bf34-9f42e82185ce",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:52:06.213Z",
+     "uuid": "2b424dac-1a4e-478b-ab8f-a916b6661297",
+     "parentUuid": "eff0f97e-430f-44ac-a2bc-da624d7419c6",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:52:09.453Z",
+     "uuid": "1784360c-a40b-492b-974b-69b6e6742760",
+     "parentUuid": "2b424dac-1a4e-478b-ab8f-a916b6661297",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83d\udca4\ud83d\udecc Wiring the photo picker into the invite screen, then a Simulator build to pro"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T00:52:09.515Z",
+     "uuid": "3feca693-bf69-4ef7-b802-416b041db9b9",
+     "parentUuid": "1784360c-a40b-492b-974b-69b6e6742760",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T00:52:09.517Z",
+     "uuid": "357fd200-a14b-4b65-9f07-68e9423bdd62",
+     "parentUuid": "3feca693-bf69-4ef7-b802-416b041db9b9",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266",
+     "pendingBackgroundAgentCount": 1
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:16:15.236Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>ac69dee87c15a23f0</task-id>\n<tool-use-id>toolu_01B6"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:16:15.242Z",
+     "operation": "dequeue"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:16:15.263Z",
+     "uuid": "1356b02e-eaa6-42e6-976b-cfeea2bb8878",
+     "parentUuid": "357fd200-a14b-4b65-9f07-68e9423bdd62",
+     "isSidechain": false,
+     "promptSource": "system",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "task-notification"
+     },
+     "message": {
+      "content": "<task-notification>\n<task-id>ac69dee87c15a23f0</task-id>\n<tool-use-id>toolu_01B6"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:16:15.281Z",
+     "uuid": "7651e6b9-a14c-4524-b73d-673012ffe073",
+     "parentUuid": "1356b02e-eaa6-42e6-976b-cfeea2bb8878",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:22.770Z",
+     "uuid": "f9eef988-cdc1-438d-8e1f-75468865ada8",
+     "parentUuid": "7651e6b9-a14c-4524-b73d-673012ffe073",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:26.476Z",
+     "uuid": "49a8868d-a53d-41a0-852a-d8fc9a825221",
+     "parentUuid": "f9eef988-cdc1-438d-8e1f-75468865ada8",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nClean result \u2014 it came out **net 67 lines smaller**. The decode logic g"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:56.992Z",
+     "uuid": "b3035cf0-0d84-497d-95ef-ac7a071a8692",
+     "parentUuid": "49a8868d-a53d-41a0-852a-d8fc9a825221",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Agent",
+        "id": "toolu_01BvsVNubDCA2vv3fBiHwbRi"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:16:57.103Z",
+     "uuid": "ef18bfc8-8f27-4da5-b143-e5b50c83997b",
+     "parentUuid": "b3035cf0-0d84-497d-95ef-ac7a071a8692",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "toolUseResult": {
+      "isAsync": true,
+      "agentId": "acab686f8a0ff29c2"
+     },
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01BvsVNubDCA2vv3fBiHwbRi"
+       }
+      ]
+     }
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:16:57.127Z",
+     "uuid": "948b0d9a-1d30-4d6b-8a97-f808a35bdba4",
+     "parentUuid": "ef18bfc8-8f27-4da5-b143-e5b50c83997b",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:16:57.128Z",
+     "uuid": "3e05a88f-9d46-4540-9951-cae40de25a57",
+     "parentUuid": "948b0d9a-1d30-4d6b-8a97-f808a35bdba4",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:58.968Z",
+     "uuid": "713647a1-408a-40f3-9c14-7ba02e04b568",
+     "parentUuid": "3e05a88f-9d46-4540-9951-cae40de25a57",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83d\udca4\ud83d\udecc Archive running for build 13. Dry run first so a signing problem doesn't cost"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T01:16:59.064Z",
+     "uuid": "f237adba-c9a7-4f5d-bf51-e886b682bd0c",
+     "parentUuid": "713647a1-408a-40f3-9c14-7ba02e04b568",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T01:16:59.065Z",
+     "uuid": "7e62dda5-a323-433f-b189-9a020641914b",
+     "parentUuid": "f237adba-c9a7-4f5d-bf51-e886b682bd0c",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266",
+     "pendingBackgroundAgentCount": 1
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:18:13.101Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01Bv"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:18:13.105Z",
+     "operation": "dequeue"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:18:13.114Z",
+     "uuid": "437d8853-de03-4f4a-a61e-c28168ff4a6e",
+     "parentUuid": "7e62dda5-a323-433f-b189-9a020641914b",
+     "isSidechain": false,
+     "promptSource": "system",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "task-notification"
+     },
+     "message": {
+      "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01Bv"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:13.242Z",
+     "uuid": "f6383038-bbf6-4ec8-bdc1-5ad66e87d54c",
+     "parentUuid": "437d8853-de03-4f4a-a61e-c28168ff4a6e",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:16.169Z",
+     "uuid": "9a902de1-737f-4150-8e42-2ea3278cf6aa",
+     "parentUuid": "f6383038-bbf6-4ec8-bdc1-5ad66e87d54c",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:16.736Z",
+     "uuid": "7d4bf065-ac91-47d6-9286-4abcc18f2030",
+     "parentUuid": "9a902de1-737f-4150-8e42-2ea3278cf6aa",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nAgent parked itself mid-build instead of polling to the end. Kicking it"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:17.283Z",
+     "uuid": "096ab37e-7f4b-412c-af72-6630823e9dd5",
+     "parentUuid": "7d4bf065-ac91-47d6-9286-4abcc18f2030",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "ToolSearch",
+        "id": "toolu_0144UpEXz7pFXQCK8proFaq7"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:18:17.877Z",
+     "uuid": "2966a12b-522b-49d4-94e6-7266ec232cd1",
+     "parentUuid": "096ab37e-7f4b-412c-af72-6630823e9dd5",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_0144UpEXz7pFXQCK8proFaq7"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:17.960Z",
+     "uuid": "3b929f11-9e55-4f3e-ad39-ad43aeb7bbc2",
+     "parentUuid": "2966a12b-522b-49d4-94e6-7266ec232cd1",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:17.962Z",
+     "uuid": "40a21a26-f808-4a4d-bbee-59e4587d78c7",
+     "parentUuid": "3b929f11-9e55-4f3e-ad39-ad43aeb7bbc2",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:27.877Z",
+     "uuid": "930b9aea-b9e6-4860-b22f-e8eca8e95835",
+     "parentUuid": "40a21a26-f808-4a4d-bbee-59e4587d78c7",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "SendMessage",
+        "id": "toolu_01GMGgD1mMcgL4nqxoP6TDQZ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:18:28.670Z",
+     "uuid": "978ec334-295b-4289-bfa0-1ad0da88d63e",
+     "parentUuid": "930b9aea-b9e6-4860-b22f-e8eca8e95835",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01GMGgD1mMcgL4nqxoP6TDQZ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:29.094Z",
+     "uuid": "aa3d5074-4866-4fc2-9284-2654b649d297",
+     "parentUuid": "978ec334-295b-4289-bfa0-1ad0da88d63e",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:29.095Z",
+     "uuid": "bb042935-5ad4-4c9e-9f6b-f3141694acb7",
+     "parentUuid": "aa3d5074-4866-4fc2-9284-2654b649d297",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:31.378Z",
+     "uuid": "46a5e2d2-8b87-4179-ae4a-f8fab1c7b38d",
+     "parentUuid": "bb042935-5ad4-4c9e-9f6b-f3141694acb7",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83d\udca4\ud83d\udecc Back on it. The archive itself never stopped \u2014 the agent just bailed out earl"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T01:18:31.621Z",
+     "uuid": "68d406ca-4f27-44aa-a0c7-1ef6c68f7427",
+     "parentUuid": "46a5e2d2-8b87-4179-ae4a-f8fab1c7b38d",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T01:18:31.624Z",
+     "uuid": "38417582-7061-4390-912c-f3b05fad6a3e",
+     "parentUuid": "68d406ca-4f27-44aa-a0c7-1ef6c68f7427",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266",
+     "pendingBackgroundAgentCount": 1
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:36:37.060Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>b3i2uz08r</task-id>\n<tool-use-id>toolu_0185owbsbssN"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:36:46.714Z",
+     "operation": "remove",
+     "content": "<task-notification>\n<task-id>b3i2uz08r</task-id>\n<tool-use-id>toolu_0185owbsbssN"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:51:04.658Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01GM"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:51:04.665Z",
+     "operation": "dequeue"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:51:04.673Z",
+     "uuid": "cf5ae310-d1e8-43d1-87f5-0c2fc37787df",
+     "parentUuid": "38417582-7061-4390-912c-f3b05fad6a3e",
+     "isSidechain": false,
+     "promptSource": "system",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "task-notification"
+     },
+     "message": {
+      "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01GM"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:51:04.686Z",
+     "uuid": "32aa939e-a4e9-4912-84cb-4d48683720a3",
+     "parentUuid": "cf5ae310-d1e8-43d1-87f5-0c2fc37787df",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:51:10.963Z",
+     "uuid": "29605161-f6c1-4a08-a9b9-4aac01019015",
+     "parentUuid": "32aa939e-a4e9-4912-84cb-4d48683720a3",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:51:20.555Z",
+     "uuid": "f9a5d87e-9131-4b2b-9d29-f53d28e865a8",
+     "parentUuid": "29605161-f6c1-4a08-a9b9-4aac01019015",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\n**8.30 build 13 is live in TestFlight.** State VALID, fully processed, "
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T01:51:21.260Z",
+     "uuid": "6ec63189-1412-4ce6-9151-140ceebd29c4",
+     "parentUuid": "f9a5d87e-9131-4b2b-9d29-f53d28e865a8",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T01:51:21.262Z",
+     "uuid": "3f325ff8-fa86-447f-a4d2-8f779a889d8b",
+     "parentUuid": "6ec63189-1412-4ce6-9151-140ceebd29c4",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    }
+   ],
+   "registry": null,
+   "pane_tail": null,
+   "tmux": {
+    "liveness": "LIVE",
+    "source": "derived: the hook route that raised these toasts refused a dead pane"
+   }
+  },
+  {
+   "t": "2026-09-12T01:54:30Z",
+   "transcript_records": [
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T00:48:12.349Z",
+     "uuid": "ad6eacfb-7a87-433d-9a2a-45e5672b3505",
+     "parentUuid": "fde44e38-cc9b-468a-b76e-cfbd48b30706",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T00:48:12.351Z",
+     "uuid": "499fcad5-85ab-4616-8a44-7ca42d3b85f4",
+     "parentUuid": "ad6eacfb-7a87-433d-9a2a-45e5672b3505",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:50:59.953Z",
+     "uuid": "e747c044-3422-4e65-94b5-7d6df10f472f",
+     "parentUuid": "499fcad5-85ab-4616-8a44-7ca42d3b85f4",
+     "isSidechain": false,
+     "promptSource": "typed",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "human"
+     },
+     "message": {
+      "content": "flip the photo-lib button and then push to testflight. min work necesssary to ma"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:50:59.953Z",
+     "uuid": "82682363-730e-4182-8210-ce2a8ef1c40e",
+     "parentUuid": "e747c044-3422-4e65-94b5-7d6df10f472f",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:50:59.953Z",
+     "uuid": "84b7f0d0-8821-4f52-8555-ca96e8a559dd",
+     "parentUuid": "82682363-730e-4182-8210-ce2a8ef1c40e",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:50:59.999Z",
+     "uuid": "2bd6daa2-852a-464b-807d-c604b618ac99",
+     "parentUuid": "84b7f0d0-8821-4f52-8555-ca96e8a559dd",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:51:22.785Z",
+     "uuid": "4db58836-9819-40dd-95e6-00d86588d728",
+     "parentUuid": "2bd6daa2-852a-464b-807d-c604b618ac99",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:51:23.858Z",
+     "uuid": "26bd0689-f2b8-4852-8a0d-87c994130cdc",
+     "parentUuid": "4db58836-9819-40dd-95e6-00d86588d728",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nPhoto button only, no paste field. Build 13.\n\n\ud83e\udd16 **[photo-picker]**: ena"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:52:05.602Z",
+     "uuid": "8b0edf5f-3995-4404-9d65-572af958cd40",
+     "parentUuid": "26bd0689-f2b8-4852-8a0d-87c994130cdc",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Agent",
+        "id": "toolu_01B6zjYHfxa5s3Z9Y1aDcQAR"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:52:06.177Z",
+     "uuid": "7c869dfa-3328-4aaa-bf34-9f42e82185ce",
+     "parentUuid": "8b0edf5f-3995-4404-9d65-572af958cd40",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "toolUseResult": {
+      "isAsync": true,
+      "agentId": "ac69dee87c15a23f0"
+     },
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01B6zjYHfxa5s3Z9Y1aDcQAR"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:52:06.211Z",
+     "uuid": "eff0f97e-430f-44ac-a2bc-da624d7419c6",
+     "parentUuid": "7c869dfa-3328-4aaa-bf34-9f42e82185ce",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:52:06.213Z",
+     "uuid": "2b424dac-1a4e-478b-ab8f-a916b6661297",
+     "parentUuid": "eff0f97e-430f-44ac-a2bc-da624d7419c6",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:52:09.453Z",
+     "uuid": "1784360c-a40b-492b-974b-69b6e6742760",
+     "parentUuid": "2b424dac-1a4e-478b-ab8f-a916b6661297",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83d\udca4\ud83d\udecc Wiring the photo picker into the invite screen, then a Simulator build to pro"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T00:52:09.515Z",
+     "uuid": "3feca693-bf69-4ef7-b802-416b041db9b9",
+     "parentUuid": "1784360c-a40b-492b-974b-69b6e6742760",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T00:52:09.517Z",
+     "uuid": "357fd200-a14b-4b65-9f07-68e9423bdd62",
+     "parentUuid": "3feca693-bf69-4ef7-b802-416b041db9b9",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266",
+     "pendingBackgroundAgentCount": 1
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:16:15.236Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>ac69dee87c15a23f0</task-id>\n<tool-use-id>toolu_01B6"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:16:15.242Z",
+     "operation": "dequeue"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:16:15.263Z",
+     "uuid": "1356b02e-eaa6-42e6-976b-cfeea2bb8878",
+     "parentUuid": "357fd200-a14b-4b65-9f07-68e9423bdd62",
+     "isSidechain": false,
+     "promptSource": "system",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "task-notification"
+     },
+     "message": {
+      "content": "<task-notification>\n<task-id>ac69dee87c15a23f0</task-id>\n<tool-use-id>toolu_01B6"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:16:15.281Z",
+     "uuid": "7651e6b9-a14c-4524-b73d-673012ffe073",
+     "parentUuid": "1356b02e-eaa6-42e6-976b-cfeea2bb8878",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:22.770Z",
+     "uuid": "f9eef988-cdc1-438d-8e1f-75468865ada8",
+     "parentUuid": "7651e6b9-a14c-4524-b73d-673012ffe073",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:26.476Z",
+     "uuid": "49a8868d-a53d-41a0-852a-d8fc9a825221",
+     "parentUuid": "f9eef988-cdc1-438d-8e1f-75468865ada8",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nClean result \u2014 it came out **net 67 lines smaller**. The decode logic g"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:56.992Z",
+     "uuid": "b3035cf0-0d84-497d-95ef-ac7a071a8692",
+     "parentUuid": "49a8868d-a53d-41a0-852a-d8fc9a825221",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Agent",
+        "id": "toolu_01BvsVNubDCA2vv3fBiHwbRi"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:16:57.103Z",
+     "uuid": "ef18bfc8-8f27-4da5-b143-e5b50c83997b",
+     "parentUuid": "b3035cf0-0d84-497d-95ef-ac7a071a8692",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "toolUseResult": {
+      "isAsync": true,
+      "agentId": "acab686f8a0ff29c2"
+     },
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01BvsVNubDCA2vv3fBiHwbRi"
+       }
+      ]
+     }
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:16:57.127Z",
+     "uuid": "948b0d9a-1d30-4d6b-8a97-f808a35bdba4",
+     "parentUuid": "ef18bfc8-8f27-4da5-b143-e5b50c83997b",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:16:57.128Z",
+     "uuid": "3e05a88f-9d46-4540-9951-cae40de25a57",
+     "parentUuid": "948b0d9a-1d30-4d6b-8a97-f808a35bdba4",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:16:58.968Z",
+     "uuid": "713647a1-408a-40f3-9c14-7ba02e04b568",
+     "parentUuid": "3e05a88f-9d46-4540-9951-cae40de25a57",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83d\udca4\ud83d\udecc Archive running for build 13. Dry run first so a signing problem doesn't cost"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T01:16:59.064Z",
+     "uuid": "f237adba-c9a7-4f5d-bf51-e886b682bd0c",
+     "parentUuid": "713647a1-408a-40f3-9c14-7ba02e04b568",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T01:16:59.065Z",
+     "uuid": "7e62dda5-a323-433f-b189-9a020641914b",
+     "parentUuid": "f237adba-c9a7-4f5d-bf51-e886b682bd0c",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266",
+     "pendingBackgroundAgentCount": 1
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:18:13.101Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01Bv"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:18:13.105Z",
+     "operation": "dequeue"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:18:13.114Z",
+     "uuid": "437d8853-de03-4f4a-a61e-c28168ff4a6e",
+     "parentUuid": "7e62dda5-a323-433f-b189-9a020641914b",
+     "isSidechain": false,
+     "promptSource": "system",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "task-notification"
+     },
+     "message": {
+      "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01Bv"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:13.242Z",
+     "uuid": "f6383038-bbf6-4ec8-bdc1-5ad66e87d54c",
+     "parentUuid": "437d8853-de03-4f4a-a61e-c28168ff4a6e",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:16.169Z",
+     "uuid": "9a902de1-737f-4150-8e42-2ea3278cf6aa",
+     "parentUuid": "f6383038-bbf6-4ec8-bdc1-5ad66e87d54c",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:16.736Z",
+     "uuid": "7d4bf065-ac91-47d6-9286-4abcc18f2030",
+     "parentUuid": "9a902de1-737f-4150-8e42-2ea3278cf6aa",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nAgent parked itself mid-build instead of polling to the end. Kicking it"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:17.283Z",
+     "uuid": "096ab37e-7f4b-412c-af72-6630823e9dd5",
+     "parentUuid": "7d4bf065-ac91-47d6-9286-4abcc18f2030",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "ToolSearch",
+        "id": "toolu_0144UpEXz7pFXQCK8proFaq7"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:18:17.877Z",
+     "uuid": "2966a12b-522b-49d4-94e6-7266ec232cd1",
+     "parentUuid": "096ab37e-7f4b-412c-af72-6630823e9dd5",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_0144UpEXz7pFXQCK8proFaq7"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:17.960Z",
+     "uuid": "3b929f11-9e55-4f3e-ad39-ad43aeb7bbc2",
+     "parentUuid": "2966a12b-522b-49d4-94e6-7266ec232cd1",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:17.962Z",
+     "uuid": "40a21a26-f808-4a4d-bbee-59e4587d78c7",
+     "parentUuid": "3b929f11-9e55-4f3e-ad39-ad43aeb7bbc2",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:27.877Z",
+     "uuid": "930b9aea-b9e6-4860-b22f-e8eca8e95835",
+     "parentUuid": "40a21a26-f808-4a4d-bbee-59e4587d78c7",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "SendMessage",
+        "id": "toolu_01GMGgD1mMcgL4nqxoP6TDQZ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:18:28.670Z",
+     "uuid": "978ec334-295b-4289-bfa0-1ad0da88d63e",
+     "parentUuid": "930b9aea-b9e6-4860-b22f-e8eca8e95835",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01GMGgD1mMcgL4nqxoP6TDQZ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:29.094Z",
+     "uuid": "aa3d5074-4866-4fc2-9284-2654b649d297",
+     "parentUuid": "978ec334-295b-4289-bfa0-1ad0da88d63e",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:18:29.095Z",
+     "uuid": "bb042935-5ad4-4c9e-9f6b-f3141694acb7",
+     "parentUuid": "aa3d5074-4866-4fc2-9284-2654b649d297",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:18:31.378Z",
+     "uuid": "46a5e2d2-8b87-4179-ae4a-f8fab1c7b38d",
+     "parentUuid": "bb042935-5ad4-4c9e-9f6b-f3141694acb7",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83d\udca4\ud83d\udecc Back on it. The archive itself never stopped \u2014 the agent just bailed out earl"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T01:18:31.621Z",
+     "uuid": "68d406ca-4f27-44aa-a0c7-1ef6c68f7427",
+     "parentUuid": "46a5e2d2-8b87-4179-ae4a-f8fab1c7b38d",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T01:18:31.624Z",
+     "uuid": "38417582-7061-4390-912c-f3b05fad6a3e",
+     "parentUuid": "68d406ca-4f27-44aa-a0c7-1ef6c68f7427",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266",
+     "pendingBackgroundAgentCount": 1
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:36:37.060Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>b3i2uz08r</task-id>\n<tool-use-id>toolu_0185owbsbssN"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:36:46.714Z",
+     "operation": "remove",
+     "content": "<task-notification>\n<task-id>b3i2uz08r</task-id>\n<tool-use-id>toolu_0185owbsbssN"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:51:04.658Z",
+     "operation": "enqueue",
+     "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01GM"
+    },
+    {
+     "type": "queue-operation",
+     "timestamp": "2026-09-12T01:51:04.665Z",
+     "operation": "dequeue"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T01:51:04.673Z",
+     "uuid": "cf5ae310-d1e8-43d1-87f5-0c2fc37787df",
+     "parentUuid": "38417582-7061-4390-912c-f3b05fad6a3e",
+     "isSidechain": false,
+     "promptSource": "system",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "task-notification"
+     },
+     "message": {
+      "content": "<task-notification>\n<task-id>acab686f8a0ff29c2</task-id>\n<tool-use-id>toolu_01GM"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T01:51:04.686Z",
+     "uuid": "32aa939e-a4e9-4912-84cb-4d48683720a3",
+     "parentUuid": "cf5ae310-d1e8-43d1-87f5-0c2fc37787df",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:51:10.963Z",
+     "uuid": "29605161-f6c1-4a08-a9b9-4aac01019015",
+     "parentUuid": "32aa939e-a4e9-4912-84cb-4d48683720a3",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T01:51:20.555Z",
+     "uuid": "f9a5d87e-9131-4b2b-9d29-f53d28e865a8",
+     "parentUuid": "29605161-f6c1-4a08-a9b9-4aac01019015",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\n**8.30 build 13 is live in TestFlight.** State VALID, fully processed, "
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T01:51:21.260Z",
+     "uuid": "6ec63189-1412-4ce6-9151-140ceebd29c4",
+     "parentUuid": "f9a5d87e-9131-4b2b-9d29-f53d28e865a8",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T01:51:21.262Z",
+     "uuid": "3f325ff8-fa86-447f-a4d2-8f779a889d8b",
+     "parentUuid": "6ec63189-1412-4ce6-9151-140ceebd29c4",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    }
+   ],
+   "registry": null,
+   "pane_tail": null,
+   "tmux": {
+    "liveness": "LIVE",
+    "source": "derived: the hook route that raised these toasts refused a dead pane"
+   }
+  }
+ ],
+ "expected_toasts": [
+  {
+   "at": "2026-09-12T01:51:23.590Z",
+   "kind": "Stop",
+   "reason": "done_idle: the newest turn end omits pendingBackgroundAgentCount on a 2.1.266 record, which is how this harness writes zero, and nothing is queued and no async launch is open. Same shape as episode c."
+  }
+ ],
+ "production_raised": 1,
+ "production_toasts": [
+  {
+   "at": "2026-09-12T01:51:20.590224Z",
+   "kind": "Stop",
+   "ground_truth": "legit",
+   "pending": 0
+  }
+ ],
+ "note": "AN OMITTED PENDING COUNT ON 2.1.266 MEANS ZERO, NOT UNKNOWN. The turn-end record here carries no pendingBackgroundAgentCount at all, and on a harness at or above 2.1.241 that is how the binary writes an empty set: 236 of 300 measured turn-end records carry a positive integer, 64 omit the key, and none carries a null or a zero. So the turn really ended and exactly one done toast is correct. Below 2.1.241 the field never existed, and there an absent key really is unknown, which is what registry_read.trusts_pending_count gates. This file was originally named e_pending_field_absent_answers_unknown and expected nothing; see superseded_expectation for why that was wrong.",
+ "evidence_availability": {
+  "registry": "absent for every past instant; see the module docstring",
+  "pane_tail": "never captured; null everywhere",
+  "tmux": "derived from the raise path, not snapshotted"
+ },
+ "superseded_expectation": {
+  "old_name": "e_pending_field_absent_answers_unknown",
+  "old_expected_toasts": [],
+  "old_note": "NO DONE TOAST, AND THE REASON IS UNKNOWN RATHER THAN BUSY. The turn-end record here carries no pendingBackgroundAgentCount at all, so transcript_facts answers pending None and rung 8 is unreachable: the resolver must stay silent rather than guess. HONESTY MARKER: this is NOT a pre-2.1.241 install. Every one of the 11,152 versioned records across this corpus reads 2.1.266, so no old-version session exists in the window to sample. 2.1.266 OMITS the field when the count is zero (measured: 355 turn-end records, positive integer or key absent, never null and never 0, interleaved inside one file at one version), and the reader cannot tell that absence from an old binary's. So this fixture exercises exactly the rung an old version would, from a real record, with nothing invented.",
+  "why_it_was_wrong": "The old expectation rested on the belief that claude 2.1.266 writes a literal null for pendingBackgroundAgentCount when no agents are pending, so an absent key had to mean a version that never wrote the field at all. Re-measured across 40 recent transcripts, 300 turn_duration records on 2.1.266: 236 carry a positive integer, 64 OMIT THE KEY, zero carry a literal null and zero carry a literal 0. The null was an artifact of jq printing a missing key as null. On a record at or above 2.1.241 the key being absent therefore means ZERO PENDING AGENTS and the turn genuinely finished. This episode is the same shape as c_genuinely_idle_one_toast and must expect the same one done toast."
+ }
+}

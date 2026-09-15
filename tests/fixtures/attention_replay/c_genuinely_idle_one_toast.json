@@ -1,0 +1,830 @@
+{
+ "name": "c_genuinely_idle_one_toast",
+ "session": {
+  "session_id": "ses_2a0b116d",
+  "tmux_name": "cloude_Insiders App-3",
+  "conversation_uuid": "f82b2e8b-ff83-4cdc-b1df-ed4265f38036",
+  "agent_family": "claude",
+  "harness_version": "2.1.266"
+ },
+ "window": {
+  "from": "2026-09-12T00:19:00Z",
+  "to": "2026-09-12T00:24:00Z"
+ },
+ "events": [
+  {
+   "t": "2026-09-12T00:21:28.768171Z",
+   "transcript_records": [
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:27:51.864Z",
+     "uuid": "671e3e35-a4f1-45d4-8c8c-0003ae6a2e4f",
+     "parentUuid": "5a93bb1b-42c3-4b9b-b23f-ec01638a7cd9",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01P9AjdGmSuAmaX7ruhbLvn7"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:51.869Z",
+     "uuid": "3b154896-60c6-422a-b0ce-6e9a44a6a88d",
+     "parentUuid": "671e3e35-a4f1-45d4-8c8c-0003ae6a2e4f",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:51.870Z",
+     "uuid": "362295db-45f1-46d2-a2dd-25fc3d14e096",
+     "parentUuid": "3b154896-60c6-422a-b0ce-6e9a44a6a88d",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:27:53.240Z",
+     "uuid": "b005d6aa-e8e4-4b0e-9ccf-c2ec2d679036",
+     "parentUuid": "362295db-45f1-46d2-a2dd-25fc3d14e096",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "Build 130 green. Verifying the live bundle, then announcing."
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:27:56.351Z",
+     "uuid": "782b03b0-d96c-454a-ae4e-37f0c9333910",
+     "parentUuid": "b005d6aa-e8e4-4b0e-9ccf-c2ec2d679036",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Bash",
+        "id": "toolu_01Hxjkyvmu8jmr2QuVQgrauU"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:27:57.283Z",
+     "uuid": "2a4110cf-1065-414c-ba14-c4d79d449375",
+     "parentUuid": "782b03b0-d96c-454a-ae4e-37f0c9333910",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01Hxjkyvmu8jmr2QuVQgrauU"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:57.290Z",
+     "uuid": "c4f69aef-b227-4658-b984-fd13613c9942",
+     "parentUuid": "2a4110cf-1065-414c-ba14-c4d79d449375",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:57.291Z",
+     "uuid": "f7c92e76-461c-4481-a5e4-ac5afb4cc828",
+     "parentUuid": "c4f69aef-b227-4658-b984-fd13613c9942",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:28:16.865Z",
+     "uuid": "7f0c2743-fa54-4547-8772-41cea72a324e",
+     "parentUuid": "f7c92e76-461c-4481-a5e4-ac5afb4cc828",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Bash",
+        "id": "toolu_011x7adPTu4Kx8dsYX4fA2jJ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:28:26.626Z",
+     "uuid": "b338c133-cb56-433f-bdce-45a2170d4aa0",
+     "parentUuid": "7f0c2743-fa54-4547-8772-41cea72a324e",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_011x7adPTu4Kx8dsYX4fA2jJ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:28:26.632Z",
+     "uuid": "ae195e08-9efe-40cb-9499-676a2606b63d",
+     "parentUuid": "b338c133-cb56-433f-bdce-45a2170d4aa0",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:28:26.633Z",
+     "uuid": "69db0e2d-5da9-4907-99e7-3d5c582b7124",
+     "parentUuid": "ae195e08-9efe-40cb-9499-676a2606b63d",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:28:42.259Z",
+     "uuid": "7a18bb65-8c9f-4216-80a3-d2c492885452",
+     "parentUuid": "69db0e2d-5da9-4907-99e7-3d5c582b7124",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "Shipped. Undo is live \u2014 reload and open a received transfer.\n\n**What you get.** "
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:28:42.971Z",
+     "uuid": "63321ff2-fd1d-442c-a20a-b82bea847a1b",
+     "parentUuid": "7a18bb65-8c9f-4216-80a3-d2c492885452",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-11T20:28:42.973Z",
+     "uuid": "99973655-ab3b-4df2-811f-1e638bcb818b",
+     "parentUuid": "63321ff2-fd1d-442c-a20a-b82bea847a1b",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-11T20:28:42.977Z",
+     "uuid": "9f406de1-e7b0-413c-a51c-5d5c160a0b67",
+     "parentUuid": "99973655-ab3b-4df2-811f-1e638bcb818b",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:20:59.026Z",
+     "uuid": "d8f01cc2-3c8d-43ad-9c0e-9a043f129cd2",
+     "parentUuid": "9f406de1-e7b0-413c-a51c-5d5c160a0b67",
+     "isSidechain": false,
+     "promptSource": "typed",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "human"
+     },
+     "message": {
+      "content": "push to prod"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:20:59.026Z",
+     "uuid": "a2ea9ea9-8dc3-4e34-8bb3-877c69d227b0",
+     "parentUuid": "d8f01cc2-3c8d-43ad-9c0e-9a043f129cd2",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:20:59.026Z",
+     "uuid": "a26f4939-9bff-4fd4-85db-9b73be12e9c9",
+     "parentUuid": "a2ea9ea9-8dc3-4e34-8bb3-877c69d227b0",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:20:59.074Z",
+     "uuid": "47543a26-070a-4dbe-9e3c-698c13a3eba7",
+     "parentUuid": "a26f4939-9bff-4fd4-85db-9b73be12e9c9",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "pr-link",
+     "timestamp": "2026-09-12T00:20:59.200Z"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:07.759Z",
+     "uuid": "394a838f-3d4a-47af-bc80-71008a83bae0",
+     "parentUuid": "47543a26-070a-4dbe-9e3c-698c13a3eba7",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:08.229Z",
+     "uuid": "dd318607-55e3-4c1c-aa72-f322428ddccc",
+     "parentUuid": "394a838f-3d4a-47af-bc80-71008a83bae0",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "Already there \u2014 but let me verify nothing's left behind rather than just assert "
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:13.328Z",
+     "uuid": "0a125655-3faf-4b32-b96c-caf56f7b52e1",
+     "parentUuid": "dd318607-55e3-4c1c-aa72-f322428ddccc",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Bash",
+        "id": "toolu_01KMAM7RzGNGrg4TrAEj4C9B"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:21:14.963Z",
+     "uuid": "823c3bf1-7034-4048-b151-4db4830f6edf",
+     "parentUuid": "0a125655-3faf-4b32-b96c-caf56f7b52e1",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01KMAM7RzGNGrg4TrAEj4C9B"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:21:14.981Z",
+     "uuid": "89cd3ba8-add3-4f70-a60f-78e1aa2bc76f",
+     "parentUuid": "823c3bf1-7034-4048-b151-4db4830f6edf",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:21:14.982Z",
+     "uuid": "51e95a31-e3cc-4984-b8a4-29bf71421459",
+     "parentUuid": "89cd3ba8-add3-4f70-a60f-78e1aa2bc76f",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:25.705Z",
+     "uuid": "fa7b51d0-8c45-487e-8fef-f37e38ae5fed",
+     "parentUuid": "51e95a31-e3cc-4984-b8a4-29bf71421459",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "Everything's already in production \u2014 nothing was left staged.\n\n- **Backend** \u2014 n"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T00:21:26.244Z",
+     "uuid": "0118d0d6-dca5-4232-b869-888f0373ad5a",
+     "parentUuid": "fa7b51d0-8c45-487e-8fef-f37e38ae5fed",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T00:21:26.249Z",
+     "uuid": "78586762-04ea-40af-9dd8-cd860ff2aaa4",
+     "parentUuid": "0118d0d6-dca5-4232-b869-888f0373ad5a",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "cost-state"
+    }
+   ],
+   "registry": null,
+   "pane_tail": null,
+   "tmux": {
+    "liveness": "LIVE",
+    "source": "derived: the hook route that raised these toasts refused a dead pane"
+   }
+  },
+  {
+   "t": "2026-09-12T00:24:30Z",
+   "transcript_records": [
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:27:51.864Z",
+     "uuid": "671e3e35-a4f1-45d4-8c8c-0003ae6a2e4f",
+     "parentUuid": "5a93bb1b-42c3-4b9b-b23f-ec01638a7cd9",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01P9AjdGmSuAmaX7ruhbLvn7"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:51.869Z",
+     "uuid": "3b154896-60c6-422a-b0ce-6e9a44a6a88d",
+     "parentUuid": "671e3e35-a4f1-45d4-8c8c-0003ae6a2e4f",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:51.870Z",
+     "uuid": "362295db-45f1-46d2-a2dd-25fc3d14e096",
+     "parentUuid": "3b154896-60c6-422a-b0ce-6e9a44a6a88d",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:27:53.240Z",
+     "uuid": "b005d6aa-e8e4-4b0e-9ccf-c2ec2d679036",
+     "parentUuid": "362295db-45f1-46d2-a2dd-25fc3d14e096",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "Build 130 green. Verifying the live bundle, then announcing."
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:27:56.351Z",
+     "uuid": "782b03b0-d96c-454a-ae4e-37f0c9333910",
+     "parentUuid": "b005d6aa-e8e4-4b0e-9ccf-c2ec2d679036",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Bash",
+        "id": "toolu_01Hxjkyvmu8jmr2QuVQgrauU"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:27:57.283Z",
+     "uuid": "2a4110cf-1065-414c-ba14-c4d79d449375",
+     "parentUuid": "782b03b0-d96c-454a-ae4e-37f0c9333910",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01Hxjkyvmu8jmr2QuVQgrauU"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:57.290Z",
+     "uuid": "c4f69aef-b227-4658-b984-fd13613c9942",
+     "parentUuid": "2a4110cf-1065-414c-ba14-c4d79d449375",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:27:57.291Z",
+     "uuid": "f7c92e76-461c-4481-a5e4-ac5afb4cc828",
+     "parentUuid": "c4f69aef-b227-4658-b984-fd13613c9942",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:28:16.865Z",
+     "uuid": "7f0c2743-fa54-4547-8772-41cea72a324e",
+     "parentUuid": "f7c92e76-461c-4481-a5e4-ac5afb4cc828",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Bash",
+        "id": "toolu_011x7adPTu4Kx8dsYX4fA2jJ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:28:26.626Z",
+     "uuid": "b338c133-cb56-433f-bdce-45a2170d4aa0",
+     "parentUuid": "7f0c2743-fa54-4547-8772-41cea72a324e",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_011x7adPTu4Kx8dsYX4fA2jJ"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:28:26.632Z",
+     "uuid": "ae195e08-9efe-40cb-9499-676a2606b63d",
+     "parentUuid": "b338c133-cb56-433f-bdce-45a2170d4aa0",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:28:26.633Z",
+     "uuid": "69db0e2d-5da9-4907-99e7-3d5c582b7124",
+     "parentUuid": "ae195e08-9efe-40cb-9499-676a2606b63d",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:28:42.259Z",
+     "uuid": "7a18bb65-8c9f-4216-80a3-d2c492885452",
+     "parentUuid": "69db0e2d-5da9-4907-99e7-3d5c582b7124",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "Shipped. Undo is live \u2014 reload and open a received transfer.\n\n**What you get.** "
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:28:42.971Z",
+     "uuid": "63321ff2-fd1d-442c-a20a-b82bea847a1b",
+     "parentUuid": "7a18bb65-8c9f-4216-80a3-d2c492885452",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-11T20:28:42.973Z",
+     "uuid": "99973655-ab3b-4df2-811f-1e638bcb818b",
+     "parentUuid": "63321ff2-fd1d-442c-a20a-b82bea847a1b",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-11T20:28:42.977Z",
+     "uuid": "9f406de1-e7b0-413c-a51c-5d5c160a0b67",
+     "parentUuid": "99973655-ab3b-4df2-811f-1e638bcb818b",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:20:59.026Z",
+     "uuid": "d8f01cc2-3c8d-43ad-9c0e-9a043f129cd2",
+     "parentUuid": "9f406de1-e7b0-413c-a51c-5d5c160a0b67",
+     "isSidechain": false,
+     "promptSource": "typed",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "human"
+     },
+     "message": {
+      "content": "push to prod"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:20:59.026Z",
+     "uuid": "a2ea9ea9-8dc3-4e34-8bb3-877c69d227b0",
+     "parentUuid": "d8f01cc2-3c8d-43ad-9c0e-9a043f129cd2",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:20:59.026Z",
+     "uuid": "a26f4939-9bff-4fd4-85db-9b73be12e9c9",
+     "parentUuid": "a2ea9ea9-8dc3-4e34-8bb3-877c69d227b0",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:20:59.074Z",
+     "uuid": "47543a26-070a-4dbe-9e3c-698c13a3eba7",
+     "parentUuid": "a26f4939-9bff-4fd4-85db-9b73be12e9c9",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "pr-link",
+     "timestamp": "2026-09-12T00:20:59.200Z"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:07.759Z",
+     "uuid": "394a838f-3d4a-47af-bc80-71008a83bae0",
+     "parentUuid": "47543a26-070a-4dbe-9e3c-698c13a3eba7",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "thinking"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:08.229Z",
+     "uuid": "dd318607-55e3-4c1c-aa72-f322428ddccc",
+     "parentUuid": "394a838f-3d4a-47af-bc80-71008a83bae0",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "Already there \u2014 but let me verify nothing's left behind rather than just assert "
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:13.328Z",
+     "uuid": "0a125655-3faf-4b32-b96c-caf56f7b52e1",
+     "parentUuid": "dd318607-55e3-4c1c-aa72-f322428ddccc",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "Bash",
+        "id": "toolu_01KMAM7RzGNGrg4TrAEj4C9B"
+       }
+      ]
+     }
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-12T00:21:14.963Z",
+     "uuid": "823c3bf1-7034-4048-b151-4db4830f6edf",
+     "parentUuid": "0a125655-3faf-4b32-b96c-caf56f7b52e1",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01KMAM7RzGNGrg4TrAEj4C9B"
+       }
+      ]
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:21:14.981Z",
+     "uuid": "89cd3ba8-add3-4f70-a60f-78e1aa2bc76f",
+     "parentUuid": "823c3bf1-7034-4048-b151-4db4830f6edf",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-12T00:21:14.982Z",
+     "uuid": "51e95a31-e3cc-4984-b8a4-29bf71421459",
+     "parentUuid": "89cd3ba8-add3-4f70-a60f-78e1aa2bc76f",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-12T00:21:25.705Z",
+     "uuid": "fa7b51d0-8c45-487e-8fef-f37e38ae5fed",
+     "parentUuid": "51e95a31-e3cc-4984-b8a4-29bf71421459",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "end_turn",
+      "content": [
+       {
+        "type": "text",
+        "text": "Everything's already in production \u2014 nothing was left staged.\n\n- **Backend** \u2014 n"
+       }
+      ]
+     }
+    },
+    {
+     "type": "system",
+     "subtype": "stop_hook_summary",
+     "timestamp": "2026-09-12T00:21:26.244Z",
+     "uuid": "0118d0d6-dca5-4232-b869-888f0373ad5a",
+     "parentUuid": "fa7b51d0-8c45-487e-8fef-f37e38ae5fed",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "system",
+     "subtype": "turn_duration",
+     "timestamp": "2026-09-12T00:21:26.249Z",
+     "uuid": "78586762-04ea-40af-9dd8-cd860ff2aaa4",
+     "parentUuid": "0118d0d6-dca5-4232-b869-888f0373ad5a",
+     "isMeta": false,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "cost-state"
+    }
+   ],
+   "registry": null,
+   "pane_tail": null,
+   "tmux": {
+    "liveness": "LIVE",
+    "source": "derived: the hook route that raised these toasts refused a dead pane"
+   }
+  }
+ ],
+ "expected_toasts": [
+  {
+   "at": "2026-09-12T00:21:28.768Z",
+   "kind": "Stop",
+   "reason": "done_idle: one turn end, 0 pending, nothing queued, no open launch, and no toast within fifteen minutes either side. This is the control: a resolver that raises nothing here has broken the 49 real ones."
+  }
+ ],
+ "production_raised": 1,
+ "production_toasts": [
+  {
+   "at": "2026-09-12T00:21:25.768171Z",
+   "kind": "Stop",
+   "ground_truth": "legit",
+   "pending": 0
+  }
+ ],
+ "note": "THE CONTROL. Production got this one right and the new resolver must too, otherwise the cure is worse than the disease.",
+ "evidence_availability": {
+  "registry": "absent for every past instant; see the module docstring",
+  "pane_tail": "never captured; null everywhere",
+  "tmux": "derived from the raise path, not snapshotted"
+ }
+}

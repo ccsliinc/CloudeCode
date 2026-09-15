@@ -205,7 +205,11 @@ treat `client/js` as code on its way out and put every new surface in `web/`.
   both shapes, and a session id is NOT a tmux name.
 - **AN ADOPTION RESOLVES THE ID, IT DOES NOT MINT ONE**
   (`session_adopt_identity.py`), because tmux fixes `CLOUDECODE_SESSION_ID` into
-  the pane at spawn and an invented id makes the hook route answer 403, not 410.
+  the pane at spawn and can never tell a running agent a new one. AN INVENTED ID
+  REGISTERS ONE LIVE PANE TWICE, adding a second `tmux_names` entry to the very
+  map the boot re-adopt reverses to recover an id, so the stored row keeps the
+  conversation uuid and the project binding while every attention write lands
+  under the invented one.
 - **A RECOVERED ID MUST NOT BE RE-MINTED A TOKEN**, since `_mint_hook_token`
   REPLACES and revokes what the running agent holds; a re-keyed adoption calls
   `_keep_hook_token`, and `hook_token_recovery.py` is in memory and NEVER MINTS.
@@ -223,9 +227,14 @@ treat `client/js` as code on its way out and put every new surface in `web/`.
   project"), the tree tests `attribution === 'none'` BEFORE `project_id`, and
   `session_project_binding.py::columns_to_write` is the rule that **THE PAIR
   MOVES TOGETHER OR NEITHER MOVES**; canonicalising the path is a FALLBACK RUNG.
-- **Hook events arrive unordered, duplicated and droppable**, so every consumer
-  in `session_activity.py` is idempotent: last-write-wins booleans and floored
-  counters, never an increment without a floor.
+- **ATTENTION IS RESOLVED FROM WHAT THE HARNESS WRITES, NEVER FROM WHAT IT
+  TELLS US**: ZERO hooks are installed (owner, 2026-09-13, `docs/DECISIONS.md`),
+  and `src/core/attention/resolve.py` walks FOUR TIERS in precedence order,
+  REGISTRY (`~/.claude/sessions/<pid>.json`) then TRANSCRIPT tail then PANE then
+  TMUX. Only the registry may ORIGINATE rest, THE PANE CAN NEVER SAY DONE, tmux
+  alone may say dead, ABSENT IS `unknown` AND `unknown` IS NEVER `idle`, and
+  there is no `or 0` anywhere in it because the background-agent count is
+  OMITTED WHEN ZERO.
 - **CSP is `default-src 'self'`, `frame-ancestors 'none'`, NO third-party origin
   in any directive**; `style-src` keeps `'unsafe-inline'` for xterm's inline
   style attributes, while inline SCRIPT and `eval` are not permitted.
@@ -250,8 +259,9 @@ treat `client/js` as code on its way out and put every new surface in `web/`.
   **4429**, and the mute gates the TOAST, not the STATUS.
 - **THE LISTING PASS GATHERS OFF THE LOOP AND ITS WRITES STAY ON IT** (SNAPSHOT,
   `asyncio.to_thread`, then the per-row loop back on the loop), because the
-  writes are read-modify-writes against state the hook route mutates there: **A
-  PARTIAL, CORRECT IMPROVEMENT BEATS A COMPLETE, RACY ONE.**
+  writes are read-modify-writes against state the attention watcher's side
+  effects mutate there: **A PARTIAL, CORRECT IMPROVEMENT BEATS A COMPLETE, RACY
+  ONE.**
 - **AN OVERFLOW DISCONNECTS; IT NEVER TRUNCATES**, because escape sequences span
   chunks; the close code is **4429**.
 - **THE VIEWER FAN-OUT IS BOUNDED AND HAS ONE WRITER PER SOCKET**
@@ -282,12 +292,21 @@ Reading `info.id` or `info.session.unread` gives you `undefined` silently, and i
 looks exactly like "the backend didn't send it". **This is the single most
 repeated bug in the project.** Check the level before you debug the endpoint.
 
+**`status_source` NAMES THE TIER THAT DECIDED**, one of `registry`,
+`transcript`, `pane`, `tmux`, `none`, derived from the rung that answered and
+never from what the caller believed. **`hook` IS GONE** and nothing can write it;
+`seed_row` keeps its constant and has no writer on the live path. Both clients
+still render a `via hooks` tooltip entry so a cached response from before the
+swap does not break.
+
 - **A GUESS MUST NEVER OUTRANK A RECORD**: `choose_agent_evidence` picks launch,
   row, fingerprint, nothing, a written inference carries its source with its
   value, and AN INFERENCE IS NOT INTENT, so it never reaches the respawn ladder.
 - **`startup_gate` asks a DIFFERENT question from `activity_status`: has this
   session started at all?** A claude on its folder-trust dialog is a live pane
-  with a healthy pid that has fired NO hook (`session_startup_gate.py`).
+  with a healthy pid and NO REGISTRY RECORD YET, because the trust dialog runs
+  BEFORE claude registers itself (`session_startup_gate.py`; the ladder is
+  unchanged and only its rung-1 input moved).
 
 ## The status lights
 
@@ -302,8 +321,14 @@ and the startup gate), LIGHT BLUE is `notice` alone, GREY is `idle` and `unknown
 told apart by SHAPE, RED is `dead` and a dropped WebSocket told apart by the
 LABEL alone, so those labels are load bearing and never paraphrases.
 
-- **A SESSION WAITING ON ITS OWN SUB-AGENTS IS NOT WAITING ON THE USER**: no toast
-  while `subagent_depth` is positive, and **`PermissionRequest` IS NEVER SUPPRESSED**.
+- **A SESSION WAITING ON ITS OWN SUB-AGENTS IS NOT WAITING ON THE USER**, and it
+  is the RUNG ORDER that says so, not a counter: the turn-end record's
+  `pendingBackgroundAgentCount` and the async-launch ledger answer `busy` above
+  every registry rung, while an unanswered blocking tool at the end of the
+  transcript outranks BOTH, because background agents do not unblock a human
+  dialog. **TOASTS ARE RAISED ON TRANSITIONS BY `attention/watcher.py`**, the
+  only raise site, and **A PERMISSION-CLASS TOAST IS SUPPRESSED BY NOTHING BUT
+  THE EXPLICIT PER-SESSION MUTE**.
 - **THE LED IS TWO INDEPENDENT RINGS** (`status-led.js`), so every surface must
   PASS IT SIGNALS (`unread`, `startup_gate`, `status_source`, `transport`), not
   just the status string.
@@ -336,8 +361,14 @@ Record: `docs/restart-and-recreate-history.md`.
 Record: `docs/session-identity-history.md`.
 
 - `sessions.claude_session_uuid` is the id a restart resumes, and **A ONE-SHOT
-  CHANNEL WITH NO RETRY IS THE WHOLE PROBLEM**: give any hook-fed field a
-  recovery path, because this one had a single writer.
+  CHANNEL WITH NO RETRY IS THE WHOLE PROBLEM**: the `SessionStart` announcement
+  that used to fill it fired ONCE per conversation, so one lost delivery left a
+  row unable to resume for life. **IT IS RE-READ NOW, NOT ANNOUNCED**: claude's
+  registry record carries `sessionId` and is rewritten on every status change,
+  so `attention/registry_read.py` sees it every pass and gates on it, and the
+  adopt-time correlation ladder (`claude_session_correlate_ladder.py`,
+  `session_claude_correlate_bind.py`) writes the column. A CONTINUOUS SOURCE
+  RETIRES THE DEFECT CLASS THAT A RECOVERY PATH ONLY PATCHED.
 - **ONE NAME PER SESSION, LAST RENAME WINS FROM EITHER SIDE**, and no hook event
   carries a `/rename`, so the pane's name is readable only from the transcript.
 - **A PROJECT'S DIRECTORY IS PERMANENT**, so `project_directory.py` canonicalises
@@ -511,9 +542,14 @@ cite these BY NUMBER, so the numbers do not move.
 9. **A bare `await requestAnimationFrame` never resolves in a hidden tab**, so
    anything that must happen for a background tab races a timer instead
    (`terminal-layout-wait.js`): a wait may DELAY the work, never cancel it.
-10. **A synthetic hook aimed at a row id can set a tracker flag the pane's own
-    claude can never clear**, when that claude holds an adopted id fixed in at
-    spawn. Ask of any flag keyed on a session id whether the two ids can diverge.
+10. **`CLOUDECODE_SESSION_ID` IS FIXED INTO A PANE AT SPAWN, so after a re-adopt
+    the row id and the id the pane believes in can diverge**, and a flag keyed on
+    the row id is one the pane's own claude can never clear. Ask of any flag
+    keyed on a session id whether the two ids can diverge: the attention ledger
+    and the unread flag both key on `UnreadStore.compose_key(tmux_name, epoch)`
+    for this reason, because that identity IS the pane. The original incident's
+    mechanism, a synthetic hook event aimed at a row id, was removed on
+    2026-09-13 with the hooks; the lesson is not.
 11. **A CHECK THAT PASSES BECAUSE IT LOOKED AT NOTHING**, the most repeated
     failure shape here. **A GREEN CHECK MUST FIRST PROVE IT CAN GO RED**: ask
     what it does when its subject is ABSENT, its tool MISSING, and its output
@@ -536,7 +572,7 @@ for seams this line has already moved.
 | `session_manager._subscribers` | `session_manager._registry.subscribers` |
 | `session_manager.subscribe_output` / `unsubscribe_output` | `SessionRegistry.subscribe` / `.unsubscribe` |
 | `session_manager._pending_toasts`, `ack_toast`, `get_toasts` | `session_manager._toast_inbox.pending` / `.ack` / `.get` |
-| `session_manager._hook_tmux_names`, `_mint_hook_token` | `session_manager.hook_tokens.tmux_names` / `.mint` |
+| `session_manager._hook_tmux_names`, `_mint_hook_token` | `session_manager.hook_tokens.tmux_names` / `.mint`, plus `.keep` and `.name_for`. The STORE AND THE MINT-AT-SPAWN SURVIVE because the boot re-adopt reverses that map, but the route's `validate` and `recover` are DELETED and move to nothing |
 | `session_manager.pinned_themes`, `set_project_theme`, `resolve_project_theme` | `session_manager._theme_store.*` |
 | `session_manager.pending_terminal_commands` | `session_manager._sidecars` |
 | `session_manager._owned_instances_from_db`, `is_owned_tmux_name` | `session_manager._owned.instances_from_db` / `.is_owned_name` |

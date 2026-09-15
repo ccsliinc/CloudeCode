@@ -125,41 +125,75 @@ def test_it_touches_nothing_outside_the_resting_pair():
 
 
 # =========================================================================== #
-# 1. SOURCE ONE - the hook tracker                                            #
+# 1. SOURCE ONE - the attention resolver                                      #
 # =========================================================================== #
+#
+# THIS SECTION USED TO BE THE HOOK TRACKER. It fed a ``Stop`` into the
+# in-memory state machine and asserted that the resting answer followed
+# the unread flag. That machine was deleted on 2026-09-13 (its input was
+# a pane-wide session id every background agent also posted under), and
+# the resting answer now comes from ``attention.display.to_display``.
+# The RULE is unchanged and so are the assertions: one projection,
+# applied by one function, and no source may decide read versus unread
+# for itself.
 
 
-def test_hook_tracker_a_stop_with_the_flag_set_reads_finished_unread():
-    tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_STOP)
-    assert tracker.resolve("s1", STATUS_IDLE, unread=True) == STATUS_FINISHED_UNREAD
+def _at_rest(*, unread: bool) -> str:
+    """The resolver's answer for a session measured as finished and idle.
+
+    Inputs: unread (bool) - the durable flag.
+    Output: str - one of the activity statuses.
+    """
+    from src.core.attention.display import to_display
+    from src.core.attention.evidence import STATE_DONE_IDLE, AttentionVerdict
+
+    return to_display(
+        AttentionVerdict(
+            state=STATE_DONE_IDLE,
+            reason="test",
+            tier="transcript",
+            detail="measured at rest",
+        ),
+        unread=unread,
+        tmux_status=STATUS_IDLE,
+    )
 
 
-def test_hook_tracker_the_same_stop_with_the_flag_clear_reads_idle():
-    """The Stop is unchanged and the state machine is unchanged; the only
+def test_a_finished_turn_with_the_flag_set_reads_finished_unread():
+    assert _at_rest(unread=True) == STATUS_FINISHED_UNREAD
+
+
+def test_the_same_finished_turn_with_the_flag_clear_reads_idle():
+    """The reading is unchanged and the resolver is unchanged; the only
     thing that moved is the flag, and the answer follows it."""
-    tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_STOP)
-    assert tracker.resolve("s1", STATUS_IDLE, unread=False) == STATUS_IDLE
+    assert _at_rest(unread=False) == STATUS_IDLE
 
 
-def test_hook_tracker_never_answers_finished_unread_on_a_clear_flag():
-    """The negative control over the whole tmux vocabulary. A hooked
-    session at rest may answer ``idle`` or ``unknown``; it may never claim
-    something is waiting for the user when nothing is."""
-    tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_STOP)
-    for tmux_status in (STATUS_IDLE, STATUS_RUNNING, STATUS_UNKNOWN):
-        assert (
-            tracker.resolve("s1", tmux_status, unread=False)
-            != STATUS_FINISHED_UNREAD
-        )
+def test_a_clear_flag_never_answers_finished_unread():
+    """The negative control. A session at rest may answer ``idle`` or
+    ``unknown``; it may never claim something is waiting for the user
+    when nothing is."""
+    assert _at_rest(unread=False) != STATUS_FINISHED_UNREAD
 
 
-def test_hook_tracker_a_dead_pane_is_dead_whatever_the_flag_says():
-    tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_STOP)
-    assert tracker.resolve("s1", STATUS_DEAD, unread=True) == STATUS_DEAD
+def test_derive_read_state_is_the_only_thing_that_splits_the_pair():
+    """ONE DERIVATION, and this is the assertion that keeps it one.
+
+    Whatever produced the resting state, the read/unread half is this
+    pure function's output and not a second implementation of it.
+    """
+    assert derive_read_state(STATUS_IDLE, unread=True) == STATUS_FINISHED_UNREAD
+    assert derive_read_state(STATUS_IDLE, unread=False) == STATUS_IDLE
+    assert _at_rest(unread=True) == derive_read_state(STATUS_IDLE, unread=True)
+    assert _at_rest(unread=False) == derive_read_state(STATUS_IDLE, unread=False)
+
+
+def test_a_dead_pane_is_dead_whatever_the_flag_says():
+    """tmux is the only thing that can report a death, and it outranks
+    the flag in every direction."""
+    assert map_tmux_fallback(STATUS_DEAD, unread=True) == STATUS_DEAD
+    assert map_tmux_fallback(STATUS_DEAD, unread=False) == STATUS_DEAD
+    assert derive_read_state(STATUS_DEAD, unread=True) == STATUS_DEAD
 
 
 # =========================================================================== #
@@ -309,10 +343,64 @@ class _FakeBackend:
         return True
 
 
+def _resting_evidence(now: datetime) -> tuple:
+    """The two file tiers of a session that has genuinely finished a turn.
+
+    Description: the shape ``src.core.attention.resolve`` rung 8 needs to
+      answer ``done_idle`` - claude reports idle on a version new enough
+      to write the background-agent count, the transcript's last word is
+      a turn end, the count is a measured zero, nothing is queued and the
+      file has been quiet. Built as frozen dataclasses rather than
+      written to disk because these tests are about the READ FLAG, not
+      about the reader.
+    Inputs: now (datetime) - the clock the listing will resolve against.
+    Output: tuple[RegistryRecord, TranscriptFacts].
+    Example: _resting_evidence(datetime.now(timezone.utc))
+    """
+    from src.core.attention.registry_read import (
+        REG_IDLE,
+        REG_OK,
+        RegistryRecord,
+    )
+    from src.core.attention.transcript_facts import (
+        FACTS_FOUND,
+        TranscriptFacts,
+    )
+
+    ended = now - timedelta(seconds=30)
+    return (
+        RegistryRecord(
+            verdict=REG_OK,
+            status=REG_IDLE,
+            waiting_for=None,
+            pid=4321,
+            session_uuid=None,
+            tmux_name="cloude_daily-briefing",
+            cwd=None,
+            status_updated_at=ended,
+            started_at=ended - timedelta(minutes=5),
+            version=(2, 1, 266),
+            detail="fixture",
+        ),
+        TranscriptFacts(
+            verdict=FACTS_FOUND,
+            pending_background_agents=0,
+            pending_field_present=True,
+            turn_end_at=ended,
+            newest_assistant_at=ended - timedelta(seconds=1),
+            newest_append_at=ended,
+            detail="fixture",
+        ),
+    )
+
+
 def _manager_with_row_state(monkeypatch, tmp_path: Path, stored: str) -> SessionManager:
-    """A manager holding one live session whose DURABLE ROW records
-    ``stored`` and which has never fired a hook - the exact shape of the
-    daily-briefing session on live."""
+    """A manager holding one live session the resolver measures AT REST.
+
+    ``stored`` is what the durable row records. It no longer decides the
+    status - the passive resolver does - and it is kept as an argument
+    because these tests exist to prove the FLAG decides the rest pair
+    whatever any stored value says."""
     stub = _StubSettings(
         pin_path=tmp_path / "pinned_themes.json", log_dir=tmp_path / "logs"
     )
@@ -335,7 +423,14 @@ def _manager_with_row_state(monkeypatch, tmp_path: Path, stored: str) -> Session
     )
     # The row says what it says. Nothing rewrites it on a view, which is
     # precisely why the read has to reconcile it.
-    monkeypatch.setattr(mgr, "_restored_activity_state", lambda name: stored)
+    # AND THE RESOLVER SAYS THE SESSION IS AT REST. Patched at the read
+    # seam, so the whole ladder above it - resolve, project, then derive
+    # the read state - runs for real.
+    monkeypatch.setattr(
+        mgr,
+        "_attention_reads_for",
+        lambda **kw: _resting_evidence(datetime.now(timezone.utc)),
+    )
     return mgr
 
 

@@ -108,6 +108,7 @@ import structlog
 
 from src.core.db_models import (
     SESSION_CLAUDE_UUID_SOURCE_HOOK,
+    SESSION_CLAUDE_UUID_SOURCES,
     SESSION_FORK_KIND_BACKGROUND,
     SESSION_FORK_KIND_FORK,
     SESSION_FORK_KIND_UNKNOWN,
@@ -366,6 +367,7 @@ def record_claude_session(
     source: Optional[str] = None,
     title: Optional[str] = None,
     pane_left_previous: bool = True,
+    uuid_source: str = SESSION_CLAUDE_UUID_SOURCE_HOOK,
     now: Optional[str] = None,
 ) -> LineageResult:
     """Record that a Claude session is running in a tmux instance.
@@ -402,6 +404,13 @@ def record_claude_session(
       (str | None) - the payload's ``source``. title (str | None) - the
       payload's ``session_title``, recorded as CLAUDE's name for the
       session, never as the user's label.
+      uuid_source (str) - which CHANNEL learned this uuid, stored in
+      ``claude_session_uuid_source``. Defaults to the hook, so every
+      caller that predates the passive watcher writes what it always
+      wrote; the watcher passes ``registry``. A value this codebase does
+      not recognise is refused rather than stored, because the column is
+      read as provenance and an unknown token there is a claim nobody
+      can evaluate.
       now (str | None) - ISO stamp override for tests.
     Output: LineageResult.
     Example: record_claude_session(conn, socket='s', name='a', epoch=1,
@@ -432,6 +441,18 @@ def record_claude_session(
             outcome=LINEAGE_UNRESOLVED,
             detail="the hook payload carried no session id",
         )
+    if uuid_source not in SESSION_CLAUDE_UUID_SOURCES:
+        # A PROVENANCE NOBODY CAN EVALUATE IS WORSE THAN THE DEFAULT. The
+        # column exists so a reader can tell how strong the uuid is, and
+        # a token this codebase has never defined answers that question
+        # with a string nothing knows how to rank. Log it and fall back
+        # rather than storing it.
+        logger.warning(
+            "claude_uuid_source_unknown",
+            requested_source=uuid_source,
+            tmux_name=name,
+        )
+        uuid_source = SESSION_CLAUDE_UUID_SOURCE_HOOK
 
     # Idempotence AND fork detection in one lookup. A uuid we have already
     # seen anywhere is a continuation no matter which row holds it and no
@@ -469,7 +490,7 @@ def record_claude_session(
             "UPDATE sessions SET claude_session_uuid = ?, "
             "claude_session_uuid_source = ?, updated_at = ? "
             "WHERE id = ?",
-            (claude_uuid, SESSION_CLAUDE_UUID_SOURCE_HOOK, stamp, int(head["id"])),
+            (claude_uuid, uuid_source, stamp, int(head["id"])),
         )
         _record_claude_title(conn, head, title, stamp)
         logger.info(
@@ -477,6 +498,7 @@ def record_claude_session(
             row_id=int(head["id"]),
             tmux_name=name,
             source=source,
+            uuid_source=uuid_source,
         )
         return LineageResult(
             outcome=LINEAGE_BOUND,
@@ -584,7 +606,7 @@ def record_claude_session(
         anchor.get("agent_family"),
         anchor.get("agent_family_source"),
         claude_uuid,
-        SESSION_CLAUDE_UUID_SOURCE_HOOK,
+        uuid_source,
         int(head["id"]),
         fork_kind,
         SESSION_LIFECYCLE_STOPPED,

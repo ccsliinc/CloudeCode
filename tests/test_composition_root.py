@@ -169,12 +169,12 @@ def test_a_write_through_the_facade_is_visible_on_the_services_side():
 
     manager._theme_store.pinned_themes["cloude_from_facade"] = "amber"
     manager._registry.log_buffers["ses_from_facade"] = []
-    manager._sidecars.idle_watchers["ses_from_facade"] = object()  # type: ignore[assignment]
+    manager._sidecars.adopt_fifo_offsets["ses_from_facade"] = 4096
     manager._owned.names.add("cloude_from_facade")
 
     assert services.themes.pinned_themes["cloude_from_facade"] == "amber"
     assert "ses_from_facade" in services.registry.log_buffers
-    assert "ses_from_facade" in services.sidecars.idle_watchers
+    assert services.sidecars.adopt_fifo_offsets["ses_from_facade"] == 4096
     assert "cloude_from_facade" in services.owned_tmux.names
 
 

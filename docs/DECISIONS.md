@@ -651,3 +651,51 @@ stays in force: a push to `Adoom666/CloudeCode` still has to fail by
 construction.
 
 The repository stays private; do not change its visibility.
+
+## Zero hooks: the app reads what the harness writes, and installs nothing
+**2026-09-13, scope: CloudeCodeDev, ruled by Adam as code owner and sole
+tie-breaker**
+
+Verbatim: "ZERO hooks. Passive detection only."
+
+The app installs no hook block in `~/.claude/settings.json`, sends no pokes and
+registers no identity hooks. Everything it knows about a session's state comes
+from what the harness writes to disk and paints in the pane: the per-pid
+registry file claude keeps about itself, the conversation transcript, the
+rendered pane, and tmux. A future agent family gets its own reader for those
+same four tiers; it does not get a hook.
+
+**What was measured.** Over the 50.8 hours from 2026-09-11T15:38Z to
+2026-09-13T18:24Z the server raised 501 "your turn" and "session done" toasts.
+Of the 459 that could be attributed to a turn, **410, or 89.3 percent, fired
+while the session's own turn-end record said background agents were still
+pending**, and 345 of those were followed inside ten minutes by the model being
+re-invoked with no human involved. A channel that is wrong nine times out of ten
+gets muted, and muting it loses the 49 that were real.
+
+**Why hardening the counter could not work, and four attempts proving it.**
+`e794aef`, `cafb50c`, `0d1a12c` and `75356eb` each tightened the same in-memory
+counter of open sub-agents, and the idle-nag pass tightened its latch. The
+counter's INPUT is mislabeled at the source: `CLOUDECODE_SESSION_ID` is a
+pane-wide environment variable, so the parent agent and every background agent
+it launches post under one session id. A sub-agent's own `PreToolUse` cleared
+the latch and re-opened the turn in a single event; measured, the latch
+suppressed 1 toast in 184 chances and 153 of 167 armed latches died inside their
+own time to live. No amount of ordering, flooring or latching moves a number
+whose input is wrong before it is counted.
+
+**And the timing made a hook-time read impossible anyway.** The `Stop` hook is
+synchronous: claude blocks inside our handler. At the moment it fires, claude
+has not yet written the turn-end record (25 ms later) and has not yet updated
+its own status (a further 7 ms). A hook is an interrupt at the one instant when
+none of the evidence has settled.
+
+Two consequences follow and are not negotiable. Deleted with the hooks: the
+PTY-byte idle watcher (`src/core/notifications/idle_watcher.py`), which was a
+second, ungated push path. Kept: the hook token store and the mint at spawn,
+because that file is our own ledger of which tmux names we launched, written by
+us and read by the boot re-adopt, and it was never a hook.
+
+Detail: `docs/session-status.md`, `docs/session-status-model.md`,
+`docs/notifications.md`, and the two entries added to `docs/LESSONS.md` on the
+same day.

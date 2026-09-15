@@ -362,7 +362,7 @@ conversation that needs somewhere to live.
 
 ```mermaid
 graph TD
-    H["Claude CLI SessionStart hook<br/>POST /hooks/claude-event"]
+    H["the attention watcher observes a registry record<br/>src/core/attention/side_effects.py<br/>(was: a SessionStart hook POST, deleted 2026-09-13)"]
     H --> H1["source enum read out of the shipped binary 2.1.236:<br/>startup, resume, clear, compact, fork<br/>src/core/db_models.py::SESSION_FORK_KIND_FORK"]
     H1 --> H2["src/core/session_manager.py::record_claude_lifecycle_event"]
     H2 --> H3["src/core/session_lineage.py::record_claude_session"]
@@ -413,7 +413,7 @@ The same word means different things on different paths. This table is why.
 | close / end | `client/js/api.js::destroySession`, `client/js/api.js::destroyExternalSession` | none | `DELETE /sessions`, `DELETE /sessions/external/name` | - | reaper stamps `stopped` |
 | delete a record | `web/src/lib/launchpad/recent-actions.ts::archiveSessionRecord` via `client/js/api.js::deleteSessionRecord` | none | `DELETE /sessions/records/session_uuid` | - | - |
 | fork - GUI | `web/src/lib/launchpad/recent-actions.ts::forkSession` via `client/js/api.js::forkSession` | none | `POST /sessions/session_name/fork` | - | parent untouched by construction; `src/core/session_fork.py::children_of` derives the relationship |
-| fork - CLI | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | lineage rows are written by `POST /hooks/claude-event` | - |
+| fork - CLI | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | **NOT IMPLEMENTED** | lineage rows are written by the attention watcher, from the registry's `sessionId` | - |
 | project create / edit / archive | `client/js/api.js::createProject`, `client/js/api.js::updateProject`, `client/js/api.js::archiveProject`, `client/js/api.js::unarchiveProject` | none | `POST /projects`, `PATCH /projects/project_name`, `POST /projects/project_name/archive`, `POST /projects/project_name/unarchive` | - | `src/core/project_reconcile.py` re-reads config.json on start |
 | group assign | `client/js/session-sidebar-group-actions.js` - drag, menu and keyboard picker all land on one write | none | `POST /session-groups/assign` | - | `src/core/session_group_membership.py::prune_missing` |
 

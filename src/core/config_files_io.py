@@ -96,7 +96,7 @@ def atomic_write(path: Path, content: str) -> None:
     # the "user" root it serves is literally ``Path.home()/".claude"``
     # (config_files.py -> slash_command_discovery.CLAUDE_HOME) with NO
     # env override of any kind. That is the identical shape as the
-    # ensure_hook_settings defect: a test that reaches this function
+    # settings-writer defect: a test that reaches this function
     # without a redirect writes into the developer's real ~/.claude.
     # Inert in production.
     assert_test_write_allowed(path)

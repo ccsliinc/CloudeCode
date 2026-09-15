@@ -12,7 +12,7 @@ app's own writes and this one interleave rather than collide.
 WHY BOOT DOES NOT WAIT. ``start()`` creates a task and returns. Nothing
 on the startup path awaits the first pass, and the task body catches
 every exception it can raise. This matches the posture of
-``ensure_db_migrated`` and ``claude_hooks.ensure_hook_settings``: a
+``ensure_db_migrated`` and ``claude_hooks.strip_managed_hooks``: a
 failure here degrades a feature, it never costs the user their server.
 The one thing that would break that contract is letting an exception
 escape the task, so the loop body is wrapped and the wrapper logs

@@ -41,6 +41,8 @@ describe('byte-identical to the legacy renderer', () => {
     /** Every status_source the server can send, plus two it cannot. */
     const SOURCES = [
         undefined,
+        'registry',
+        'pane',
         'hook',
         'transcript',
         'seed_row',

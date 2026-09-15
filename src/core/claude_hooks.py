@@ -1,33 +1,42 @@
-"""v0.7.0 Part 3 / feat/hook-driven-status - Claude Code lifecycle hook
-settings management.
+"""Removing cloudecode's managed hook block from ``~/.claude/settings.json``.
 
-This module owns the idempotent merge of cloudecode's hook block into
-``~/.claude/settings.json``. Called once at FastAPI startup. The hooks
-themselves are tiny shell one-liners that POST the event payload (read
-from the hook's stdin) to cloudecode's loopback ``/api/v1/hooks/claude-event``
-endpoint, carrying the per-session env vars
-(``CLOUDECODE_SESSION_ID`` / ``CLOUDECODE_HOOK_TOKEN`` / ``CLOUDECODE_HOOK_URL``)
-that were injected into the spawned ``claude`` process's environment via
-``TmuxBackend.start(env=...)``.
+THIS MODULE USED TO INSTALL HOOKS. IT NOW ONLY TAKES THEM BACK OUT.
 
-Security model:
-    The hook subprocess can't carry a JWT - there's no place for the user
-    to authenticate the hook. Instead the hook proves identity via the
-    HMAC-bearer token that ONLY the cloudecode process and the spawned
-    agent share (env-injected at tmux session birth). The route ALSO
-    requires loopback (127.0.0.1) - defense in depth.
+CloudeCode learned a session's state by making Claude Code POST every
+lifecycle event to a loopback endpoint. That was measured wrong nine
+times in ten, because ``CLOUDECODE_SESSION_ID`` is a PANE-WIDE
+environment variable: the parent agent and every background agent it
+spawned posted under one session id, so a sub-agent's own tool call
+looked exactly like the user's turn resuming. The whole subsystem is
+gone, replaced by passive detection that reads what the harness already
+writes to disk (``src/core/attention/``).
 
-Idempotent merge:
-    Each managed hook command embeds the literal marker
-    ``# cloudecode-managed`` so on subsequent runs we can identify our
-    own hooks vs. anything the user (or another tool) added. We replace
-    every managed hook in place; non-managed hooks are left untouched.
+So the one job left here is CLEANING UP AFTER THE OLD VERSION. An install
+that ran any earlier build has our block sitting in the user's settings
+file, pointing at an endpoint that no longer exists, making Claude Code
+pay for a curl on every single event forever. :func:`strip_managed_hooks`
+is called once at startup and removes it.
 
-Safety:
-    - Existing settings file is parsed; if parse fails we LOG and BAIL
-      (no clobber of unparseable user config).
-    - Write is atomic: write-to-tmp + rename.
-    - Opt-out via ``settings.notifications.disable_claude_hooks``.
+What it must never do:
+
+- **Touch a hook the user wrote.** Every managed command carries the
+  literal marker ``# cloudecode-managed``. Only entries bearing it are
+  dropped; everything else is written back byte-for-byte.
+- **Clobber a file it could not parse.** A read error or a syntax error
+  LOGS and BAILS, exactly as the old merge did.
+- **Leave litter behind.** An event key whose matcher list is emptied by
+  the strip is removed, and a ``hooks`` key emptied by that is removed
+  too, so a user who never had hooks of their own is left with the file
+  they would have had if CloudeCode had never run.
+- **Skip anyone.** There is deliberately NO opt-out check. The old
+  ``disable_claude_hooks`` setting is gone, and honouring it here would
+  skip the cleanup for exactly the users who asked not to have the block
+  in the first place - the ones most likely to still be carrying one
+  from before they set the flag.
+
+The write is atomic: write-to-tmp + rename. The file is left untouched
+when there was nothing of ours in it, so a steady-state boot does not
+rewrite the user's settings at all.
 """
 
 from __future__ import annotations
@@ -90,12 +99,6 @@ ACTIVITY_ONLY_EVENTS = (
 # carries ``reason``.
 LIFECYCLE_EVENTS = ("SessionStart", "SessionEnd")
 
-# Every event we install a managed hook for. Ordered for deterministic
-# JSON output diff-stability (toast-worthy first, matching the original
-# three's historical order, then the new activity-only events, then the
-# lifecycle pair).
-_MANAGED_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS + LIFECYCLE_EVENTS
-
 # WORK, as opposed to BROWSING. The events that mean the conversation
 # itself did something: a prompt was submitted, a tool ran, a subagent ran,
 # a turn stopped, permission was asked for, a notification was raised.
@@ -121,95 +124,12 @@ _MANAGED_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS + LIFECYCLE_EVENTS
 WORK_EVENTS = TOAST_EVENTS + ACTIVITY_ONLY_EVENTS
 
 
-def _build_managed_command(event_kind: str) -> str:
-    """Build the curl one-liner for a given hook event.
-
-    The hook reads its JSON payload from stdin, pipes it straight into
-    curl's ``--data-binary @-`` body, attaches the cloudecode auth
-    headers from env vars, fires the POST to the loopback URL, and
-    backgrounds the whole thing so Claude's own flow is never blocked
-    waiting for the hook response. ``-m 3`` caps each call at 3 seconds
-    even if the server is hung.
-
-    The literal ``# cloudecode-managed`` comment is appended (as a
-    no-op tail in the shell command) purely as a marker we can grep for
-    on subsequent merges. Shells treat it as a comment so it has zero
-    runtime effect.
-    """
-    return (
-        # ``cat`` reads the hook's stdin JSON and pipes it into curl's
-        # ``--data-binary @-`` so the full payload reaches the endpoint
-        # unchanged. ``-sS`` = silent except on error. ``-m 3`` caps TOTAL
-        # time at 3s, and that cap is the ONLY thing this needs in order to
-        # be safe to run synchronously.
-        #
-        # IT USED TO END IN ``& :`` AND THAT SILENTLY DELIVERED NOTHING.
-        # The reasoning was "background it so Claude Code's own loop is
-        # never blocked waiting on us", which sounds prudent and was fatal:
-        # the shell returned instantly, the backgrounded subshell was
-        # orphaned, and curl was reaped before the POST completed. The hook
-        # ran, exited 0, and wrote nothing anywhere - so every layer
-        # reported success while claude_session_uuid was never bound, and
-        # resume and fork could not work for any session.
-        #
-        # Measured rather than reasoned about, same env, same headers, same
-        # payload, one variable changed:
-        #     with the trailing &   -> row unchanged
-        #     without it            -> uuid bound immediately
-        #
-        # The cost of dropping it is that Claude waits up to 3s on an
-        # unreachable endpoint. That is the trade ``-m 3`` was already
-        # there to make, and a hook that never delivers is not faster, it
-        # is absent.
-        "(cat | curl -sS -m 2 -X POST \"$CLOUDECODE_HOOK_URL\" "
-        "-H \"X-Cloudecode-Session: $CLOUDECODE_SESSION_ID\" "
-        "-H \"X-Cloudecode-Token: $CLOUDECODE_HOOK_TOKEN\" "
-        f"-H \"X-Cloudecode-Event: {event_kind}\" "
-        "-H \"Content-Type: application/json\" "
-        "--data-binary @-) > /dev/null 2>&1 "
-        f"; : {CLOUDECODE_HOOKS_MARKER}"
-    )
-
-
-def _build_hook_block() -> dict[str, list[dict[str, Any]]]:
-    """Build the canonical cloudecode hook block.
-
-    Structure matches Claude Code's documented hook schema::
-
-        {
-          "Stop": [
-            {
-              "matcher": "*",
-              "hooks": [
-                {"type": "command", "command": "<one-liner>"}
-              ]
-            }
-          ],
-          ...
-        }
-    """
-    block: dict[str, list[dict[str, Any]]] = {}
-    for event in _MANAGED_EVENTS:
-        block[event] = [
-            {
-                "matcher": "*",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": _build_managed_command(event),
-                    }
-                ],
-            }
-        ]
-    return block
-
-
 def _is_managed_command(cmd: Any) -> bool:
     """True iff a hook command string carries the cloudecode marker.
 
     Tolerates non-string ``command`` values (just returns False rather
     than raising) so a user's custom hook with an unexpected shape can't
-    crash our merge.
+    crash the strip.
     """
     return isinstance(cmd, str) and CLOUDECODE_HOOKS_MARKER in cmd
 
@@ -223,8 +143,8 @@ def _filter_user_matchers(
     We classify it as managed if AT LEAST ONE of its inner ``hooks``
     bears our marker. (Mixed user/managed matcher dicts shouldn't
     happen if everyone respects the marker convention, but if they do
-    we err on the side of letting the user's entry through and
-    re-appending our own clean entry below.)
+    we err on the side of letting the user's entry through: keeping a
+    hook the user wrote is recoverable, deleting one is not.)
     """
     keep: list[Any] = []
     for matcher_entry in matchers:
@@ -235,9 +155,9 @@ def _filter_user_matchers(
         if not isinstance(inner_hooks, list):
             keep.append(matcher_entry)
             continue
-        # If ANY hook in this matcher is managed, drop the entry. We're
-        # going to re-add our canonical entry below, so dropping the
-        # whole matcher prevents partial-duplicate states.
+        # If ANY hook in this matcher is managed, drop the whole entry.
+        # Every hook we ever wrote lived alone in its own matcher, so
+        # this cannot take a user's hook down with it.
         if any(
             isinstance(h, dict) and _is_managed_command(h.get("command"))
             for h in inner_hooks
@@ -245,62 +165,6 @@ def _filter_user_matchers(
             continue
         keep.append(matcher_entry)
     return keep
-
-
-def _merge_hooks(
-    existing: dict[str, Any], managed: dict[str, list[dict[str, Any]]]
-) -> dict[str, Any]:
-    """Return ``existing`` with managed hooks added/replaced in place.
-
-    User-added hooks under the same event are preserved. Managed
-    hooks (identified by marker) are stripped and re-added so we end
-    up with EXACTLY one canonical cloudecode entry per event.
-
-    Always operates on a fresh shallow copy of the top-level dict so
-    callers' references aren't mutated.
-    """
-    merged: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
-
-    hooks_block = merged.get("hooks")
-    if not isinstance(hooks_block, dict):
-        hooks_block = {}
-    else:
-        hooks_block = dict(hooks_block)
-
-    for event, managed_matchers in managed.items():
-        existing_matchers = hooks_block.get(event, [])
-        if not isinstance(existing_matchers, list):
-            existing_matchers = []
-        # Strip any previously-managed entries so re-running the merge
-        # doesn't duplicate hooks. User entries pass through untouched.
-        user_matchers = _filter_user_matchers(existing_matchers, event)
-        # Append our canonical block AFTER user matchers - Claude Code
-        # runs matchers in order, and we'd rather user hooks fire first
-        # (their decisions can short-circuit ours via exit codes).
-        hooks_block[event] = user_matchers + list(managed_matchers)
-
-    merged["hooks"] = hooks_block
-    return merged
-
-
-def _hooks_disabled() -> bool:
-    """Read the opt-out flag from the live ``settings.load_auth_config()``.
-
-    Defaults to False (= hooks enabled) when the config is missing the
-    field or any read raises. The whole hook subsystem is best-effort;
-    we never let a config glitch take down server startup.
-    """
-    try:
-        from src.config import settings
-
-        auth_cfg = settings.load_auth_config()
-        notif_cfg = getattr(auth_cfg, "notifications", None)
-        if notif_cfg is None:
-            return False
-        return bool(getattr(notif_cfg, "disable_claude_hooks", False))
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("claude_hooks_disabled_check_failed", error=str(exc))
-        return False
 
 
 #: Env var that overrides the production settings destination. Exists so
@@ -312,8 +176,8 @@ SETTINGS_PATH_ENV_VAR = "CLOUDE_CLAUDE_SETTINGS_PATH"
 def default_settings_path() -> Path:
     """Resolve the settings file the production caller means.
 
-    This used to be an inline ``or`` fallback inside
-    :func:`ensure_hook_settings`, which meant a caller that passed
+    This used to be an inline ``or`` fallback inside the old
+    ``ensure_hook_settings``, which meant a caller that passed
     nothing INHERITED the developer's real ``~/.claude/settings.json``
     without ever saying so. A plain ``pytest`` run then merged
     CloudeCode's managed hook block into the developer's live Claude Code
@@ -337,35 +201,57 @@ def default_settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
-def ensure_hook_settings(settings_path: Path) -> bool:
-    """Idempotently merge cloudecode's hook block into a settings file.
+def strip_managed_hooks(settings_path: Path) -> bool:
+    """Remove cloudecode's managed hook block from a settings file.
 
-    Called once at FastAPI startup (from ``src/main.py``'s lifespan) as
-    ``ensure_hook_settings(default_settings_path())``.
+    Description: the successor to the old ``ensure_hook_settings``, which
+      INSTALLED the block this now deletes. Called once at FastAPI
+      startup so an install upgraded from any earlier build stops paying
+      for a curl on every Claude Code lifecycle event, aimed at an
+      endpoint that no longer exists.
 
-    ``settings_path`` is REQUIRED and has no default on purpose. See
-    :func:`default_settings_path`.
+      IT IS THE ONLY THING LEFT THAT TOUCHES THE USER'S SETTINGS FILE,
+      and it only ever subtracts. An entry is removed if and only if one
+      of its commands carries the literal ``# cloudecode-managed``
+      marker; anything else is written back unchanged, in place, in
+      order.
 
-    Args:
-        settings_path: The settings file to merge into. Never optional.
+      THREE LEVELS OF EMPTINESS ARE CLEANED UP, and the reason is that
+      stopping halfway leaves litter that reads like configuration. A
+      matcher list emptied by the strip removes its event key; a
+      ``hooks`` object emptied by that removes itself. A user who never
+      wrote a hook is left with exactly the file they would have had if
+      CloudeCode had never run.
 
-    Returns:
-        True on success (file written or no-op when disabled), False on
-        any handled failure (parse error, write failure). The caller
-        should LOG and CONTINUE; hook integration is best-effort and
-        must never block server boot.
+      NOTHING IS WRITTEN WHEN NOTHING OF OURS WAS FOUND. A steady-state
+      boot, and every boot for a user who never had the block, does not
+      rewrite the file at all - so this cannot churn mtimes, cannot lose
+      a concurrent edit it had no reason to touch, and cannot reformat a
+      file it has no business reformatting.
 
+      THERE IS DELIBERATELY NO OPT-OUT CHECK. The old
+      ``notifications.disable_claude_hooks`` flag is gone. Consulting one
+      here would skip the cleanup for precisely the users who asked not
+      to have the block - the ones most likely to still be carrying one
+      installed before they set the flag.
+    Inputs:
+      settings_path: the settings file to strip. REQUIRED and with no
+        default, for the reason :func:`default_settings_path` gives.
+    Output:
+      bool - True when the file is clean of our block, whether this call
+      removed one, found none, or found no file at all. False on any
+      handled failure (unparseable JSON, a read error, a write error),
+      where the file is left exactly as it was and the caller should LOG
+      AND CONTINUE: cleanup is best-effort and must never block boot.
     Raises:
-        OutsideTempWriteError: only during a test run, and only for a
-            destination outside every temp root. Deliberately NOT caught
-            here and deliberately NOT folded into the ``False`` return:
-            a harness violation must fail the test loudly rather than
-            degrade into a handled failure nobody reads.
+      OutsideTempWriteError: only during a test run, and only for a
+        destination outside every temp root. Deliberately NOT caught and
+        deliberately NOT folded into the ``False`` return - a harness
+        violation must fail the test loudly rather than degrade into a
+        handled failure nobody reads.
+    Example:
+      strip_managed_hooks(default_settings_path())
     """
-    if _hooks_disabled():
-        logger.info("claude_hooks_disabled_by_config")
-        return True
-
     path = settings_path
 
     # Blast-radius control. Inert in production; under pytest this
@@ -374,38 +260,70 @@ def ensure_hook_settings(settings_path: Path) -> bool:
     # test building its own app, or a subprocess.
     assert_test_write_allowed(path)
 
-    existing: dict[str, Any] = {}
-    if path.exists():
-        try:
-            raw = path.read_text(encoding="utf-8")
-            if raw.strip():
-                existing = json.loads(raw)
-                if not isinstance(existing, dict):
-                    logger.warning(
-                        "claude_settings_not_object",
-                        path=str(path),
-                        type=type(existing).__name__,
-                    )
-                    return False
-        except json.JSONDecodeError as exc:
-            # User's file is corrupted/unparseable. We CANNOT safely merge
-            # - bail loud rather than clobber.
-            logger.warning(
-                "claude_settings_unparseable",
-                path=str(path),
-                error=str(exc),
-            )
-            return False
-        except OSError as exc:
-            logger.warning(
-                "claude_settings_read_failed",
-                path=str(path),
-                error=str(exc),
-            )
-            return False
+    if not path.exists():
+        return True
 
-    managed = _build_hook_block()
-    merged = _merge_hooks(existing, managed)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "claude_settings_read_failed", path=str(path), error=str(exc)
+        )
+        return False
+
+    if not raw.strip():
+        return True
+
+    try:
+        existing = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        # The user's file is corrupted or unparseable. We CANNOT safely
+        # rewrite it - bail loud rather than clobber.
+        logger.warning(
+            "claude_settings_unparseable", path=str(path), error=str(exc)
+        )
+        return False
+
+    if not isinstance(existing, dict):
+        logger.warning(
+            "claude_settings_not_object",
+            path=str(path),
+            type=type(existing).__name__,
+        )
+        return False
+
+    hooks_block = existing.get("hooks")
+    if not isinstance(hooks_block, dict):
+        # No hooks object at all, or one of a shape we did not write.
+        # Either way there is nothing of ours in it to take out.
+        return True
+
+    stripped: dict[str, Any] = {}
+    removed: list[str] = []
+    for event, matchers in hooks_block.items():
+        if not isinstance(matchers, list):
+            # A shape we never wrote. Preserve it verbatim.
+            stripped[event] = matchers
+            continue
+        kept = _filter_user_matchers(matchers, event)
+        if len(kept) != len(matchers):
+            removed.append(event)
+        # AN EVENT KEY WHOSE LIST WE EMPTIED IS DROPPED, but one that was
+        # ALREADY empty before we looked is preserved: that empty list is
+        # the user's, and deleting it would be this function editing
+        # something it did not write.
+        if not kept and matchers:
+            continue
+        stripped[event] = kept
+
+    if not removed:
+        return True
+
+    merged = dict(existing)
+    if stripped:
+        merged["hooks"] = stripped
+    else:
+        merged.pop("hooks", None)
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -416,14 +334,14 @@ def ensure_hook_settings(settings_path: Path) -> bool:
         )
         tmp.replace(path)
         logger.info(
-            "claude_hooks_settings_written",
+            "claude_hooks_settings_stripped",
             path=str(path),
-            events=list(managed.keys()),
+            events=removed,
         )
         return True
     except OSError as exc:
         logger.warning(
-            "claude_hooks_settings_write_failed",
+            "claude_hooks_settings_strip_failed",
             path=str(path),
             error=str(exc),
         )

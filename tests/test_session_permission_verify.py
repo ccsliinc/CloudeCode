@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from tests.attention_claim_helpers import open_claims
 from src.core.session_activity import (
     EVENT_PERMISSION_REQUEST,
     EVENT_STOP,
@@ -274,54 +275,63 @@ def test_a_refused_capture_says_nothing_about_the_flag() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The tracker's half: the stamp, and re-arming.
+# The tracker's half: the stamp, and what a clear takes with it.
 # ---------------------------------------------------------------------------
-
-
-def test_the_stamp_dates_the_transition_not_the_duplicate() -> None:
-    """A repeating PermissionRequest must not push the grace window out."""
-    t = SessionActivityTracker()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event(
-        "s1", EVENT_PERMISSION_REQUEST, now=T0 + timedelta(seconds=60)
-    )
-    assert t.permission_open_since("s1") == T0
+#
+# THREE CASES HERE TESTED THE HOOK WRITER AND WENT WITH IT: that a
+# repeating ``PermissionRequest`` did not re-stamp, that a clearing hook
+# kind dropped the stamp, and that a duplicate after a clear re-opened
+# the claim. All three were rules about ``record_event``, which was
+# deleted on 2026-09-13 - the events feeding it arrived under a pane-wide
+# session id that every background agent also posted under. They are not
+# re-expressed against a writer that does not exist; the rule they were
+# protecting (a stamp dates a claim, and an undated claim is not a dated
+# one) is asserted below against what the READERS see.
 
 
 def test_clearing_drops_the_stamp_with_the_flag() -> None:
+    """They are ONE FACT IN TWO FIELDS.
+
+    A stamp left behind after the flag cleared would date a claim that no
+    longer exists, and the capture throttle keys on exactly that stamp.
+    """
     t = SessionActivityTracker()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(t, "s1", permission=True, at=T0)
     assert t.clear_permission("s1") is True
     assert t.permission_open_since("s1") is None
     # Idempotent - nothing left to clear.
     assert t.clear_permission("s1") is False
 
 
-def test_a_hook_clear_also_drops_the_stamp() -> None:
-    """The three hook-driven clears are untouched by this change."""
-    for kind in (EVENT_USER_PROMPT_SUBMIT, EVENT_STOP):
-        t = SessionActivityTracker()
-        t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-        t.record_event("s1", kind, now=T0 + timedelta(seconds=1))
-        assert t.permission_open_since("s1") is None, kind
+def test_a_cleared_claim_is_never_captured_for_again() -> None:
+    """Clearing the flag is what ends the episode, not a counter.
 
-
-def test_a_duplicated_permission_after_a_clear_re_sets_it() -> None:
-    """A NEW prompt is a new claim, and it gets its own grace window.
-
-    This is the order-tolerance contract: clearing is not a latch, and a
-    PermissionRequest arriving after a clear (a duplicate of the one that
-    was cleared, or a genuinely new prompt - the hook stream cannot tell
-    us which) must re-open the flag rather than be swallowed.
+    ``permission_flag_cleared_no_dialog`` logs exactly once per episode
+    with no extra bookkeeping, because clearing also drops the stamp and
+    the cost gate then refuses every later poll.
     """
     t = SessionActivityTracker()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(t, "s1", permission=True, at=T0)
     t.clear_permission("s1")
+    assert should_capture_permission_tail(
+        pane_alive=True,
+        permission_open=t.permission_open_since("s1") is not None,
+        opened_at=t.permission_open_since("s1"),
+        now=T0 + timedelta(hours=1),
+    ) is False
+
+
+def test_a_fresh_claim_gets_its_own_grace_window() -> None:
+    """A NEW claim is a new episode, dated from when it opened.
+
+    The window is measured from the stamp and not from the session, so a
+    claim raised long after an earlier one was cleared is not treated as
+    already overdue for a look.
+    """
+    t = SessionActivityTracker()
     later = T0 + timedelta(seconds=120)
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=later)
+    open_claims(t, "s1", permission=True, at=later)
     assert t.permission_open_since("s1") == later
-    assert t.resolve("s1", STATUS_IDLE) == STATUS_QUESTION
-    # And the fresh claim is inside its own grace window again.
     assert should_capture_permission_tail(
         pane_alive=True,
         permission_open=True,
@@ -382,24 +392,24 @@ class _FakeManager:
 def test_a_view_clears_an_open_permission() -> None:
     """THE OWNER'S RULE: clicking a tab marks the session read."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     mgr = _FakeManager(tracker)
 
     assert clear_view_state(mgr, session_id="ses_1") is True
     assert tracker.permission_open_since("ses_1") is None
-    assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_IDLE
+    assert tracker.permission_open_since("ses_1") is None
 
 
 def test_a_view_is_idempotent() -> None:
     """Looking twice reaches the same state as looking once."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     mgr = _FakeManager(tracker)
 
     clear_view_state(mgr, session_id="ses_1")
-    first = tracker.resolve("ses_1", STATUS_IDLE)
+    first = tracker.permission_open_since("ses_1")
     clear_view_state(mgr, session_id="ses_1")
-    assert tracker.resolve("ses_1", STATUS_IDLE) == first
+    assert tracker.permission_open_since("ses_1") == first
     assert len(mgr._unread_store.cleared) == 2
 
 
@@ -407,7 +417,7 @@ def test_a_view_by_tmux_name_clears_the_permission_too() -> None:
     """The manual mark-read control arrives holding the NAME, not the id,
     and must reach the same flag."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     mgr = _FakeManager(tracker)
 
     assert clear_view_state(mgr, tmux_name="cloude_Media_Compression") is True
@@ -416,15 +426,16 @@ def test_a_view_by_tmux_name_clears_the_permission_too() -> None:
 
 def test_a_view_still_clears_the_notice_and_the_unread_flag() -> None:
     """The new clear is ADDITIVE - nothing the view did before is lost."""
-    from src.core.session_activity import EVENT_NOTIFICATION
-
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_NOTIFICATION, now=T0)
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    signal = open_claims(
+        tracker, "ses_1", permission=True, notice=True, at=T0
+    )
     mgr = _FakeManager(tracker)
 
     clear_view_state(mgr, session_id="ses_1")
-    assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_IDLE
+
+    assert signal.notice_open is False
+    assert signal.permission_open is False
     assert mgr._unread_store.cleared == [
         ("cloude_Media_Compression", "epoch-1")
     ]
@@ -477,7 +488,7 @@ PAST_GRACE = T0 + timedelta(seconds=PERMISSION_TAIL_GRACE_SECONDS + 5)
 def test_the_seam_does_not_capture_inside_the_grace_window(monkeypatch) -> None:
     """The expensive input is not paid for while the claim is fresh."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     calls: list = []
     verdict = _run_seam(
         monkeypatch, tracker, IDLE_PANE,
@@ -506,7 +517,7 @@ def test_the_seam_clears_a_flag_with_no_dialog_on_the_pane(
 ) -> None:
     """THE LIVE CASE. Real tail, real absence, flag retired."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     calls: list = []
     verdict = _run_seam(
         monkeypatch, tracker, STUCK_LIVE_PANE, now=PAST_GRACE, calls=calls,
@@ -514,14 +525,14 @@ def test_the_seam_clears_a_flag_with_no_dialog_on_the_pane(
     assert verdict == PERMISSION_CLEARED_NO_DIALOG
     assert len(calls) == 1
     assert tracker.permission_open_since("ses_1") is None
-    assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_IDLE
+    assert tracker.permission_open_since("ses_1") is None
 
 
 def test_the_seam_captures_once_per_poll_then_stops(monkeypatch) -> None:
     """One capture per poll while the flag is open, and NONE after it is
     cleared - which is also what makes the log line fire exactly once."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     calls: list = []
     _run_seam(monkeypatch, tracker, STUCK_LIVE_PANE, now=PAST_GRACE, calls=calls)
     _run_seam(monkeypatch, tracker, STUCK_LIVE_PANE, now=PAST_GRACE, calls=calls)
@@ -530,14 +541,14 @@ def test_the_seam_captures_once_per_poll_then_stops(monkeypatch) -> None:
 
 def test_the_seam_keeps_a_flag_with_a_dialog_on_the_pane(monkeypatch) -> None:
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     calls: list = []
     verdict = _run_seam(
         monkeypatch, tracker, BASH_DIALOG, now=PAST_GRACE, calls=calls,
     )
     assert verdict == PERMISSION_KEPT_DIALOG
     assert tracker.permission_open_since("ses_1") == T0
-    assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_QUESTION
+    assert tracker.permission_open_since("ses_1") is not None
 
 
 def test_the_seam_keeps_a_flag_it_could_not_read_the_pane_for(
@@ -545,14 +556,14 @@ def test_the_seam_keeps_a_flag_it_could_not_read_the_pane_for(
 ) -> None:
     """REFUSES ON NO EVIDENCE, and keeps trying on the next poll."""
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     calls: list = []
     verdict = _run_seam(
         monkeypatch, tracker, None, now=PAST_GRACE, calls=calls,
     )
     assert verdict == PERMISSION_KEPT_UNREADABLE
     assert tracker.permission_open_since("ses_1") == T0
-    assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_QUESTION
+    assert tracker.permission_open_since("ses_1") is not None
     _run_seam(monkeypatch, tracker, None, now=PAST_GRACE, calls=calls)
     assert len(calls) == 2
 
@@ -567,7 +578,7 @@ def test_the_seam_never_invents_a_permission(monkeypatch) -> None:
     )
     assert verdict == PERMISSION_NOT_CHECKED
     assert tracker.permission_open_since("ses_1") is None
-    assert tracker.resolve("ses_1", STATUS_IDLE) == STATUS_IDLE
+    assert tracker.permission_open_since("ses_1") is None
 
 
 def test_the_seam_refuses_an_unmeasured_pane(monkeypatch) -> None:
@@ -590,7 +601,7 @@ def test_the_seam_refuses_an_unmeasured_pane(monkeypatch) -> None:
         lambda **kw: calls.append(kw) or IDLE_PANE,
     )
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     assert apply_mod.verify_open_permission(
         _seam_manager(tracker),
         session_id="ses_1",
@@ -618,7 +629,7 @@ def test_the_seam_clears_a_measured_dead_pane_with_no_capture(monkeypatch) -> No
         lambda **kw: calls.append(kw) or IDLE_PANE,
     )
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     assert apply_mod.verify_open_permission(
         _seam_manager(tracker),
         session_id="ses_1",
@@ -641,7 +652,7 @@ def test_the_seam_never_raises_when_the_capture_blows_up(monkeypatch) -> None:
 
     monkeypatch.setattr(ledger, "capture_pane_tail", boom)
     tracker = SessionActivityTracker()
-    tracker.record_event("ses_1", EVENT_PERMISSION_REQUEST, now=T0)
+    open_claims(tracker, "ses_1", permission=True, at=T0)
     assert apply_mod.verify_open_permission(
         _seam_manager(tracker),
         session_id="ses_1",

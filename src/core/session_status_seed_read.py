@@ -26,7 +26,7 @@ reads, both bounded and both refusing rather than guessing:
 NEITHER READ MAY RAISE. This runs on the listing path, which paints the
 sidebar and the launchpad, and a status is telemetry: every failure
 becomes a named outcome the caller may log and ignore. That is the same
-posture ``_persist_activity_state`` and ``sync_claude_title`` already
+posture the durable status write and ``sync_claude_title`` already
 take on their own critical paths.
 
 WHERE THE CACHE LIVES, and why it is not an attribute on SessionManager.
@@ -443,10 +443,8 @@ def seed_live_sessions(manager: Any) -> Tuple[int, int]:
       session's status instead of painting it ``unknown`` until the next
       poll fills the cache lazily. Purely a warm-up: it derives exactly
       what the seam would derive, so running it, not running it, or
-      running it twice all reach the same place. Skips any session that
-      already has live hook signal, because a hook outranks a seed.
-      Never raises - the boot pass must not fail because a status did
-      not warm.
+      running it twice all reach the same place. Never raises - the boot
+      pass must not fail because a status did not warm.
     Inputs: manager (SessionManager) - holding the sessions to seed.
     Output: tuple[int, int] - (sessions that got a seed, sessions
       examined).
@@ -458,7 +456,6 @@ def seed_live_sessions(manager: Any) -> Tuple[int, int]:
         sessions = dict(manager._registry.sessions)
         store = seeds_for(manager)
         store.prune(sessions.keys())
-        tracker = getattr(manager, "_activity_tracker", None)
         now = datetime.now(timezone.utc)
     except _SEED_READ_ERRORS as exc:
         logger.warning(
@@ -473,8 +470,12 @@ def seed_live_sessions(manager: Any) -> Tuple[int, int]:
     # that fails for session 3 of 19 still lets 4 through 19 seed.
     for session_id, session in sessions.items():
         try:
-            if tracker is not None and tracker.hooks_seen(session_id):
-                continue
+            # EVERY SESSION IS WARMED. This used to skip a session whose
+            # hooks had spoken, because a hook outranked a seed; nothing
+            # reads hook signal any more, so the skip could only ever
+            # refuse to warm a session that needs warming. It is the same
+            # answer this loop already gave whenever the tracker could
+            # not be read at all.
             examined += 1
             authority = getattr(manager, "hook_tokens", None)
             tmux_name = getattr(session, "tmux_session", None) or (

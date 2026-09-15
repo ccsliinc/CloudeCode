@@ -13,7 +13,7 @@ app's own writes proceed while it reads.
 WHY BOOT DOES NOT WAIT. ``start()`` creates a task and returns. Nothing
 on the startup path awaits the first check, and the task body catches
 every exception it can raise. This is the same fail-soft posture as
-``ensure_db_migrated``, ``claude_hooks.ensure_hook_settings`` and
+``ensure_db_migrated``, ``claude_hooks.strip_managed_hooks`` and
 ``CorpusIngestScheduler``: a failure here degrades a status field, it
 never costs the user their server.
 

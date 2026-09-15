@@ -168,6 +168,70 @@ file and check `$?`, or capture the output into a variable and inspect it
 afterwards. There is no correct way to read a status through a pipe, only
 less-wrong ones.
 
+## A counter fed by a mislabeled key cannot be fixed by ordering
+
+**Five occurrences, all of them on the same counter.**
+
+The app counted how many sub-agents a session had open, so it could keep quiet
+while a session was waiting on its own work rather than on the user. The count
+was fed by Claude Code's lifecycle hooks, keyed on `CLOUDECODE_SESSION_ID`.
+**That variable is set on the tmux PANE, so every process in the pane posts
+under it: the parent agent and every background agent it launches.** The counter
+was therefore not counting what its name said. A sub-agent's own `PreToolUse`
+cleared the parent's latch and re-opened the parent's turn in one event.
+
+Five passes tried to repair it without touching the key: `e794aef` and
+`cafb50c` gated on the heartbeat, `0d1a12c` added the suppression gate,
+`75356eb` added a 180 second latch, and the idle-nag pass added a turn-closed
+flag. Measured over 50.8 hours after all five: **410 of 459 attributable toasts,
+89.3 percent, still fired while the session's own turn-end record said
+background agents were pending.** The latch suppressed 1 toast in 184 chances;
+153 of 167 armed latches died inside their own time to live at a median of 60.1
+seconds. The number did not move, because no consumer can undo a label applied
+before the event was emitted.
+
+**Do:** when a signal is wrong, ask what identifies each event before you ask
+what order they arrive in. If two producers cannot be told apart at the source,
+every downstream repair is a guess about which one you are holding, and the
+symptom will survive each one. The replacement reads the count out of the
+record claude writes at the end of its own turn
+(`system`/`turn_duration`.`pendingBackgroundAgentCount`), where the number is
+stated once by the only process that knows it.
+
+**And the corollary, because it is the half that keeps getting skipped:** an
+absent field is not a zero. That key is OMITTED when the count is zero, so
+`count or 0` and a missing key are the same expression and different facts.
+`src/core/attention/resolve.py` has no `or 0` in it for this reason, and an
+unreadable count answers `unknown`, which raises nothing.
+
+## A signal read before its source has settled is not a reading
+
+**Two occurrences, one of them for 50.8 measured hours.**
+
+The `Stop` hook is SYNCHRONOUS: claude blocks inside our handler until it
+returns. Measured on Claude Code 2.1.266 by timestamping both sides, the order
+at the end of a turn is: the hook fires, then **25 ms later** claude writes the
+turn-end record carrying the background-agent count, then **7 ms after that**
+claude updates its own status file to `idle`. So at the instant the hook ran,
+every piece of evidence about the turn that just ended was still unwritten. The
+"done" toast was raised from the one moment in the turn when nothing could be
+checked.
+
+The same shape, one layer down and in the other direction: at a BLOCKED moment
+the evidence LEADS rather than lags. An `AskUserQuestion` tool call was written
+at .284, claude's status went to `waiting` at .335, and the toast followed at
+.403. Reading either boundary once, at the wrong end of it, gives a confident
+answer about a state that has not happened yet or has already moved.
+
+**Do:** do not read a source at the instant it is being written. Either read on
+a cadence that is decoupled from the event (a tick, or a watch on the file), or
+require the reading to hold still before you act on it. Both are in the
+replacement: `SETTLE_SECONDS = 1.5` makes a pane-decided or end-of-file-decided
+verdict prove itself twice, and `DONE_QUIET_SECONDS = 3` makes a finished turn
+stay finished for three seconds of transcript silence before anything is raised
+on it. Neither number is a conservatism knob; each one is longer than the gap
+that was measured.
+
 ## Global tool state is shared state
 
 **One occurrence, both parties, and it was written INTO a protocol.**

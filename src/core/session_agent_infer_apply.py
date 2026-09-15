@@ -352,7 +352,7 @@ def apply_agent_inference(
 ) -> InferApplyResult:
     """Infer this pane's agent once, and record it if anything was proven.
 
-    Description: called from ``SessionManager.record_hook_event`` on every
+    Description: called from ``AttentionSideEffects.on_observation`` on every
       hook, and structured so the common path costs one memo lookup. The
       order is deliberate and is the whole performance story: memo, then
       the row gate (one SELECT), then the tmux pane pid, then the single
