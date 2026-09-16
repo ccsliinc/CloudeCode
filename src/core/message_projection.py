@@ -54,20 +54,44 @@ background and why the whole-corpus drain is an operator script the
 owner runs deliberately, rather than something an upgrade does to his
 disk while he is not looking.
 
-ONE FILE IS ONE TRANSACTION, AND THE BIGGEST FILE IS THE BOUND. The
-whole of one archive's ingest happens inside a single ``BEGIN
+ONE FILE IS ONE TRANSACTION, AND THE CREDENTIAL SCAN IS NO LONGER IN IT.
+The whole of one archive's ingest happens inside a single ``BEGIN
 IMMEDIATE``, which is what makes a replace atomic: there is no instant
 where a transcript has been deleted and not yet rewritten. The cost of
-that is a write lock held for as long as the file takes, and the largest
-transcript in the owner's corpus is 244 MB - about five minutes at the
-measured throughput. WAL plus the 30s busy timeout
-(``src.core.db.CONNECTION_PRAGMAS``) is what lets another writer wait
-rather than fail, and within one server process the question does not
-arise at all because the scheduler runs the ingest and this pass
-sequentially. Shrinking that window means moving the parse outside the
-transaction, which is a change to ``ingest_lines`` and is NOT pretended
-to have been made here. It is also why the first-run drain is an
-operator script the owner runs when it suits him.
+that is a write lock held for as long as the file takes, and the budget
+in ``run_projection_once`` is checked BETWEEN files and cannot interrupt
+one - so that window was bounded only by the largest transcript in the
+corpus. Measured on archive 16874 (244.1 MB, 17,486 lines) the lock was
+held for **511.7 seconds** by one call, against a ``max_seconds`` of 30.
+
+Profiled INSIDE the lock on archive 15132 (116.1 MB, 47.2 s held) the
+cause was not distributed: ``scan_text`` was 40.523 s tottime, **85.9
+percent**, while sqlite ``execute`` was 0.619 s, **1.3 percent**. The
+transaction was being held open almost entirely so a REGEX PASS could
+finish. ``project_one`` now runs that pass BEFORE it takes the lock, via
+:mod:`src.core.message_secret_prescan`, and hands the result to
+``ingest_lines``. Nothing else moved: the write order, the SQL and the
+rows produced are identical, which
+``tests/test_secret_scan_outside_the_write_lock.py`` asserts row for row
+rather than by count.
+
+THE FINDINGS ARE CONTENT ADDRESSED, so this cannot attach one body's
+scan to another: the index is keyed on ``body_bytes_sha256``, which is
+defined as the sha256 of the very text being scanned. A MISS scans live
+inside the lock exactly as before, so being wrong about the index costs
+only the speedup and can never record a body as clean that nothing
+measured. WRITING THE FINDINGS AFTER THE COMMIT was the other candidate
+and was REJECTED: ``archive_snippet_gate`` reads them, and measured over
+the live archive's 12,522 real findings, 1,211 of them (9.7 percent) sit
+in a preview window that the gate's own fallback scan does not flag. See
+that module's docstring for the measurement.
+
+WAL plus the 30s busy timeout (``src.core.db.CONNECTION_PRAGMAS``) is
+what lets another writer wait rather than fail, and within one server
+process the question does not arise at all because the scheduler runs
+the ingest and this pass sequentially. The remaining hold is the writes
+plus the parse, and the first-run drain is still an operator script the
+owner runs when it suits him.
 
 IT IS NEVER ON THE EVENT LOOP. ``run_projection_once`` is synchronous
 sqlite and synchronous CPU from end to end, and its only in-process
@@ -114,6 +138,7 @@ from src.core.message_archive_flag import (
     resolve as resolve_message_archive,
 )
 from src.core.message_model_ingest import SourceLine, ingest_lines
+from src.core.message_secret_prescan import prescan_for_projection
 from src.core.transcript_archive import export_archive
 
 logger = structlog.get_logger()
@@ -213,6 +238,18 @@ def project_one(
     lines, trailing, line_ending = _split_source_lines(data)
     replacing = pending.prior_outcome is not None
 
+    # THE SECRET SCAN HAPPENS HERE, BEFORE THE LOCK, AND THAT IS THE
+    # WHOLE OF ISSUE 224. Profiled inside the transaction on archive
+    # 15132 (116.1 MB, 47.2 s held): scan_text was 40.523 s tottime,
+    # 85.9 percent of the hold, against 0.619 s of sqlite execute. The
+    # budget in run_projection_once is checked BETWEEN files and cannot
+    # interrupt one, so this window was bounded only by the largest
+    # transcript in the corpus - measured at 516.4 s for archive 16874.
+    # The index is keyed on the scanned bytes' own sha256 and a miss
+    # scans live inside the lock as before, so this can shorten the hold
+    # and cannot change what is recorded.
+    prescan = prescan_for_projection(lines)
+
     conn.execute("BEGIN IMMEDIATE")
     try:
         # The DELETE is the replace, and it is keyed on source_ref rather
@@ -227,6 +264,7 @@ def project_one(
             conn, source_ref=source_ref, session_ref=session_ref,
             lines=lines, has_trailing_newline=trailing,
             line_ending=line_ending, now=pending.ingested_at,
+            prescan=prescan,
         )
         slug, attribution = derive_slug(pending.source_path, layout)
         project_id = (

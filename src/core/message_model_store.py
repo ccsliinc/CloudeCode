@@ -20,14 +20,14 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from src.core.message_body_equivalence import (
     DuplicateVerdict,
     duplicate_verdict,
 )
 from src.core.message_gate_contract import BY_CODE, classify_fidelity
-from src.core.message_model_secrets import scan_text
+from src.core.message_model_secrets import SecretFinding, scan_text
 from src.core.message_model_serialize import (
     detect_style,
     identity_key,
@@ -124,6 +124,7 @@ def record_finding(
 
 def store_secret_findings(
     conn: sqlite3.Connection, body_id: int, body_json: str, now: str,
+    *, matches: Optional[Sequence[SecretFinding]] = None,
 ) -> int:
     """Scan one body for credential material and record what was found.
 
@@ -132,12 +133,25 @@ def store_secret_findings(
       detector name, the offset, the length and a sha256. The record
       itself is stored byte-exactly and is NOT altered; redaction would
       break the fidelity this whole model exists to provide.
+
+      ``matches`` accepts a scan ALREADY RUN over this same body text, so
+      the regex pass can happen outside the caller's write transaction -
+      see :mod:`src.core.message_secret_prescan`, where the measured cost
+      is 85.9 percent of a 47.2 s lock hold. It is a scan RESULT, never a
+      permission to skip scanning: ``None`` means no measurement was
+      offered and this function takes one itself, which is why an absent
+      or unusable prescan degrades to the original behaviour rather than
+      to a body recorded as clean. There remains exactly ONE writer of
+      message_secret_findings, which is the point of threading the
+      result through here instead of giving the prescan its own INSERT.
     Inputs: conn, body_id (int), body_json (str - the identity body's
-      rendered JSON, which is what gets searched), now (ISO-8601 str).
+      rendered JSON, which is what gets searched), now (ISO-8601 str),
+      matches (sequence of SecretFinding over THIS body's text, or None
+      to scan now).
     Output: int - how many findings were recorded.
     Example: store_secret_findings(conn, 1, '{"a":1}', "t") -> 0
     """
-    found = scan_text(body_json)
+    found = list(matches) if matches is not None else scan_text(body_json)
     for item in found:
         conn.execute(
             "INSERT INTO message_secret_findings "
