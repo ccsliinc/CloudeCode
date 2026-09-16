@@ -71,7 +71,7 @@ from src.core.archive_overlay_ddl import DDL_V19
 from src.core.message_activity import install_transcript_activity
 from src.core.message_scheme_repair import repair_session_ref_schemes
 from src.core.message_block_ddl import DDL_V18
-from src.core.message_block_search_ddl import DDL_V27
+from src.core.message_block_search_ddl import DDL_V29
 from src.core.message_host_ddl import DDL_V17
 from src.core.message_archive_flag import message_archive_enabled
 from src.core.archive_db_schema_target import execute_archive_ddl
@@ -927,8 +927,8 @@ def _apply_v18_ddl(conn: sqlite3.Connection) -> None:
     execute_archive_ddl(conn, DDL_V18)
 
 
-def _apply_v27_ddl(conn: sqlite3.Connection) -> None:
-    """Execute the v27 block-search DDL.
+def _apply_v29_ddl(conn: sqlite3.Connection) -> None:
+    """Execute the v29 block-search DDL.
 
     Description: one FTS5 virtual table and three triggers, each
       with IF NOT EXISTS. It CREATES the index and does not POPULATE
@@ -940,9 +940,9 @@ def _apply_v27_ddl(conn: sqlite3.Connection) -> None:
       ``message_content_blocks`` or ``message_bodies``.
     Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
     Output: None.
-    Example: _apply_v27_ddl(conn)
+    Example: _apply_v29_ddl(conn)
     """
-    execute_archive_ddl(conn, DDL_V27)
+    execute_archive_ddl(conn, DDL_V29)
 
 
 def apply_message_model_schema(conn: sqlite3.Connection) -> None:
@@ -968,7 +968,7 @@ def apply_message_model_schema(conn: sqlite3.Connection) -> None:
     _apply_v16_ddl(conn)
     _apply_v17_ddl(conn)
     _apply_v18_ddl(conn)
-    _apply_v27_ddl(conn)
+    _apply_v29_ddl(conn)
 
 
 def _step_v15_to_v16(conn: sqlite3.Connection) -> None:
@@ -1359,18 +1359,80 @@ def _step_v25_to_v26(conn: sqlite3.Connection) -> None:
         conn.execute(DDL_V26_SESSIONS_NOTIFICATION_POLICY_GENERATION)
 
 
-def _step_v26_to_v27(conn: sqlite3.Connection) -> None:
+def _step_v26_to_v27_reserved_for_catalog_ledger(
+    conn: sqlite3.Connection,
+) -> None:
+    """Hold v26 -> v27 for the OTHER line's skills catalog install ledger.
+
+    Description: a NUMBER RESERVATION, not a migration. Both lines of this
+      project independently claimed v27 while diverged: adamdev/master
+      spent it on the catalog install ledger (installed_items,
+      installed_item_targets, catalog_revocations_seen,
+      catalog_index_state) and this line spent it on the FTS5 block-search
+      index. The block-search work moved to v29; this reserves the number
+      it vacated so the two can never collide again.
+
+      IT EXISTS BECAUSE THE CHAIN MUST BE DENSE, NOT AS A COURTESY.
+      ``run_chain`` walks ``range(from_version, to_version)`` and raises
+      KeyError on any missing key, and tests/test_db_migration.py asserts
+      every version below CURRENT_SCHEMA_VERSION has a step. Vacating 26
+      and 27 would make a v26 database on this branch unable to reach v29
+      at all. So the keys are filled rather than skipped, and the chain
+      stays the one shape the runner understands.
+
+      IT DOES NOTHING, AND THAT IS CORRECT ON THIS BRANCH AND NOWHERE
+      ELSE. This branch carries no catalog feature, so there is no table
+      here to create and nothing that reads one. When the lines merge,
+      the three-way merge takes Adam's real bodies for 26 and 27, because
+      his additions and ours land on different lines; this placeholder
+      disappears in that merge rather than surviving it.
+
+      THE RESIDUAL RISK IS NAMED RATHER THAN HIDDEN. A database this
+      branch carries to v29 records v29 and will never re-run 26 or 27,
+      so it reaches the merged world without the catalog tables. That
+      hazard is inherent to two lines claiming one number and predates
+      this change; what this change does is stop it growing. Adam's DDL
+      is idempotent by the statement (every table carries its own IF NOT
+      EXISTS), so the remediation is a re-apply, and it needs his DDL,
+      which this branch does not have.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+      Unused: this step reserves a number and writes nothing.
+    Output: None.
+    Example: _step_v26_to_v27_reserved_for_catalog_ledger(conn)  # no-op
+    """
+    return None
+
+
+def _step_v27_to_v28_reserved_for_loadout_members(
+    conn: sqlite3.Connection,
+) -> None:
+    """Hold v27 -> v28 for the OTHER line's installed_loadout_members.
+
+    Description: the second half of the reservation above, for the same
+      reason and with the same merge behaviour. adamdev/master spends
+      v27 -> v28 on ``installed_loadout_members``, the refcount an
+      uninstall reads before removing anything. This line has no loadouts
+      and writes nothing here.
+    Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
+      Unused, as above.
+    Output: None.
+    Example: _step_v27_to_v28_reserved_for_loadout_members(conn)  # no-op
+    """
+    return None
+
+
+def _step_v28_to_v29(conn: sqlite3.Connection) -> None:
     """Create the FTS5 index over content-block text, and its triggers.
 
-    Description: build step for v27. See
+    Description: build step for v29. See
       src/core/message_block_search_ddl.py for the measured false-positive
       counts this replaces, the tokenizer comparison behind
       ``unicode61``, and why the index is kept current by TRIGGERS rather
       than by a Python write path (a cascading delete of a body is
       invisible to Python and visible to a trigger).
 
-      IT CREATES AND DOES NOT POPULATE, for the reason _apply_v27_ddl
-      gives. A v26 database reaches v27 with an EMPTY index, and that is
+      IT CREATES AND DOES NOT POPULATE, for the reason _apply_v29_ddl
+      gives. A v28 database reaches v29 with an EMPTY index, and that is
       the honest state: message_block_search_status reports it as
       ``never_built`` and search REFUSES with cannot_determine rather
       than returning zero hits. Falling back to the old INSTR scan was
@@ -1381,16 +1443,16 @@ def _step_v26_to_v27(conn: sqlite3.Connection) -> None:
       archive off has no message_content_blocks for the triggers to
       reference, and CREATE TRIGGER against a missing table fails.
       Crossing this version with the flag off leaves the work to
-      apply_message_model_schema, which applies v27 with the rest.
+      apply_message_model_schema, which applies v29 with the rest.
     Inputs: conn (sqlite3.Connection) - inside the caller's transaction.
     Output: None.
-    Example: _step_v26_to_v27(conn)  # after _step_v25_to_v26
+    Example: _step_v28_to_v29(conn)  # after the v27 and v28 reservations
     """
     if not message_archive_enabled():
         return
     if not table_exists(conn, "message_content_blocks"):
         return
-    _apply_v27_ddl(conn)
+    _apply_v29_ddl(conn)
 
 
 # from_version -> the function that advances it by one. Adding a key here
@@ -1424,7 +1486,9 @@ STEPS: Dict[int, Callable[[sqlite3.Connection], None]] = {
     23: _step_v23_to_v24,
     24: _step_v24_to_v25,
     25: _step_v25_to_v26,
-    26: _step_v26_to_v27,
+    26: _step_v26_to_v27_reserved_for_catalog_ledger,
+    27: _step_v27_to_v28_reserved_for_loadout_members,
+    28: _step_v28_to_v29,
 }
 
 
