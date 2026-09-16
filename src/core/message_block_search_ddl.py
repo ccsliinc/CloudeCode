@@ -1,4 +1,4 @@
-"""DDL for schema v27: the FTS5 index over ``message_content_blocks.text``.
+"""DDL for schema v29: the FTS5 index over ``message_content_blocks.text``.
 
 WHAT THIS REPLACES, AND WHY IT IS A CORRECTNESS FIX RATHER THAN A SPEED
 ONE. ``archive_search`` matched with ``INSTR(body_json, needle)``, and
@@ -142,22 +142,22 @@ BEGIN
 END
 """
 
-#: Ordered DDL for a v26 -> v27 database. Every statement carries its own
+#: Ordered DDL for a v28 -> v29 database. Every statement carries its own
 #: IF NOT EXISTS, so the step is safe on a retry - the same idiom
 #: v7/v8/v14/v16/v18 already use for the same reason. NOTHING HERE
 #: POPULATES the index: a CREATE that also ran the 1.80 s build would put
 #: an unbounded write inside the migration transaction, and on a corpus
 #: 20 times this size that is a boot that looks hung. The build is its
 #: own named operation with its own liveness record.
-DDL_V27: Tuple[str, ...] = (
+DDL_V29: Tuple[str, ...] = (
     DDL_MESSAGE_BLOCK_SEARCH,
     DDL_TRIGGER_BLOCK_SEARCH_INSERT,
     DDL_TRIGGER_BLOCK_SEARCH_DELETE,
     DDL_TRIGGER_BLOCK_SEARCH_UPDATE,
 )
 
-#: Object names v27 creates, in creation order. Used by the migration
+#: Object names v29 creates, in creation order. Used by the migration
 #: test so it does not re-list them (a second list that can drift).
-V27_OBJECT_NAMES: Tuple[str, ...] = (
+V29_OBJECT_NAMES: Tuple[str, ...] = (
     BLOCK_SEARCH_TABLE,
 ) + BLOCK_SEARCH_TRIGGERS

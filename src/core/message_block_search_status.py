@@ -8,7 +8,7 @@ vocabulary ``corpus_ingest_state`` and ``db_integrity_status`` already
 use, plus one this path needed:
 
   ``missing``      the FTS table is not there. An install that has not
-                   reached v27, or one whose archive flag is off.
+                   reached v29, or one whose archive flag is off.
   ``never_built``  the table exists and holds nothing while blocks
                    exist. The migration CREATES and does not POPULATE,
                    so this is the normal state of a freshly migrated
@@ -282,7 +282,7 @@ def probe_index_state(
             return IndexState(
                 INDEX_MISSING,
                 f"{BLOCK_SEARCH_TABLE} does not exist; this install has not "
-                f"reached schema v27, or the message archive is off",
+                f"reached schema v29, or the message archive is off",
                 built_at=built_at,
             )
         has_rows = conn.execute(_ANY_INDEXED_SQL).fetchone() is not None
@@ -346,7 +346,7 @@ def resolve_index_state(
             return IndexState(
                 INDEX_MISSING,
                 f"{BLOCK_SEARCH_TABLE} does not exist; this install has not "
-                f"reached schema v27, or the message archive is off",
+                f"reached schema v29, or the message archive is off",
                 built_at=built_at,
             )
         indexed = int(conn.execute(

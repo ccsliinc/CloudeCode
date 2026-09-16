@@ -256,7 +256,7 @@ def test_a_fresh_install_needs_no_rebuild_because_the_triggers_ran(
       was already complete. The triggers are applied by the same schema
       step that creates the table, so a fresh install is indexed on the
       way in and ``rebuild_block_search_index.py`` is only ever needed by
-      an install that already HAD content blocks when it crossed v27.
+      an install that already HAD content blocks when it crossed v29.
       That is a better outcome than the one expected and it is pinned
       here so a future change that moves indexing out of the triggers
       cannot pass quietly.
@@ -284,7 +284,7 @@ def test_an_emptied_index_refuses_rather_than_returning_zero(
 
     Description: this is the rung that would otherwise re-create the
       defect. An install that already held content blocks when it crossed
-      v27 arrives here, and so does a ``--rebuild`` run between its reset
+      v29 arrives here, and so does a ``--rebuild`` run between its reset
       and its build. Answering "no results" there is the false green the
       whole design exists to stop, and falling back to the old scan would
       silently restore the false positives on exactly the installs least

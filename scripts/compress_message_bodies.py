@@ -118,7 +118,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "\nREFUSING: the FTS5 block-search index does not exist on "
                 "this database, so search may still be reading body_json "
                 "directly. Compressing now would blind it silently. Migrate "
-                "to schema v27 and run scripts/rebuild_block_search_index.py "
+                "to schema v29 and run scripts/rebuild_block_search_index.py "
                 "first."
             )
             return 2
