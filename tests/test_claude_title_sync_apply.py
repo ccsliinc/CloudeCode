@@ -141,7 +141,7 @@ def db(tmp_path):
         # agent_family_source travels with agent_type everywhere the row
         # identity is read (see session_store.identity_for_live_name):
         # the value alone cannot say whether it was launched or inferred.
-        "agent_type TEXT, agent_family_source TEXT)"
+        "agent_type TEXT, agent_family TEXT, agent_family_source TEXT)"
     )
     conn.commit()
     # The seam closes the connection it is handed, which would break the

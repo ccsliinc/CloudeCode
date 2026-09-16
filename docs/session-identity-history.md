@@ -372,8 +372,30 @@ no timestamp, so it cannot be ordered against the label already on the row.
 14:47:41Z 2026-09-08, a rename logged `claude_rename_pushed` and delivered
 nothing because the file appeared 2m33s later, `--resume` exited 1, stderr went to
 DEVNULL. `decide_push` now defers on a MEASURED absence only (`unchecked` still
-sends) and `spawn_oob_rename` reaps and logs. STILL OPEN: a deferred push is
-never retried; `title != claude_title` is the marker a retry would key on.
+sends) and `spawn_oob_rename` reaps and logs.
+**THAT DEFERRED PUSH IS NOW RETRIED, A BOUNDED NUMBER OF TIMES, AND THE HARD
+PART IS THE ORDERING RATHER THAN THE RETRY.** Measured on live 2026-09-16, 4 of
+941 rows carry `title != claude_title` and one had been diverged since
+2026-09-04. `src/core/claude_rename_retry.py` is the pure ladder,
+`claude_rename_retry_store.py` the durable ledger and
+`claude_rename_retry_apply.py` the seam, hung off the tail of
+`sync_claude_title` because that pass has already read every field the retry
+needs. THE ORDERING IS A WITNESSED STATE, NOT A CLOCK: `TITLE_APPLIED` writes
+BOTH columns to one value and a browser rename writes `title` ALONE, so a
+divergence is orderable exactly when the two columns were once seen to AGREE and
+`claude_title` has not moved since. The ledger records that agreement. A row with
+no such frame answers `unordered` and pushes NOTHING - which is the right answer
+for the two live rows whose claude-side name may well be the newer one, and the
+whole reason this is not a loop that re-sends a label. The push is additionally
+gated on the transcript's own newest `custom-title` still equalling
+`claude_title` (the sync's `TITLE_UNCHANGED`), so a silent or unreadable window
+authorises nothing and spends no attempt. THE BOUND IS 5 PUSHES per distinct
+label with a 60s floor between them, which spans four minutes against the 2m33s
+transient above; `exhausted` and `superseded` are the named terminal states, a
+new label starts a fresh budget, and the budget is durable so a restart cannot
+refill it. `CLOUDE_RENAME_RETRY=0` switches it off and it defaults OFF under
+`CLOUDE_TEST_MODE`, so a pytest run can never spawn `claude --resume` against
+the developer's corpus.
 **The plain create endpoint was the one creator passing no label**, so only
 launchpad sessions launched claude with no `--name`; `CreateSessionRequest.label`
 closes it, and an absent label leaves the command line byte-identical.
