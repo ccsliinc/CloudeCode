@@ -7,6 +7,7 @@
   "scripts": {
     "build": "vite build",
     "watch": "vite build --watch",
+    "dev:harness": "vite --config vite.dev-harness.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "svelte-check --tsconfig ./tsconfig.json"

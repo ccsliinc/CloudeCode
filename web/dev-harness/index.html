@@ -1,0 +1,28 @@
+<!doctype html>
+<!--
+  DEVELOPMENT PREVIEW HARNESS. SCAFFOLDING, NOT THE ARCHIVE SCREEN.
+
+  This page exists to make slice 5 (NavRail) and slice 6 (TranscriptList)
+  clickable before the application shell that will host them exists. It
+  is served only by `npm run dev:harness` and is never built, never
+  bundled into client/dist and never served by FastAPI. Delete the whole
+  of web/dev-harness/ when the real shell lands.
+-->
+<html lang="en" data-theme="dark">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Archive component preview (dev harness)</title>
+    </head>
+    <body>
+        <!--
+          The mount point. It carries NO class: every class name in this
+          page below the harness root belongs to the real components and
+          to client/css/archive*.css, and commitment 1 of issue #173 is
+          that this work introduces no new class name anywhere those
+          stylesheets or those components can see.
+        -->
+        <div id="dev-harness-root"></div>
+        <script type="module" src="./harness-main.ts"></script>
+    </body>
+</html>
