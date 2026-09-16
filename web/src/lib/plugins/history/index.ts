@@ -193,3 +193,72 @@ export { isFiltering, visibleRows } from './tlist-fuzzy';
 export type {
     FuzzyMatcher, MatchSpan, SpanMap, LabelSegment, RankedRow,
 } from './tlist-fuzzy';
+
+/**
+ * SLICE 5, THE NAVIGATION RAIL. Published here for the same reason the
+ * block above is: `import-direction.test.ts` pins that nothing outside
+ * `history/` reaches past this file, so a composition root mounts
+ * `NavRail` through the package rather than by path.
+ *
+ * IT IS DELIBERATELY NOT WIRED TO A SCREEN, for the same reason slice 6
+ * is not. It takes its container, its granted client, its outcome
+ * classifier, its `onSelect`, and optionally its order storage, its
+ * modal stack, its presentation overlay and its outcome renderer from
+ * whoever mounts it, and assumes nothing about what is around it.
+ *
+ * Replaces client/js/archive-nav.js, archive-nav-row.js,
+ * archive-nav-card.js, archive-nav-info.js, archive-nav-merged.js,
+ * archive-nav-order.js, archive-nav-fuzzy.js, archive-nav-drill.js and
+ * archive-nav-tree.js.
+ */
+export { default as NavRail } from './NavRail.svelte';
+export { default as NavProjectCard } from './NavProjectCard.svelte';
+export { default as NavNode } from './NavNode.svelte';
+export { default as NavLevel } from './NavLevel.svelte';
+export { default as NavInfoModal } from './NavInfoModal.svelte';
+export { default as NavLabel } from './NavLabel.svelte';
+export { default as NavOutcome } from './NavOutcome.svelte';
+export {
+    CLASS as NAV_CLASS, INFO_CLASS as NAV_INFO_CLASS, NODE_KINDS, NODE_MOD,
+    ROOT_CLASS as NAV_ROOT_CLASS, INFO_ROOT_CLASS, UNATTRIBUTED_LABEL,
+    UNATTRIBUTED_TITLE, UNSTYLED_PRE_EXISTING, VIEWS,
+} from './nav-vocab';
+export type { NodeKind, NavView } from './nav-vocab';
+export {
+    countFor, describeFilter as describeNavFilter, filterRows, idFor, labelFor,
+    renderCount, shouldShowUnattributed, titleFor, unattributedNote,
+} from './nav-row';
+export type { NavRowData, UnattributedNote, UnattributedVerdict } from './nav-row';
+export {
+    MODES as ORDER_MODES, DEFAULT_MODE as DEFAULT_ORDER_MODE, STORAGE_KEY as ORDER_STORAGE_KEY,
+    activityCell, comparatorFor, hasKey, isMode, modeFor, partition, readMode,
+    sortNodes, unsortedReason, writeMode,
+} from './nav-order';
+export type {
+    ActivityCell, ModeStore, OrderKind, OrderMode, OrderableNode, ParkedNode,
+    SortResult, StoredMode, UnsortedReason,
+} from './nav-order';
+export { BOUNDARY_CHARS, isBoundary, match, matchRow, rank, segments } from './nav-fuzzy';
+export type { FuzzyField, FuzzyHit, NavSegment, RankedNavRow } from './nav-fuzzy';
+export {
+    FIELDS as NAV_FUZZY_FIELDS, filterByHost, hostOptions, normalizedProjects,
+    paintMerged, partitionUnattributed,
+} from './nav-merged';
+export type { MergedNode, MergedPaint, PaintedProject, UnattributedSplit } from './nav-merged';
+export {
+    SESSION_COUNTED_FIELD, SESSION_COUNT_FIELDS, SESSION_REASONS, SESSION_STATES,
+    countsLine, countsTitle, presentationFor, sessionCountFor,
+} from './nav-card';
+export type { CountsLine, OverlayFallback, Presentation, SessionCount } from './nav-card';
+export { infoField, machineRows, machinesHeading, machinesUnevaluated } from './nav-info';
+// `ModalStackLike` is published above, from `keys-help.ts`. The rail
+// REUSES that type rather than declaring a second name for the same host
+// object, so there is nothing to re-export here.
+export type { InfoField, MachineRow, MachinesHeading } from './nav-info';
+export {
+    HOSTS_KEY, LEVEL_FIELDS, applyLevel, childKind, emptyLevel, fetchLevel,
+    levelKey, loadedCorpora, unattributedRowFor,
+} from './nav-drill';
+export type { DrillState, LevelState } from './nav-drill';
+export { applyMerged, emptyMerged } from './nav-merged-load';
+export type { MergedState } from './nav-merged-load';

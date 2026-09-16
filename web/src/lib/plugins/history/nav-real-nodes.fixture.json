@@ -1,0 +1,2550 @@
+[
+ {
+  "project_id": 1,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 262,
+  "session_count": 4,
+  "newest_activity_at": "2026-09-16T16:30:55.557Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 1,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode",
+    "transcript_count": 262,
+    "session_count": 4
+   }
+  ]
+ },
+ {
+  "project_id": 2,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-daily-briefing",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 100,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-16T15:56:18.958Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 2,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-daily-briefing",
+    "transcript_count": 100,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 3,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Media",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1503,
+  "session_count": 214,
+  "newest_activity_at": "2026-09-15T19:54:00.966Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 3,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Media",
+    "transcript_count": 1503,
+    "session_count": 214
+   }
+  ]
+ },
+ {
+  "project_id": 4,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Fantasy-Football-2026",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 63,
+  "session_count": 2,
+  "newest_activity_at": "2026-09-15T12:43:36.845Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 4,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Fantasy-Football-2026",
+    "transcript_count": 63,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 5,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Personal-Assistant",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 207,
+  "session_count": 20,
+  "newest_activity_at": "2026-09-15T05:43:15.610Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 5,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Personal-Assistant",
+    "transcript_count": 207,
+    "session_count": 20
+   }
+  ]
+ },
+ {
+  "project_id": 6,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-BHPP",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 760,
+  "session_count": 28,
+  "newest_activity_at": "2026-09-13T06:44:21.949Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 6,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-BHPP",
+    "transcript_count": 760,
+    "session_count": 28
+   }
+  ]
+ },
+ {
+  "project_id": 7,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Mac",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 127,
+  "session_count": 13,
+  "newest_activity_at": "2026-09-11T19:37:09.549Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 7,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Mac",
+    "transcript_count": 127,
+    "session_count": 13
+   }
+  ]
+ },
+ {
+  "project_id": 8,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Hirschfeld",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1420,
+  "session_count": 46,
+  "newest_activity_at": "2026-09-16T16:21:05.329Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 8,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Hirschfeld",
+    "transcript_count": 1420,
+    "session_count": 46
+   }
+  ]
+ },
+ {
+  "project_id": 9,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Amerifund",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 170,
+  "session_count": 13,
+  "newest_activity_at": "2026-09-10T13:14:25.555Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 9,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Amerifund",
+    "transcript_count": 170,
+    "session_count": 13
+   }
+  ]
+ },
+ {
+  "project_id": 10,
+  "full_path": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode-2629dba5-234e-44d2-be54-ddaf69c8db4b-scratchpad-permprobe",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 3,
+  "newest_activity_at": "2026-09-09T19:34:39.905Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 10,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode-2629dba5-234e-44d2-be54-ddaf69c8db4b-scratchpad-permprobe",
+    "transcript_count": 3,
+    "session_count": 3
+   }
+  ]
+ },
+ {
+  "project_id": 11,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-ko0irget",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T23:33:51.221Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 11,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-ko0irget",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 12,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-5ukrvlul",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T23:31:23.903Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 12,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-5ukrvlul",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 13,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work--yrasc2z",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T23:36:45.860Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 13,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work--yrasc2z",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 14,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-qrqd1nku",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T22:03:33.190Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 14,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-qrqd1nku",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 15,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-t4kdpt79",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T21:36:40.446Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 15,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-t4kdpt79",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 16,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-zn4izl16",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T21:21:12.611Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 16,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-zn4izl16",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 17,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-yyfp9eml",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T21:22:58.483Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 17,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-yyfp9eml",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 18,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-dj8de2mj",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T21:23:57.810Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 18,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-cc-rht-work-dj8de2mj",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 19,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-p5-work-79ul7oaz",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T20:51:41.425Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 19,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-p5-work-79ul7oaz",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 20,
+  "full_path": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-p4-work-9e94pz2r",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T20:50:06.734Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 20,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-var-folders-p6-2fx4wn854s19lksf30bgv6rh0000gn-T-p4-work-9e94pz2r",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 21,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-ses-5a756046",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-09-08T18:59:08.929Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 21,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-ses-5a756046",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 22,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Punchlist-Two",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T18:39:14.249Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 22,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Punchlist-Two",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 23,
+  "full_path": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode-2629dba5-234e-44d2-be54-ddaf69c8db4b-scratchpad-resizeprobe",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T18:00:14.417Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 23,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode-2629dba5-234e-44d2-be54-ddaf69c8db4b-scratchpad-resizeprobe",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 24,
+  "full_path": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode-2629dba5-234e-44d2-be54-ddaf69c8db4b-scratchpad-renametest",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-08T14:55:35.363Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 24,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode-2629dba5-234e-44d2-be54-ddaf69c8db4b-scratchpad-renametest",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 25,
+  "full_path": "-Users-jsugamele-Development-ses-ec5bf2a3",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 3,
+  "newest_activity_at": "2026-08-18T14:55:00.139Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 25,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-ses-ec5bf2a3",
+    "transcript_count": 3,
+    "session_count": 3
+   }
+  ]
+ },
+ {
+  "project_id": 26,
+  "full_path": "-Users-jsugamele-Development-ses-c3737fbe",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-08-17T14:24:38.996Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 26,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-ses-c3737fbe",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 27,
+  "full_path": "-Users-jsugamele-Development-scrolltest",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-08-19T13:38:19.788Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 27,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-scrolltest",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 28,
+  "full_path": "-Users-jsugamele-Development-fstest",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-08-20T14:55:42.678Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 28,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-fstest",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 29,
+  "full_path": "-Users-jsugamele-Development-claude-config-sync",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 4,
+  "session_count": 4,
+  "newest_activity_at": "2026-08-16T20:27:06.452Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 29,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-claude-config-sync",
+    "transcript_count": 4,
+    "session_count": 4
+   }
+  ]
+ },
+ {
+  "project_id": 30,
+  "full_path": "-Users-jsugamele",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 12,
+  "session_count": 8,
+  "newest_activity_at": "2026-08-27T14:14:58.920Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 30,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele",
+    "transcript_count": 12,
+    "session_count": 8
+   }
+  ]
+ },
+ {
+  "project_id": 31,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-FantasyHockey2026",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-09-15T13:42:58.656Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 31,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-FantasyHockey2026",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 32,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2911,
+  "session_count": 81,
+  "newest_activity_at": "2026-09-16T16:21:44.935Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 32,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure",
+    "transcript_count": 2911,
+    "session_count": 81
+   }
+  ]
+ },
+ {
+  "project_id": 33,
+  "full_path": "-Users-jsugamele-Development-Assistants-Infrastructure",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-09-06T21:19:08.181Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 33,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-Assistants-Infrastructure",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 34,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Games-Mindustry3",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 408,
+  "session_count": 5,
+  "newest_activity_at": "2026-09-05T22:41:14.846Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 34,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Games-Mindustry3",
+    "transcript_count": 408,
+    "session_count": 5
+   }
+  ]
+ },
+ {
+  "project_id": 35,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Developer",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1334,
+  "session_count": 17,
+  "newest_activity_at": "2026-09-05T22:37:06.612Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 35,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Developer",
+    "transcript_count": 1334,
+    "session_count": 17
+   }
+  ]
+ },
+ {
+  "project_id": 36,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-N8N",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 9,
+  "session_count": 1,
+  "newest_activity_at": "2026-05-12T23:02:57.956Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 36,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-N8N",
+    "transcript_count": 9,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 37,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-New-Work",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-14T20:25:27.267Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 37,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-New-Work",
+    "transcript_count": 3,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 38,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-PT-IMC",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 398,
+  "session_count": 47,
+  "newest_activity_at": "2026-09-04T22:04:59.794Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 38,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-PT-IMC",
+    "transcript_count": 398,
+    "session_count": 47
+   }
+  ]
+ },
+ {
+  "project_id": 39,
+  "full_path": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure-6e4a3f8b-4751-44b5-a100-fcdad830f741-scratchpad-hookprobe",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 1,
+  "newest_activity_at": "2026-09-03T23:18:25.920Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 39,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp-claude-501--Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure-6e4a3f8b-4751-44b5-a100-fcdad830f741-scratchpad-hookprobe",
+    "transcript_count": 2,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 40,
+  "full_path": "-private-tmp-permtest-45244",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 5,
+  "session_count": 5,
+  "newest_activity_at": "2026-09-03T19:10:49.731Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 40,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp-permtest-45244",
+    "transcript_count": 5,
+    "session_count": 5
+   }
+  ]
+ },
+ {
+  "project_id": 41,
+  "full_path": "-Users-jsugamele-Development-Assistants-Hirschfeld",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-08-19T15:02:17.930Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 41,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Development-Assistants-Hirschfeld",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 42,
+  "full_path": "-private-tmp-claude-501--Users-jsugamele-Development-Assistants-Infrastructure-6e4a3f8b-4751-44b5-a100-fcdad830f741-scratchpad-forktest",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-08-16T20:54:58.199Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 42,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp-claude-501--Users-jsugamele-Development-Assistants-Infrastructure-6e4a3f8b-4751-44b5-a100-fcdad830f741-scratchpad-forktest",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 43,
+  "full_path": "-private-tmp",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 5,
+  "session_count": 5,
+  "newest_activity_at": "2026-09-02T21:29:16.755Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 43,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-private-tmp",
+    "transcript_count": 5,
+    "session_count": 5
+   }
+  ]
+ },
+ {
+  "project_id": 44,
+  "full_path": "-Users-jsugamele-scripts",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 8,
+  "session_count": 3,
+  "newest_activity_at": "2026-01-26T21:12:13.535Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 44,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-scripts",
+    "transcript_count": 8,
+    "session_count": 3
+   }
+  ]
+ },
+ {
+  "project_id": 45,
+  "full_path": "-Users-jsugamele-Scratch-llmScratch-wt-tui-scrollback-v2",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 3,
+  "newest_activity_at": "2026-08-17T15:04:04.887Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 45,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch-llmScratch-wt-tui-scrollback-v2",
+    "transcript_count": 3,
+    "session_count": 3
+   }
+  ]
+ },
+ {
+  "project_id": 46,
+  "full_path": "-Users-jsugamele-Scratch-llmScratch-sbgate-lab-fs",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-08-17T18:43:06.147Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 46,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch-llmScratch-sbgate-lab-fs",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 47,
+  "full_path": "-Users-jsugamele-Scratch-llmScratch-sbgate-lab-classic",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-08-17T18:43:06.178Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 47,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch-llmScratch-sbgate-lab-classic",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 48,
+  "full_path": "-Users-jsugamele-Scratch-llmScratch-hlv3-proj",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 17,
+  "session_count": 17,
+  "newest_activity_at": "2026-08-19T15:26:31.694Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 48,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch-llmScratch-hlv3-proj",
+    "transcript_count": 17,
+    "session_count": 17
+   }
+  ]
+ },
+ {
+  "project_id": 49,
+  "full_path": "-Users-jsugamele-Scratch-llmScratch-altscreen-lab",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-08-17T15:20:02.084Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 49,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch-llmScratch-altscreen-lab",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 50,
+  "full_path": "-Users-jsugamele-Scratch--claude",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 54,
+  "session_count": 4,
+  "newest_activity_at": "2026-02-07T03:38:46.301Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 50,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch--claude",
+    "transcript_count": 54,
+    "session_count": 4
+   }
+  ]
+ },
+ {
+  "project_id": 51,
+  "full_path": "-Users-jsugamele-Scratch",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1224,
+  "session_count": 130,
+  "newest_activity_at": "2026-04-20T21:34:30.664Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 51,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Scratch",
+    "transcript_count": 1224,
+    "session_count": 130
+   }
+  ]
+ },
+ {
+  "project_id": 52,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Python-csj-dbexport",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 1,
+  "newest_activity_at": "2026-03-14T14:18:19.685Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 52,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Python-csj-dbexport",
+    "transcript_count": 3,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 53,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Python-BHPP-Sql",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 1,
+  "newest_activity_at": "2026-01-03T02:45:32.904Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 53,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Python-BHPP-Sql",
+    "transcript_count": 3,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 54,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-unifi-tunnel-reset",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 1,
+  "newest_activity_at": "2025-12-29T20:34:12.972Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 54,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-unifi-tunnel-reset",
+    "transcript_count": 2,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 55,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-scratch-rpisurv-office",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 4,
+  "session_count": 1,
+  "newest_activity_at": "2026-03-30T14:00:42.075Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 55,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-scratch-rpisurv-office",
+    "transcript_count": 4,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 56,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-n8n-document-catalog",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 6,
+  "session_count": 2,
+  "newest_activity_at": "2026-01-05T03:11:08.443Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 56,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-n8n-document-catalog",
+    "transcript_count": 6,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 57,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-msp-dashboard",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 1,
+  "newest_activity_at": "2025-12-29T23:59:08.093Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 57,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-msp-dashboard",
+    "transcript_count": 3,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 58,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-media-cleanup-qnap",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 103,
+  "session_count": 28,
+  "newest_activity_at": "2026-01-11T03:33:42.466Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 58,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-media-cleanup-qnap",
+    "transcript_count": 103,
+    "session_count": 28
+   }
+  ]
+ },
+ {
+  "project_id": 59,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-slack",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 75,
+  "session_count": 8,
+  "newest_activity_at": "2026-01-29T03:43:29.466Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 59,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-slack",
+    "transcript_count": 75,
+    "session_count": 8
+   }
+  ]
+ },
+ {
+  "project_id": 60,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-podio-migration-frontend-src-lib-components",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 9,
+  "session_count": 2,
+  "newest_activity_at": "2026-02-05T22:00:27.613Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 60,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-podio-migration-frontend-src-lib-components",
+    "transcript_count": 9,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 61,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-podio-migration",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 444,
+  "session_count": 11,
+  "newest_activity_at": "2026-02-11T13:02:32.245Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 61,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-podio-migration",
+    "transcript_count": 444,
+    "session_count": 11
+   }
+  ]
+ },
+ {
+  "project_id": 62,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-personal-assistant",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 153,
+  "session_count": 26,
+  "newest_activity_at": "2026-01-30T03:17:26.018Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 62,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-personal-assistant",
+    "transcript_count": 153,
+    "session_count": 26
+   }
+  ]
+ },
+ {
+  "project_id": 63,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-paperless",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 168,
+  "session_count": 23,
+  "newest_activity_at": "2026-02-02T04:04:23.233Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 63,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-paperless",
+    "transcript_count": 168,
+    "session_count": 23
+   }
+  ]
+ },
+ {
+  "project_id": 64,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-maestro",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 979,
+  "session_count": 21,
+  "newest_activity_at": "2026-03-25T20:15:35.708Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 64,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-maestro",
+    "transcript_count": 979,
+    "session_count": 21
+   }
+  ]
+ },
+ {
+  "project_id": 65,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-long-term-backup",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 2,
+  "newest_activity_at": "2026-01-20T15:53:27.348Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 65,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-long-term-backup",
+    "transcript_count": 2,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 66,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-immich",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 104,
+  "session_count": 8,
+  "newest_activity_at": "2026-02-02T00:30:23.155Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 66,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-immich",
+    "transcript_count": 104,
+    "session_count": 8
+   }
+  ]
+ },
+ {
+  "project_id": 67,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-dgx",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 386,
+  "session_count": 8,
+  "newest_activity_at": "2026-02-01T20:46:06.322Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 67,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-jsugamele-dgx",
+    "transcript_count": 386,
+    "session_count": 8
+   }
+  ]
+ },
+ {
+  "project_id": 68,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-homeassistant",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 211,
+  "session_count": 21,
+  "newest_activity_at": "2026-04-14T15:06:06.337Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 68,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-homeassistant",
+    "transcript_count": 211,
+    "session_count": 21
+   }
+  ]
+ },
+ {
+  "project_id": 69,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-hirschfeld-it-policy",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 28,
+  "session_count": 1,
+  "newest_activity_at": "2026-04-22T12:37:00.017Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 69,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-hirschfeld-it-policy",
+    "transcript_count": 28,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 70,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-ha-smart-sprinkler-control",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 9,
+  "session_count": 4,
+  "newest_activity_at": "2026-01-29T05:33:05.113Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 70,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-ha-smart-sprinkler-control",
+    "transcript_count": 9,
+    "session_count": 4
+   }
+  ]
+ },
+ {
+  "project_id": 71,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-ha-smart-lock-manager",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 60,
+  "session_count": 2,
+  "newest_activity_at": "2026-04-15T18:45:25.224Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 71,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-ha-smart-lock-manager",
+    "transcript_count": 60,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 72,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-docker-management-and-backup",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1256,
+  "session_count": 54,
+  "newest_activity_at": "2026-04-17T15:11:10.099Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 72,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-docker-management-and-backup",
+    "transcript_count": 1256,
+    "session_count": 54
+   }
+  ]
+ },
+ {
+  "project_id": 73,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-dev-tools-scripts",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 0,
+  "newest_activity_at": "2025-12-29T06:34:10.303Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 73,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-dev-tools-scripts",
+    "transcript_count": 2,
+    "session_count": 0
+   }
+  ]
+ },
+ {
+  "project_id": 74,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4-server",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 2,
+  "session_count": 1,
+  "newest_activity_at": "2026-02-08T23:01:14.989Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 74,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4-server",
+    "transcript_count": 2,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 75,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4-scripts",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 43,
+  "session_count": 1,
+  "newest_activity_at": "2026-02-11T12:57:55.849Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 75,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4-scripts",
+    "transcript_count": 43,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 76,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4-frontend",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 52,
+  "session_count": 17,
+  "newest_activity_at": "2026-01-30T01:08:27.361Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 76,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4-frontend",
+    "transcript_count": 52,
+    "session_count": 17
+   }
+  ]
+ },
+ {
+  "project_id": 77,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 649,
+  "session_count": 48,
+  "newest_activity_at": "2026-03-03T04:28:26.039Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 77,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-4",
+    "transcript_count": 649,
+    "session_count": 48
+   }
+  ]
+ },
+ {
+  "project_id": 78,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-3",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 46,
+  "session_count": 7,
+  "newest_activity_at": "2026-01-26T16:24:50.077Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 78,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-claude-3",
+    "transcript_count": 46,
+    "session_count": 7
+   }
+  ]
+ },
+ {
+  "project_id": 79,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-camera-viewer",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 173,
+  "session_count": 1,
+  "newest_activity_at": "2026-04-03T15:08:10.732Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 79,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-camera-viewer",
+    "transcript_count": 173,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 80,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-web-scripts-fds-viewer",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 74,
+  "session_count": 3,
+  "newest_activity_at": "2026-02-23T21:30:58.380Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 80,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-web-scripts-fds-viewer",
+    "transcript_count": 74,
+    "session_count": 3
+   }
+  ]
+ },
+ {
+  "project_id": 81,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-web--collateral-bhpp-backup-old-EDP---Greatland",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 161,
+  "session_count": 5,
+  "newest_activity_at": "2026-02-15T01:23:22.931Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 81,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-web--collateral-bhpp-backup-old-EDP---Greatland",
+    "transcript_count": 161,
+    "session_count": 5
+   }
+  ]
+ },
+ {
+  "project_id": 82,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-web",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1786,
+  "session_count": 36,
+  "newest_activity_at": "2026-03-30T15:24:05.608Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 82,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-web",
+    "transcript_count": 1786,
+    "session_count": 36
+   }
+  ]
+ },
+ {
+  "project_id": 83,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-qande-v3",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 270,
+  "session_count": 2,
+  "newest_activity_at": "2026-03-25T17:37:38.180Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 83,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-qande-v3",
+    "transcript_count": 270,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 84,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-new-server--claude",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 37,
+  "session_count": 1,
+  "newest_activity_at": "2026-02-23T14:51:14.044Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 84,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-new-server--claude",
+    "transcript_count": 37,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 85,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-new-server",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 790,
+  "session_count": 80,
+  "newest_activity_at": "2026-04-20T22:46:36.623Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 85,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-bhpp-new-server",
+    "transcript_count": 790,
+    "session_count": 80
+   }
+  ]
+ },
+ {
+  "project_id": 86,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-ai-setup",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 10,
+  "session_count": 2,
+  "newest_activity_at": "2026-01-07T02:54:04.204Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 86,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production-ai-setup",
+    "transcript_count": 10,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 87,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 9,
+  "session_count": 1,
+  "newest_activity_at": "2026-01-04T18:30:31.370Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 87,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Production",
+    "transcript_count": 9,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 88,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Electronics-led-matrix",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 57,
+  "session_count": 9,
+  "newest_activity_at": "2026-01-19T19:25:08.815Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 88,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Electronics-led-matrix",
+    "transcript_count": 57,
+    "session_count": 9
+   }
+  ]
+ },
+ {
+  "project_id": 89,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Personal-Assistant-projects-vault-cleanup",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 53,
+  "session_count": 1,
+  "newest_activity_at": "2026-05-29T11:45:08.387Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 89,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Personal-Assistant-projects-vault-cleanup",
+    "transcript_count": 53,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 90,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Media--claude-worktrees-vibrant-leakey-ea30bb",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 4,
+  "session_count": 1,
+  "newest_activity_at": "2026-05-14T14:52:07.728Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 90,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Media--claude-worktrees-vibrant-leakey-ea30bb",
+    "transcript_count": 4,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 91,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure-projects-docker-management-source",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-08-13T14:28:16.857Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 91,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure-projects-docker-management-source",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 92,
+  "full_path": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-3D-Work",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 30,
+  "session_count": 5,
+  "newest_activity_at": "2026-06-10T15:47:49.665Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 92,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-3D-Work",
+    "transcript_count": 30,
+    "session_count": 5
+   }
+  ]
+ },
+ {
+  "project_id": 93,
+  "full_path": "-Users-jsugamele-Downloads-qande",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 9,
+  "session_count": 2,
+  "newest_activity_at": "2026-03-12T01:45:16.562Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 93,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele-Downloads-qande",
+    "transcript_count": 9,
+    "session_count": 2
+   }
+  ]
+ },
+ {
+  "project_id": 94,
+  "full_path": "-Users-jsugamele--dotfiles-setup",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 3,
+  "session_count": 1,
+  "newest_activity_at": "2026-04-03T15:05:53.600Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 94,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele--dotfiles-setup",
+    "transcript_count": 3,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 95,
+  "full_path": "-Users-jsugamele--dotfiles--claude",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 1,
+  "session_count": 1,
+  "newest_activity_at": "2026-01-23T03:38:24.341Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 95,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele--dotfiles--claude",
+    "transcript_count": 1,
+    "session_count": 1
+   }
+  ]
+ },
+ {
+  "project_id": 96,
+  "full_path": "-Users-jsugamele--dotfiles",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 114,
+  "session_count": 29,
+  "newest_activity_at": "2026-02-19T02:36:39.688Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 96,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele--dotfiles",
+    "transcript_count": 114,
+    "session_count": 29
+   }
+  ]
+ },
+ {
+  "project_id": 97,
+  "full_path": "-Users-jsugamele--claude2",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 52,
+  "session_count": 3,
+  "newest_activity_at": "2026-01-22T20:45:10.288Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 97,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele--claude2",
+    "transcript_count": 52,
+    "session_count": 3
+   }
+  ]
+ },
+ {
+  "project_id": 98,
+  "full_path": "-Users-jsugamele--claude",
+  "display_name": null,
+  "observed_cwd": null,
+  "transcript_count": 141,
+  "session_count": 38,
+  "newest_activity_at": "2026-02-18T16:11:19.903Z",
+  "activity_status": "known",
+  "hosts": [
+   "Joseph\u2019s Mac mini (2)"
+  ],
+  "host_count": 1,
+  "session_counted": true,
+  "members": [
+   {
+    "project_id": 98,
+    "corpus_id": 1,
+    "host_id": 1,
+    "host_display_name": "Joseph\u2019s Mac mini (2)",
+    "slug": "-Users-jsugamele--claude",
+    "transcript_count": 141,
+    "session_count": 38
+   }
+  ]
+ }
+]
