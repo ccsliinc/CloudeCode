@@ -68,7 +68,7 @@ FTS_MATCH_MARKER = "VIRTUAL TABLE INDEX 0:M"
 
 @pytest.fixture()
 def conn(tmp_path: Path):
-    """A real datastore carrying the whole message schema, v27 included.
+    """A real datastore carrying the whole message schema, v29 included.
 
     Description: the plan depends on which indexes exist, so this has to
       be the REAL schema rather than a hand-written subset that might

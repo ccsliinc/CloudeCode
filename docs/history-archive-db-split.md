@@ -266,8 +266,8 @@ after reading the separate archive database, identical results.**
 
 ### Schema versions this was measured against
 
-`VERIFIED_SCHEMA_VERSIONS = {25, 26, 27}`. v25 is the read-only backup
-every size and orphan figure above came from. v26 and v27 were checked by
+`VERIFIED_SCHEMA_VERSIONS = {25, 26, 27, 29}`. v25 is the read-only backup
+every size and orphan figure above came from. v26, v27 and v29 were checked by
 migrating a fresh database through the app's OWN chain
 (`ensure_db_migrated`) and re-running the partition against the result:
 **zero unclassified objects, and the same three crossing keys**. So the

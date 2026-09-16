@@ -336,7 +336,7 @@ def test_every_measured_schema_version_is_accepted(version: int) -> None:
     """The other half of the version rung, so it cannot refuse everything.
 
     v25 is the read-only backup every figure in the docs came from. v26
-    and v27 were checked by migrating a fresh database through the app's
+    v27 and v29 were checked by migrating a fresh database through the app's
     own chain and re-running the partition against the result: zero
     unclassified objects, and the same three crossing keys.
     """
@@ -346,7 +346,7 @@ def test_every_measured_schema_version_is_accepted(version: int) -> None:
 @pytest.mark.parametrize(
     "override, rung",
     [
-        # A version nobody has measured. 25, 26 and 27 are in
+        # A version nobody has measured. 25, 26, 27 and 29 are in
         # VERIFIED_SCHEMA_VERSIONS and must NOT refuse; see the positive
         # control below.
         ({"schema_version": 99}, SCHEMA_VERSION_UNEXPECTED),

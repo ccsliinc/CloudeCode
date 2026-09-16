@@ -145,7 +145,7 @@ it writes. This was NOT the expected result - the first draft of the test
 asserted that a projected-but-unbuilt install reports `never_built`, and
 it failed because the index was already complete. `rebuild_block_search_index.py`
 is only ever needed by an install that already HAD content blocks when it
-crossed v27.
+crossed v29.
 
 What a trigger cannot protect against is being ABSENT, so the status
 ladder compares the FTS row count against the block count rather than
