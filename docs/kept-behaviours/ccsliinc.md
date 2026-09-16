@@ -113,6 +113,88 @@ bogus cols/rows and the real tmux pane was reflowed to a grid matching nothing
 on screen, on a phone, while desktop looked perfect. New libraries get vendored.
 `style-src 'unsafe-inline'` stays and is not licence to widen anything else.
 
+### continuous transcript archiving
+paths: src/core/corpus_ingest_task.py src/core/corpus_ingest_service.py src/core/corpus_ingest_scan.py src/core/corpus_ingest_state.py src/core/corpus_status.py src/api/corpus_routes.py src/main.py
+anchors: CorpusIngestScheduler | corpus_ingest_scheduler.start() | CLOUDE_CORPUS_INGEST | FRESHNESS_NEVER_RAN
+tests: tests/test_corpus_ingest_service.py tests/test_corpus_api.py tests/test_transcript_corpus_ingest.py
+A background loop that keeps a byte-exact copy of this machine's Claude Code
+transcript corpus (`~/.claude/projects`) inside the app's own database, started
+from `lifespan()` and stopped on shutdown, running whether or not anyone is
+looking at it. The owner develops inside these sessions every day and the
+archive is what makes that history survive.
+
+NOTHING HAS REMOVED THIS AND THIS ENTRY IS NOT A COMPLAINT. Measured
+2026-09-16: all four `corpus_ingest_*.py` modules, `corpus_status.py`,
+`corpus_routes.py` and the three named tests are present and identical on
+`adamdev/master`, and `CorpusIngestScheduler` still starts from `lifespan()`
+there. The archiver has never depended on the hook subsystem, so `a1373d5`
+("delete the hook subsystem, and start the watcher") did not touch it: hooks
+feed the status machine, which is a different system with a different job. This
+is a forward-looking guardrail written while the behaviour is healthy, which is
+the only time a guardrail is cheap to write, and it is filed here so a future
+refactor on either side has something to trip over instead of a silence.
+
+WHY IT IS NOT NEGOTIABLE: FOR PART OF THE CORPUS THE ARCHIVE IS THE ONLY COPY
+LEFT. Measured 2026-09-16 over the whole population, no sampling: of 23,715
+archived rows, 2,524 name a `.jsonl` that no longer exists anywhere under
+`~/.claude/projects`. Those conversations are not recoverable from disk, from a
+re-scan or from Claude Code itself; they exist because a pass captured them
+before the file went. Every one of those 2,524 reconstructs byte-exactly, and
+0 of all 23,715 rows mismatch. Stopping the loop does not lose what is already
+stored, and it silently stops new work from ever entering that set, which is
+the same outcome one corpus generation later. See
+`docs/transcript-archive-integrity.md` and
+`scripts/transcript-archive/verify_archive_integrity.py`.
+
+WHAT IT RESTS ON, so a change to any of these is a change to this behaviour:
+the four `corpus_ingest_*` modules (`_service` is one pass, `_scan` the plan and
+its two fingerprints, `_state` the on-disk cache and liveness artifact, `_task`
+the loop); the scheduler being CONSTRUCTED AND STARTED in `lifespan()`, because
+an importable scheduler nobody starts is a loop that never runs; the
+`CLOUDE_CORPUS_INGEST` switch, which must keep defaulting ON outside
+`CLOUDE_TEST_MODE`; and the liveness artifact with its four freshness states,
+`current` / `stale` / `never_ran` / `cannot_determine`, published on EVERY
+terminating path including failures.
+
+THE FOUR STATES ARE THE POINT, NOT DECORATION. A dead ingester looks exactly
+like a healthy one finding nothing new: both write no rows. Age is the only
+signal that separates them, which is why the artifact is refreshed even by a
+run that failed, and why "no artifact" resolves to `never_ran` rather than to a
+zero that reads as healthy. Collapsing those four values to a boolean, or
+letting an unreadable artifact answer `current`, removes the only way anyone
+finds out.
+
+WHAT WOULD BREAK IT QUIETLY, none of which raises anything: flipping the
+`CLOUDE_CORPUS_INGEST` default to off, or widening the `CLOUDE_TEST_MODE`
+default-off to a path that is not a test run; keeping the modules and dropping
+the `lifespan()` wiring in a `src/main.py` merge, which is a deletion of two
+lines in a file both lines edit constantly; moving the state directory without
+moving the artifact, so freshness reads `never_ran` forever while the loop is
+fine; pointing the ingester at a database the archive no longer lives in, which
+the archive db split makes a live possibility now that `transcript_archives`
+sits in `cloude-archive.db` rather than inside `cloude.db`; and turning the loop
+off to fix a slow boot, which works, because it is scheduled rather than awaited
+and was never what made boot slow.
+
+HOW TO SEE IT IS ALIVE, IN ONE COMMAND. It answers with the app's own resolver
+rather than a second copy of the rule, so the check and the code cannot
+disagree:
+
+    ./venv/bin/python3 -c "import os; from pathlib import Path; \
+    from src.core.corpus_ingest_state import read_liveness, classify_freshness; \
+    d = Path(os.environ.get('CLOUDE_STATE_DIR') or \
+        (Path.home() / 'Library/Application Support/CloudeCode')); \
+    r = read_liveness(d); v, age, why = classify_freshness(r); \
+    print(v, 'age', age, (r or {}).get('status'), (r or {}).get('finished_at'))"
+
+Healthy on the owner's box 2026-09-16 reads `current age 438.9 ok
+2026-09-16T16:00:10Z`. THE NEGATIVE CONTROL IS PART OF THE CHECK: pointed at a
+state directory with no artifact the same command must print `never_ran`, and a
+build of this check that cannot produce `never_ran` is not measuring anything.
+Only `current` is a pass; `stale`, `never_ran` and `cannot_determine` are three
+different problems and must not be read as one. `GET /corpus/status` reports the
+same verdict over HTTP when a server is up.
+
 ## disliked
 
 Our preferences, stated as preferences. None of these is an instruction to
