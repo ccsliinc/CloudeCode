@@ -3,7 +3,7 @@
 THE MIGRATION CREATES AND DOES NOT POPULATE, for a reason: the build is
 1.80 s over the measured 112,623 blocks, and a startup transaction may
 not spend that - on a corpus twenty times the size it is a boot that
-looks hung. So an install arrives at v27 with an EMPTY index,
+looks hung. So an install arrives at v29 with an EMPTY index,
 ``message_block_search_status`` calls that ``never_built``, and search
 REFUSES rather than answering zero hits. This module is what moves it to
 ``current``.
@@ -137,7 +137,7 @@ def pending_count(conn: sqlite3.Connection) -> int:
     """
     if not index_table_exists(conn):
         raise BlockSearchIndexUnavailable(
-            f"{BLOCK_SEARCH_TABLE} does not exist; migrate to schema v27 "
+            f"{BLOCK_SEARCH_TABLE} does not exist; migrate to schema v29 "
             f"with the message archive enabled before building it"
         )
     return int(conn.execute(_PENDING_COUNT_SQL).fetchone()[0])
@@ -204,7 +204,7 @@ def build_pending(
     started = time.perf_counter()
     if not index_table_exists(conn):
         raise BlockSearchIndexUnavailable(
-            f"{BLOCK_SEARCH_TABLE} does not exist; migrate to schema v27 "
+            f"{BLOCK_SEARCH_TABLE} does not exist; migrate to schema v29 "
             f"with the message archive enabled before building it"
         )
     try:
