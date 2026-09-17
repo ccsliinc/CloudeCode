@@ -262,3 +262,92 @@ export {
 export type { DrillState, LevelState } from './nav-drill';
 export { applyMerged, emptyMerged } from './nav-merged-load';
 export type { MergedState } from './nav-merged-load';
+
+/**
+ * SLICE 7, THE TRANSCRIPT READER. Published here for the same reason
+ * slices 5 and 6 are: `import-direction.test.ts` pins that nothing
+ * outside `history/` reaches past this file, so a composition root
+ * mounts `TranscriptReader` through the package rather than by path.
+ *
+ * IT IS DELIBERATELY NOT WIRED TO A SCREEN, for the same reason they are
+ * not. It takes its client, its outcome classifier, its transcript id,
+ * its optional deep-link line and its FRAME SCHEDULER from whoever
+ * mounts it, and assumes nothing about what is around it. The frame
+ * scheduler is the THIRD gap in the `app-screen` surface; see
+ * `TranscriptReader.svelte`'s header and
+ * `docs/archive-shell-contract.md`.
+ *
+ * Replaces client/js/archive-reader.js, archive-reader-dom.js,
+ * archive-reader-body.js, archive-reader-paging.js,
+ * archive-reader-select.js, archive-line-render.js,
+ * archive-virtual-list.js, archive-body-cache.js, archive-body-gate.js
+ * and archive-screen-reader.js. It also ports archive-mask.js, which
+ * STAYS on disk because client/js/archive-chat-block.js is still a
+ * consumer; see `reader-mask.ts` for why that one is a hard import here
+ * rather than an injected seam.
+ */
+export { default as TranscriptReader } from './TranscriptReader.svelte';
+export { default as ReaderRow } from './ReaderRow.svelte';
+export { default as ReaderStatus } from './ReaderStatus.svelte';
+export { default as ReaderBody } from './ReaderBody.svelte';
+export { default as ReaderProgressRun } from './ReaderProgressRun.svelte';
+export {
+    ACTIONS as READER_ACTIONS, BODY_STATE, CLASS as READER_CLASS,
+    FAMILIES, FAMILY_MOD, NO_ROLE_TEXT, NO_RECORD_TYPE_TEXT, NOT_REQUESTED,
+    PROGRESS_RUN_MOD, RECORD_FAMILY, ROW_CLASS,
+    ROOT_CLASS as READER_ROOT_CLASS, UNSTYLED_PRE_EXISTING as READER_UNSTYLED,
+    WIRE_WITHHELD_TOO_LARGE,
+} from './reader-vocab';
+export type { BodyState, Family, ReaderAction } from './reader-vocab';
+export { MASK_OK, MASK_REFUSED, SECRET_MARKER, maskBody } from './reader-mask';
+export type { MaskResult, MaskOk, MaskRefused, SecretFinding } from './reader-mask';
+export {
+    applyMask, forbidsFetch, gateFor, reasonFrom, NEVER_FETCH,
+    BODY_INLINE_MAX, BODY_RENDER_HARD_MAX, BODY_CACHE_MAX_ENTRIES,
+    BODY_CACHE_MAX_CHARS, BODY_DEADLINE_MS,
+} from './reader-gate';
+export type { GateVerdict, GateRow, MaskApplication } from './reader-gate';
+export { createBodyCache } from './reader-body-cache';
+export type { BodyCache, BodyEntry, BodyRow, CacheStats } from './reader-body-cache';
+export {
+    createList, estimateHeight, estimateItem, rowAt,
+    CHARS_PER_LINE, COLLAPSED_MAX_PX, HEIGHT_EPSILON_PX, LINE_HEIGHT_PX,
+    OVERSCAN_ROWS, PLACEHOLDER_EXTRA_PX, PROGRESS_ROW_PX, ROW_CHROME_PX,
+} from './reader-virtual';
+export type {
+    MeasurementResult, ReaderWindow, VirtualList, VirtualListOptions,
+} from './reader-virtual';
+export {
+    bodyView, familyFor, familyModFor, groupRows, indexOfLine, isRun, itemKey,
+    paintPlan, rangeText, roleLabel,
+} from './reader-rows';
+export type {
+    BodyAction, BodyView, PaintedItem, ProgressRun, ReaderItem, RoleLabel,
+    SpineRow,
+} from './reader-rows';
+export { createBodyPolicy } from './reader-body-policy';
+export type { BodyPolicy, BodyPolicyContext } from './reader-body-policy';
+export {
+    createPager, DEFAULT_PAGE_ROWS, PAGE_COMPLETE, PAGE_FAILED, PAGE_NO_PAGER,
+} from './reader-paging';
+export type { Pager, PagerContext } from './reader-paging';
+export {
+    appendSpine, applySpine, emptySpine, fetchSpine, loadingSpine,
+    nextStartLine, sentinelText, NEXT_LINE_STEP, TOKEN_TRANSPORT_ERROR,
+} from './reader-load';
+export type { NextStart, SpineFetch, SpineState } from './reader-load';
+export {
+    measuredHeight, reconcileMeasured, scrollRowIntoView, scrollTopOf,
+    viewportHeight, watchScroller, FALLBACK_VIEWPORT_PX,
+} from './reader-measure.svelte';
+export { createSelectionApi, NOTHING_SELECTED } from './reader-select';
+export type { SelectionApi, SelectionContext } from './reader-select';
+export { createActionRouter } from './reader-actions';
+export type { ActionContext } from './reader-actions';
+export { createOpenApi } from './reader-open';
+export type { OpenApi, OpenContext } from './reader-open';
+export { createFramePass } from './reader-frame';
+export type { FramePass, FrameContext } from './reader-frame';
+export { headerFacts } from './reader-header';
+export type { HeaderFacts, TranscriptHeaderRecord } from './reader-header';
+export type { ReaderProps } from './reader-props';

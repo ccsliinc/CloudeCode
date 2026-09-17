@@ -17,6 +17,38 @@
  */
 import { mount } from 'svelte';
 import './harness-legacy';
+// THE TWELVE ARCHIVE STYLESHEETS, WHICH THIS PAGE WAS NOT LOADING.
+//
+// Measured in a real browser 2026-09-17, on this harness: `.archive-reader`
+// computed `display: block` and `.archive-reader__scroller` computed
+// `overflow-y: visible`, because NOT ONE of `client/css/archive*.css` was
+// linked here. Every archive component previewed on this page was rendering
+// in Chrome's user-agent defaults - which is EXACTLY the failure
+// `tests/test_archive_tlist_styled.node.mjs` was written for, reproduced by
+// the preview that was supposed to catch it.
+//
+// For the reader it is not cosmetic. `.archive-reader__scroller` is what
+// declares `overflow-y: auto`, so without these files there IS no scrollport:
+// the scroller grows to fit its content (measured 40,809px tall), the render
+// window covers everything, and the virtualisation is INERT while looking
+// perfect. A preview of a windowed list that is not windowing is worse than
+// no preview.
+//
+// IMPORTING IS NOT EDITING. Commitment 2 is that none of these twelve files
+// changes; this adds a reference to them from harness scaffolding, and they
+// are read byte-for-byte as they sit on disk.
+import '../../client/css/archive-align.css';
+import '../../client/css/archive-chat.css';
+import '../../client/css/archive-export.css';
+import '../../client/css/archive-nav-card.css';
+import '../../client/css/archive-nav-info.css';
+import '../../client/css/archive-nav.css';
+import '../../client/css/archive-outcomes.css';
+import '../../client/css/archive-panes.css';
+import '../../client/css/archive-reader.css';
+import '../../client/css/archive-screen.css';
+import '../../client/css/archive-search.css';
+import '../../client/css/archive-tlist.css';
 import { installHarnessApiGlobal } from './harness-api';
 import HarnessRoot from './HarnessRoot.svelte';
 

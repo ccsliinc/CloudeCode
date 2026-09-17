@@ -36,7 +36,9 @@
 -->
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { NavRail, TranscriptList, countFor, NODE_KINDS } from '../src/lib/plugins/history/index';
+    import {
+        NavRail, TranscriptList, TranscriptReader, countFor, NODE_KINDS,
+    } from '../src/lib/plugins/history/index';
     import type {
         ArchiveClient, ListScope, NavRowData, NodeKind,
     } from '../src/lib/plugins/history/index';
@@ -152,17 +154,54 @@
     }
 
     /**
-     * One transcript was clicked in the list.
+     * The transcript open in the reader, or null for none.
      *
-     * Description: THE READER IS SLICE 7 AND DOES NOT EXIST, so this
-     *   says so out loud instead of pretending. Opening nothing silently
-     *   would read as a broken list.
+     * NULL IS RENDERED AS THE LIST, NOT AS AN EMPTY READER. A reader
+     * mounted on a null id would request `/archive/transcripts/null` and
+     * paint a refusal for a transcript nobody asked for.
+     */
+    let openId = $state<number | string | null>(null);
+
+    /**
+     * The reader's instance, for the ONE call a parent has to make.
+     *
+     * THE READER DOES NOT LOAD ITSELF, AND THAT IS ITS CONTRACT, exactly
+     * as `NavRail.ensureViewLoaded()` is. `open()` is exported rather than
+     * run from an effect so the composition root decides WHEN the first
+     * request goes out. The cost of that design is a parent which forgets
+     * the call getting a reader that paints its idle state with no
+     * request made and no error to see - the false green this harness's
+     * own header describes, and the bug its first draft shipped. So the
+     * call below is the whole reason this binding exists.
+     */
+    let reader = $state<ReturnType<typeof TranscriptReader> | undefined>(undefined);
+
+    /**
+     * One transcript was clicked in the list: open it in the reader.
+     *
+     * Description: THE INTERACTION SLICE 7 EXISTS FOR. The list hands
+     *   back the `transcript_id` and never the `session_ref`, which is
+     *   not an identity - measured, `journal` names 14 different
+     *   transcripts - so this is keyed on the id it was given.
      * Inputs: transcriptId. Output: void.
      */
     function openTranscript(transcriptId: number | string): void {
-        console.info(`[dev-harness] transcript ${transcriptId} was chosen. The `
-            + 'reader is slice 7 and is not built, so there is nothing to open.');
+        openId = transcriptId;
     }
+
+    /** Go back to the transcript list. */
+    function closeTranscript(): void {
+        openId = null;
+    }
+
+    // Open the transcript the moment one is chosen, and again whenever a
+    // DIFFERENT one is. `untrack` is not needed: `open()` writes only the
+    // reader's own state, not ours.
+    $effect(() => {
+        const id = openId;
+        if (id === null) return;
+        void reader?.open();
+    });
 </script>
 
 <main>
@@ -183,7 +222,27 @@
             />
         </nav>
         <section bind:this={scrollport}>
-            {#if scope === null}
+            {#if openId !== null}
+                <p>
+                    reading transcript {openId}
+                    <button type="button" onclick={closeTranscript}>back to the list</button>
+                </p>
+                <!--
+                  KEYED ON THE ID. Choosing a DIFFERENT transcript must
+                  build a NEW reader rather than hand the old one a new
+                  prop: the reader holds one transcript's geometry, body
+                  cache and expansions, and a `line_no` from the old file
+                  can numerically coincide with one from the new.
+                -->
+                {#key openId}
+                    <TranscriptReader
+                        bind:this={reader}
+                        {client}
+                        {outcome}
+                        transcriptId={openId}
+                    />
+                {/key}
+            {:else if scope === null}
                 <p>pick a project in the rail on the left.</p>
             {:else}
                 <p>{chosenLabel}</p>
