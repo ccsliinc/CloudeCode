@@ -232,10 +232,26 @@ def run_ingest(conn: sqlite3.Connection, rows: List[Dict], decided_by: str) -> i
         child = outcomes[row["source_path"]]
         if child.archive_id is None:
             continue
+        # A manifest row MAY name its parent explicitly, and one that does wins.
+        # The structural derivation below reads a ``subagents/`` directory out
+        # of the path, which the current Claude Code layout provides and the
+        # 2026-01 flat layout does not: there the agent-*.jsonl sits beside its
+        # parent session and only the file's own sessionId names it. Deriving
+        # would raise ValueError on every such row, so the caller supplies what
+        # it measured rather than this function guessing from a shape that is
+        # not there. Absent the key, behaviour is exactly as before.
+        explicit = row.get("parent_source_path")
+        if explicit is None:
+            try:
+                explicit = parent_source_path(row["source_path"])
+            except ValueError as exc:
+                print(f"  cannot derive a parent for {row['source_path']}:"
+                      f" {exc} - left unrooted")
+                continue
         parent = conn.execute(
             "SELECT id FROM transcript_archives WHERE source_path = ?"
             " ORDER BY id DESC LIMIT 1",
-            (parent_source_path(row["source_path"]),),
+            (explicit,),
         ).fetchone()
         if parent is None:
             print(f"  no parent row for {row['source_path']} - left unrooted")

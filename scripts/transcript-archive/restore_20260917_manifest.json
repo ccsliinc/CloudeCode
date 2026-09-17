@@ -1,0 +1,822 @@
+[
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele--claude/464285d4-3b9c-465e-8716-1491f29c8cdb.jsonl",
+  "bytes": 46698,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele--claude/464285d4-3b9c-465e-8716-1491f29c8cdb.jsonl",
+  "sha256": "cfb52ca8675f4b3c9090a9eb84635f95a971c86229a6439b7ae9280071e37a24",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele--claude/464285d4-3b9c-465e-8716-1491f29c8cdb.jsonl",
+  "stem": "464285d4-3b9c-465e-8716-1491f29c8cdb",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele--claude/46a0ea2d-bc47-4a7a-b62f-96e52dfdabb6.jsonl",
+  "bytes": 69977,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele--claude/46a0ea2d-bc47-4a7a-b62f-96e52dfdabb6.jsonl",
+  "sha256": "67e2c6209b7c67ec00087318ad4012f343be284ba276d775513b8b26a07d7b64",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele--claude/46a0ea2d-bc47-4a7a-b62f-96e52dfdabb6.jsonl",
+  "stem": "46a0ea2d-bc47-4a7a-b62f-96e52dfdabb6",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele--claude/6218e5a4-677a-4591-b467-9585527379bf.jsonl",
+  "bytes": 34899,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele--claude/6218e5a4-677a-4591-b467-9585527379bf.jsonl",
+  "sha256": "bde85b8368dc1ad34e9a89b07b4c0587776472dd96f52d2f631ac9bf19f4f015",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele--claude/6218e5a4-677a-4591-b467-9585527379bf.jsonl",
+  "stem": "6218e5a4-677a-4591-b467-9585527379bf",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele--claude/e3df813b-0c95-45d7-9450-306cdf2c5a6b.jsonl",
+  "bytes": 21517,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele--claude/e3df813b-0c95-45d7-9450-306cdf2c5a6b.jsonl",
+  "sha256": "44a6d4adf1213ea47d2bae65f202accdf76f985c09619a180e63c7c03e10ae2c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele--claude/e3df813b-0c95-45d7-9450-306cdf2c5a6b.jsonl",
+  "stem": "e3df813b-0c95-45d7-9450-306cdf2c5a6b",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele--dotfiles/4bbf929e-6d69-47cd-8857-2b0462c1aca4.jsonl",
+  "bytes": 325683,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele--dotfiles/4bbf929e-6d69-47cd-8857-2b0462c1aca4.jsonl",
+  "sha256": "1a255e9b024500a1f331db5d46c1d618a2fef6d1ced77fb4399a41acd222dda9",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele--dotfiles/4bbf929e-6d69-47cd-8857-2b0462c1aca4.jsonl",
+  "stem": "4bbf929e-6d69-47cd-8857-2b0462c1aca4",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-personal-ai-cleanup/52f7be73-02d5-4d8b-9677-c4fbc14bba13.jsonl",
+  "bytes": 154590,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-personal-ai-cleanup/52f7be73-02d5-4d8b-9677-c4fbc14bba13.jsonl",
+  "sha256": "10c773c352413e4a149bc96c036b0947b39afa5e68697b068e0d172c5ca97f9e",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-personal-ai-cleanup/52f7be73-02d5-4d8b-9677-c4fbc14bba13.jsonl",
+  "stem": "52f7be73-02d5-4d8b-9677-c4fbc14bba13",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-ha-panel-boilerplate/6123db92-28f1-4e13-bf20-544cdf397d8b.jsonl",
+  "bytes": 1346552,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-ha-panel-boilerplate/6123db92-28f1-4e13-bf20-544cdf397d8b.jsonl",
+  "sha256": "e247acdb7ff4aa95f2bc99ab1304abeb5b830e55c448fbac04c842718d353bff",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-ha-panel-boilerplate/6123db92-28f1-4e13-bf20-544cdf397d8b.jsonl",
+  "stem": "6123db92-28f1-4e13-bf20-544cdf397d8b",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-ha-panel-boilerplate/eb48ce2b-3535-4ff5-9379-75a04de2312a.jsonl",
+  "bytes": 113770,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-ha-panel-boilerplate/eb48ce2b-3535-4ff5-9379-75a04de2312a.jsonl",
+  "sha256": "5b57a4045858ac4721ee185065796f488107583dd9b1f6c2d7395daef921fdbe",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-ha-panel-boilerplate/eb48ce2b-3535-4ff5-9379-75a04de2312a.jsonl",
+  "stem": "eb48ce2b-3535-4ff5-9379-75a04de2312a",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-ha-panel-template/4ef0234e-45b9-4b75-875e-08a268629870.jsonl",
+  "bytes": 1033195,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-ha-panel-template/4ef0234e-45b9-4b75-875e-08a268629870.jsonl",
+  "sha256": "c24f70903eac2d5cc1b387dedc31ea85b0d057f6391d0fc08145ca9a3ba74ec3",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-ha-panel-template/4ef0234e-45b9-4b75-875e-08a268629870.jsonl",
+  "stem": "4ef0234e-45b9-4b75-875e-08a268629870",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-ha-smart-lock-manager/24495cde-0470-44ea-b9cd-b2684ed66d75.jsonl",
+  "bytes": 24749,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-ha-smart-lock-manager/24495cde-0470-44ea-b9cd-b2684ed66d75.jsonl",
+  "sha256": "c14688cb95481bae496844ebd553f8b230d4bf783cb798f50b0e16fd2a0f3dd2",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-ha-smart-lock-manager/24495cde-0470-44ea-b9cd-b2684ed66d75.jsonl",
+  "stem": "24495cde-0470-44ea-b9cd-b2684ed66d75",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-ha-smart-sprinkler-control/46db4bd8-9551-4ffb-95cd-43e5b2f625a3.jsonl",
+  "bytes": 549565,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-ha-smart-sprinkler-control/46db4bd8-9551-4ffb-95cd-43e5b2f625a3.jsonl",
+  "sha256": "367e92bca182ef4cf1bb807b21d49e39c8caf3f7074cd69b815f5849b6ba698a",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-ha-smart-sprinkler-control/46db4bd8-9551-4ffb-95cd-43e5b2f625a3.jsonl",
+  "stem": "46db4bd8-9551-4ffb-95cd-43e5b2f625a3",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-ha-smart-sprinkler-control/90c1ceb8-20c2-4e6a-be95-1a127b3581a5.jsonl",
+  "bytes": 129,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-ha-smart-sprinkler-control/90c1ceb8-20c2-4e6a-be95-1a127b3581a5.jsonl",
+  "sha256": "a947e6655623b4192b7639b3ea7748c514b703cd6dd2af7b5665a741de48ddb7",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-ha-smart-sprinkler-control/90c1ceb8-20c2-4e6a-be95-1a127b3581a5.jsonl",
+  "stem": "90c1ceb8-20c2-4e6a-be95-1a127b3581a5",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/0a0140ba-ff04-4fbc-a665-c1f4065a9021.jsonl",
+  "bytes": 128174,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/0a0140ba-ff04-4fbc-a665-c1f4065a9021.jsonl",
+  "sha256": "5998b623bb4a499b186ef9da9b5a0576ddaaf3e46dc678ee9951d20978a1dd4c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/0a0140ba-ff04-4fbc-a665-c1f4065a9021.jsonl",
+  "stem": "0a0140ba-ff04-4fbc-a665-c1f4065a9021",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/31eb7358-43c4-49f6-b0e8-0c8180541c40.jsonl",
+  "bytes": 883417,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/31eb7358-43c4-49f6-b0e8-0c8180541c40.jsonl",
+  "sha256": "20f062eb2a9a1acc6d2940839daead164b64dcf53ef23af3a91e9200b7af4a11",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/31eb7358-43c4-49f6-b0e8-0c8180541c40.jsonl",
+  "stem": "31eb7358-43c4-49f6-b0e8-0c8180541c40",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/337bc330-da40-43a2-8075-bb74a3401f7b.jsonl",
+  "bytes": 2267401,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/337bc330-da40-43a2-8075-bb74a3401f7b.jsonl",
+  "sha256": "8f04c0f07f250e7409b8c41c6a7f44cc76b5342314a7f24a8a2498bc02eead79",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/337bc330-da40-43a2-8075-bb74a3401f7b.jsonl",
+  "stem": "337bc330-da40-43a2-8075-bb74a3401f7b",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/33c63c6d-c5d4-4467-b5ae-42dce0744ebf.jsonl",
+  "bytes": 35896,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/33c63c6d-c5d4-4467-b5ae-42dce0744ebf.jsonl",
+  "sha256": "414cd06dba1cf1f57b977e0560b7eae714845cca9590445267d7a2d30b3a93c6",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/33c63c6d-c5d4-4467-b5ae-42dce0744ebf.jsonl",
+  "stem": "33c63c6d-c5d4-4467-b5ae-42dce0744ebf",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/43caf99f-e869-4ac4-a666-3ef6b38f7939.jsonl",
+  "bytes": 1525799,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/43caf99f-e869-4ac4-a666-3ef6b38f7939.jsonl",
+  "sha256": "4246611e82125d0de28d81fda06de456a9dc666259b21c8c04764e3ea6d8dd43",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/43caf99f-e869-4ac4-a666-3ef6b38f7939.jsonl",
+  "stem": "43caf99f-e869-4ac4-a666-3ef6b38f7939",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/45ff7d19-82ee-4b44-b5d1-864d35e673e5.jsonl",
+  "bytes": 26492265,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/45ff7d19-82ee-4b44-b5d1-864d35e673e5.jsonl",
+  "sha256": "0bf6f6e3c6a005215100e3d80d919ce1f3270b5858bfaf18f85db47c9c6321ec",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/45ff7d19-82ee-4b44-b5d1-864d35e673e5.jsonl",
+  "stem": "45ff7d19-82ee-4b44-b5d1-864d35e673e5",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/56852e68-5af4-4700-bc57-2c3972839f52.jsonl",
+  "bytes": 260641,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/56852e68-5af4-4700-bc57-2c3972839f52.jsonl",
+  "sha256": "641bfca8f7e52101d92aa7f6afcff6430d7f7d1d23de2f4d6625d3bb51f2ff92",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/56852e68-5af4-4700-bc57-2c3972839f52.jsonl",
+  "stem": "56852e68-5af4-4700-bc57-2c3972839f52",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/6edac7d2-295e-442f-8ca5-d2038045701f.jsonl",
+  "bytes": 3638142,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/6edac7d2-295e-442f-8ca5-d2038045701f.jsonl",
+  "sha256": "4a6ed8dc53f0b0b1afe39a609bf76abef49e6b5e49d19a8a510d9cb746aa27c3",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/6edac7d2-295e-442f-8ca5-d2038045701f.jsonl",
+  "stem": "6edac7d2-295e-442f-8ca5-d2038045701f",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/732fb64a-723a-48e9-86ba-34142190df73.jsonl",
+  "bytes": 4711765,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/732fb64a-723a-48e9-86ba-34142190df73.jsonl",
+  "sha256": "f0763f26d2582a7d7111fb54f4b0c9180031bb09d057a357b96cc05c5f3e0f5f",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/732fb64a-723a-48e9-86ba-34142190df73.jsonl",
+  "stem": "732fb64a-723a-48e9-86ba-34142190df73",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/78e1fb86-ce8c-4e5b-aae0-606b55f11a76.jsonl",
+  "bytes": 6189991,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/78e1fb86-ce8c-4e5b-aae0-606b55f11a76.jsonl",
+  "sha256": "62aa307ff639294b165565a93df791a82f95cda040f583089aa9b8f45a029a32",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/78e1fb86-ce8c-4e5b-aae0-606b55f11a76.jsonl",
+  "stem": "78e1fb86-ce8c-4e5b-aae0-606b55f11a76",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/8668f1a4-e9c5-49b4-afbb-b9b93b5d1e27.jsonl",
+  "bytes": 6011784,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/8668f1a4-e9c5-49b4-afbb-b9b93b5d1e27.jsonl",
+  "sha256": "bc5207ac8eba059ee706cd7f2e9f27b67eba861b72ba204c47add9cce5f98fca",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/8668f1a4-e9c5-49b4-afbb-b9b93b5d1e27.jsonl",
+  "stem": "8668f1a4-e9c5-49b4-afbb-b9b93b5d1e27",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/900dc45d-98a3-4011-bbab-c5a179da015d.jsonl",
+  "bytes": 25850145,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/900dc45d-98a3-4011-bbab-c5a179da015d.jsonl",
+  "sha256": "662c98e3de5e1e4572e7f48feedb9e2a151fc14d71a60cc2abcd3c23e84d6a4f",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/900dc45d-98a3-4011-bbab-c5a179da015d.jsonl",
+  "stem": "900dc45d-98a3-4011-bbab-c5a179da015d",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/93a917c0-d325-43da-9a9f-07a3cf610e47.jsonl",
+  "bytes": 3188920,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/93a917c0-d325-43da-9a9f-07a3cf610e47.jsonl",
+  "sha256": "2c8ba6d739a794502359e71c0f9b1667d736daba4d66d0b572b3bad532917090",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/93a917c0-d325-43da-9a9f-07a3cf610e47.jsonl",
+  "stem": "93a917c0-d325-43da-9a9f-07a3cf610e47",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/a5e882cb-7f57-4a9f-ad16-14665c7d2b8e.jsonl",
+  "bytes": 603893,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/a5e882cb-7f57-4a9f-ad16-14665c7d2b8e.jsonl",
+  "sha256": "f32069c29b96ad0701849e2534820aadef1f83f401e1c5838606fed6de89454d",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/a5e882cb-7f57-4a9f-ad16-14665c7d2b8e.jsonl",
+  "stem": "a5e882cb-7f57-4a9f-ad16-14665c7d2b8e",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/c518d55f-79f5-4b77-a7a6-17fd25973f60.jsonl",
+  "bytes": 611462,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/c518d55f-79f5-4b77-a7a6-17fd25973f60.jsonl",
+  "sha256": "74a57da74f04d9dc67139d51a75bf222c8f18c40d61f67568155e0f7df4a1f2d",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/c518d55f-79f5-4b77-a7a6-17fd25973f60.jsonl",
+  "stem": "c518d55f-79f5-4b77-a7a6-17fd25973f60",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-lock-manager/cfe5150a-94fd-4926-a793-fe6e7c1937a5.jsonl",
+  "bytes": 3835763,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-lock-manager/cfe5150a-94fd-4926-a793-fe6e7c1937a5.jsonl",
+  "sha256": "308a7e137926de972f72276dfe219d686049a7f49c5c4b3960d2a05d97955e6c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-lock-manager/cfe5150a-94fd-4926-a793-fe6e7c1937a5.jsonl",
+  "stem": "cfe5150a-94fd-4926-a793-fe6e7c1937a5",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-test-env/4e847b0d-19e9-4a9d-b7cb-0bca4d3a5ff7.jsonl",
+  "bytes": 13939,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-test-env/4e847b0d-19e9-4a9d-b7cb-0bca4d3a5ff7.jsonl",
+  "sha256": "e4f865031df4d3632b8fa31513dd941080117011aaa8216a6611f967c20028fa",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-test-env/4e847b0d-19e9-4a9d-b7cb-0bca4d3a5ff7.jsonl",
+  "stem": "4e847b0d-19e9-4a9d-b7cb-0bca4d3a5ff7",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-test-env/87ac5ae1-84c3-4b50-8a80-05175f13f53a.jsonl",
+  "bytes": 91406,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-test-env/87ac5ae1-84c3-4b50-8a80-05175f13f53a.jsonl",
+  "sha256": "71f202a63aabb09968f1f09f9ab1bde50fecc414d5731450f8f5ed2557bf4bd8",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-test-env/87ac5ae1-84c3-4b50-8a80-05175f13f53a.jsonl",
+  "stem": "87ac5ae1-84c3-4b50-8a80-05175f13f53a",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-test-env/8bff25d1-e4f4-4b5c-9e7a-13f283bd4b66.jsonl",
+  "bytes": 936384,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-test-env/8bff25d1-e4f4-4b5c-9e7a-13f283bd4b66.jsonl",
+  "sha256": "b13a42c4f9b5b3cce990f927f847396ed5b8dac0dc8678ad783d4a66d027ef94",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-test-env/8bff25d1-e4f4-4b5c-9e7a-13f283bd4b66.jsonl",
+  "stem": "8bff25d1-e4f4-4b5c-9e7a-13f283bd4b66",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-test-env/9811d8ee-6efc-4f23-96ce-c82c4b40a929.jsonl",
+  "bytes": 32978,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-test-env/9811d8ee-6efc-4f23-96ce-c82c4b40a929.jsonl",
+  "sha256": "baae0f63d19c6f2f1500e37591f61bc641ab40ce9b54039d15e2bfd43cfbaad3",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-test-env/9811d8ee-6efc-4f23-96ce-c82c4b40a929.jsonl",
+  "stem": "9811d8ee-6efc-4f23-96ce-c82c4b40a929",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-python-test-env/f7409fdd-8d92-45ba-9abe-fbb338b07380.jsonl",
+  "bytes": 2330181,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-python-test-env/f7409fdd-8d92-45ba-9abe-fbb338b07380.jsonl",
+  "sha256": "ddff30fdf08c6589d786781be737b09607ccb97313e99c9a072f9b2b083a9ebf",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-python-test-env/f7409fdd-8d92-45ba-9abe-fbb338b07380.jsonl",
+  "stem": "f7409fdd-8d92-45ba-9abe-fbb338b07380",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-ai-setup/4262f929-d7b6-4798-a9b6-82592059d47d.jsonl",
+  "bytes": 650666,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-ai-setup/4262f929-d7b6-4798-a9b6-82592059d47d.jsonl",
+  "sha256": "20f0748fdb9c015bf4f0430f3039291fde3a72ebe5b6965f7a86b89a1d21637c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-ai-setup/4262f929-d7b6-4798-a9b6-82592059d47d.jsonl",
+  "stem": "4262f929-d7b6-4798-a9b6-82592059d47d",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-ai-setup/4ce3225e-923e-44b7-8874-480cc5c47afd.jsonl",
+  "bytes": 1957846,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-ai-setup/4ce3225e-923e-44b7-8874-480cc5c47afd.jsonl",
+  "sha256": "6f4735d8a6a0e279679bc3bec20da12df3d7d19d53dc88efbd3a40d932ccf276",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-ai-setup/4ce3225e-923e-44b7-8874-480cc5c47afd.jsonl",
+  "stem": "4ce3225e-923e-44b7-8874-480cc5c47afd",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-ai-setup/666875f8-29f8-4657-b65f-fba41c37e75e.jsonl",
+  "bytes": 535382,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-ai-setup/666875f8-29f8-4657-b65f-fba41c37e75e.jsonl",
+  "sha256": "96b530ad27c533f2726d783d8c7e4b1121fa8c24cb338ea139720fb6fde1d27e",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-ai-setup/666875f8-29f8-4657-b65f-fba41c37e75e.jsonl",
+  "stem": "666875f8-29f8-4657-b65f-fba41c37e75e",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-ai-setup/9c736387-c283-4fef-8d6a-1796b55f4424.jsonl",
+  "bytes": 261,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-ai-setup/9c736387-c283-4fef-8d6a-1796b55f4424.jsonl",
+  "sha256": "70ace609a825d22ca010326408e237ba4d7ec856ea78082862d09edf54d1b213",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-ai-setup/9c736387-c283-4fef-8d6a-1796b55f4424.jsonl",
+  "stem": "9c736387-c283-4fef-8d6a-1796b55f4424",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-defcon/9fa7fcfe-04d3-4273-9388-3c3d7126bd93.jsonl",
+  "bytes": 3356646,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-defcon/9fa7fcfe-04d3-4273-9388-3c3d7126bd93.jsonl",
+  "sha256": "4de121fe571aa49d790cf9198434eb2a53e6ca2db923a0431596853d43520bc1",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-defcon/9fa7fcfe-04d3-4273-9388-3c3d7126bd93.jsonl",
+  "stem": "9fa7fcfe-04d3-4273-9388-3c3d7126bd93",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/0f58707c-1f9a-44a4-9148-4b62154663d3.jsonl",
+  "bytes": 363651,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/0f58707c-1f9a-44a4-9148-4b62154663d3.jsonl",
+  "sha256": "61ead22b5ee818cf53d7e06e205590d88cce606dbf986364d5915b5cec33ea96",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/0f58707c-1f9a-44a4-9148-4b62154663d3.jsonl",
+  "stem": "0f58707c-1f9a-44a4-9148-4b62154663d3",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/1093ae4e-076f-4820-ab03-4341cf550875.jsonl",
+  "bytes": 133236,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/1093ae4e-076f-4820-ab03-4341cf550875.jsonl",
+  "sha256": "29eed914a8fdb93efcc929e7e673bff93c4d150e0b18e5c9afa752b223165c18",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/1093ae4e-076f-4820-ab03-4341cf550875.jsonl",
+  "stem": "1093ae4e-076f-4820-ab03-4341cf550875",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/6a5f80b3-b248-4f01-b731-46c9d1a695f1.jsonl",
+  "bytes": 3347235,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/6a5f80b3-b248-4f01-b731-46c9d1a695f1.jsonl",
+  "sha256": "03710a2dc3de6c458924a4b1e509880fe8f5dfd873b503955a6915af18415e0c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/6a5f80b3-b248-4f01-b731-46c9d1a695f1.jsonl",
+  "stem": "6a5f80b3-b248-4f01-b731-46c9d1a695f1",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/836c8a32-bb48-4e53-8747-065f19b81ef0.jsonl",
+  "bytes": 4987066,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/836c8a32-bb48-4e53-8747-065f19b81ef0.jsonl",
+  "sha256": "7ac293d0294571d21481cc5bb265ae9ef50c64c012e505a919c84dcd395416c6",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/836c8a32-bb48-4e53-8747-065f19b81ef0.jsonl",
+  "stem": "836c8a32-bb48-4e53-8747-065f19b81ef0",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/99ec2291-8fbe-48d4-96e0-06862930b729.jsonl",
+  "bytes": 388293,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/99ec2291-8fbe-48d4-96e0-06862930b729.jsonl",
+  "sha256": "b8f50cafaa8d7d36203abc6618a0ea32eb8ff4d6929b5c8293ebe2524c89968a",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/99ec2291-8fbe-48d4-96e0-06862930b729.jsonl",
+  "stem": "99ec2291-8fbe-48d4-96e0-06862930b729",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/9df48480-78ac-4446-8e41-48b02a588c99.jsonl",
+  "bytes": 435235,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/9df48480-78ac-4446-8e41-48b02a588c99.jsonl",
+  "sha256": "ae1c8a2c75e8e512f72d3a6ae6ce4b694c26172f84a07b4421ccf680d4d7b7b4",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/9df48480-78ac-4446-8e41-48b02a588c99.jsonl",
+  "stem": "9df48480-78ac-4446-8e41-48b02a588c99",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/9e9fc353-8f59-4156-8206-bfbac9fcd663.jsonl",
+  "bytes": 3468612,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/9e9fc353-8f59-4156-8206-bfbac9fcd663.jsonl",
+  "sha256": "e43201e7d0e354e693f66d9e6b51d5e41e5790ca0e01062914d9c3a26d8c8034",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/9e9fc353-8f59-4156-8206-bfbac9fcd663.jsonl",
+  "stem": "9e9fc353-8f59-4156-8206-bfbac9fcd663",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/a21fca4e-0039-4ead-9331-4a8e6109d579.jsonl",
+  "bytes": 971131,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/a21fca4e-0039-4ead-9331-4a8e6109d579.jsonl",
+  "sha256": "65dfd5a1a447841d18637e9eeae686d1099de5918daea6f003550cdf9d55e41c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/a21fca4e-0039-4ead-9331-4a8e6109d579.jsonl",
+  "stem": "a21fca4e-0039-4ead-9331-4a8e6109d579",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/c9b3cfbf-2288-40e7-afd4-ef545ebfb375.jsonl",
+  "bytes": 474330,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/c9b3cfbf-2288-40e7-afd4-ef545ebfb375.jsonl",
+  "sha256": "037ba74c4f8b2921661342e58737c67468275e7461432387c75aaaff7fbabd33",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/c9b3cfbf-2288-40e7-afd4-ef545ebfb375.jsonl",
+  "stem": "c9b3cfbf-2288-40e7-afd4-ef545ebfb375",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/d0ff2f35-e1a7-434f-bfcd-23cb5ce6ded3.jsonl",
+  "bytes": 860663,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/d0ff2f35-e1a7-434f-bfcd-23cb5ce6ded3.jsonl",
+  "sha256": "332bb61cd506dd9084167e8f9b46014cb4198a73f75b76faa2ce982fdcd62729",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/d0ff2f35-e1a7-434f-bfcd-23cb5ce6ded3.jsonl",
+  "stem": "d0ff2f35-e1a7-434f-bfcd-23cb5ce6ded3",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/deac4ec1-8a28-4366-b905-4b1c8c5dd49b.jsonl",
+  "bytes": 3070838,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/deac4ec1-8a28-4366-b905-4b1c8c5dd49b.jsonl",
+  "sha256": "403659f305a491b16bb3057592d9885d606c0a36bf1a1d7fa0066b7695d92a4f",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/deac4ec1-8a28-4366-b905-4b1c8c5dd49b.jsonl",
+  "stem": "deac4ec1-8a28-4366-b905-4b1c8c5dd49b",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/dfd094ee-38f6-49c8-ad31-c05999d8a765.jsonl",
+  "bytes": 262263,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/dfd094ee-38f6-49c8-ad31-c05999d8a765.jsonl",
+  "sha256": "3efb6931086479d260a4239a1234ae3983dbf5b470cfa6463fe6b7fda43c1422",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/dfd094ee-38f6-49c8-ad31-c05999d8a765.jsonl",
+  "stem": "dfd094ee-38f6-49c8-ad31-c05999d8a765",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/e189d7ef-12f5-4243-9e2d-6da708ef116e.jsonl",
+  "bytes": 148454,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/e189d7ef-12f5-4243-9e2d-6da708ef116e.jsonl",
+  "sha256": "47e6a9ae9ddf6fa5399252ce20872b795dfa7cfde52172ea53c7de2183c13c7a",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/e189d7ef-12f5-4243-9e2d-6da708ef116e.jsonl",
+  "stem": "e189d7ef-12f5-4243-9e2d-6da708ef116e",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/f3eeb676-c92d-4220-a192-eece3f76fb9c.jsonl",
+  "bytes": 50096623,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/f3eeb676-c92d-4220-a192-eece3f76fb9c.jsonl",
+  "sha256": "b7856488a98bde1f3f227ce9a48277da6508e846c06da83c56e1299ff67fe584",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/f3eeb676-c92d-4220-a192-eece3f76fb9c.jsonl",
+  "stem": "f3eeb676-c92d-4220-a192-eece3f76fb9c",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/f68d64b6-7415-4878-8754-e600afa158f6.jsonl",
+  "bytes": 157020,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/f68d64b6-7415-4878-8754-e600afa158f6.jsonl",
+  "sha256": "1c3e853dad4fa9148f27472732410dfa2efaf05559311ec4268bd56049f6dd22",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/f68d64b6-7415-4878-8754-e600afa158f6.jsonl",
+  "stem": "f68d64b6-7415-4878-8754-e600afa158f6",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-dev-tools/fa75447f-b2c2-4900-b100-cba1917ab98c.jsonl",
+  "bytes": 745329,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-dev-tools/fa75447f-b2c2-4900-b100-cba1917ab98c.jsonl",
+  "sha256": "9bea00dafaee58481642fe64280307e1b50fc0685151617ef4ecded561207b3e",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-dev-tools/fa75447f-b2c2-4900-b100-cba1917ab98c.jsonl",
+  "stem": "fa75447f-b2c2-4900-b100-cba1917ab98c",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/0165e634-da7d-4a2a-b6ee-f6f9e2c45c9b.jsonl",
+  "bytes": 71296525,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/0165e634-da7d-4a2a-b6ee-f6f9e2c45c9b.jsonl",
+  "sha256": "875ef5d25adf0e9d77457cf28ffbae358a89efbc620d33b203014ab79d676578",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/0165e634-da7d-4a2a-b6ee-f6f9e2c45c9b.jsonl",
+  "stem": "0165e634-da7d-4a2a-b6ee-f6f9e2c45c9b",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/02b9746c-7dc8-4722-8945-4bdef00891bf.jsonl",
+  "bytes": 210558,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/02b9746c-7dc8-4722-8945-4bdef00891bf.jsonl",
+  "sha256": "f723bcb4de655aca28c2bdaa3ae6eb586ea5515bf5b095713ef3fd508381a3c2",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/02b9746c-7dc8-4722-8945-4bdef00891bf.jsonl",
+  "stem": "02b9746c-7dc8-4722-8945-4bdef00891bf",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/20f1b752-7ba0-469f-918c-e3995ebe577e.jsonl",
+  "bytes": 1420328,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/20f1b752-7ba0-469f-918c-e3995ebe577e.jsonl",
+  "sha256": "6bb087b5fea5f7378fc7eb5c4cf42e5fc93bd32352b0f1225157780e8ff945fd",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/20f1b752-7ba0-469f-918c-e3995ebe577e.jsonl",
+  "stem": "20f1b752-7ba0-469f-918c-e3995ebe577e",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/79899e70-fb3f-40b0-bf9b-15367feb8410.jsonl",
+  "bytes": 180351,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/79899e70-fb3f-40b0-bf9b-15367feb8410.jsonl",
+  "sha256": "481239c8391030e75c4cb51a03fd9169e4e81bd81ad8112a34f173d1311d6e7b",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/79899e70-fb3f-40b0-bf9b-15367feb8410.jsonl",
+  "stem": "79899e70-fb3f-40b0-bf9b-15367feb8410",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/7c62f258-c5e7-48b8-97b3-7dd09bed1adc.jsonl",
+  "bytes": 16455182,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/7c62f258-c5e7-48b8-97b3-7dd09bed1adc.jsonl",
+  "sha256": "ca236cf176f490c8cd2cf6c98bc59b22e3ba28be98a55d06f74857721b6a0b6e",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/7c62f258-c5e7-48b8-97b3-7dd09bed1adc.jsonl",
+  "stem": "7c62f258-c5e7-48b8-97b3-7dd09bed1adc",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/8f65c9c3-1840-4f36-89cf-c37159aab7dc.jsonl",
+  "bytes": 1206730,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/8f65c9c3-1840-4f36-89cf-c37159aab7dc.jsonl",
+  "sha256": "593d73afd68a0ccef6e5421671d9e13b8ba0c9e5c6ce5db89ae28112c0ad2a5c",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/8f65c9c3-1840-4f36-89cf-c37159aab7dc.jsonl",
+  "stem": "8f65c9c3-1840-4f36-89cf-c37159aab7dc",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/97c40e6d-b210-428c-ab1a-36eeed14fdf3.jsonl",
+  "bytes": 28397278,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/97c40e6d-b210-428c-ab1a-36eeed14fdf3.jsonl",
+  "sha256": "52713455d7131a523b5cb2cdc4b92dd96e7c74ecbfbf68a883f8307636770fee",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/97c40e6d-b210-428c-ab1a-36eeed14fdf3.jsonl",
+  "stem": "97c40e6d-b210-428c-ab1a-36eeed14fdf3",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/9848421f-1e32-4580-bf93-5ba7d3574341.jsonl",
+  "bytes": 2638,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/9848421f-1e32-4580-bf93-5ba7d3574341.jsonl",
+  "sha256": "e68f19826d4d6b4400180d118462010d3a87a7f62b3f31479663025eef93d6d1",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/9848421f-1e32-4580-bf93-5ba7d3574341.jsonl",
+  "stem": "9848421f-1e32-4580-bf93-5ba7d3574341",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/9e403abf-6aef-402b-9b11-6c5126f17364.jsonl",
+  "bytes": 90853378,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/9e403abf-6aef-402b-9b11-6c5126f17364.jsonl",
+  "sha256": "748ef41bd8e0617047fad82d12e320cd7259789e9f44131e5e60e206a380ac15",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/9e403abf-6aef-402b-9b11-6c5126f17364.jsonl",
+  "stem": "9e403abf-6aef-402b-9b11-6c5126f17364",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/c0c1bb9e-8cb4-42d1-9361-f4b610633a42.jsonl",
+  "bytes": 11419285,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/c0c1bb9e-8cb4-42d1-9361-f4b610633a42.jsonl",
+  "sha256": "c8875571b33effc0f2989c40b6fb7e20eee945bb6ca51973fd260a73863b37e5",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/c0c1bb9e-8cb4-42d1-9361-f4b610633a42.jsonl",
+  "stem": "c0c1bb9e-8cb4-42d1-9361-f4b610633a42",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/cc3b1a19-163a-466b-9a3a-90ba5e9b309c.jsonl",
+  "bytes": 40187154,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/cc3b1a19-163a-466b-9a3a-90ba5e9b309c.jsonl",
+  "sha256": "ab316a942b46546140b30939fafdbf6ea09760fe43421f91fdf8cdbcdeb0e3eb",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/cc3b1a19-163a-466b-9a3a-90ba5e9b309c.jsonl",
+  "stem": "cc3b1a19-163a-466b-9a3a-90ba5e9b309c",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/dd07bb5d-80b4-4164-8613-1da0a8f0180f.jsonl",
+  "bytes": 13346987,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/dd07bb5d-80b4-4164-8613-1da0a8f0180f.jsonl",
+  "sha256": "e1393d27b542252e863f002b46068a1bba988e8adf3ecb46c16740de8d67f4fc",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/dd07bb5d-80b4-4164-8613-1da0a8f0180f.jsonl",
+  "stem": "dd07bb5d-80b4-4164-8613-1da0a8f0180f",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-tools-network-monitor/df4710c9-e95d-4ce4-89d2-31ba20eef25a.jsonl",
+  "bytes": 3349990,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-tools-network-monitor/df4710c9-e95d-4ce4-89d2-31ba20eef25a.jsonl",
+  "sha256": "c85eb852bf668199c63e9ce6101e913e1b65de0f14f08a78d65bbefb36f05266",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-tools-network-monitor/df4710c9-e95d-4ce4-89d2-31ba20eef25a.jsonl",
+  "stem": "df4710c9-e95d-4ce4-89d2-31ba20eef25a",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-web-missioncontrol/9109cac8-8043-4811-9d12-7d31fe94f1c3.jsonl",
+  "bytes": 175331,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-web-missioncontrol/9109cac8-8043-4811-9d12-7d31fe94f1c3.jsonl",
+  "sha256": "39cc597fdd0dbbce8e2d028a61df7b5def7826fc181aceefe9315bb1b0905feb",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-web-missioncontrol/9109cac8-8043-4811-9d12-7d31fe94f1c3.jsonl",
+  "stem": "9109cac8-8043-4811-9d12-7d31fe94f1c3",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-web-missioncontrol/c85c35de-5632-4ed6-8efa-826f2547f39d.jsonl",
+  "bytes": 3047,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-web-missioncontrol/c85c35de-5632-4ed6-8efa-826f2547f39d.jsonl",
+  "sha256": "be9d4b3d538ded9f5bb47d2c26af6852b86cbfe48ccc7ea446c793c2495cb5b6",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-web-missioncontrol/c85c35de-5632-4ed6-8efa-826f2547f39d.jsonl",
+  "stem": "c85c35de-5632-4ed6-8efa-826f2547f39d",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Development-Production-web-missioncontrol/f53c9508-a47d-447e-ba2d-d512588ec8cc.jsonl",
+  "bytes": 182114,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Development-Production-web-missioncontrol/f53c9508-a47d-447e-ba2d-d512588ec8cc.jsonl",
+  "sha256": "eabbb94e307501804d3d3dbef920cd55f6a6b800c9913d7962186cb4d8472701",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Development-Production-web-missioncontrol/f53c9508-a47d-447e-ba2d-d512588ec8cc.jsonl",
+  "stem": "f53c9508-a47d-447e-ba2d-d512588ec8cc",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele-Scratch-temp-comfy/c2dbce81-628f-4790-b90c-752b10ebe823.jsonl",
+  "bytes": 14848,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele-Scratch-temp-comfy/c2dbce81-628f-4790-b90c-752b10ebe823.jsonl",
+  "sha256": "638b068c656b003e26e152ff582b92fadf7d3158e649ea9212bc6d9da5b2f3a8",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele-Scratch-temp-comfy/c2dbce81-628f-4790-b90c-752b10ebe823.jsonl",
+  "stem": "c2dbce81-628f-4790-b90c-752b10ebe823",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/03/projects/-Users-jsugamele/e483d6a8-abcf-4081-a9f1-52e4c8c1a05b.jsonl",
+  "bytes": 136,
+  "kind": "session",
+  "rel": "projects/-Users-jsugamele/e483d6a8-abcf-4081-a9f1-52e4c8c1a05b.jsonl",
+  "sha256": "dd5fe5f4146d2c001bbf73d234077a468135c5c4d64f7ecc0b6f897fa72ef38a",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/03-gogs-history-6d8879b.tar.zst#projects/-Users-jsugamele/e483d6a8-abcf-4081-a9f1-52e4c8c1a05b.jsonl",
+  "stem": "e483d6a8-abcf-4081-a9f1-52e4c8c1a05b",
+  "tarball": "03-gogs-history-6d8879b.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/69eb03c6-38da-432b-b3e1-909b314c001c.jsonl",
+  "bytes": 10393,
+  "kind": "session",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/69eb03c6-38da-432b-b3e1-909b314c001c.jsonl",
+  "sha256": "d12fab9a6aa46bacb470da3a932edae62328060d5e1a8d77ffa3d7b191ae6543",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/69eb03c6-38da-432b-b3e1-909b314c001c.jsonl",
+  "stem": "69eb03c6-38da-432b-b3e1-909b314c001c",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-a18a162.jsonl",
+  "bytes": 1932,
+  "kind": "subagent",
+  "parent_session_uuid": "69eb03c6-38da-432b-b3e1-909b314c001c",
+  "parent_source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/69eb03c6-38da-432b-b3e1-909b314c001c.jsonl",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-a18a162.jsonl",
+  "sha256": "515cd5961cac5f5206dcf8df79c9540bcedf94df62ee2ea992cd63407c90b18b",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-a18a162.jsonl",
+  "stem": "agent-a18a162",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-a4572dd.jsonl",
+  "bytes": 1322,
+  "kind": "subagent",
+  "parent_session_uuid": "bb4ce21e-1ee4-471f-8b09-43be77edf33f",
+  "parent_source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/bb4ce21e-1ee4-471f-8b09-43be77edf33f.jsonl",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-a4572dd.jsonl",
+  "sha256": "4525f76a93193528b11b80631863c2779d7c44f213ae214e44fdcec59e35ad90",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-a4572dd.jsonl",
+  "stem": "agent-a4572dd",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-ab238a9.jsonl",
+  "bytes": 1264,
+  "kind": "subagent",
+  "parent_session_uuid": "69eb03c6-38da-432b-b3e1-909b314c001c",
+  "parent_source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/69eb03c6-38da-432b-b3e1-909b314c001c.jsonl",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-ab238a9.jsonl",
+  "sha256": "a854bbe09a2a3a42c7b9b2d3ac6a9ab28cdb48feb4c40e703330d7637bf87ebf",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-ab238a9.jsonl",
+  "stem": "agent-ab238a9",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-ac3693d.jsonl",
+  "bytes": 1322,
+  "kind": "subagent",
+  "parent_session_uuid": "bb4ce21e-1ee4-471f-8b09-43be77edf33f",
+  "parent_source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/bb4ce21e-1ee4-471f-8b09-43be77edf33f.jsonl",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-ac3693d.jsonl",
+  "sha256": "d1511518758fb57bae531103e2cd2a3035d0c48c3d4da296e3a28562522687ba",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-ac3693d.jsonl",
+  "stem": "agent-ac3693d",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-aca6b24.jsonl",
+  "bytes": 309485,
+  "kind": "subagent",
+  "parent_session_uuid": "bb4ce21e-1ee4-471f-8b09-43be77edf33f",
+  "parent_source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/bb4ce21e-1ee4-471f-8b09-43be77edf33f.jsonl",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-aca6b24.jsonl",
+  "sha256": "d340b1b5603ebd34e46499bbbe0897ccc8358c4b52d86925aed7a674a3c050e6",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/agent-aca6b24.jsonl",
+  "stem": "agent-aca6b24",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/bb4ce21e-1ee4-471f-8b09-43be77edf33f.jsonl",
+  "bytes": 4209566,
+  "kind": "session",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/bb4ce21e-1ee4-471f-8b09-43be77edf33f.jsonl",
+  "sha256": "0c78f5e6a5ef8248e9dd7342ff7b482680149688a62dea6f5c113f467c2e5441",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/bb4ce21e-1ee4-471f-8b09-43be77edf33f.jsonl",
+  "stem": "bb4ce21e-1ee4-471f-8b09-43be77edf33f",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/04/.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/d0b03417-e2b1-448b-8b42-d27ef2803b01.jsonl",
+  "bytes": 6870,
+  "kind": "session",
+  "rel": ".claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/d0b03417-e2b1-448b-8b42-d27ef2803b01.jsonl",
+  "sha256": "4ddaa304ea5c4ff03b7dc8a4416e59d1a6d1205c1202f1247b2effaf883f83a9",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/04-mini-claude-backup-20260106.tar.zst#.claude-backup-20260106/projects/-Users-jsugamele-Development-ai-setup/d0b03417-e2b1-448b-8b42-d27ef2803b01.jsonl",
+  "stem": "d0b03417-e2b1-448b-8b42-d27ef2803b01",
+  "tarball": "04-mini-claude-backup-20260106.tar.zst"
+ },
+ {
+  "abs_recovered": "/Volumes/Backup/claude-transcript-restore-20260917/tarball-members-verified/06/claude2/projects/-Users-jsugamele-Development-Production-bhpp-new-server/c4b49caa-be86-4546-aec9-d44c71e2d2e8.jsonl",
+  "bytes": 8597,
+  "kind": "session",
+  "rel": "claude2/projects/-Users-jsugamele-Development-Production-bhpp-new-server/c4b49caa-be86-4546-aec9-d44c71e2d2e8.jsonl",
+  "sha256": "cb8dfcdff2f1c9aa00c01cb36ea8bf06c66b59d7777d6e8b841606929338ccc9",
+  "source_path": "/mnt/ARCHIVE/vault/85_cloud-exports/claude/claude-archive-20260830/06-misc-claude2-and-app-sessions.tar.zst#claude2/projects/-Users-jsugamele-Development-Production-bhpp-new-server/c4b49caa-be86-4546-aec9-d44c71e2d2e8.jsonl",
+  "stem": "c4b49caa-be86-4546-aec9-d44c71e2d2e8",
+  "tarball": "06-misc-claude2-and-app-sessions.tar.zst"
+ }
+]

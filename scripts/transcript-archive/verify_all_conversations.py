@@ -19,13 +19,22 @@ once reported near-total loss. ``sessionId`` is wrong because an
 ``agent-<id>.jsonl`` subagent run records its PARENT's sessionId, so keying on it
 collapses thousands of distinct files onto one id.
 
-SUBAGENT RUNS ARE COUNTED SEPARATELY AND ARE NOT CONVERSATIONS. An
+SUBAGENT RUNS ARE A SECOND POPULATION AND THEY ARE NOW IN SCOPE. An
 ``agent-*.jsonl`` is a sub-task this app spawned inside a conversation, not
-something the owner sat down and had. Both are counted; the verdict leads with
-conversations, and the subagent number is reported beside it so it can never be
-quietly folded in to make a total look better.
+something the owner sat down and had, so the two are never summed. Until
+2026-09-17 a missing subagent run was printed as information and did not affect
+the verdict. The owner overruled that, verbatim: "i also want to confirm all
+conversations are in the database. even subagent because the archive viewer is
+an in depth detailed viewer." So BOTH populations are verified, BOTH can fail
+the run, and each gets its OWN headline line and its OWN gap list. A gap in one
+must never be masked by the other being clean, which is exactly what one merged
+total would do.
 
-THE THREE SOURCES, AND WHY THE THIRD IS A FILE RATHER THAN A SCAN.
+Subagent identity comes from ``subagent_roster.txt`` beside the census, which
+holds every subagent stem ever observed and nothing else. See
+:mod:`subagent_roster` for why identity and provenance are stored apart.
+
+THE FOUR SOURCES, AND WHY THE THIRD IS A FILE RATHER THAN A SCAN.
 
   live archive   ``transcript_archives.source_path`` in cloude-archive.db.
                  This is the thing being audited.
@@ -37,12 +46,20 @@ THE THREE SOURCES, AND WHY THE THIRD IS A FILE RATHER THAN A SCAN.
                  recorded with which sources held it. It is a file and not a
                  scan because the NAS is not always reachable and a check that
                  answers nothing when a server is down is a check nobody runs.
+  roster         ``subagent_roster.txt`` beside the census: every subagent run
+                 ever observed anywhere, identity only, one stem per line.
 
-EXIT CODES. 0 every conversation accounted for. 1 a gap: at least one
-conversation is known to exist and is not in the live archive. 2 could not
-evaluate. NOT HAVING LOOKED IS NEVER A PASS, which is the whole reason 2 is
-distinct from 0: an unreadable database, a missing census and an unreadable
-corpus root all exit 2, never 0.
+EXIT CODES. 0 every conversation AND every subagent run accounted for. 1 a gap
+in EITHER population: something is known to exist and is not in the live
+archive. 2 could not evaluate. NOT HAVING LOOKED IS NEVER A PASS, which is the
+whole reason 2 is distinct from 0: an unreadable database, a missing census, a
+missing roster and an unreadable corpus root all exit 2, never 0.
+
+EXCLUSIONS ARE PRINTED EVERY RUN AND ARE NOT GAPS. A population the owner has
+ruled out of scope - today that is 195 OpenAI Codex CLI conversations - is
+carried as structured data in the census and reported with its current count,
+so it reads as a decision rather than as something nobody noticed. See
+:mod:`census_exclusions`.
 
 AN ACCEPTED GAP IS STILL PRINTED, EVERY RUN. A census entry may carry
 ``disposition: "accepted"`` with a reason, for a conversation the owner has
@@ -76,9 +93,11 @@ import sys
 import time
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from census_exclusions import render_exclusions
 from conversation_sources import (SUBAGENT_PREFIX, CannotEvaluate, is_subagent,
                                   read_archive, read_census, read_corpus,
                                   split_stems, stem_of)
+from subagent_roster import default_roster_path, read_roster
 
 #: Live transcript archive maintained by the running app.
 DEFAULT_ARCHIVE = os.path.expanduser(
@@ -100,24 +119,30 @@ DISPOSITION_ACCEPTED = "accepted"
 EXIT_OK, EXIT_GAP, EXIT_CANNOT_EVALUATE = 0, 1, 2
 
 
-def evaluate(archive_path: str, corpus_root: str, census_path: str) -> dict:
-    """Run the whole check and return a report.
+def evaluate(archive_path: str, corpus_root: str, census_path: str,
+             roster_path: Optional[str] = None) -> dict:
+    """Run the whole check over BOTH populations and return a report.
 
     Inputs:
       archive_path: live cloude-archive.db.
       corpus_root: on-disk corpus root.
       census_path: recorded census json.
+      roster_path: subagent roster, defaulting to the one beside the census.
     Outputs:
       dict: the report, always carrying ``verdict`` in
-        {all_accounted_for, gap, cannot_evaluate}.
+        {all_accounted_for, gap, cannot_evaluate}, plus ``open_gaps`` for
+        conversations and ``subagent_open_gaps`` for subagent runs. The two
+        lists are never merged.
     """
     started = time.time()
+    roster_path = roster_path or default_roster_path(census_path)
     report: dict = {
         "verdict": None,
         "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "archive_path": archive_path,
         "corpus_root": corpus_root,
         "census_path": census_path,
+        "roster_path": roster_path,
         "sources": [],
         "cannot_evaluate": [],
     }
@@ -141,6 +166,23 @@ def evaluate(archive_path: str, corpus_root: str, census_path: str) -> dict:
     ever_sub: Set[str] = set(arc_sub)
     open_gaps: List[dict] = []
     accepted_gaps: List[dict] = []
+    sub_open_gaps: List[dict] = []
+    sub_accepted_gaps: List[dict] = []
+
+    # THE ROSTER IS READ BEFORE ANYTHING ELSE IS DECIDED, and a missing one is
+    # fatal rather than empty. A checker that treated an absent roster as "no
+    # subagent run has ever existed" would print ALL ACCOUNTED FOR on a machine
+    # where the file had simply been deleted, which is the exact failure mode
+    # this project's exit code 2 exists to prevent.
+    try:
+        roster_stems, roster_complete = read_roster(roster_path)
+    except CannotEvaluate as exc:
+        report["verdict"] = "cannot_evaluate"
+        report["cannot_evaluate"].append(str(exc))
+        return report
+    report["roster_subagents"] = len(roster_stems)
+    report["roster_complete"] = roster_complete
+    ever_sub |= roster_stems
 
     try:
         disk_conv, disk_sub, disk_where = read_corpus(corpus_root)
@@ -170,7 +212,17 @@ def evaluate(archive_path: str, corpus_root: str, census_path: str) -> dict:
                 "note": "on disk and not yet ingested; if this file is minutes "
                         "old the ingester has simply not run since",
             })
-        report["subagents_on_disk_not_archived"] = sorted(disk_sub - arc_sub)
+        # A subagent run on disk and not in the archive is now a GAP, on the
+        # same terms as a conversation. It used to be a side list nothing acted
+        # on, which is how a population stops being watched.
+        for stem in sorted(disk_sub - arc_sub):
+            sub_open_gaps.append({
+                "stem": stem, "kind": "subagent",
+                "sources": ["disk corpus"],
+                "where": disk_where.get(stem),
+                "note": "on disk and not yet ingested; if this file is minutes "
+                        "old the ingester has simply not run since",
+            })
 
     try:
         census = read_census(census_path)
@@ -220,23 +272,38 @@ def evaluate(archive_path: str, corpus_root: str, census_path: str) -> dict:
         else:
             open_gaps.append(item)
 
-    # Subagent runs are counted, not enumerated (see the census docstring), with
-    # one exception: a run KNOWN to be missing from the live archive is recorded
-    # by stem so it can be named. Those are reported, never folded into the
-    # conversation verdict, because a subagent run is not a conversation.
-    missing_sub: List[dict] = []
-    for stem, record in sorted(census.get("subagents", {}).items()):
-        ever_sub.add(stem)
-        if stem not in arc_sub:
-            missing_sub.append({"stem": stem, "sources": record.get("sources", []),
-                                "where": record.get("where"),
-                                "bytes": record.get("bytes")})
-    report["subagent_gaps"] = missing_sub
+    # THE ROSTER CARRIES IDENTITY; THE CENSUS CARRIES PROVENANCE. Every stem the
+    # roster names is checked against the archive. The census's ``subagents``
+    # map adds where-to-find-it and a disposition for the few that are missing,
+    # exactly as it does for conversations, so the owner can accept a subagent
+    # gap the same way he accepts a conversation gap.
+    sub_records = census.get("subagents", {})
+    seen_sub_gap: Set[str] = {item["stem"] for item in sub_open_gaps}
+    for stem in sorted(ever_sub - arc_sub):
+        if stem in seen_sub_gap:
+            continue
+        record = sub_records.get(stem, {})
+        item = {
+            "stem": stem, "kind": "subagent",
+            "sources": record.get("sources", []) or ["subagent roster"],
+            "where": record.get("where"),
+            "bytes": record.get("bytes"),
+            "recoverability": record.get("recoverability"),
+            "note": record.get("note"),
+        }
+        if record.get("disposition") == DISPOSITION_ACCEPTED:
+            item["reason"] = record.get("reason")
+            sub_accepted_gaps.append(item)
+        else:
+            sub_open_gaps.append(item)
 
     report["total_conversations_ever"] = len(ever_conv)
     report["total_subagents_ever"] = len(ever_sub)
     report["open_gaps"] = open_gaps
     report["accepted_gaps"] = accepted_gaps
+    report["subagent_open_gaps"] = sub_open_gaps
+    report["subagent_accepted_gaps"] = sub_accepted_gaps
+    report["exclusions"] = census.get("exclusions", [])
     report["elapsed_seconds"] = round(time.time() - started, 3)
     report["verdict"] = verdict_for(report)
     return report
@@ -251,14 +318,21 @@ def verdict_for(report: dict) -> str:
     emptied only the report key printed "VERDICT: GAP" while exiting 0. A
     checker that says gap and exits success is worse than no checker.
 
+    BOTH POPULATIONS COUNT. A gap in either conversations or subagent runs is a
+    gap, and the two lists are read separately rather than summed, so a clean
+    conversation set can never make a missing subagent run disappear.
+
     Inputs:
-      report: a report dict carrying ``cannot_evaluate`` and ``open_gaps``.
+      report: a report dict carrying ``cannot_evaluate``, ``open_gaps`` and
+        ``subagent_open_gaps``.
     Outputs:
       str: one of all_accounted_for, gap, cannot_evaluate.
     """
     if report.get("cannot_evaluate"):
         return "cannot_evaluate"
-    return "gap" if report.get("open_gaps") else "all_accounted_for"
+    if report.get("open_gaps") or report.get("subagent_open_gaps"):
+        return "gap"
+    return "all_accounted_for"
 
 
 def render(report: dict, quiet: bool = False) -> None:
@@ -278,12 +352,17 @@ def render(report: dict, quiet: bool = False) -> None:
         print("\nnot having looked is not a pass. exit 2.")
         return
 
-    ever = report["total_conversations_ever"]
-    have = report["archive_conversations"]
-    print(f"conversations ever observed anywhere : {ever}")
-    print(f"conversations in the live archive now: {have}")
-    print(f"subagent runs ever observed          : {report['total_subagents_ever']}"
-          f"  (in archive: {report['archive_subagents']})")
+    # TWO POPULATIONS, TWO LINES, EACH CARRYING ITS OWN MISSING COUNT. A zero is
+    # printed rather than omitted, because an absent line reads as "not checked"
+    # and a stated zero reads as a measurement.
+    conv_missing = len(report.get("open_gaps", []))
+    sub_missing = len(report.get("subagent_open_gaps", []))
+    print(f"conversations : ever {report['total_conversations_ever']:>6}   "
+          f"in archive {report['archive_conversations']:>6}   "
+          f"missing {conv_missing}")
+    print(f"subagent runs : ever {report['total_subagents_ever']:>6}   "
+          f"in archive {report['archive_subagents']:>6}   "
+          f"missing {sub_missing}")
     if not quiet:
         print(f"\narchive rows: {report['archive_rows']}   "
               f"checked at {report['checked_at']}   "
@@ -299,36 +378,41 @@ def render(report: dict, quiet: bool = False) -> None:
                   f"conv={str(source.get('conversations')):>6} "
                   f"missing_from_live={miss_s:>4}{reach}")
 
-    accepted = report.get("accepted_gaps", [])
-    if accepted:
-        print(f"\nACCEPTED, outside the archive on purpose ({len(accepted)}):")
-        for item in accepted:
-            print(f"  {item['stem']}  {item.get('reason')}")
+    for label, accepted in (("conversation", report.get("accepted_gaps", [])),
+                            ("subagent run",
+                             report.get("subagent_accepted_gaps", []))):
+        if accepted:
+            print(f"\nACCEPTED {label}(s) outside the archive on purpose "
+                  f"({len(accepted)}):")
+            for item in accepted:
+                print(f"  {item['stem']}  {item.get('reason')}")
 
-    sub_gaps = report.get("subagent_gaps", [])
-    if sub_gaps:
-        print(f"\nsubagent runs known to exist and not in the archive "
-              f"({len(sub_gaps)}). These are sub-tasks, NOT conversations, and "
-              f"they do not change the verdict:")
-        for item in sub_gaps:
-            print(f"  {item['stem']}  {item.get('where') or ''}")
+    for line in render_exclusions(report.get("exclusions", [])):
+        print(line)
 
     gaps = report.get("open_gaps", [])
-    if not gaps:
-        print("\nVERDICT: ALL ACCOUNTED FOR")
+    sub_gaps = report.get("subagent_open_gaps", [])
+    if not gaps and not sub_gaps:
+        print("\nVERDICT: ALL ACCOUNTED FOR, both populations")
         return
-    print(f"\nVERDICT: GAP. {len(gaps)} conversation(s) known to exist "
-          f"and not in the live archive:")
-    for item in gaps:
-        src = ", ".join(item.get("sources") or []) or "unknown source"
-        size = f"  {item['bytes']} bytes" if item.get("bytes") else ""
-        print(f"  {item['stem']}  [{src}]{size}")
-        if item.get("where"):
-            print(f"      at: {item['where']}")
-        if item.get("recoverability"):
-            print(f"      recoverability: {item['recoverability']}")
-        if item.get("note"):
-            print(f"      note: {item['note']}")
+    print(f"\nVERDICT: GAP. conversations {len(gaps)}, "
+          f"subagent runs {len(sub_gaps)}.")
+    for heading, items in (("conversation(s)", gaps),
+                           ("subagent run(s)", sub_gaps)):
+        if not items:
+            continue
+        print(f"\n{len(items)} {heading} known to exist and not in the live "
+              f"archive:")
+        for item in items:
+            src = ", ".join(item.get("sources") or []) or "unknown source"
+            size = f"  {item['bytes']} bytes" if item.get("bytes") else ""
+            print(f"  {item['stem']}  [{src}]{size}")
+            if item.get("where"):
+                print(f"      at: {item['where']}")
+            if item.get("recoverability"):
+                print(f"      recoverability: {item['recoverability']}")
+            if item.get("note"):
+                print(f"      note: {item['note']}")
 
 
 def exit_code_for(verdict: str) -> int:
@@ -362,6 +446,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--archive", default=DEFAULT_ARCHIVE)
     parser.add_argument("--corpus-root", default=DEFAULT_CORPUS_ROOT)
     parser.add_argument("--census", default=DEFAULT_CENSUS)
+    parser.add_argument("--roster", default=None,
+                        help="subagent roster; defaults to beside the census")
     parser.add_argument("--json", help="write the full report here")
     parser.add_argument("--quiet", action="store_true",
                         help="headline and gaps only")
@@ -373,7 +459,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         from verify_all_conversations_selftest import self_test
         return self_test()
 
-    report = evaluate(args.archive, args.corpus_root, args.census)
+    report = evaluate(args.archive, args.corpus_root, args.census, args.roster)
     render(report, quiet=args.quiet)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as handle:
