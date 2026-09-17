@@ -58,9 +58,13 @@ zero.
 
 Every byte was verified against the tarball's OWN manifest before ingest, not
 against a hash recomputed here, which would compare a reading to itself: **83 of
-83 members verified, 0 mismatches**, then re-verified after the network transfer.
-Two of the 83 are `history.jsonl`, the CLI prompt history file, dropped by
-`looks_like_conversation` rather than by a second rule written for this restore.
+83 members verified, 0 mismatches**, four times over - on the NAS after
+decompression, after the network transfer, after relocation to
+`/Volumes/Backup` (by `restore_tarball_conversations.py`, which refuses rather
+than skipping on a mismatch), and once more by an independent second reader at
+the new location. Two of the 83 are `history.jsonl`, the CLI prompt history
+file, dropped by `looks_like_conversation` rather than by a second rule written
+for this restore.
 
 A pass that used `str.lstrip("./")` to normalise manifest paths reported all
 nine members of tarball 04 as "not in manifest". `lstrip` strips every leading
@@ -106,10 +110,25 @@ restore set, so all five rooted.
 | `transcript_records` | 12,382,880 | 12,436,875 | +53,995 |
 | raw bytes under `/mnt/ARCHIVE/%` | 0 | 453,025,061 | the restored content |
 
-Pre-write backup: `cloude-archive.db.bak-preRESTORE76-20260917T152632Z` in the
-state directory, taken with SQLite's online backup API against the live writer,
-16,378,740,736 bytes, `PRAGMA integrity_check` = **ok**, 24,600 archives /
-12,382,880 records / 36,901,872,368 raw bytes.
+Pre-write backup: `cloude-archive.db.bak-preRESTORE76-20260917T152632Z`, taken
+with SQLite's online backup API against the live writer, 16,378,740,736 bytes,
+`PRAGMA integrity_check` = **ok**, 24,600 archives / 12,382,880 records /
+36,901,872,368 raw bytes.
+
+It now lives at `/Volumes/Backup/claude-transcript-restore-20260917/`, not in
+the state directory: the boot volume was at 30 GiB free and 94 percent full, so
+it was moved off. `mv` across volumes unlinks the source rather than routing it
+through the Trash, so the space returned immediately and `df` confirmed it,
+30 GiB to 45 GiB free.
+
+**A copy that has not been verified at its new location is not a backup**, so
+the whole check was re-run there and the result is not a size comparison: same
+16,378,740,736 bytes, `integrity_check` **ok**, same 24,600 / 12,382,880 /
+36,901,872,368, and the sha256 over every `(source_path, content_sha256)` pair
+in id order is `fd236e7ad7787c503e652c6e414d08e0aac4b27d4869537d6aacef32ee141ed8`,
+**identical to the digest taken before the move**. That took 3h47m, because
+`/Volumes/Backup` reads at 24.3 MB/s measured, against 134s for the same check
+on the internal SSD. Budget for that before verifying anything large there.
 
 Recoverability was proven end to end for all 81, twice: once inside the ingest,
 and once afterwards on a FRESH connection, exporting each row and comparing the
