@@ -439,6 +439,99 @@ Record: `docs/maintenance-history.md`.
   PRAGMA** (`db_integrity_gate.py`), and a cached FAILURE runs the live pragma
   rather than short-circuiting.
 
+## The archive's names come from the app database
+
+The archive stores a project as the SLUG Claude Code derived from a cwd, and
+the browser rendered that raw. `projects.display_name` in `cloude.db` has held
+the real name all along and nothing joined the two.
+
+| Piece | File |
+|---|---|
+| The forward slug join, the tie-break, the refusals | `src/core/archive_display_names.py` |
+| The ONE bulk read of cloude.db | `src/core/app_name_index.py` |
+| The seam that decorates an envelope after the read | `src/core/archive_name_decorate.py` |
+
+**`observed_cwd` WAS THE INTENDED SOURCE AND IT IS EMPTY.**
+`archive_project_names` derives its `display_name` from that column. Measured
+2026-09-18: NULL on **100 of 100** rows, and `archive_project_overlay` holds
+**0** rows, so every project painted its slug. An earlier pass checked exactly
+those two places, correctly reported "no display name source exists", and never
+looked in the app database.
+
+**THE JOIN RUNS FORWARD, BECAUSE THE SLUG IS NOT INVERTIBLE.** Every character
+outside `[A-Za-z0-9-]` becomes a single `-`, so `/`, `_`, `.`, a space and a
+literal `-` all collapse onto one byte. `bhpp_new_server`, `3D Work` and
+`dev_tools/scripts` all lose the thing that distinguishes them. So each
+`projects.root` and `raw_path` is pushed through this project's OWN slug rule
+(`path_spellings` into `slugify_project_dir`, never a second copy) and the
+RESULT is compared to the archive's directory name. A lossy function is still a
+function: computing it in its defined direction is exact. **Measured on live:
+73 of 100 slugs resolve**, 64 as-written and 9 through a symlink spelling.
+
+**ONE REAL DIRECTORY IS ONE NAME, AND THE NAIVE TIE-BREAK RECREATES THE SPLIT.**
+`~/Development` is a symlink into iCloud, and the data carries the scar: project
+4 `Hirschfeld (old path)` is rooted at the short spelling and project 6
+`Hirschfeld` at the long one, so BOTH slugs match BOTH rows. Ranking by which
+row matched more literally answers `Hirschfeld (old path)` for the short slug
+and `Hirschfeld` for the long one, which is the defect restated rather than
+fixed. `resolve_slug` instead asks whether the candidates denote the same real
+directory (`realpath` of each root) and keeps the row whose root is ALREADY
+CANONICAL, which is a measured filesystem property and the spelling
+`project_directory` has written since `a4eeef1`. All 3 contested slugs resolve,
+and both Hirschfeld slugs answer `Hirschfeld`.
+`tests/test_archive_display_names.py` reproduces the naive rule inline so the
+file fails if it returns.
+
+**CANDIDATES THAT DISAGREE ABOUT WHICH DIRECTORY THEY ARE REFUSE**, because a
+slug cannot adjudicate a real collision. Zero on the live corpus, and it is the
+rung that stops the tie-break degenerating into "pick one".
+
+**AN ANCESTOR IS NOT A NAME, AND THAT RUNG WAS BUILT AND THROWN AWAY.** Nine of
+the 27 unresolved slugs are real subdirectories of named projects. Claiming the
+parent's name labels a distinct project with another project's name, and the
+slug prefix test that finds them cannot tell a child from a sibling whose name
+merely starts the same way: `-Users-x-Media` prefixes both `/Users/x/Media/sub`
+and `/Users/x/Media-Extra`, because the separator and the literal hyphen are the
+same byte. Those nine report `none` and render their slug. The other 18 are
+`/private/tmp` and `/private/var/folders` scratch directories that correctly
+have no project row.
+
+**`sessions.title` IS THE SESSION NAME, NOT `claude_title`.** Per the one-name
+model, `claude_title` is the marker that makes `claude_title_sync` idempotent
+under duplicated hook events, not a second name; measured on live it is set on
+31 of 941 rows against `title`'s 896. `title` is joined on
+`claude_session_uuid` = the archive's `session_ref` under the `uuid` scheme and
+names **882 of 1,305** own conversations (67.6%). An `agent` sidechain is never
+looked up: it has no row and never will.
+
+**IT ADDS FIELDS AND OVERWRITES NONE.** `display_name` and `title` already on
+these rows are measurements OF THE ARCHIVE, and `archive_titles`' `title_source`
+would become a lie if a value from another database were written under it. The
+new values arrive as `app_display_name`, `app_description`, `app_name_source`,
+`app_project_id` and `app_session_title`, with `meta.app_naming` carrying the
+rate. A corpus collected on ANOTHER machine has no row here, so the archive's
+own reading stays the only one it has.
+
+**ONE DATABASE OPEN PER LISTING, AND IT MUST NOT ATTACH.** The decoration runs
+on an envelope the archive read has already finished and closed for, so the
+`ARCHIVE_ONLY` connection never sees `cloude.db` and neither holds the other's
+write lock. Decorating inside the read would put both files under one lock
+scope, which is what `db_connection_shape` forbids and what produced the
+516-second hold in issue #224. Measured: **1 connection, 2 statements, 5.1 ms**
+for 79 projects and 882 titles, and it does not grow with the row count.
+`tests/test_app_name_index_cost.py` pins the count rather than a clock, because
+the count is the defect exactly.
+
+**THE `$HOME` ALIAS SCAN IS NOW HOISTABLE.** `path_spellings` rebuilt the
+symlink table on every call, which is right for the adopt and hook paths that
+ask about one directory and stale-proof. A bulk caller paid it per project: the
+owner's `$HOME` holds 474 entries and the scan costs 0.84 ms, so naming 79
+projects spent **131 ms of a 139 ms** index build re-listing one directory 158
+times. `home_dir_aliases()` is public and `path_spellings(aliases=...)` accepts
+the table; the build is **4.1 ms** with identical results. It is scanned once
+per PASS, never memoised for the process, or a new symlink would be invisible
+until a restart.
+
 ## Refreshing the local install on a new version
 
 Adam's rule: every new version, his local copy gets refreshed to it. Record:
