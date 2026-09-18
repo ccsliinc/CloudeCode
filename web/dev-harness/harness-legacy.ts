@@ -51,6 +51,17 @@ import '../../client/css/archive-nav-info.css';
 import '../../client/css/archive-tlist.css';
 import '../../client/css/archive-align.css';
 import '../../client/css/archive-panes.css';
+/*
+ * THE READER'S AND THE CHAT VIEW'S OWN SHEETS. Slices 7 and 8 mount
+ * components whose classes live here, and a harness that linked neither
+ * would show them in Chrome's user-agent defaults while every automated
+ * check passed - which is the exact failure `archive-tlist.css`'s own
+ * header records having shipped once already. LOADING A STYLESHEET IS
+ * NOT TOUCHING IT: commitment 2 of issue #173 is that none of the twelve
+ * archive stylesheets is MODIFIED, and none is.
+ */
+import '../../client/css/archive-reader.css';
+import '../../client/css/archive-chat.css';
 
 /* The three globals the components' props are fed from. */
 import '../../client/js/archive-outcome.js';

@@ -351,3 +351,88 @@ export type { FramePass, FrameContext } from './reader-frame';
 export { headerFacts } from './reader-header';
 export type { HeaderFacts, TranscriptHeaderRecord } from './reader-header';
 export type { ReaderProps } from './reader-props';
+
+/**
+ * SLICE 8, THE CONVERSATION VIEW. Published here for the same reason
+ * slices 5, 6 and 7 are: `import-direction.test.ts` pins that nothing
+ * outside `history/` reaches past this file, so a composition root mounts
+ * `ChatView` through the package rather than by path.
+ *
+ * IT IS DELIBERATELY NOT WIRED TO A SCREEN, for the same reason they are
+ * not. It takes its client, its outcome classifier, its transcript id,
+ * an optional root label and its FRAME SCHEDULER from whoever mounts it,
+ * and assumes nothing about what is around it. The scheduler is the
+ * THIRD gap in the `app-screen` surface, the SAME one slice 7 reported;
+ * this slice found no fourth. See `chat-props.ts` and
+ * `docs/archive-shell-contract.md`.
+ *
+ * EVERY BYTE OF BLOCK TEXT IT PAINTS GOES THROUGH `reader-gate.applyMask`
+ * by way of `chat-mask.ts`, which is the one file in this family
+ * permitted to read a block's text at all. That is asserted, not
+ * promised: see `ChatView.commitments.test.ts`.
+ *
+ * Replaces client/js/archive-chat-view.js, archive-chat-screen.js,
+ * archive-chat-turn.js, archive-chat-block.js, archive-chat-info.js,
+ * archive-chat-subagents.js, archive-chat-stack.js,
+ * archive-chat-estimate.js and archive-chat-clicks.js.
+ */
+export { default as ChatView } from './ChatView.svelte';
+export { default as ChatTurn } from './ChatTurn.svelte';
+export { default as ChatBlock } from './ChatBlock.svelte';
+export { default as ChatInfo } from './ChatInfo.svelte';
+export { default as ChatSubagents } from './ChatSubagents.svelte';
+export { default as ChatChain } from './ChatChain.svelte';
+export { default as ChatStatus } from './ChatStatus.svelte';
+export {
+    ACTIONS as CHAT_ACTIONS, CLASS as CHAT_CLASS, MOD as CHAT_MOD,
+    COLLAPSED_BY_DEFAULT, ROLE_LABELS, TYPE_LABELS,
+    UNSTYLED_PRE_EXISTING as CHAT_UNSTYLED,
+    BLOCK_CLASS, CHAIN_CLASS, INFO_CLASS, SUBAGENTS_CLASS, TURN_CLASS,
+    ROOT_CLASS as CHAT_ROOT_CLASS,
+} from './chat-vocab';
+export type { ChatAction } from './chat-vocab';
+export { blockText, declaredSecrets, findingsFor, textState, TEXT_STATE } from './chat-mask';
+export type {
+    ChatBlockRaw, ChatBlockText, ChatTextRefused, ChatTextSafe, ChatTextUnknown,
+    ChatTextWithheld, ChatTurnSecrets, TextState,
+} from './chat-mask';
+export {
+    isRun as isChatRun, itemKey as chatItemKey, progressChipLabel,
+    roleLabel as chatRoleLabel, turnBody, turnView,
+} from './chat-turn';
+export type {
+    ChatBlockView, ChatItem, ChatTurnRaw, ChatTurnView, OpenState,
+    ProgressRun as ChatProgressRun, TurnBody,
+} from './chat-turn';
+export {
+    basisProse, expanderFor, lookupState, nameFor, order as orderSubagents,
+    ordinalFor, panelFor, startOf, transcriptsOf, BASIS_PROSE, LOOKUP_FAILED,
+    LOOKUP_KNOWN, ORDER_DECLARED, ORDER_DERIVED, ORDER_UNKNOWN,
+} from './chat-subagents';
+export type {
+    Expander, OrderedRows, SubagentControl, SubagentPanel, SubagentRow,
+    SubagentRowView, SubagentTranscript, SubagentTurn,
+} from './chat-subagents';
+export { createStack, crumbText } from './chat-stack';
+export type { ChainLevel, ChainSpec, ChatStack } from './chat-stack';
+export { display as chatInfoDisplay, extraKeys, infoPanel, pick as chatInfoPick, FIELDS as CHAT_INFO_FIELDS, USAGE_FIELDS as CHAT_USAGE_FIELDS } from './chat-info';
+export type {
+    InfoField as ChatInfoField, InfoPanel, InfoRow, InfoTurn,
+} from './chat-info';
+export {
+    blockHeight, estimateItem as estimateChatItem, estimator as chatEstimator,
+    CHARS_PER_LINE as CHAT_CHARS_PER_LINE, INFO_PANEL_PX, LINE_HEIGHT_PX as CHAT_LINE_HEIGHT_PX,
+    PROGRESS_ROW_PX as CHAT_PROGRESS_ROW_PX, SUBAGENT_HEAD_PX, SUBAGENT_ROW_PX,
+    TURN_CHROME_PX, TURN_MAX_PX,
+} from './chat-estimate';
+export {
+    appendTurns, applyTurns, emptyChat, fetchTurns, groupTurns, loadingChat,
+    nextCursorOf, noRouteEnvelope, sentinelText as chatSentinelText, turnsOf,
+    DEFAULT_PAGE_TURNS, NO_PAGER_TEXT, TOKEN_CANNOT_DETERMINE,
+} from './chat-load';
+export type { ChatState } from './chat-load';
+export {
+    createChatOpenApi, NOT_OPENABLE, NO_CURSOR, SUPERSEDED,
+} from './chat-open';
+export type { ChatOpenApi, ChatOpenContext } from './chat-open';
+export type { ChatProps, SubagentTarget } from './chat-props';

@@ -37,7 +37,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import {
-        NavRail, TranscriptList, TranscriptReader, countFor, NODE_KINDS,
+        ChatView, NavRail, TranscriptList, TranscriptReader, countFor, NODE_KINDS,
     } from '../src/lib/plugins/history/index';
     import type {
         ArchiveClient, ListScope, NavRowData, NodeKind,
@@ -163,6 +163,26 @@
     let openId = $state<number | string | null>(null);
 
     /**
+     * Which view an open transcript is read in.
+     *
+     * THE RAW READER IS THE BYTE-EXACT RECORD AND THE CHAT VIEW IS THE
+     * DEFAULT ONE PEOPLE WANT. "im looking at a bunch of raw json so it
+     * does not read properly" is what produced slice 8, and the answer
+     * was never to throw the bytes away: some questions can only be
+     * answered by them. So both mount, and this is the switch. It starts
+     * on `chat` because that is the reading view.
+     */
+    let mode = $state<'chat' | 'raw'>('chat');
+
+    /**
+     * The chat view's instance, for the ONE call a parent has to make.
+     *
+     * NEITHER VIEW LOADS ITSELF, and that is their contract, not a bug -
+     * see the note on `reader` below, which applies word for word here.
+     */
+    let chat = $state<ReturnType<typeof ChatView> | undefined>(undefined);
+
+    /**
      * The reader's instance, for the ONE call a parent has to make.
      *
      * THE READER DOES NOT LOAD ITSELF, AND THAT IS ITS CONTRACT, exactly
@@ -199,8 +219,10 @@
     // reader's own state, not ours.
     $effect(() => {
         const id = openId;
+        const which = mode;
         if (id === null) return;
-        void reader?.open();
+        if (which === 'raw') void reader?.open();
+        else void chat?.open();
     });
 </script>
 
@@ -226,6 +248,15 @@
                 <p>
                     reading transcript {openId}
                     <button type="button" onclick={closeTranscript}>back to the list</button>
+                    <!--
+                      THE SWITCH. Both views read the SAME transcript from
+                      two different endpoints: the chat view from
+                      `/messages`, the raw reader from `/lines`. Either
+                      can fail while the other works, which is why the
+                      chat view's own refusal copy points at this one.
+                    -->
+                    <button type="button" onclick={() => { mode = mode === 'chat' ? 'raw' : 'chat'; }}
+                    >{mode === 'chat' ? 'show the raw record' : 'show the conversation'}</button>
                 </p>
                 <!--
                   KEYED ON THE ID. Choosing a DIFFERENT transcript must
@@ -234,13 +265,23 @@
                   cache and expansions, and a `line_no` from the old file
                   can numerically coincide with one from the new.
                 -->
-                {#key openId}
-                    <TranscriptReader
-                        bind:this={reader}
-                        {client}
-                        {outcome}
-                        transcriptId={openId}
-                    />
+                {#key `${mode}:${openId}`}
+                    {#if mode === 'chat'}
+                        <ChatView
+                            bind:this={chat}
+                            {client}
+                            {outcome}
+                            transcriptId={openId}
+                            label={chosenLabel}
+                        />
+                    {:else}
+                        <TranscriptReader
+                            bind:this={reader}
+                            {client}
+                            {outcome}
+                            transcriptId={openId}
+                        />
+                    {/if}
                 {/key}
             {:else if scope === null}
                 <p>pick a project in the rail on the left.</p>
