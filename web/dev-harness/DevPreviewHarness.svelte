@@ -37,7 +37,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import {
-        NavRail, TranscriptList, TranscriptReader, countFor, NODE_KINDS,
+        NavRail, SearchPanel, TranscriptList, TranscriptReader, archiveFuzzy,
+        countFor, NODE_KINDS,
     } from '../src/lib/plugins/history/index';
     import type {
         ArchiveClient, ListScope, NavRowData, NodeKind,
@@ -74,7 +75,14 @@
     /** The one classifier in the client. Throws if the module is absent. */
     const outcome = harnessOutcome();
     /** Optional, degrades to no client-side filtering. */
-    const fuzzy = harnessFuzzy();
+    // THE PORTED MATCHER, NOT `window.ArchiveFuzzy`. Slice 9 ported
+    // `client/js/archive-fuzzy.js` to `search-fuzzy.ts`, and
+    // `tlist-fuzzy.ts`'s header said the injection site would be the only
+    // thing that changes when it landed. This is that one line. The
+    // legacy reader is kept BESIDE it so the harness still proves the
+    // vanilla is loadable, and it is what the fallback below uses if the
+    // port is ever unavailable.
+    const fuzzy = archiveFuzzy ?? harnessFuzzy();
     /** Optional, degrades to no Escape routing on the details modal. */
     const modalStack = harnessModalStack();
 
@@ -190,6 +198,50 @@
     }
 
     /** Go back to the transcript list. */
+    /** The typed query, or '' before anything has been asked. */
+    let q = $state('');
+
+    /** The panel handle, so the harness can drive a real search. */
+    let search = $state<ReturnType<typeof SearchPanel> | undefined>(undefined);
+
+    /**
+     * Hand composed export text to the person.
+     *
+     * Description: THE FOURTH SHELL GAP, satisfied here by the crudest
+     *   possible host so the seam is exercised rather than stubbed out.
+     *   It resolves FALSE on a real failure - a denied clipboard
+     *   permission, an insecure origin - which is the middle of the
+     *   prop's three outcomes and the one a silent no-op would hide.
+     * Inputs: text - the composed artefact. Output: whether it landed.
+     */
+    async function copyText(text: string): Promise<boolean> {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (err) {
+            // NOT SWALLOWED. A clipboard refusal is the exact case the
+            // three-outcome contract exists for, so it is logged with its
+            // reason and reported as a failure, never as a success.
+            console.warn('[dev-harness] clipboard refused the export', err);
+            return false;
+        }
+    }
+
+    /** Run the search the box holds, over whatever scope is chosen. */
+    function runSearch(): void {
+        if (!q) return;
+        openId = null;
+        // A NULL SCOPE ID IS NOT A SCOPE. `ListScope.id` is nullable and
+        // sending `project_id=null` would ask the server about a project
+        // that does not exist, which answers `not_found` and reads on
+        // screen as "your term is not in this project". Falling back to
+        // the whole archive is the honest wider question.
+        const scoped = scope && scope.kind === 'project' && scope.id !== null
+            ? { q, projectId: scope.id }
+            : { q };
+        void search?.run(scoped);
+    }
+
     function closeTranscript(): void {
         openId = null;
     }
@@ -206,7 +258,15 @@
 
 <main>
     <header>
-        <span>dev harness - real NavRail and real TranscriptList, real archive API</span>
+        <span>dev harness - real NavRail, TranscriptList, TranscriptReader and
+            SearchPanel, real archive API</span>
+        <input
+            type="search"
+            placeholder="search the archive"
+            bind:value={q}
+            onkeydown={(e) => { if (e.key === 'Enter') runSearch(); }}
+        />
+        <button type="button" onclick={runSearch}>search</button>
         <button type="button" onclick={onSignOut}>forget token</button>
     </header>
     <div>
@@ -222,7 +282,19 @@
             />
         </nav>
         <section bind:this={scrollport}>
-            {#if openId !== null}
+            {#if q !== '' && openId === null}
+                <p>
+                    search results for {q}
+                    {#if scope}(scoped to project {scope.id}){:else}(whole archive){/if}
+                </p>
+                <SearchPanel
+                    bind:this={search}
+                    {client}
+                    {outcome}
+                    {copyText}
+                    onOpenHit={openTranscript}
+                />
+            {:else if openId !== null}
                 <p>
                     reading transcript {openId}
                     <button type="button" onclick={closeTranscript}>back to the list</button>
@@ -243,7 +315,7 @@
                     />
                 {/key}
             {:else if scope === null}
-                <p>pick a project in the rail on the left.</p>
+                <p>pick a project in the rail on the left, or search above.</p>
             {:else}
                 <p>{chosenLabel}</p>
                 <TranscriptList

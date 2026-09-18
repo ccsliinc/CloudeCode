@@ -351,3 +351,109 @@ export type { FramePass, FrameContext } from './reader-frame';
 export { headerFacts } from './reader-header';
 export type { HeaderFacts, TranscriptHeaderRecord } from './reader-header';
 export type { ReaderProps } from './reader-props';
+
+/**
+ * SLICE 9, SEARCH / EXPORT / MASK. Published here for the same reason
+ * slices 5, 6 and 7 are: `import-direction.test.ts` pins that nothing
+ * outside `history/` reaches past this file, so a composition root
+ * mounts `SearchPanel` through the package rather than by path.
+ *
+ * IT IS DELIBERATELY NOT WIRED TO A SCREEN, for the same reason they are
+ * not. `SearchPanel` takes its client, its outcome classifier, its
+ * `onOpenHit` and - THE FOURTH SHELL GAP - its `copyText`, and assumes
+ * nothing about what is around it. The three documented gaps in the
+ * `app-screen` surface are the scrollport, the modal host and the frame
+ * scheduler; the fourth is a CLIPBOARD SEAM, because a composed export
+ * has to reach a person and every route to that is a host capability.
+ * See `SearchPanel.svelte`'s header and `docs/archive-shell-contract.md`.
+ *
+ * `ExportModal` needs the SECOND gap, the modal host: it registers with
+ * no modal stack and its parent owns escape and focus return, exactly as
+ * slices 5 and 7 left theirs.
+ *
+ * Replaces client/js/archive-search.js, archive-search-render.js,
+ * archive-export.js, archive-outcome-view.js and archive-fuzzy.js.
+ * `archive-mask.js` is NOT among them: slice 7 ported it to
+ * `reader-mask.ts` and it STAYS on disk because
+ * `client/js/archive-chat-block.js` is still a consumer.
+ *
+ * `mask-egress.ts` IS THE ONE DOOR every rendered snippet and every
+ * composed export passes through, and it is a HARD IMPORT everywhere it
+ * is used rather than an injected seam - the same argument slice 7 makes
+ * for `reader-mask.ts`, because a gate a composition root can forget to
+ * supply is fail-OPEN.
+ */
+export { default as SearchPanel } from './SearchPanel.svelte';
+export { default as SearchHit } from './SearchHit.svelte';
+export { default as ExportModal } from './ExportModal.svelte';
+export { default as OutcomeBlock } from './OutcomeBlock.svelte';
+export {
+    ACTIONS as SEARCH_ACTIONS, CLASS as SEARCH_CLASS, COVERAGE_PENDING,
+    PREVIEW_WITHHELD_LABEL, RESUME_KINDS, ROOT_CLASS as SEARCH_ROOT_CLASS,
+    SCAN_STATUSES, SCAN_UNKNOWN, UNSTYLED_PRE_EXISTING as SEARCH_UNSTYLED,
+    WITHHELD_LEAD,
+} from './search-vocab';
+export type { ResumeKind, SearchAction } from './search-vocab';
+export {
+    coverageSentence, resumeAffordance, scanProgress, scanStatus,
+} from './search-envelope';
+export type { ResumeAffordance, ScanProgress, SearchEnvelope } from './search-envelope';
+export { hitLocator, hitView, NOT_KNOWN as HIT_NOT_KNOWN, NO_SESSION_REF,
+         NO_TRANSCRIPT_ID } from './search-hit';
+export type { HitView, SearchHitRecord } from './search-hit';
+// ALIASED, NOT RE-EXPORTED BARE. Slice 7's `reader-load.ts` already
+// publishes a `TOKEN_TRANSPORT_ERROR` through this file and the two hold
+// the SAME string for the same reason, so one name would be convenient
+// and wrong: they are two modules' constants, and folding them would
+// make slice 7's reader and slice 9's search share a symbol neither
+// imports from the other. Caught by `svelte-check` as a duplicate
+// identifier, which is the boundary doing its job.
+export { createSearchRunner, emptySearch,
+         TOKEN_TRANSPORT_ERROR as SEARCH_TOKEN_TRANSPORT_ERROR } from './search-run';
+export type {
+    SearchQuery, SearchRunner, SearchState, SearchTransport,
+} from './search-run';
+export {
+    archiveFuzzy, BASE_PER_CHAR, BOUNDARY_BONUS, BOUNDARY_CHARS as FUZZY_BOUNDARY_CHARS,
+    CONSECUTIVE_BONUS, isActive as fuzzyIsActive, isBoundary as fuzzyIsBoundary,
+    match as fuzzyMatch, rank as fuzzyRank, segments as fuzzySegments,
+} from './search-fuzzy';
+export type { FuzzyMatch } from './search-fuzzy';
+export {
+    ABSENT_STATE_REASON, DECLARED_FINDINGS_REASON, NO_PREVIEW_TEXT,
+    SNIPPET_INCLUDED, UNRECOGNISED_STATE_REASON, WITHHELD_REASONS,
+} from './mask-vocab';
+export {
+    bodyEgress, EGRESS_NONE, EGRESS_TEXT, EGRESS_WITHHELD, exportLine, snippetEgress,
+} from './mask-egress';
+export type {
+    EgressLine, EgressNone, EgressText, EgressWithheld, HitLike, SnippetEgress,
+} from './mask-egress';
+export {
+    ACTIONS as EXPORT_ACTIONS, CLASS as EXPORT_CLASS, COMPOSED_BANNER,
+    COMPOSED_FORMATS, LABELS as EXPORT_LABELS, ROOT_CLASS as EXPORT_ROOT_CLASS,
+    STATES as EXPORT_STATES, UNSTYLED_PRE_EXISTING as EXPORT_UNSTYLED,
+} from './export-vocab';
+export type { ComposedFormat, ExportState } from './export-vocab';
+export {
+    classifyPreflight, collisionWarning, downloadCapability, filenameFrom,
+    shasumCommand,
+} from './export-preflight';
+export type {
+    DownloadCapability, PreflightInfo, PreflightResult,
+} from './export-preflight';
+export { composeExport, COMPOSED_BASENAME, COMPOSED_EXTENSION } from './export-compose';
+export type { ComposeContext, ComposedExport } from './export-compose';
+export {
+    CLASS as OUTCOME_CLASS, DEFAULT_ACTIONS as OUTCOME_DEFAULT_ACTIONS,
+    LABELS as OUTCOME_LABELS, ROOT_CLASS as OUTCOME_ROOT_CLASS, TOKEN_MOD,
+    UNSTYLED_PRE_EXISTING as OUTCOME_UNSTYLED,
+} from './outcome-vocab';
+export type { ActionDef } from './outcome-vocab';
+export {
+    actionRows, coverageRow, describeScope, headlineFor, outcomeBlock, reasonRows,
+    scanNumbers,
+} from './outcome-view';
+export type {
+    ActionRow, CoverageRow, OutcomeBlockModel, OutcomeReason, ReasonRow, ScanNumbers,
+} from './outcome-view';
