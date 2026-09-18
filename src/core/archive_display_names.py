@@ -75,6 +75,13 @@ function over an index someone else read in bulk; see
 :mod:`src.core.app_name_index` for the one connection that feeds it and
 for why "the app database would not open" is a different answer from "no
 project matched".
+
+THE VOCABULARY LIVES NEXT DOOR, in :mod:`src.core.archive_name_kinds`,
+and is re-exported here so every existing importer is unaffected. It
+moved when a SECOND rung (:mod:`src.core.archive_cwd_names`) started
+reporting into the same ``app_name_source`` field: a contract with two
+producers belongs in a module neither of them owns, or the two grow
+their own copies and a client learns a value the server never sends.
 """
 
 from __future__ import annotations
@@ -84,51 +91,27 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import structlog
 
+#: RE-EXPORTED, not used here. The vocabulary moved to
+#: :mod:`src.core.archive_name_kinds` when it acquired a second producer
+#: and every existing importer still reaches it through this module; a
+#: linter reporting these as unused is reading the wrong intent.
+from src.core.archive_name_kinds import (  # noqa: F401
+    MATCH_KINDS,
+    MATCH_KINDS_NAMED,
+    MATCH_KINDS_NAMED_WITH_DERIVED,
+    MATCHED_AMBIGUOUS,
+    MATCHED_AS_WRITTEN,
+    MATCHED_CANNOT_DETERMINE,
+    MATCHED_CANONICAL_SPELLING,
+    MATCHED_CWD_CONFLICT,
+    MATCHED_DERIVED_CWD,
+    MATCHED_NONE,
+    MATCHED_SCRATCH_PATH,
+)
 from src.core.claude_project_dirs import home_dir_aliases, path_spellings
 from src.core.claude_transcript_correlate import slugify_project_dir
 
 logger = structlog.get_logger()
-
-#: A project row's own ``root`` or ``raw_path`` slugifies to this slug.
-#: The strongest rung: the app recorded the very spelling Claude Code was
-#: started in.
-MATCHED_AS_WRITTEN = "as_written"
-
-#: The slug was produced by a RESOLVED or ALIASED spelling of a project's
-#: root - the symlink case. Still exact, still measured; it simply came
-#: from a spelling the row does not literally store.
-MATCHED_CANONICAL_SPELLING = "canonical_spelling"
-
-#: No project row produces this slug. A MEASURED ABSENCE: the index was
-#: read and nothing in it matches. The caller renders the slug.
-MATCHED_NONE = "none"
-
-#: Two or more projects at DIFFERENT real directories produce this slug,
-#: and nothing here can say which the archive meant. Refuses rather than
-#: picking, because a confident wrong name is worse than a slug.
-MATCHED_AMBIGUOUS = "ambiguous"
-
-#: The app database could not be read, so no question was asked. NEVER
-#: collapsed into :data:`MATCHED_NONE` - "nothing matched" and "nobody
-#: looked" render identically and mean opposite things.
-MATCHED_CANNOT_DETERMINE = "cannot_determine"
-
-#: Every value :func:`resolve_slug` can report, for a client that wants
-#: to assert it understands the vocabulary before trusting a name.
-MATCH_KINDS: Tuple[str, ...] = (
-    MATCHED_AS_WRITTEN,
-    MATCHED_CANONICAL_SPELLING,
-    MATCHED_NONE,
-    MATCHED_AMBIGUOUS,
-    MATCHED_CANNOT_DETERMINE,
-)
-
-#: The rungs on which a name may actually be shown. A client that renders
-#: a name for any other kind is rendering something nobody measured.
-MATCH_KINDS_NAMED: Tuple[str, ...] = (
-    MATCHED_AS_WRITTEN,
-    MATCHED_CANONICAL_SPELLING,
-)
 
 #: Shipped in ``meta`` so a rail cannot present a resolved name as though
 #: it had decoded the slug itself.
@@ -171,6 +154,7 @@ class ProjectNameIndex:
     ) -> None:
         self.complete = bool(complete)
         self._by_slug: Dict[str, List[Dict[str, object]]] = {}
+        self._by_real_dir: Dict[str, Dict[str, object]] = {}
         self._rows: List[Dict[str, object]] = []
         # ONE $HOME scan for the whole index. Per-project it was 131 ms
         # of a 139 ms build on the owner's 474-entry home directory.
@@ -180,6 +164,12 @@ class ProjectNameIndex:
             if record is None:
                 continue
             self._rows.append(record)
+            for spelling in (record.get("root"), record.get("raw_path")):
+                real = _real(_text(spelling))
+                if real:
+                    # First row wins, so a duplicate-rooted pair keeps the
+                    # same winner the slug index's ordering would pick.
+                    self._by_real_dir.setdefault(real, record)
             for slug, as_written in self._slugs_for(record, table):
                 bucket = self._by_slug.setdefault(slug, [])
                 existing = next(
@@ -271,6 +261,40 @@ class ProjectNameIndex:
         Inputs: none. Output: int.
         """
         return len(self._rows)
+
+    def named_ancestor(self, real_path: str) -> Optional[Dict[str, object]]:
+        """The deepest project whose own folder CONTAINS this directory.
+
+        Description: the anchor a derived name is qualified by, and the
+          reason it is safe where the slug-prefix version of this idea
+          was not. That earlier rung was built and thrown away because
+          ``-Users-x-Media`` prefixes both ``/Users/x/Media/sub`` and
+          ``/Users/x/Media-Extra``: the separator and the literal hyphen
+          are the same byte in a slug, so a prefix test cannot tell a
+          child from a sibling. Here the input is a REAL absolute path
+          with real separators, so containment is component-wise and
+          exact, and ``Media-Extra`` simply is not a component of
+          ``Media/sub``.
+
+          DEEPEST WINS, and a row rooted at ``$HOME`` therefore only
+          answers when nothing nearer does. It also returns nothing for
+          the directory ITSELF: a project whose own root is this path
+          would have been matched by :func:`resolve_slug` already, and
+          answering here would let a caller compose a name out of a
+          project plus an empty subpath.
+        Inputs: real_path (str) - an absolute path, ALREADY resolved by
+          the caller; this does no filesystem work.
+        Output: dict | None - the project record, with ``display_name``.
+        Example: idx.named_ancestor('/Users/x/Media/sub')['display_name']
+        """
+        if not real_path or not real_path.startswith("/"):
+            return None
+        parts = real_path.split("/")
+        for depth in range(len(parts) - 1, 0, -1):
+            found = self._by_real_dir.get("/".join(parts[:depth]))
+            if found is not None and found.get("display_name"):
+                return found
+        return None
 
     def candidates(self, slug: str) -> List[Dict[str, object]]:
         """The project records that produce this slug, unranked.

@@ -54,6 +54,7 @@ from src.core import archive_body, archive_hierarchy, archive_lines
 from src.core import archive_merged_tree
 from src.core import archive_name_decorate
 from src.core.app_name_index import load_app_name_index
+from src.core.archive_cwd_evidence import load_archive_cwd_index
 from src.core import archive_subagents
 from src.core.archive_read import (
     DEFAULT_LINE_LIMIT,
@@ -271,11 +272,18 @@ def _name_projects(envelope: dict) -> dict:
       route reads as one thing. Opens ``cloude.db`` ONCE, matches in
       memory, returns the same envelope. A failure to read leaves the
       rows untouched and marks them ``cannot_determine``.
+      THEN the slugs it could not name are taken BACK to the archive,
+      which is the only place the real working directory survives. That
+      second read is skipped entirely when there are none to ask about,
+      so a machine whose every project has a row pays nothing for it.
     Inputs: envelope (dict) - what ``merged_projects`` returned.
     Output: dict - the same envelope, decorated.
     """
-    return archive_name_decorate.decorate_project_nodes(
-        envelope, load_app_name_index(state_dir())
+    index = load_app_name_index(state_dir())
+    envelope = archive_name_decorate.decorate_project_nodes(envelope, index)
+    unnamed = archive_name_decorate.unnamed_slugs(envelope)
+    return archive_name_decorate.decorate_project_nodes_from_cwd(
+        envelope, index, load_archive_cwd_index(state_dir(), unnamed)
     )
 
 

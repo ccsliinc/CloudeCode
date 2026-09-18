@@ -448,7 +448,10 @@ the real name all along and nothing joined the two.
 | Piece | File |
 |---|---|
 | The forward slug join, the tie-break, the refusals | `src/core/archive_display_names.py` |
+| Every value `app_name_source` can carry | `src/core/archive_name_kinds.py` |
 | The ONE bulk read of cloude.db | `src/core/app_name_index.py` |
+| The ONE bulk read of the recorded cwd, out of the archive | `src/core/archive_cwd_evidence.py` |
+| The second rung: a name derived from that cwd | `src/core/archive_cwd_names.py` |
 | The seam that decorates an envelope after the read | `src/core/archive_name_decorate.py` |
 
 **`observed_cwd` WAS THE INTENDED SOURCE AND IT IS EMPTY.**
@@ -486,15 +489,138 @@ file fails if it returns.
 slug cannot adjudicate a real collision. Zero on the live corpus, and it is the
 rung that stops the tie-break degenerating into "pick one".
 
-**AN ANCESTOR IS NOT A NAME, AND THAT RUNG WAS BUILT AND THROWN AWAY.** Nine of
-the 27 unresolved slugs are real subdirectories of named projects. Claiming the
-parent's name labels a distinct project with another project's name, and the
-slug prefix test that finds them cannot tell a child from a sibling whose name
-merely starts the same way: `-Users-x-Media` prefixes both `/Users/x/Media/sub`
-and `/Users/x/Media-Extra`, because the separator and the literal hyphen are the
-same byte. Those nine report `none` and render their slug. The other 18 are
-`/private/tmp` and `/private/var/folders` scratch directories that correctly
-have no project row.
+**AN ANCESTOR IS NOT A NAME BY ITSELF, AND THE SLUG-PREFIX VERSION OF THAT RUNG
+WAS BUILT AND THROWN AWAY.** Claiming the parent's name labels a distinct
+project with another project's name, and the slug prefix test that finds them
+cannot tell a child from a sibling whose name merely starts the same way:
+`-Users-x-Media` prefixes both `/Users/x/Media/sub` and `/Users/x/Media-Extra`,
+because the separator and the literal hyphen are the same byte. That rung stays
+dead. What replaced it is below, and it differs on both counts.
+
+### The second rung: the cwd the transcripts recorded
+
+The owner's design, verbatim: "Project names usually default to the last folder
+in the structure. but this should be brought in from the main database" and "as
+for the path, its basically built into the slug. it should have also been in the
+original jsonl file." The database is the first source and stays first. This is
+what happens when it has nothing to say, and he is right that the path is in the
+jsonl.
+
+**THE LAST FOLDER IS TAKEN FROM THE RECORDED cwd, NEVER FROM THE SLUG.** Claude
+Code writes a `cwd` on nearly every transcript record. Measured over the whole
+live archive 2026-09-18: **19,309 of 20,509** non-superseded archives yield one
+from the first 4 KB of their compressed body, 20,212 from the first 16 KB. That
+is the only surviving record of `unifi_tunnel_reset`'s underscore - the
+directory has since been deleted from disk and the slug cannot show it.
+
+**IT COMES OUT OF THE ARCHIVE, NOT OFF DISK AND NOT OUT OF THE MESSAGE MODEL.**
+`message_projects.observed_cwd` is still NULL on 100 of 100 rows, so the model
+cannot answer. The jsonl files were the other candidate and were rejected: the
+archive is byte-exact, self-contained, and still holds a transcript whose file
+was deleted or moved. **The blob is never fetched whole** - a transcript here
+reaches 73 MB - so the statement is `substr(content_gzip, 1, 4096)` fed to an
+incremental `zlib.decompressobj`, and the scan beside it rides
+`ix_transcript_archives_projection_scan`, which covers `source_path`. Measured:
+**1 connection, 2 statements, 13.5 ms** for the 27 unnamed slugs and the 97
+archives under them. The head escalates ONCE to 16 KB, and that retry is
+measured rather than assumed: it is 896 archives at 4 KB against 6 at 16 KB.
+`tests/test_archive_cwd_evidence.py` pins the connection count AND asserts the
+SQL says `substr`, because a regression to `SELECT content_gzip` returns the
+right answer while reading gigabytes.
+
+**A NAME IS COMPOSED, NOT COPIED, AND THAT IS WHAT MAKES IT DIFFERENT FROM THE
+DEAD RUNG.** `scripts` alone on a row tells the owner nothing, and `setup` beside
+`.claude` reads as two strangers. So a derived name is `<anchor> / <subpath>`:
+the deepest project the app database NAMES that contains this directory, then
+the real components below it. It never claims the anchor's name for the child -
+the subpath is always carried - and the anchor is found by component-wise
+containment on REAL resolved paths, where `Media-Extra` simply is not a
+component of `Media/sub`. `ProjectNameIndex.named_ancestor` is the lookup and it
+refuses a project's own root, because `resolve_slug` already answered for that.
+
+**A WORKTREE KEEPS ITS WHOLE SUBPATH, WITH NO SPECIAL CASE.**
+`vibrant-leakey-ea30bb` is generated word salad and `worktrees` is no better, so
+the leaf alone is worthless. `Media / .claude/worktrees/vibrant-leakey-ea30bb`
+puts the meaningful part first and then says plainly what kind of thing it is. A
+rule that recognised `.claude/worktrees` would be a hardcoded fix for one family
+and the general rule already renders it correctly.
+
+**SCRATCH IS NAMELESS AND SAYS SO, AS ITS OWN OUTCOME.** 17 of the 27 are
+per-run directories. The test is `transcript_import_paths.is_scratch`, reused
+rather than restated, so there is one list of scratch prefixes on this machine.
+**THAT HELPER HAD A REAL HOLE AND IT IS FIXED HERE**: `/var` is a symlink to
+`/private/var`, so `realpath` turns the SHORT spelling into the long one and
+never the reverse, and `SCRATCH_PREFIXES` listed only `/var/folders`. Ten live
+slugs recording `/private/var/folders/.../T/cc_rht_work_*` therefore read as
+real project roots. The transcript importer uses the same helper, so its
+exclusion had the same hole.
+
+**THE SLUG IS THE CONTROL, AND WITHOUT IT THIS WOULD NAME STRANGERS.** A session
+that changes directory writes the new cwd into the same transcript, so a slug's
+evidence routinely contains somebody else's folder: measured, **32 of 99** slugs
+record more than one distinct cwd, and `Developer` records
+`/Users/x/Development/Web/imc-support/docs`. So an observed cwd is evidence for a
+slug only when the slug can be recovered from it. `cwd_path_match` is the strong
+rung - push the cwd forward through this project's own slugifier and it
+reproduces the slug, which discards every mid-session `cd` for free and folds
+the symlink spellings together by construction. `cwd_leaf_match` is the weak one,
+needed by exactly three projects that ran under a symlinked `Production/tools/`
+and `Production/web/` layer that no longer exists, so the recorded path and the
+filing slug differ by an interior component while naming the same folder; it
+requires the leaf's slug to be the slug's trailing segment AT A SEPARATOR, or
+any leaf would match any slug ending in its letters.
+
+**WATCHED GO RED.** With the control removed, the rung answers `derived_cwd` for
+**59** slugs and `cwd_conflict` for **22**; with it, 81 and 0. Fed a NEIGHBOUR's
+recorded cwds, 81 slugs produced **78 refusals and 3 names, all 3 correct**
+because the donor's evidence genuinely contained that slug's own directory -
+zero false names.
+`tests/test_archive_cwd_names.py` reproduces the no-control version inline, so
+the file fails if the gate is ever dropped rather than only passing when present.
+
+**A CONFLICT REFUSES, AND IT IS UNEXERCISED ON HIS DATA.** Two supported cwds at
+different real directories answer `cwd_conflict`. Zero slugs reach it on the
+live corpus - the path-match control filters every disagreement down to one
+directory first - so it is covered by construction (`my_project` beside
+`my-project`) and that is said out loud, because a rung nobody has watched fire
+is unmeasured, not proven. The symlink pair is NOT a conflict and the fold IS
+exercised: 8 live slugs are supported by two spellings and all 8 resolve.
+The `<parent> / <leaf>` fallback for a directory with no named ancestor is
+likewise unexercised - all 8 of his derivable subdirectories land on a real
+anchor - and is tested rather than hoped at.
+
+**THE CONTRACT GREW, IT DID NOT WIDEN.** `app_name_source` gains `derived_cwd`,
+`scratch_path` and `cwd_conflict`, and the node gains `app_name_evidence`,
+`app_name_cwd` and `app_name_anchor_project_id` (all declared as null on EVERY
+node, so a client never has to tell absent from null). **The anchor is NOT
+`app_project_id`**: that field means "this slug IS project N" on the app rung,
+and the anchor means "this slug is INSIDE project N", so a client navigating on
+the first meaning would open Production for a row that is a folder inside it.
+Two meanings on one field is how they come to disagree. `MATCH_KINDS_NAMED` is **unchanged** - a client already
+renders a name for exactly those two, and adding the derived rung to it would
+make every existing client start showing a derived name it never agreed to
+trust. `MATCH_KINDS_NAMED_WITH_DERIVED` is the opt-in. The vocabulary moved to
+`archive_name_kinds.py` when it acquired a second producer.
+
+**MEASURED END TO END THROUGH THE ROUTE HELPER**, 100 merged nodes: 64
+`as_written`, 9 `canonical_spelling`, **8 `derived_cwd`**, 17 `scratch_path`, 2
+`none`, 0 `cwd_conflict`, 0 `cannot_determine`. The whole of `_name_projects`,
+both database reads and both decorations, costs **22 to 24 ms warm**. The two
+remaining `none` are the junk relative-path artifacts `mnt` and `Users`, which
+have no archive under them at all, so there is no cwd to have.
+
+**STILL OPEN: `message_projects.observed_cwd` IS THE PERMANENT FIX AND WAS NOT
+RUN.** `upsert_project` already accepts `observed_cwd` and self-heals a NULL,
+and its one caller (`scripts/message_model_host_run.py:163`) passes nothing -
+which is why the column has never been filled. Fixing the caller is one line and
+the projection has the record in hand there, but it only helps NEW rows: the
+projection refuses a `source_ref` it has already ingested, so the 100 existing
+rows need a one-time backfill script, DRY RUN BY DEFAULT, in the shape of
+`scripts/backfill_claude_session_uuid.py`. It would fill 98 of 100 from the same
+corroborated reading above. It does NOT replace this rung: `observed_cwd` is a
+raw path, and the anchor, the subpath and the refusals still have to live
+somewhere - it only changes WHERE the cwd is read from, which is one line in
+`archive_cwd_evidence`.
 
 **`sessions.title` IS THE SESSION NAME, NOT `claude_title`.** Per the one-name
 model, `claude_title` is the marker that makes `claude_title_sync` idempotent
