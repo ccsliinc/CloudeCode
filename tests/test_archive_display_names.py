@@ -255,3 +255,50 @@ def test_naming_meta_reports_an_unread_database_as_unread():
     assert meta["app_database_read"] is False
     assert meta["resolved"] == 0
     assert meta["by_match_kind"][MATCHED_CANNOT_DETERMINE] == 2
+
+
+# --- the anchor a derived name is qualified by --------------------------
+
+
+def test_named_ancestor_finds_the_deepest_containing_project():
+    """Component-wise on REAL paths, which is why this is safe.
+
+    The slug-prefix version of this idea was built and thrown away
+    because ``-Users-x-Media`` prefixes both ``/Users/x/Media/sub`` and
+    ``/Users/x/Media-Extra`` - the separator and the literal hyphen are
+    the same byte in a slug. Here they are different path components.
+    """
+    index = ProjectNameIndex(
+        [
+            {"id": 1, "root": "/w", "raw_path": None,
+             "display_name": "home", "description": None},
+            {"id": 2, "root": "/w/Media", "raw_path": None,
+             "display_name": "Media", "description": None},
+        ],
+        complete=True,
+        aliases=(),
+    )
+    assert index.named_ancestor("/w/Media/sub")["display_name"] == "Media"
+    # The sibling whose name merely STARTS the same way is not contained.
+    assert index.named_ancestor("/w/Media-Extra")["display_name"] == "home"
+    # A project's OWN root is not its ancestor: resolve_slug already
+    # answered for that, and a name plus an empty subpath is not a name.
+    assert index.named_ancestor("/w/Media")["display_name"] == "home"
+    assert index.named_ancestor("/elsewhere/thing") is None
+    assert index.named_ancestor("") is None
+    assert index.named_ancestor("relative/path") is None
+
+
+def test_a_project_row_with_no_display_name_is_not_an_anchor():
+    """Composing a name out of an empty string would render as ' / sub'."""
+    index = ProjectNameIndex(
+        [
+            {"id": 1, "root": "/w", "raw_path": None,
+             "display_name": "home", "description": None},
+            {"id": 2, "root": "/w/Nameless", "raw_path": None,
+             "display_name": "", "description": None},
+        ],
+        complete=True,
+        aliases=(),
+    )
+    assert index.named_ancestor("/w/Nameless/sub")["display_name"] == "home"

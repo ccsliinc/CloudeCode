@@ -38,17 +38,24 @@ slugs - exactly what it showed before this module existed.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, MutableMapping
 
 import structlog
 
 from src.core.app_name_index import AppNameIndex
+from src.core.archive_cwd_evidence import ArchiveCwdIndex
+from src.core.archive_cwd_names import (
+    DERIVED_KINDS,
+    DERIVED_NAMES_MEAN,
+    derive_name_from_cwd,
+)
 from src.core.archive_display_names import (
     MATCHED_CANNOT_DETERMINE,
     MATCHED_NONE,
     naming_meta,
     resolve_slug,
 )
+from src.core.claude_project_dirs import home_dir_aliases
 
 logger = structlog.get_logger()
 
@@ -109,10 +116,138 @@ def decorate_project_nodes(
         node["app_description"] = outcome["description"]
         node["app_name_source"] = outcome["matched_by"]
         node["app_project_id"] = outcome["project_id"]
+        # Declared here, on EVERY node, so the derived rung only ever
+        # overwrites a field the client already knows about. A field that
+        # appears on some rows and not others reads to a client as a
+        # backend that forgot to send it.
+        node["app_name_evidence"] = None
+        node["app_name_cwd"] = None
+        node["app_name_anchor_project_id"] = None
     meta = envelope.setdefault("meta", {})
     if isinstance(meta, MutableMapping):
         meta["app_naming"] = naming_meta(index.projects, results)
     return envelope
+
+
+def unnamed_slugs(envelope: Mapping[str, Any]) -> List[str]:
+    """The slugs :func:`decorate_project_nodes` could not name.
+
+    Description: exactly the population the cwd rung exists for, and the
+      reason it is a separate pure function is cost. It is read BEFORE
+      the archive is opened so a listing whose every slug the app
+      database named opens no connection at all - the same "skip the
+      read when nothing can use it" rule ``InstanceIndex`` follows. Only
+      ``none`` qualifies: ``ambiguous`` is a refusal the app rung already
+      reached on evidence, and re-asking a different question about it
+      would be shopping for an answer.
+    Inputs: envelope (Mapping) - a DECORATED merged-projects envelope.
+    Output: list[str] - distinct slugs, in the order they appear.
+    Example: unnamed_slugs(decorate_project_nodes(env, idx))  # 27 slugs
+    """
+    nodes = envelope.get("result")
+    if not isinstance(nodes, list):
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            continue
+        if node.get("app_name_source") != MATCHED_NONE:
+            continue
+        slug = node.get("full_path")
+        if isinstance(slug, str) and slug and slug not in seen:
+            seen.add(slug)
+            out.append(slug)
+    return out
+
+
+def decorate_project_nodes_from_cwd(
+    envelope: MutableMapping[str, Any],
+    index: AppNameIndex,
+    cwds: ArchiveCwdIndex,
+) -> MutableMapping[str, Any]:
+    """Name the leftover slugs from the cwd their transcripts recorded.
+
+    Description: runs AFTER :func:`decorate_project_nodes` and touches
+      ONLY nodes it left at ``none``. A node the app database named is
+      never reconsidered: a recorded name outranks a derived one, and
+      letting this rung overwrite would make the whole ladder pointless.
+      Writes ``app_name_evidence``, ``app_name_cwd`` and
+      ``app_name_anchor_project_id`` beside the name so the provenance
+      travels with it, and moves ``app_name_source``
+      off ``none`` to one of the three values
+      :mod:`src.core.archive_cwd_names` introduces - which is why the
+      contract grew rather than quietly widening ``none``.
+    Inputs: envelope (MutableMapping) - the DECORATED envelope. index
+      (AppNameIndex) - for the anchor project lookup. cwds
+      (ArchiveCwdIndex) - read once by the caller.
+    Output: the SAME envelope, mutated and returned for chaining.
+    Example: decorate_project_nodes_from_cwd(env, idx, cwds)
+    """
+    nodes = envelope.get("result")
+    if not isinstance(nodes, list):
+        return envelope
+    results: Dict[str, Dict[str, object]] = {}
+    # ONE $HOME symlink scan for the whole envelope. Per slug it was
+    # 101 ms over 100 slugs against 3.6 ms hoisted on the owner's
+    # 474-entry home directory - the same trap, and the same fix,
+    # ``ProjectNameIndex`` already carries one rung up.
+    aliases = home_dir_aliases()
+    for node in nodes:
+        if not isinstance(node, MutableMapping):
+            continue
+        if node.get("app_name_source") != MATCHED_NONE:
+            continue
+        slug = node.get("full_path")
+        key = slug if isinstance(slug, str) else ""
+        outcome = results.get(key)
+        if outcome is None:
+            outcome = derive_name_from_cwd(
+                index.projects, cwds, key, aliases=aliases
+            )
+            results[key] = outcome
+        if outcome["matched_by"] == MATCHED_CANNOT_DETERMINE:
+            # The ARCHIVE could not be read. The app database WAS read
+            # and really did answer "no project", so the node keeps that
+            # measured `none` rather than being downgraded by a second
+            # source's failure.
+            continue
+        node["app_name_source"] = outcome["matched_by"]
+        node["app_display_name"] = outcome["display_name"]
+        node["app_name_evidence"] = outcome["evidence"]
+        node["app_name_cwd"] = outcome["observed_cwd"]
+        # The anchor gets its OWN field. ``app_project_id`` means "this
+        # slug IS project N" on the app rung; the anchor means "this slug
+        # is INSIDE project N", and a client that navigated on the first
+        # meaning would open the wrong project for every derived row.
+        node["app_name_anchor_project_id"] = outcome["anchor_project_id"]
+    meta = envelope.setdefault("meta", {})
+    if isinstance(meta, MutableMapping):
+        naming = meta.setdefault("app_naming", {})
+        if isinstance(naming, MutableMapping):
+            naming["derived_names_mean"] = DERIVED_NAMES_MEAN
+            naming["archive_read"] = cwds.complete
+            naming["by_derived_kind"] = _derived_counts(results)
+    return envelope
+
+
+def _derived_counts(results: Mapping[str, Mapping[str, object]]) -> Dict[str, int]:
+    """How the cwd rung answered, counted by outcome.
+
+    Description: every kind is listed with a zero rather than omitted, so
+      a reader can see a rung that fired nothing without inferring it
+      from an absent key.
+    Inputs: results (Mapping) - slug to what the rung returned.
+    Output: dict[str, int].
+    """
+    counts = {kind: 0 for kind in DERIVED_KINDS}
+    counts[MATCHED_NONE] = 0
+    counts[MATCHED_CANNOT_DETERMINE] = 0
+    for result in results.values():
+        key = str(result.get("matched_by"))
+        if key in counts:
+            counts[key] += 1
+    return counts
 
 
 def decorate_transcript_rows(

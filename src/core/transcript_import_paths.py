@@ -17,7 +17,23 @@ from typing import Optional, Sequence, Tuple
 #: ``/private/tmp`` and ``/tmp`` are the same directory on macOS and both
 #: spellings appear in the live corpus, so both are listed rather than
 #: relying on a resolve that a vanished path cannot perform.
-SCRATCH_PREFIXES: Tuple[str, ...] = ("/private/tmp", "/tmp", "/var/folders")
+#:
+#: ``/private/var/folders`` IS LISTED BECAUSE THE RESOLVE RUNS THE WRONG
+#: WAY FOR IT, which made this tuple miss the canonical spelling of the
+#: one family it is most obviously about. ``/var`` is a symlink to
+#: ``/private/var``, so ``realpath('/var/folders/x')`` is
+#: ``/private/var/folders/x`` and never the reverse - the resolve in
+#: :func:`is_scratch` can only turn the SHORT spelling into the long one,
+#: so a cwd already recorded long matched nothing. Measured on the live
+#: archive 2026-09-18: 10 project slugs record a
+#: ``/private/var/folders/.../T/cc_rht_work_*`` per-run directory and
+#: every one of them read as a real project root.
+SCRATCH_PREFIXES: Tuple[str, ...] = (
+    "/private/tmp",
+    "/tmp",
+    "/private/var/folders",
+    "/var/folders",
+)
 
 #: The longest a reconstructed title may be. Long enough to carry a real
 #: first sentence, short enough for a sidebar row.

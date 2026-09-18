@@ -154,3 +154,148 @@ def test_the_transcript_summary_counts_what_it_named():
     assert naming["rows_considered"] == 3
     assert naming["named"] == 1
     assert naming["app_database_read"] is True
+
+
+# --- the cwd rung, which runs only BELOW the app database --------------
+
+
+def _cwd_index(mapping):
+    """A complete ArchiveCwdIndex over literal {slug: {cwd: count}}."""
+    from src.core.archive_cwd_evidence import ArchiveCwdIndex
+
+    return ArchiveCwdIndex(
+        mapping, {s: sum(v.values()) for s, v in mapping.items()}, (),
+        complete=True,
+    )
+
+
+def _app_index(projects):
+    """An AppNameIndex over literal (id, root, display_name) rows."""
+    from src.core.app_name_index import AppNameIndex
+
+    return AppNameIndex(
+        [
+            {"id": rid, "root": root, "raw_path": None,
+             "display_name": name, "description": None}
+            for rid, root, name in projects
+        ],
+        {},
+        complete=True,
+    )
+
+
+def test_unnamed_slugs_is_exactly_the_population_the_cwd_rung_exists_for():
+    """Read BEFORE the archive is opened, so a fully named listing opens nothing."""
+    from src.core.archive_name_decorate import (
+        decorate_project_nodes,
+        unnamed_slugs,
+    )
+
+    index = _app_index([(1, "/w/Known", "Known")])
+    envelope = {"result": [
+        {"full_path": "-w-Known"},
+        {"full_path": "-w-Unknown"},
+        {"full_path": "-w-Unknown"},
+    ]}
+    decorate_project_nodes(envelope, index)
+    assert unnamed_slugs(envelope) == ["-w-Unknown"]
+
+
+def test_the_cwd_rung_never_overwrites_a_name_the_app_database_recorded():
+    """A recorded name outranks a derived one, or the ladder is pointless."""
+    from src.core.archive_name_decorate import (
+        decorate_project_nodes,
+        decorate_project_nodes_from_cwd,
+    )
+
+    index = _app_index([(1, "/w/Known", "Known")])
+    envelope = {"result": [{"full_path": "-w-Known"}]}
+    decorate_project_nodes(envelope, index)
+    # Evidence that would name it something else entirely, if consulted.
+    cwds = _cwd_index({"-w-Known": {"/w/Known": 9}})
+    decorate_project_nodes_from_cwd(envelope, index, cwds)
+    node = envelope["result"][0]
+    assert node["app_display_name"] == "Known"
+    assert node["app_name_source"] == "as_written"
+    assert node["app_name_evidence"] is None
+
+
+def test_a_derived_name_lands_with_its_provenance_beside_it():
+    """The client gates on app_name_source and can show WHERE it came from."""
+    from src.core.archive_name_decorate import (
+        decorate_project_nodes,
+        decorate_project_nodes_from_cwd,
+    )
+
+    index = _app_index([(1, "/w/Production", "Production")])
+    slug = "-w-Production-dev-tools-scripts"
+    envelope = {"result": [{"full_path": slug}]}
+    decorate_project_nodes(envelope, index)
+    assert envelope["result"][0]["app_name_source"] == "none"
+    decorate_project_nodes_from_cwd(
+        envelope, index,
+        _cwd_index({slug: {"/w/Production/dev_tools/scripts": 3}}),
+    )
+    node = envelope["result"][0]
+    assert node["app_name_source"] == "derived_cwd"
+    assert node["app_display_name"] == "Production / dev_tools/scripts"
+    assert node["app_name_evidence"] == "cwd_path_match"
+    assert node["app_name_cwd"] == "/w/Production/dev_tools/scripts"
+    # The anchor is NOT app_project_id: that field means "this slug IS
+    # project N", and a client navigating on it would open Production
+    # when the row is a folder inside Production.
+    assert node["app_name_anchor_project_id"] == 1
+    assert node["app_project_id"] is None
+
+
+def test_every_node_declares_the_new_fields_even_when_the_rung_never_runs():
+    """A field present on some rows reads to a client as a backend that forgot."""
+    from src.core.archive_name_decorate import decorate_project_nodes
+
+    envelope = {"result": [{"full_path": "-w-Known"}]}
+    decorate_project_nodes(envelope, _app_index([(1, "/w/Known", "Known")]))
+    node = envelope["result"][0]
+    for field in ("app_name_evidence", "app_name_cwd",
+                  "app_name_anchor_project_id"):
+        assert field in node
+
+
+def test_an_unreadable_archive_leaves_the_measured_none_alone():
+    """The app database WAS read and really did answer 'no project'.
+
+    Downgrading that to cannot_determine because a SECOND source failed
+    would report the wrong refusal about the wrong database.
+    """
+    from src.core.archive_cwd_evidence import empty_cwd_index
+    from src.core.archive_name_decorate import (
+        decorate_project_nodes,
+        decorate_project_nodes_from_cwd,
+    )
+
+    index = _app_index([(1, "/w/Known", "Known")])
+    envelope = {"result": [{"full_path": "-w-Unknown"}]}
+    decorate_project_nodes(envelope, index)
+    decorate_project_nodes_from_cwd(envelope, index, empty_cwd_index())
+    node = envelope["result"][0]
+    assert node["app_name_source"] == "none"
+    assert envelope["meta"]["app_naming"]["archive_read"] is False
+
+
+def test_the_meta_counts_every_derived_outcome_including_the_zeros():
+    """A rung that fired nothing must be visible, not inferred from an absent key."""
+    from src.core.archive_name_decorate import (
+        decorate_project_nodes,
+        decorate_project_nodes_from_cwd,
+    )
+
+    index = _app_index([])
+    slug = "-private-tmp-probe"
+    envelope = {"result": [{"full_path": slug}]}
+    decorate_project_nodes(envelope, index)
+    decorate_project_nodes_from_cwd(
+        envelope, index, _cwd_index({slug: {"/private/tmp/probe": 1}})
+    )
+    counts = envelope["meta"]["app_naming"]["by_derived_kind"]
+    assert counts["scratch_path"] == 1
+    assert counts["derived_cwd"] == 0
+    assert counts["cwd_conflict"] == 0
