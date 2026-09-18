@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Weekly PROOF that the history backup can actually be restored.
+
+  This does NOT take a backup. backup-m4.sh (docker-management repo,
+  com.jsugamele.backup-m4, 03:30 daily) takes the consistent VACUUM INTO dump
+  onto /Volumes/Backup and hands it to the restic repository. This job goes
+  back to that repository, pulls the artifact out, opens it, and reconstructs
+  a real conversation from it byte for byte against the live jsonl on this
+  Mac. A backup nobody has restored is a hope.
+
+  Sunday 06:30, comfortably after the 03:30 backup and after qnap-home's
+  05:00 retention pass, so the proof runs against a repository in its settled
+  state rather than mid-prune.
+
+  WEEKLY, NOT DAILY, AND THE REASON IS HONEST RATHER THAN CONVENIENT. The
+  proof reads about 16 GB back over the network and writes it to the USB
+  drive. Nightly that is real and continuous cost for a check whose failure
+  mode is slow-moving: repository corruption does not appear between one
+  Tuesday and the next without something else being very wrong. The nightly
+  job already asserts, every night, that the artifact is present in the
+  snapshot it just wrote at the exact byte count it dumped. This is the
+  deeper check layered on top, not a replacement for it.
+
+  RunAtLoad is false on purpose: a reboot should not start a 16 GB restore at
+  a moment nobody chose.
+
+  Install:
+      cp com.jsugamele.cloudecode-restore-proof.plist ~/Library/LaunchAgents/
+      launchctl bootout  gui/$(id -u)/com.jsugamele.cloudecode-restore-proof 2>/dev/null
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jsugamele.cloudecode-restore-proof.plist
+  NEVER `launchctl kickstart -k` on this machine.
+
+  How a failure surfaces, without reading a log:
+      venv/bin/python3 scripts/history-backup/status.py --remote
+  exits non-zero when the last proof did not verify, and reports the AGE of
+  the record as current / stale / never_ran / cannot_determine, because a job
+  that died looks exactly like one that had nothing to do.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jsugamele.cloudecode-restore-proof</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>cd "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Sync/Development/CloudeCode" &amp;&amp; ./venv/bin/python3 scripts/history-backup/prove_restore.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/cloudecode-restore-proof.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/cloudecode-restore-proof.err.log</string>
+</dict>
+</plist>

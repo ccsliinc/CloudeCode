@@ -51,14 +51,45 @@ logger = structlog.get_logger()
 # later, and so `jq 'select(.to_version=="3")' | .backup_path` in a bash
 # rollback script is the whole lookup.
 BACKUP_PREFIX = "cloude.db.bak-v"
+
+#: THE FILE DECLARES ITS OWN INTENT, SO NO BACKUP JOB HAS TO GUESS ITS NAME.
+#: A rollback copy is a multi-gigabyte near-duplicate of a database that is
+#: already protected, so shipping it off-box every night is pure repository
+#: bloat. The restic job on this machine tried to say so with a name pattern,
+#: ``cloude.db.bak-*``, and THE PATTERN HAD TO PREDICT A NAME IT COULD NOT
+#: KNOW: when the history archive grew its own rollback copies they were
+#: called ``cloude-archive.db.bak-*``, a different prefix, and 30 GB a night
+#: went off-box unnoticed. Inverting it fixes the class rather than the
+#: instance - the code CREATING the file says "do not back me up" in the
+#: filename, and the backup job carries one rule that can never fall out of
+#: date.
+#:
+#: ``.nobackup`` deliberately rhymes with this repository's existing
+#: ``.nosync`` convention (``venv.nosync``, ``macOS/dist.nosync``,
+#: ``node_modules.nosync``, codified in the root .gitignore), which solves
+#: the same shape of problem for iCloud. One family, two members, learnable
+#: at a glance. It is spelled ``.nobackup`` rather than ``.norestic``
+#: because the reason to skip a redundant rollback copy has nothing to do
+#: with which backup tool is asking: Time Machine and any future tool should
+#: skip it for exactly the same reason.
+BACKUP_SUFFIX = ".nobackup"
+
 # The optional -N suffix is a same-second collision breaker, not a
 # generation counter. A crash-loop can retry a migration twice inside one
 # second, and the second attempt must not be told "a backup already
 # exists" and abort as unverified - the retry is exactly when the backup
 # matters most.
+#
+# THE .nobackup TAIL IS OPTIONAL IN THE PATTERN AND MANDATORY IN THE
+# WRITER. Backups taken before this convention existed are still on disk
+# and are still valid rollback points; a regex that stopped recognising
+# them would quietly drop them out of retention and out of
+# `select_backup`, so the reader accepts both spellings for ever while
+# `backup_filename` only ever emits the new one.
 BACKUP_NAME_RE = re.compile(
     r"^cloude\.db\.bak-v(?P<version>[^-]+)-(?P<stamp>\d{8}T\d{6}Z)"
-    r"(?:-(?P<seq>\d+))?$"
+    r"(?:-(?P<seq>\d+))?"
+    r"(?:\.nobackup)?$"
 )
 
 KEEP_VERSIONS = 5
@@ -102,12 +133,15 @@ def backup_filename(from_version: object, when: Optional[datetime] = None) -> st
     Description: naming is load-bearing, not cosmetic - the trail's
       backup_path is this string, and a bash rollback script finds the
       right file by reading it rather than by globbing and guessing.
+      Every name carries BACKUP_SUFFIX, so the file tells every backup
+      tool on this machine that it is a redundant local rollback copy and
+      does not belong off-box. See the note by BACKUP_SUFFIX.
     Inputs: from_version (object) - the version being left, stringified.
       when (datetime | None) - UTC instant, defaults to now.
-    Output: str - e.g. "cloude.db.bak-v1-20260818T090000Z".
+    Output: str - e.g. "cloude.db.bak-v1-20260818T090000Z.nobackup".
     """
     stamp = (when or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%SZ")
-    return f"{BACKUP_PREFIX}{from_version}-{stamp}"
+    return f"{BACKUP_PREFIX}{from_version}-{stamp}{BACKUP_SUFFIX}"
 
 
 def take_backup(
@@ -270,15 +304,29 @@ def _uniquify(target: Path) -> Path:
       crash-loop produces), a numeric suffix is appended instead of
       failing - refusing to back up because a one-second-old backup
       exists would abort the retry that needs the backup most.
+      THE SEQUENCE GOES BEFORE BACKUP_SUFFIX, NOT AFTER IT, AND BOTH
+      REASONS ARE LOAD BEARING. Appending it to the whole name would
+      produce "...Z.nobackup-2", which BACKUP_NAME_RE does not match - so
+      the file would drop out of list_backups, out of retention and out of
+      select_backup, invisibly - and which no ".nobackup" exclusion rule
+      matches either, so the very copy the suffix exists to keep off-box
+      would be the one that got shipped. A suffix that means something to
+      other tools has to be the LAST thing in the name.
     Inputs: target (Path) - the natural, timestamped backup path.
-    Output: Path - target, or target with "-2", "-3", ... appended.
+    Output: Path - target, or the same name with "-2", "-3", ... inserted
+      ahead of the suffix.
     Raises: RuntimeError - after 999 collisions, which cannot happen
       without something else being badly wrong.
     """
     if not target.exists():
         return target
+    name = target.name
+    stem, suffix = (
+        (name[: -len(BACKUP_SUFFIX)], BACKUP_SUFFIX)
+        if name.endswith(BACKUP_SUFFIX) else (name, "")
+    )
     for seq in range(2, 1000):
-        candidate = target.with_name(f"{target.name}-{seq}")
+        candidate = target.with_name(f"{stem}-{seq}{suffix}")
         if not candidate.exists():
             return candidate
     raise RuntimeError(f"could not find a free backup name near {target}")

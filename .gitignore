@@ -170,6 +170,45 @@ macOS/node_modules.nosync/
 /build
 /build.nosync/
 
+# ---------------------------------------------------------------------------
+# THE SUFFIX FAMILY. Two conventions, one idea: the file declares its own
+# intent in its name, so no tool has to predict a name it cannot know.
+#
+#   <name>.nosync    iCloud must not sync this. A real directory named
+#                    <name>.nosync with a symlink at <name>, which is why
+#                    the patterns above come in pairs - a trailing-slash
+#                    pattern matches the real directory and not the symlink.
+#
+#   <name>.nobackup  No backup tool should carry this off-box. It is a
+#                    redundant local copy of data that is already protected:
+#                    a migration rollback point, a pre-repair copy, a scratch
+#                    restore. Added 2026-09-17.
+#
+# WHY .nobackup EXISTS. The restic job for this machine excluded rollback
+# copies with the name pattern `cloude.db.bak-*`. When the history archive
+# grew its own rollback copies they were called `cloude-archive.db.bak-*` -
+# a different prefix the pattern could not have anticipated - and 30 GB of
+# near-duplicates shipped off-box nightly with nothing reporting it. A suffix
+# inverts the responsibility onto whoever creates the file.
+#
+# WHO EMITS IT. src/core/db_backup.py (BACKUP_SUFFIX) names every migration
+# rollback copy this way. Its reader accepts both spellings for ever, so
+# copies taken before the convention stay recognised by retention. If you add
+# any other code that writes a copy of a live database, give it the suffix.
+#
+# WHO HONOURS IT. devices/mini-m4/backup-m4.sh in the docker-management repo
+# excludes `*.nobackup` and `*.nobackup-*` - two patterns, because a WAL
+# database's sidecars are `<db>-wal` and `<db>-shm`, so a renamed rollback is
+# foo.nobackup PLUS foo.nobackup-wal and foo.nobackup-shm.
+#
+# These files live outside the repo (in Application Support), so nothing here
+# needs to ignore them. This block is documentation, and it sits beside
+# .nosync on purpose so the two read as one family.
+# ---------------------------------------------------------------------------
+*.nobackup
+*.nobackup-shm
+*.nobackup-wal
+
 # Screenshots from scripts/verify/measure-theme-effect-visibility.py
 scripts/verify/.theme-effect-shots/
 
