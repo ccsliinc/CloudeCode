@@ -37,7 +37,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import {
-        NavRail, TranscriptList, TranscriptReader, countFor, NODE_KINDS,
+        NavRail, TranscriptList, TranscriptReader, countFor, labelFor, NODE_KINDS,
     } from '../src/lib/plugins/history/index';
     import type {
         ArchiveClient, ListScope, NavRowData, NodeKind,
@@ -125,6 +125,16 @@
      *   `unattributed_transcript_count`) and a second spelling of that
      *   rule is a second thing to keep in step. A count that is not a
      *   number stays null, which the list renders as NOT KNOWN.
+     *
+     *   IT ALSO CLOSES AN OPEN READER, AND THAT IS THE WHOLE OF PUNCHLIST
+     *   DEFECT 1. The reader branch below is tested BEFORE the listing
+     *   branch, so while `openId` was set the rail's selection changed
+     *   `scope` and `chosenLabel` behind a transcript that stayed on
+     *   screen. Nothing threw, nothing logged, and the request for the
+     *   new listing went out and was applied, so from the outside it read
+     *   as a rail that had stopped responding to clicks. A parent that
+     *   owns BOTH pieces of view state has to move both of them, or the
+     *   one it forgets silently outranks the one it set.
      * Inputs: kind - 'project' or 'unattributed'. id - the project id, or
      *   the corpus id for the unattributed listing. row - the clicked row.
      * Output: void.
@@ -134,22 +144,31 @@
         const listKind = kind === NODE_KINDS.UNATTRIBUTED ? 'unattributed' : 'project';
         scope = { kind: listKind, id, inScope: countFor(kind, row) };
         chosenLabel = labelOf(kind, id, row);
+        openId = null;
     }
 
     /**
-     * A short heading for the chosen node. HARNESS TEXT, NOT THE RAIL'S.
+     * A short heading for the chosen node. HARNESS CHROME, ONE RENDERER.
      *
-     * Description: deliberately NOT `labelFor` from `nav-row.ts`. That
-     *   function is what the rail paints INSIDE itself, and reproducing
-     *   its output in harness chrome would put a second renderer of the
-     *   same thing on screen beside the first, which is how two
-     *   renderings come to disagree. This is a scaffold caption and
-     *   reads like one.
+     * Description: IT CALLS `labelFor`, the rail's own reader, and the
+     *   first draft deliberately did not. That draft read `full_path`
+     *   directly, which is the SLUG, so the caption printed
+     *   '-Users-jsugamele-Library-Mobile-Documents-...' over a rail row
+     *   that was painting whatever `display_name` the server had sent.
+     *   Two renderers of one name is exactly how they come to disagree,
+     *   and here they disagreed the moment a project had a name at all.
+     *   The caption keeps its own `kind:` prefix, which is the part that
+     *   is genuinely scaffold text.
+     *
+     *   NOTE WHAT THIS DOES NOT FIX. `labelFor` prefers `display_name`
+     *   and falls back to the slug, and on this install the server sends
+     *   a null `display_name` for every project, so the slug is still
+     *   what both now print. That is a data gap in the archive, not a
+     *   rendering choice: see the note in the report.
      * Inputs: kind, id, row. Output: a plain string.
      */
     function labelOf(kind: NodeKind, id: number | string, row: NavRowData): string {
-        const path = row['full_path'];
-        const name = typeof path === 'string' && path !== '' ? path : `id ${id}`;
+        const name = labelFor(kind, row) || `id ${id}`;
         return `${kind}: ${name}`;
     }
 

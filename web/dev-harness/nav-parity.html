@@ -1,0 +1,30 @@
+<!doctype html>
+<!--
+  THE RAIL PARITY MEASUREMENT PAGE. SCAFFOLDING, NOT THE ARCHIVE SCREEN.
+
+  It exists to answer ONE question with numbers rather than with an
+  opinion: does the Svelte rail render the same boxes as the vanilla
+  `client/js/archive-nav-*.js` rail, given the same rows and the same
+  twelve stylesheets. A spacing complaint is a PORT DEFECT when the two
+  disagree and a RESTYLE REQUEST when they agree, and those two have
+  different answers under the commitments on issue #173.
+
+  IT NEEDS NO LOGIN, because it feeds both renderers the SAME captured
+  fixture rows rather than the archive API. That is deliberate: a
+  measurement that required a TOTP code would be a measurement nobody
+  re-runs.
+
+  Delete it with the rest of `web/dev-harness/` when the real shell
+  lands.
+-->
+<html lang="en" data-theme="dark">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Rail parity measurement (dev harness)</title>
+    </head>
+    <body>
+        <div id="nav-parity-root"></div>
+        <script type="module" src="./nav-parity.ts"></script>
+    </body>
+</html>
