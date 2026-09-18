@@ -170,7 +170,8 @@ def attach_bodies(
             else:
                 item["body_json"] = scalar(
                     conn,
-                    "SELECT body_json FROM message_bodies WHERE id = ?",
+                    "SELECT cloude_body_text(body_json) "
+                    "FROM message_bodies WHERE id = ?",
                     (row["body_id"],),
                 )
                 item["body_state"] = BODY_INCLUDED

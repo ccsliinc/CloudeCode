@@ -703,21 +703,34 @@ function initHomeScreen(): void {
  *   merge. The tree and the running list update because they READ the
  *   store.
  *
- *   RE-RENDERS ON FAILURE, and that is not defensive noise: without it
- *   the archived notice keeps whatever the last SUCCESSFUL fetch painted
- *   - a confident "showing archived: N" sitting on screen after the
- *   request that would have told you failed. Measured in the live
- *   browser 2026-09-06.
+ *   REFRESHES THE PANELS UNCONDITIONALLY, and that is not defensive
+ *   noise: without it the archived notice keeps whatever the last
+ *   SUCCESSFUL fetch painted - a confident "showing archived: N" sitting
+ *   on screen after the request that would have told you failed.
+ *   Measured in the live browser 2026-09-06. It is asked BEFORE the
+ *   project list is awaited rather than after, which keeps it
+ *   unconditional and takes two round trips off the recent section; the
+ *   panels answer their own failures per panel either way.
  * Inputs: none. Output: Promise<void>. Never rejects.
  * Example: await window.Launchpad.loadProjects();
  */
 async function loadHomeScreen(): Promise<void> {
+    // EVERY INDEPENDENT REQUEST ON THIS SCREEN IS STARTED BEFORE ANY OF
+    // THEM IS AWAITED. The running merge and the two self-fetching panels
+    // take no input from the project list, and they used to sit behind
+    // it: `loadProjects` had to answer, and its sidecars after it, before
+    // the merge sent its first byte. That put five round trips end to end
+    // in front of the first session row. They now overlap, so the screen
+    // fills after roughly one.
+    //
+    // Not awaited, and unchanged in that: the merge records its own
+    // failures as a verdict the list can render, and a panel that cannot
+    // refetch is caught per panel inside `refreshLaunchpadPanels`.
+    const running = sessionStore.loadRunningSessions(t);
+    refreshLaunchpadPanels();
     const result = await sessionStore.loadProjects(uiPrefs.archivedProjectsVisible, t);
     if (!result.ok && result.error) showHomeError(result.error, t);
-    refreshLaunchpadPanels();
-    // Not awaited: the running merge is independent of the project list
-    // and a failure in it is handled inside the store.
-    void sessionStore.loadRunningSessions(t);
+    void running;
 }
 
 /**

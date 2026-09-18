@@ -24,12 +24,12 @@ NEITHER READ MAY RAISE. This runs on the listing path that paints the
 sidebar and the launchpad, and a status is telemetry: every failure
 becomes a named outcome the caller may log and ignore.
 
-WHY THE GATE IS ``hooks_seen``, AND WHY IT IS NOT THE HOOK TOKEN STORE.
-The rule is that hooks are a hooked session's truth, and the seam that
-reaches this module already enforces exactly that: it runs only while
-``SessionActivityTracker.hooks_seen`` is False, and the first hook event
-of the process retires the whole seed for good. Membership in the hook
-TOKEN store looks like a stronger gate and is not one. MEASURED on live
+WHY THE GATE WAS NEVER THE HOOK TOKEN STORE. The seed used to be gated
+on whether this session had ever fired a hook, and that whole tier went
+with the hooks on 2026-09-13 - the attention resolver now reads the
+transcript directly. The reasoning is kept because the trap it names is
+still live for any future gate: membership in the hook TOKEN store looks
+like a stronger gate and is not one. MEASURED on live
 2026-09-09: ``hook_tokens.json`` holds 33 entries against 19 live tmux
 sessions, and every externally adopted pane is in it - because an adopt
 mints a token for a pane it never spawned into, which is the exact

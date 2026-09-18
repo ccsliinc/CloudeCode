@@ -148,7 +148,13 @@ def seed_block_status(
 
     Description: the row the turns view reads to tell "genuinely no
       blocks" from "never processed" from "unparseable". A test proving
-      the never-processed state simply does NOT call this.
+      the never-processed state passes ``extract_blocks=False`` to
+      ``seed_body`` and does NOT call this.
+
+      IT IS AN UPSERT, because ``seed_body`` now runs the real extractor
+      and therefore already wrote a row. A test calling this is
+      DECLARING the status it wants to prove something about, which must
+      win over what the extractor inferred.
     Inputs: conn, body_id (int), status (str) - must be inside the
       schema's CHECK domain, block_count (int), detail (str|None),
       extractor_version (int).
@@ -162,7 +168,7 @@ def seed_block_status(
             f"{sorted(BLOCK_STATUSES)}"
         )
     conn.execute(
-        "INSERT INTO message_body_block_status "
+        "INSERT OR REPLACE INTO message_body_block_status "
         "(body_id, status, block_count, detail, extractor_version, processed_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (body_id, status, block_count, detail, extractor_version,

@@ -256,7 +256,25 @@ def _seed_mixed(conn: sqlite3.Connection) -> dict:
     Output: dict - name -> transcript id.
     Example: _seed_mixed(conn)["audit"]
     """
+    # EVERY ROW NAMES project_id 1, so project 1 has to exist. It did not,
+    # and that went unnoticed because ``writable()`` used to open a bare
+    # sqlite3 connection, where foreign_keys defaults OFF. It now opens
+    # through the app's own factory, which sets the pragma every real
+    # connection carries - so the fixture is held to the same constraints
+    # the schema declares, and the missing parent is seeded rather than
+    # the pragma turned back off.
     ids = {}
+    conn.execute(
+        "INSERT OR IGNORE INTO message_hosts (id, machine_id, "
+        "machine_id_scheme, display_name, first_seen_at) VALUES "
+        "(1, 'm1', 'declared', 'h', '2026-01-01T00:00:00.000000Z')")
+    conn.execute(
+        "INSERT OR IGNORE INTO message_corpora (id, host_id, corpus_key, "
+        "root_path, collected_at) VALUES "
+        "(1, 1, 'c1', '/c', '2026-01-01T00:00:00.000000Z')")
+    conn.execute(
+        "INSERT OR IGNORE INTO message_projects (id, corpus_id, slug, "
+        "first_seen_at) VALUES (1, 1, 'p1', '2026-01-01T00:00:00.000000Z')")
     rows = (
         ("audit", "audit", UUID_SCHEME),
         ("journal", "journal", UUID_SCHEME),

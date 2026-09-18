@@ -86,7 +86,7 @@ console.log('[ConfigEditorTreeState Module] Loading...');
      * deliberately NOT consulted - today it only flags read-only roots, and
      * "collapsed by default" is a client decision.
      *
-     * @param {string} rootId - "user" | "project" | "workdir".
+     * @param {string} rootId - "user" | "workdir".
      * @param {{name: string, rel_path: string}} node - Server TreeNode, or a
      *   synthetic root node ({name, rel_path: '', is_dir: true}).
      * @param {boolean} [fallbackExpanded] - Default when nothing is

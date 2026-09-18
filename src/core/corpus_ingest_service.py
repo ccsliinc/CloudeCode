@@ -42,15 +42,33 @@ adds nothing else - the storage decisions are all inherited:
 
 WHAT THIS DOES NOT DO, STATED SO THE ABSENCE IS NOT MISREAD. It does not
 populate the v16 message model (``message_transcripts`` /
-``message_bodies`` / ``message_appearances``). That model has no
-re-ingest path for a file that GREW - ``ingest_lines`` refuses a
-``source_ref`` it has already seen, deliberately, so that nothing is
-ever silently overwritten - which makes it the wrong layer for a live
-corpus whose transcripts grow while the app watches them. The archive
-layer used here is the one built for exactly that case. The status
-surface still REPORTS the message model's gate findings, read-only, and
-says out loud when that model holds nothing on this datastore rather
-than rendering an empty table as a clean bill of health.
+``message_bodies`` / ``message_appearances``) ITSELF, and the reason is
+unchanged: that model has no re-ingest path for a file that GREW -
+``ingest_lines`` refuses a ``source_ref`` it has already seen,
+deliberately, so that nothing is ever silently overwritten - which makes
+it the wrong layer to point at a live corpus whose transcripts grow while
+the app watches them. The archive layer used here is the one built for
+exactly that case.
+
+THAT SENTENCE USED TO END THE STORY, AND IT LEFT THE HISTORY BROWSER
+BLANK. The browser reads the message model and nothing joined the two, so
+an install could hold 22,828 correctly ingested archives and render an
+empty rail (measured on the owner's box, 2026-09-13). The join now exists
+and is a SEPARATE pass - :mod:`src.core.message_projection`, run by this
+module's own scheduler right after an ingest, on its own thread, under
+its own budget, with its own liveness artifact. It reads the ARCHIVE
+rather than the filesystem, which is precisely what makes growth
+answerable: the archive layer has already versioned it. Do not move that
+work into this pass; the two have different costs, different failure
+modes, and must be able to fail independently.
+
+The status surface still REPORTS the message model's gate findings,
+read-only, and says out loud when that model holds nothing on this
+datastore rather than rendering an empty table as a clean bill of health.
+Beside it now sits ``projection`` (see
+:mod:`src.core.message_projection_status`), which is the half
+``model_not_populated`` could never say: whether the join has ever run
+here, and how much of the archive is still waiting.
 
 HOST ATTRIBUTION IS RECORDED, WITH ITS EVIDENCE NAMED. When the schema
 carries the v17 host dimension, each run interns this machine and this
@@ -111,6 +129,12 @@ from src.core.transcript_corpus_discover import (
 from src.core.transcript_corpus_ingest import (
     ingest_one,
     root_pending_archives,
+)
+from src.core.archive_db_partition import archive_db_path_for
+from src.core.db import connect_archive_only
+from src.core.db_connection_shape import (
+    require_archive_only,
+    require_pair,
 )
 from src.core.transcript_prefix_dedupe import verify_stored_hash
 from src.core.transcript_project_root import root_pending_archives_by_project
@@ -464,13 +488,59 @@ def _run_inner(
             )
             return
 
-        _ingest_pass(state_dir, root, conn, cancel, report)
-        report.host_attribution = _record_host(conn, root, version.value)
-        report.byte_verify = _sample_byte_verify(conn, byte_verify_sample)
+        # TWO CONNECTIONS, ROUTED BY WHAT EACH STATEMENT NEEDS TO SEE.
+        # BEGIN IMMEDIATE takes the write lock on every attached
+        # database, so ingesting a file on the PAIR connection held
+        # cloude.db's lock for the whole write - and cloude.db is where
+        # the Claude Code hook path writes activity state, synchronously
+        # on the event loop. Measured 2026-09-14: a 97 s ingest pass
+        # parked the loop at 25 s a time, three times inside 33 seconds.
+        #
+        # The heavy writes go archive-only; ROOTING KEEPS THE PAIR,
+        # because it joins transcript_archives to sessions and projects
+        # and genuinely needs both files. On an unsplit install there is
+        # no second file and archive_conn is simply the same connection.
+        archive_conn = _archive_connection(state_dir, conn)
+        try:
+            _ingest_pass(
+                state_dir, root, conn, archive_conn, cancel, report,
+            )
+            report.host_attribution = _record_host(
+                archive_conn, root, version.value,
+            )
+            report.byte_verify = _sample_byte_verify(
+                archive_conn, byte_verify_sample,
+            )
+        finally:
+            if archive_conn is not conn:
+                archive_conn.close()
 
+
+
+def _archive_connection(
+    state_dir: Path, pair: sqlite3.Connection,
+) -> sqlite3.Connection:
+    """The connection the ingest pass writes through.
+
+    Description: archive-only when this install is split, so a long
+      ingest write's lock reaches no other file; otherwise the caller's
+      own connection, because an unsplit install has exactly one file
+      and nothing to route. Returning ``pair`` unchanged is what makes
+      the caller's ``is not`` close-check correct.
+    Inputs: state_dir (Path), pair (sqlite3.Connection - the caller's).
+    Output: sqlite3.Connection.
+    Raises: DatastoreError - the archive exists but could not be opened.
+      NOT swallowed: silently falling back to the pair would restore the
+      stall while every count stayed right.
+    Example: _archive_connection(state_dir, conn)
+    """
+    if archive_db_path_for(state_dir).exists():
+        return connect_archive_only(state_dir)
+    return pair
 
 def _ingest_pass(
     state_dir: Path, root: Path, conn: sqlite3.Connection,
+    archive_conn: sqlite3.Connection,
     cancel: Optional[Event], report: CorpusIngestReport,
 ) -> None:
     """Discover, plan, ingest and root, updating the scan cache as it goes.
@@ -480,11 +550,23 @@ def _ingest_pass(
       file's write is its own transaction inside ``ingest_one``. Files
       not reached are counted as ``not_reached`` rather than folded into
       any other bucket.
-    Inputs: state_dir (Path), root (Path), conn, cancel (Event | None),
-      report (CorpusIngestReport, mutated).
+      EVERY STATEMENT IS ROUTED, and the routing is ASSERTED rather than
+      remembered: ``conn`` is the PAIR (cloude.db plus the attached
+      archive) and carries only the cross-file reads and the rooting
+      joins; ``archive_conn`` is archive-only and carries every write.
+      Sending a write to ``conn`` by mistake produces the right rows and
+      re-creates a 25 second event-loop stall, which no assertion about
+      results can see - so ``require_archive_only`` and ``require_pair``
+      check the connection at each seam.
+    Inputs: state_dir (Path), root (Path), conn (the PAIR connection),
+      archive_conn (archive-only; the same object on an unsplit
+      install), cancel (Event | None), report (CorpusIngestReport,
+      mutated).
     Output: None.
-    Example: _ingest_pass(Path("/s"), Path("/r"), conn, None, report)
+    Example: _ingest_pass(Path("/s"), Path("/r"), conn, arch, None, report)
     """
+    require_pair(conn, "the corpus ingest pass's cross-file reads")
+    require_archive_only(archive_conn, "the corpus ingest pass's writes")
     discovery = discover_corpus_detailed(root)
     entries = discovery.entries
     report.discovered = len(entries)
@@ -516,7 +598,7 @@ def _ingest_pass(
             )
             report.not_reached = len(todo) - index
             break
-        outcome = ingest_one(conn, entry)
+        outcome = ingest_one(archive_conn, entry)
         if outcome.outcome == "ingested":
             report.ingested += 1
             report.bytes_ingested += outcome.raw_byte_length or 0
@@ -533,7 +615,7 @@ def _ingest_pass(
             cache.pop(entry.source_path, None)
             continue
         stat_key = _stat_key(entry)
-        sha = _current_hash(conn, entry.source_path)
+        sha = _current_hash(archive_conn, entry.source_path)
         if stat_key is not None and sha is not None:
             cache[entry.source_path] = (stat_key[0], stat_key[1], sha)
         else:
@@ -548,6 +630,10 @@ def _ingest_pass(
         report.project_rooting = {
             "status": "ran", **root_pending_archives_by_project(conn),
         }
+        # Both rooting calls stay on the PAIR. The project one touches
+        # only archive tables today, but it is the same pass, decided by
+        # the same signature, and splitting them would make one half
+        # able to run while the other could not.
     else:
         # NOT ZEROS. A skipped pass renders as its own named state, so a
         # reader can never mistake "nothing changed, so the previous

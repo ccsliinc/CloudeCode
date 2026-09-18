@@ -84,35 +84,30 @@ Ecosystem facts:
 Numbered so the top-50 cut in section 4 can cite them. A = Adam's originals.
 
 Aesthetic / BBS
-- U1 The whole app boots as a BBS: ANSI splash, modem handshake, "last callers",
-  one-liner wall, NEWSCAN of everything since your last login.
-- U2 Monthly signed ANSI artpack drops: themes shipped like ACiD packs.
+- U2 Monthly signed ANSI artpack drops: themes shipped like ACiD packs. (theme packs)
 - U3 Access tiers earned by evidence (GUEST, CALLER, CONTRIBUTOR, OPERATOR,
   SYSOP) that unlock hidden menus and catalog powers.
-- U4 Door games where the AGENTS are the players: a LORD-style arena where
-  sessions duel by solving real tasks; the winner's diff gets merged.
-- U5 War-dialer: scan the tailnet for boxes running tmux + claude and "dial in".
-- U6 NFO file per swarm run: a provenance sheet, human and machine readable.
+- U4 Door games where the AGENTS are the players: a LORD-style arena where sessions duel by solving real tasks; the winner's diff gets merged. (plugin)
+- U6 NFO file per swarm run: a provenance sheet, human and machine readable. (this should be a plugin)
 - U7 Handles, callsigns and signature blocks for humans AND agents.
-- U8 Sysop page: one hotkey anywhere pages a human with run context attached.
 
 Multi-pane / views
 - U9 (A) Grid / columns / rows of live sessions.
 - U10 Warroom wall: 40 live tiles at low fps, hover to zoom, click to take over.
-- U11 Follow-the-action: focus jumps to whichever agent just changed state.
+- U11 Follow-the-action: focus jumps to whichever agent just changed state. (this is awesome, but we need to solve the notifications issue first otherwise we're bouncing all over the place for no reason)
 - U12 Linked input: type once, land in N panes (a broadcast keyboard).
 - U13 Matrix-rain ambient screensaver rendered from real swarm activity, for a
-  wall display.
-- U14 Multiplayer cursors: two humans driving one session from two devices.
+  wall display. (plugin / different "screen savers")
+- U14 Multiplayer cursors: two humans driving one session from two devices. (love the multi / session idea)
 
 Notifications
-- U15 (A) Kill the crying wolf on sub-agent waits.
+- U15 (A) Kill the crying wolf on sub-agent waits. (super important)
 - U16 Intent scoring: a local model reads the pane tail and rates "needs me now
-  / needs me later / never".
+  / needs me later / never". (nice to have... programatic is better / faster. just need to figure it out)
 - U17 Digest mode: nothing but hard blocks interrupts; everything else lands in
   a NEWSCAN every N minutes.
 - U18 Agents self-report: a hook makes the agent emit `needs_human {why,
-  urgency}` and that sentence IS the toast body.
+  urgency}` and that sentence IS the toast body. i don't want to require hooks as that requires us messing with agent configs)
 - U19 Approval inbox: every permission prompt across every session in one list,
   answerable from the phone.
 
@@ -124,53 +119,47 @@ Skills / themes / plugins catalogs
 - U23 Signed publishers: sigstore-style signatures on every catalog item, the
   thing nobody does.
 - U24 Skill-doctor score: lint + eval on upload, a grade on the card.
-- U25 Usage telemetry, opt-in: "invoked 4,231 times this week, 92% completion".
+- U25 Usage telemetry, opt-in: "invoked 4,231 times this week, 92% completion". (local only)
 - U26 Fork-a-skill: propose a change to someone else's item as a PR, Raycast
   and Homebrew style.
-- U27 Skill A/B: same prompt, two skill versions, diff the outcomes.
-- U28 Skill mining: "you've done this five times, want it as a skill?"
-- U29 Loadouts: named bundles of skills + wrappers + theme, one-click swap.
-- U30 Theme from any image: upload a screenshot, get a palette and a theme.json.
-- U31 Reactive themes: hues shift with swarm load and token burn.
-- U32 Per-family tints: Claude sessions and Codex sessions look different at a
-  glance.
-- U33 Server-side "door" plugins: Python processes with a manifest, adding
-  routes, hooks and pollers without touching the browser CSP.
+- U27 Skill A/B: same prompt, two skill versions, diff the outcomes. (this sounds like a skill in iteself)
+- U28 Skill mining: "you've done this five times, want it as a skill?" (plugin)
+- U29 Loadouts: named bundles of skills + wrappers + theme, one-click swap. (love bundle idea... like "ADoom's Pack")
+- U30 Theme from any image: upload a screenshot, get a palette and a theme.json. (plugin)
+- U31 Reactive themes: hues shift with swarm load and token burn. (plugin.... also like the idea of changing themes based on time / season / events / etc)
+- U32 Per-family tints: Claude sessions and Codex sessions look different at a glance. (plugin)
 - U34 Contribution economy: kudos and leech-points inverted, rewarding reusable
-  fixes, evals and docs. Leaderboards on the BBS front page.
+  fixes, evals and docs. Leaderboards on the BBS front page. love it but instead of "kudos" use "Ratio" and "1337 points"
+  
 
 Git
 - U35 (A) Modified-files rail since last commit.
-- U36 (A) Repo + branch badge in the terminal header.
-- U37 Diff drawer with "explain this diff" on a cheap model.
-- U38 Worktree per session, automatic, Conductor / CCManager style.
-- U39 Collision radar: two sessions on one repo touching the same file.
-- U40 Rewind: a git snapshot per turn, scrub back to any turn.
-- U41 Shadow writes: an agent's file edits land in a shadow tree and show as a
-  PR before touching disk.
+- U36 (A) Repo + branch badge in the terminal footer.
+- U37 Diff drawer with "explain this diff" on a cheap model. (plugin)
+- U39 Collision radar: two sessions on one repo touching the same file. (plugin)
+- U40 Rewind: a git snapshot per turn, scrub back to any turn. (plugin)
+
 
 Observability
 - U42 (A) Live models in use, token usage over time, running agents, context.
 - U43 (A) Provider account ledger: 3 Claude Max plans + Codex, usage, resets.
 - U44 Session-aware quota: which session will trip the limit first.
 - U45 Account rotation: new sessions launch under the account with the most
-  headroom.
-- U46 Context-pressure gauge per session.
-- U47 Burn-rate alarm: tokens per minute spike detection.
-- U48 Cost per branch / PR: tokens attributed to git work.
-- U49 Budget guardrails: hard cap per session or day, agent paused at the cap.
-- U50 Secrets radar: the agent printed something credential-shaped.
+  headroom. (flag for later)
+- U46 Context-pressure gauge per session. (plugin)
+- U47 Burn-rate alarm: tokens per minute spike detection. (plugin)
+- U48 Cost per branch / PR: tokens attributed to git work. (plugin)
+- U49 Budget guardrails: hard cap per session or day, agent paused at the cap. (plugin)
+- U50 Secrets radar: the agent printed something credential-shaped. (plugin)
 
 Messaging / swarm
 - U51 (A) Cross-provider bus: `@Name do this` between Claude and Codex sessions.
-- U52 Shared blackboard: a KV every agent on the box mounts via MCP.
-- U53 Handoff: "give this task to a Codex session" carries a transcript summary.
-- U54 Prompt queue: prompts that fire when the session's next Stop lands.
-- U55 Swarm blueprints: a YAML that launches "3 claude + 1 codex on this repo
-  with these skills", one click.
-- U56 Bake-off: same task to N harnesses, diff the outputs, vote.
+- U52 Shared blackboard: a KV every agent on the box mounts via MCP. (plugin)
+- U53 Handoff: "give this task to a Codex session" carries a transcript summary. (plugin)
+- U55 Swarm blueprints: a JSON that launches "3 claude + 1 codex on this repo with these skills", one click.
+- U56 Bake-off: same task to N harnesses, diff the outputs, vote. (plugin)
 - U57 Panic button: pause every agent on the box, one gesture, gated.
-- U58 Session cloning with context (CCManager's trick).
+- U58 Session cloning with context (CCManager's trick). (i think we have this as "fork")
 
 Console / mobile / desktop / remote
 - U59 (A) Full TUI with hotkeys, BBS aesthetic.
@@ -182,37 +171,36 @@ Console / mobile / desktop / remote
 - U64 Push-to-talk voice into a pane from the phone.
 - U65 Watch complication: swarm status on the wrist.
 - U66 (A) Remote tmux hosts over LAN / VLAN / tailnet.
-- U67 Federation: every install can publish to another; a fleet of Carnivores.
-- U68 mDNS / tailnet discovery of other hosts.
-- U91 Move a running agent session between machines, Herdr's stated 1.0 idea.
+- U67 Federation: every install can publish to another; a fleet of Carnivores. (like the idea, but what's the benefit over just SSH into other boxes?)
+- U91 Move a running agent session between machines
 
 Integrations
 - U69 (A) herdr.dev parity or better.
-- U70 Ticket-as-task: Linear / Jira / GitHub issue becomes a session (Emdash).
-- U71 Hardware out: Stream Deck keys and LED strips showing swarm state.
-- U72 OBS overlay for streamers.
-- U73 n8n / Home Assistant webhooks in and out.
+- U70 Ticket-as-task: Linear / Jira / GitHub issue becomes a session (Emdash). (plugin)
+- U71 Hardware out: Stream Deck keys and LED strips showing swarm state. (plugin)
+- U72 OBS overlay for streamers. (plugin)
+- U73 n8n / Home Assistant webhooks in and out. (plugin)
 
 Pets / fun
-- U74 (A) Pixel helpers that wander the screen and hold a small agent.
+- U74 (A) Pixel helpers that wander the screen and hold a small agent. 
 - U75 Pets evolve with session productivity; a dead session's pet mourns.
 - U76 The pet is your cross-session search daemon.
+** this opens up another store / catalog of "pets"
 
 Understanding what happened
-- U77 (A) Event-stream timeline of a session built by a cheap or local LLM.
-- U78 While-you-were-away report across the whole swarm.
-- U79 Time-travel scrub: terminal scrollback and transcript aligned on one bar.
-- U80 Replay as a movie: render a session to MP4 for sharing.
-- U81 Auto-retro: on session end a model drafts a LESSONS entry candidate.
-- U82 Explain-this-pane button: summarize the last N lines.
-- U83 Semantic search across every transcript with local embeddings.
-- U84 Agent CV: per-family success stats over time, a trust score.
+- U77 (A) Event-stream timeline of a session built by a cheap or local LLM. (plugin)
+- U78 While-you-were-away report across the whole swarm. (plugin)
+- U79 Time-travel scrub: terminal scrollback and transcript aligned on one bar. (would like to know more)
+- U80 Replay as a movie: render a session to MP4 for sharing. (plugin)
+- U81 Auto-retro: on session end a model drafts a LESSONS entry candidate. (plugin / skill)
+- U82 Explain-this-pane button: summarize the last N lines. (plugin)
+- U84 Agent CV: per-family success stats over time, a trust score. (plugin)
 - U85 Spectator links: read-only, time-limited share of a live session.
 - U86 (A) OpenClaw / Hermes first-class harness support.
-- U87 Scheduled swarms: cron-launch sessions with a prompt.
-- U88 Session-to-skill: crystallize a finished session into a reusable skill.
-- U89 Prompt macros with variables, per project.
-- U90 Keyboard-only navigation mode (vim keys everywhere).
+- U87 Scheduled swarms: cron-launch sessions with a prompt. (i like this idea as the ability to fire off one-click commands as well that spin up an agent with a dedicated prompt or something)
+- U88 Session-to-skill: crystallize a finished session into a reusable skill. (plugin)
+- U89 Prompt macros with variables, per project. (plugin)
+- U90 Keyboard-only navigation mode (vim keys everywhere) (we need this as much as possible everywhere, especiallyy in the TUI)
 
 ## 4. The top 50 NEW ideas, each with its "probably possible" twin
 

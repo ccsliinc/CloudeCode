@@ -34,7 +34,6 @@ from fastapi import APIRouter
 from src.api import agent_wrappers_routes
 from src.api import filesystem_routes
 from src.api import health_routes
-from src.api import hook_event_routes
 from src.api import projects_presence_routes
 from src.api import provider_models_routes
 from src.api import server_control_routes
@@ -90,7 +89,6 @@ router.include_router(session_theme_routes.router)
 router.include_router(session_rename_routes.router)
 router.include_router(session_input_routes.router)
 router.include_router(session_toast_routes.router)
-router.include_router(hook_event_routes.router)
 router.include_router(session_logs_routes.router)
 router.include_router(filesystem_routes.router)
 router.include_router(terminal_commands_routes.router)

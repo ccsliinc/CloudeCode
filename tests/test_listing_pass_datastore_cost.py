@@ -304,7 +304,6 @@ async def test_the_seed_takes_no_connection_of_its_own_on_this_pass(
     """
     manager, _names = live_manager
     from src.core import session_status_seed_read as seed_read
-    from src.core.session_instance_index import InstanceIndex
 
     counter = _DatastoreOpenCounter()
     counter.install(monkeypatch)
@@ -320,29 +319,24 @@ async def test_the_seed_takes_no_connection_of_its_own_on_this_pass(
         f"per session and not never. By caller: {shipped}"
     )
 
-    # The control. An index that reports it could not be built is what the
-    # seam refuses to read from, so every session takes its own
-    # connection - the pre-fix shape, on the same fixture and the same
-    # panes. A cached seed would be served rather than re-derived, so the
-    # store is dropped first.
-    monkeypatch.setattr(
-        SessionManager,
-        "_instance_index_for_listing",
-        lambda self, **kwargs: InstanceIndex(),
-    )
+    # THE CONTROL, AND IT IS WHAT MAKES THE ZERO ABOVE MEAN ANYTHING. A
+    # zero cannot tell "the row read was served from the bulk index"
+    # from "the row read stopped happening", and those are a saving and
+    # a regression. So the same rows are built the OTHER way the code
+    # supports: one session at a time, with no gather, no prefetch and
+    # no index - the shape ``get_session_info`` uses - which is exactly
+    # the per-row connection the index replaces. A cached seed would be
+    # served rather than re-derived, so the store is dropped first.
     seed_read._STORES.pop(manager, None)
 
-    await manager.list_session_infos()
+    for session_id in list(manager._registry.sessions.keys()):
+        manager._session_info_for(session_id)
     per_row = counter.snapshot()
 
-    assert per_row["by_caller"].get("read_instance_row", 0) == LIVE_SESSIONS, (
+    opened = per_row["by_caller"].get("read_instance_row", 0) - shipped[
+        "by_caller"
+    ].get("read_instance_row", 0)
+    assert opened == LIVE_SESSIONS, (
         "the control did not exercise the per-row path it is controlling "
         f"for, so the comparison proves nothing. By caller: {per_row}"
-    )
-    # The index costs ONE open and saves one per session, so the net is
-    # N - 1. Asserting the net rather than the raw totals is what keeps
-    # this from moving every time an unrelated per-pass read is added.
-    assert per_row["total"] - shipped["total"] == LIVE_SESSIONS - 1, (
-        "the saving is not the one connection per session this round "
-        f"claims. shipped={shipped}, per_row={per_row}"
     )

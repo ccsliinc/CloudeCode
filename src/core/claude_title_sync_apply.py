@@ -10,10 +10,21 @@ WHAT THIS RUNS ON. Every Claude Code hook event, including ``PreToolUse``
 and ``PostToolUse``, which fire on every single tool call. So the cost of
 the common path is the design constraint, not an afterthought:
 
-  * one SELECT of five columns on an indexed-ish lookup,
+  * one SELECT of six columns on an indexed-ish lookup,
   * one ``os.path.getsize``,
   * one read of at most 64 KB,
   * and NO write at all unless a name actually changed.
+
+THE RENAME RETRY RIDES THIS PASS, and rides it precisely because of the
+list above. ``src.core.claude_rename_retry_apply`` needs the row id, both
+title columns, the conversation uuid and this pass's ``TITLE_*`` verdict,
+and every one of them has already been read here - so the whole feature
+costs two dictionary lookups and a string comparison in steady state, and
+spends a subprocess only when a browser rename is provably still pending.
+It is wired at the tail of :func:`sync_claude_title` rather than given a
+loop of its own for the same reason the sync itself was rehomed onto the
+watcher: the trigger it needs is a transcript that grew, and that trigger
+already exists here.
 
 The transcript path is resolved once per conversation and cached in
 process, because :func:`conversation_presence` falls back to scanning the
@@ -32,7 +43,7 @@ compares the second time against what the first time wrote and stops.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Optional
 
 import structlog
@@ -89,6 +100,11 @@ class TitleSyncResult:
         broadcast on this being non-None, so a baseline pass can never
         announce a rename that did not happen.
       - ``detail``: a plain sentence naming why.
+      - ``retry``: what the rename retry decided on this same pass, on
+        :data:`SYNC_RAN` only. Reported rather than acted on by the
+        caller; the seam has already done whatever it was going to do.
+        None means the retry did not run, which is a different fact from
+        a retry that ran and refused.
     Inputs: n/a.
     Output: n/a (data holder).
     """
@@ -98,6 +114,7 @@ class TitleSyncResult:
     title: Optional[str] = None
     broadcast_title: Optional[str] = None
     detail: Optional[str] = None
+    retry: Optional[Any] = None
 
 
 def _tmux_name_for(session_manager: Any, session_id: str) -> Optional[str]:
@@ -213,9 +230,16 @@ def sync_claude_title(session_manager: Any, session_id: str) -> TitleSyncResult:
                 detail="no instance row for this tmux name",
             )
 
+        # ``agent_family`` joins the SELECT for the rename retry, which
+        # has to answer the same "is this a claude" question
+        # ``_push_rename_to_claude`` answers before it sends anything. It
+        # rides the SELECT that was already being made rather than
+        # opening a second read: this runs on every transcript append and
+        # a per-pass connection is the cost this project has paid for
+        # twice already.
         row = conn.execute(
-            "SELECT claude_session_uuid, title, claude_title, working_dir "
-            "FROM sessions WHERE id = ?",
+            "SELECT claude_session_uuid, title, claude_title, working_dir, "
+            "agent_family FROM sessions WHERE id = ?",
             (identity["id"],),
         ).fetchone()
         if row is None:
@@ -225,11 +249,12 @@ def sync_claude_title(session_manager: Any, session_id: str) -> TitleSyncResult:
             )
 
         row_id = identity["id"]
-        uuid, current_title, claude_title, working_dir = (
+        uuid, current_title, claude_title, working_dir, agent_family = (
             row[0],
             row[1],
             row[2],
             row[3],
+            row[4],
         )
         if not uuid:
             return TitleSyncResult(
@@ -257,9 +282,48 @@ def sync_claude_title(session_manager: Any, session_id: str) -> TitleSyncResult:
             recorded_claude_title=claude_title,
         )
 
+        def _with_retry(
+            result: TitleSyncResult,
+            *,
+            effective_title: Optional[str],
+            effective_claude_title: Optional[str],
+        ) -> TitleSyncResult:
+            """Run the rename retry for this pass and attach its verdict.
+
+            Description: closes over the row this pass already resolved,
+              so the retry costs no second read. The values passed are
+              the POST-WRITE ones, because the retry witnesses agreement
+              between the two columns and a ``TITLE_APPLIED`` pass has
+              just created one.
+            Inputs: result (TitleSyncResult) - the sync's own answer.
+              effective_title (str | None) and effective_claude_title
+              (str | None) - the row's two names after this pass.
+            Output: TitleSyncResult - ``result`` with ``retry`` set.
+            Example: _with_retry(r, effective_title='A',
+              effective_claude_title='A')
+            """
+            from src.core.claude_rename_retry_apply import run_rename_retry
+
+            return replace(
+                result,
+                retry=run_rename_retry(
+                    session_id=session_id,
+                    row_id=row_id,
+                    title=effective_title,
+                    claude_title=effective_claude_title,
+                    claude_uuid=str(uuid),
+                    agent_family=agent_family,
+                    sync_action=verdict.action,
+                ),
+            )
+
         if verdict.action == TITLE_NOT_MEASURED:
-            return TitleSyncResult(
-                SYNC_RAN, action=verdict.action, detail=verdict.detail
+            return _with_retry(
+                TitleSyncResult(
+                    SYNC_RAN, action=verdict.action, detail=verdict.detail
+                ),
+                effective_title=current_title,
+                effective_claude_title=claude_title,
             )
 
         if verdict.action == TITLE_BASELINE_RECORDED:
@@ -276,11 +340,15 @@ def sync_claude_title(session_manager: Any, session_id: str) -> TitleSyncResult:
                 row_id=row_id,
                 note="visible title untouched; see claude_title_sync docstring",
             )
-            return TitleSyncResult(
-                SYNC_RAN,
-                action=verdict.action,
-                title=verdict.title,
-                detail=verdict.detail,
+            return _with_retry(
+                TitleSyncResult(
+                    SYNC_RAN,
+                    action=verdict.action,
+                    title=verdict.title,
+                    detail=verdict.detail,
+                ),
+                effective_title=current_title,
+                effective_claude_title=verdict.title,
             )
 
         if verdict.action == TITLE_APPLIED:
@@ -304,18 +372,32 @@ def sync_claude_title(session_manager: Any, session_id: str) -> TitleSyncResult:
                 row_id=row_id,
                 moved_visible_title=verdict.writes_visible_title,
             )
-            return TitleSyncResult(
-                SYNC_RAN,
-                action=verdict.action,
-                title=verdict.title,
-                broadcast_title=(
-                    verdict.title if verdict.writes_visible_title else None
+            return _with_retry(
+                TitleSyncResult(
+                    SYNC_RAN,
+                    action=verdict.action,
+                    title=verdict.title,
+                    broadcast_title=(
+                        verdict.title if verdict.writes_visible_title else None
+                    ),
+                    detail=verdict.detail,
                 ),
-                detail=verdict.detail,
+                # BOTH COLUMNS NOW HOLD ``verdict.title``. On the
+                # writes_visible_title branch that is literal; on the
+                # other, ``observed == current_title`` was the very test
+                # that set the flag False. Either way the row has just
+                # agreed with itself, which is the agreement the retry
+                # witnesses.
+                effective_title=verdict.title,
+                effective_claude_title=verdict.title,
             )
 
-        return TitleSyncResult(
-            SYNC_RAN, action=verdict.action, detail=verdict.detail
+        return _with_retry(
+            TitleSyncResult(
+                SYNC_RAN, action=verdict.action, detail=verdict.detail
+            ),
+            effective_title=current_title,
+            effective_claude_title=claude_title,
         )
     except sqlite3.Error as exc:
         logger.debug(

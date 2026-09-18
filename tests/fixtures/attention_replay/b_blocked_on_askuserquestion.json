@@ -1,0 +1,505 @@
+{
+ "name": "b_blocked_on_askuserquestion",
+ "session": {
+  "session_id": "ses_6bcc9cfe",
+  "tmux_name": "cloude_Sauna",
+  "conversation_uuid": "327133c3-fee8-49bf-9cf1-66a63de45dd6",
+  "agent_family": "claude",
+  "harness_version": "2.1.266"
+ },
+ "window": {
+  "from": "2026-09-11T20:39:00Z",
+  "to": "2026-09-11T20:43:00Z"
+ },
+ "events": [
+  {
+   "t": "2026-09-11T20:41:27.396760Z",
+   "transcript_records": [
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:39:25.525Z",
+     "uuid": "78da09b3-680b-4e61-9b7f-44b2d0e7729a",
+     "parentUuid": null,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:39:25.528Z",
+     "uuid": "94b0c3f5-1295-4918-b623-9518dee7de2a",
+     "parentUuid": "78da09b3-680b-4e61-9b7f-44b2d0e7729a",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "d818a815-a8cd-4bd3-ba71-4ad00376bdc3",
+     "parentUuid": "94b0c3f5-1295-4918-b623-9518dee7de2a",
+     "isSidechain": false,
+     "promptSource": "typed",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "human"
+     },
+     "message": {
+      "content": "when the app is open, the timer isn't counting down live. Also I want to have an"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.728Z",
+     "uuid": "b7181f73-7f7a-4b83-b737-6c078b71c20c",
+     "parentUuid": "d818a815-a8cd-4bd3-ba71-4ad00376bdc3",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.728Z",
+     "uuid": "f517f293-6b33-47c9-886f-3701ac4dc29c",
+     "parentUuid": "b7181f73-7f7a-4b83-b737-6c078b71c20c",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.728Z",
+     "uuid": "03e904e4-c97c-415d-82ef-783f3d9e7d61",
+     "parentUuid": "f517f293-6b33-47c9-886f-3701ac4dc29c",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "9d43ddd2-5371-427d-93c8-23d67f930bf7",
+     "parentUuid": "03e904e4-c97c-415d-82ef-783f3d9e7d61",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "9bc70077-7b2f-429d-9d26-e06e327eff95",
+     "parentUuid": "9d43ddd2-5371-427d-93c8-23d67f930bf7",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "36ffb65f-1ee3-43df-8e33-3785c8891f29",
+     "parentUuid": "9bc70077-7b2f-429d-9d26-e06e327eff95",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "f03dfeeb-d0f2-43cd-9c41-da7535ad719a",
+     "parentUuid": "36ffb65f-1ee3-43df-8e33-3785c8891f29",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "b4c61bf3-b5a8-419c-9f08-34622a4524e1",
+     "parentUuid": "f03dfeeb-d0f2-43cd-9c41-da7535ad719a",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "7a99f535-7dcc-471b-a2fc-1ab104058f6a",
+     "parentUuid": "b4c61bf3-b5a8-419c-9f08-34622a4524e1",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "a4e6db31-2ff1-4159-986a-db2dec4923d7",
+     "parentUuid": "7a99f535-7dcc-471b-a2fc-1ab104058f6a",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.757Z",
+     "uuid": "23d0f6df-6524-4885-9701-214ad1757202",
+     "parentUuid": "a4e6db31-2ff1-4159-986a-db2dec4923d7",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.833Z",
+     "uuid": "642a7257-d1ab-4d21-8e4f-217c40cfe969",
+     "parentUuid": "23d0f6df-6524-4885-9701-214ad1757202",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.833Z",
+     "uuid": "810bdb2f-da4b-4cf4-9fe4-a506054ed639",
+     "parentUuid": "642a7257-d1ab-4d21-8e4f-217c40cfe969",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.833Z",
+     "uuid": "eeab9c97-a000-455b-98c3-ddb649e3b9ce",
+     "parentUuid": "810bdb2f-da4b-4cf4-9fe4-a506054ed639",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.834Z",
+     "uuid": "690dd380-7ea1-42d3-a751-6780f66a3432",
+     "parentUuid": "eeab9c97-a000-455b-98c3-ddb649e3b9ce",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.835Z",
+     "uuid": "c584b815-fc24-4e59-bcf7-c942e5c83eb9",
+     "parentUuid": "690dd380-7ea1-42d3-a751-6780f66a3432",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:41:10.468Z",
+     "uuid": "077d3b9b-a6df-4e41-bc2e-7038fc62f2a1",
+     "parentUuid": "c584b815-fc24-4e59-bcf7-c942e5c83eb9",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nHold up \u2014 which app? You got two frontends in this repo: the Mac menu b"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:41:18.310Z",
+     "uuid": "fdb03285-4740-4dbd-a619-74cb14e73dfe",
+     "parentUuid": "077d3b9b-a6df-4e41-bc2e-7038fc62f2a1",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "AskUserQuestion",
+        "id": "toolu_01QEDUVdr5Ya3qdDHGMRpvLz"
+       }
+      ]
+     }
+    }
+   ],
+   "registry": {
+    "synthetic": true,
+    "synthetic_reason": "No registry snapshot exists for any past instant, so this one is RECONSTRUCTED from the state machine in the plan's tier-1 table: an unanswered AskUserQuestion tool_use at EOF is precisely the open non-user-invoked dialog for which stock Claude Code writes status waiting / waitingFor input needed. Present so the harness can exercise rung 4; the same event resolves through rung 9 with registry null.",
+    "status": "waiting",
+    "waitingFor": "input needed",
+    "sessionId": "327133c3-fee8-49bf-9cf1-66a63de45dd6",
+    "cwd": "/Users/Adam/Dropbox/My Projects/harvia-cli",
+    "tmux": "cloude_Sauna:@0.%0",
+    "version": "2.1.266"
+   },
+   "pane_tail": null,
+   "tmux": {
+    "liveness": "LIVE",
+    "source": "derived: the hook route that raised these toasts refused a dead pane"
+   }
+  },
+  {
+   "t": "2026-09-11T20:43:30Z",
+   "transcript_records": [
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:39:25.525Z",
+     "uuid": "78da09b3-680b-4e61-9b7f-44b2d0e7729a",
+     "parentUuid": null,
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:39:25.528Z",
+     "uuid": "94b0c3f5-1295-4918-b623-9518dee7de2a",
+     "parentUuid": "78da09b3-680b-4e61-9b7f-44b2d0e7729a",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "file-history-snapshot"
+    },
+    {
+     "type": "user",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "d818a815-a8cd-4bd3-ba71-4ad00376bdc3",
+     "parentUuid": "94b0c3f5-1295-4918-b623-9518dee7de2a",
+     "isSidechain": false,
+     "promptSource": "typed",
+     "version": "2.1.266",
+     "origin": {
+      "kind": "human"
+     },
+     "message": {
+      "content": "when the app is open, the timer isn't counting down live. Also I want to have an"
+     }
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.728Z",
+     "uuid": "b7181f73-7f7a-4b83-b737-6c078b71c20c",
+     "parentUuid": "d818a815-a8cd-4bd3-ba71-4ad00376bdc3",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.728Z",
+     "uuid": "f517f293-6b33-47c9-886f-3701ac4dc29c",
+     "parentUuid": "b7181f73-7f7a-4b83-b737-6c078b71c20c",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.728Z",
+     "uuid": "03e904e4-c97c-415d-82ef-783f3d9e7d61",
+     "parentUuid": "f517f293-6b33-47c9-886f-3701ac4dc29c",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "9d43ddd2-5371-427d-93c8-23d67f930bf7",
+     "parentUuid": "03e904e4-c97c-415d-82ef-783f3d9e7d61",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "9bc70077-7b2f-429d-9d26-e06e327eff95",
+     "parentUuid": "9d43ddd2-5371-427d-93c8-23d67f930bf7",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "36ffb65f-1ee3-43df-8e33-3785c8891f29",
+     "parentUuid": "9bc70077-7b2f-429d-9d26-e06e327eff95",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "f03dfeeb-d0f2-43cd-9c41-da7535ad719a",
+     "parentUuid": "36ffb65f-1ee3-43df-8e33-3785c8891f29",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "b4c61bf3-b5a8-419c-9f08-34622a4524e1",
+     "parentUuid": "f03dfeeb-d0f2-43cd-9c41-da7535ad719a",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "7a99f535-7dcc-471b-a2fc-1ab104058f6a",
+     "parentUuid": "b4c61bf3-b5a8-419c-9f08-34622a4524e1",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.729Z",
+     "uuid": "a4e6db31-2ff1-4159-986a-db2dec4923d7",
+     "parentUuid": "7a99f535-7dcc-471b-a2fc-1ab104058f6a",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.757Z",
+     "uuid": "23d0f6df-6524-4885-9701-214ad1757202",
+     "parentUuid": "a4e6db31-2ff1-4159-986a-db2dec4923d7",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.833Z",
+     "uuid": "642a7257-d1ab-4d21-8e4f-217c40cfe969",
+     "parentUuid": "23d0f6df-6524-4885-9701-214ad1757202",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.833Z",
+     "uuid": "810bdb2f-da4b-4cf4-9fe4-a506054ed639",
+     "parentUuid": "642a7257-d1ab-4d21-8e4f-217c40cfe969",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.833Z",
+     "uuid": "eeab9c97-a000-455b-98c3-ddb649e3b9ce",
+     "parentUuid": "810bdb2f-da4b-4cf4-9fe4-a506054ed639",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.834Z",
+     "uuid": "690dd380-7ea1-42d3-a751-6780f66a3432",
+     "parentUuid": "eeab9c97-a000-455b-98c3-ddb649e3b9ce",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "attachment",
+     "timestamp": "2026-09-11T20:41:07.835Z",
+     "uuid": "c584b815-fc24-4e59-bcf7-c942e5c83eb9",
+     "parentUuid": "690dd380-7ea1-42d3-a751-6780f66a3432",
+     "isSidechain": false,
+     "version": "2.1.266"
+    },
+    {
+     "type": "last-prompt"
+    },
+    {
+     "type": "custom-title"
+    },
+    {
+     "type": "agent-name"
+    },
+    {
+     "type": "mode"
+    },
+    {
+     "type": "permission-mode"
+    },
+    {
+     "type": "atis-latch"
+    },
+    {
+     "type": "bridge-session"
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:41:10.468Z",
+     "uuid": "077d3b9b-a6df-4e41-bc2e-7038fc62f2a1",
+     "parentUuid": "c584b815-fc24-4e59-bcf7-c942e5c83eb9",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "text",
+        "text": "\ud83c\udff4\u200d\u2620\ufe0fLFG\n\nHold up \u2014 which app? You got two frontends in this repo: the Mac menu b"
+       }
+      ]
+     }
+    },
+    {
+     "type": "assistant",
+     "timestamp": "2026-09-11T20:41:18.310Z",
+     "uuid": "fdb03285-4740-4dbd-a619-74cb14e73dfe",
+     "parentUuid": "077d3b9b-a6df-4e41-bc2e-7038fc62f2a1",
+     "isSidechain": false,
+     "version": "2.1.266",
+     "message": {
+      "stop_reason": "tool_use",
+      "content": [
+       {
+        "type": "tool_use",
+        "name": "AskUserQuestion",
+        "id": "toolu_01QEDUVdr5Ya3qdDHGMRpvLz"
+       }
+      ]
+     }
+    }
+   ],
+   "registry": null,
+   "pane_tail": null,
+   "tmux": {
+    "liveness": "LIVE",
+    "source": "derived: the hook route that raised these toasts refused a dead pane"
+   }
+  }
+ ],
+ "expected_toasts": [
+  {
+   "at": "2026-09-11T20:41:27.396Z",
+   "kind": "PermissionRequest",
+   "reason": "needs_user(question): the window ends on an unanswered AskUserQuestion tool_use, which is the question itself. Production raised a Notification here, the right count and the wrong kind."
+  }
+ ],
+ "production_raised": 1,
+ "production_toasts": [
+  {
+   "at": "2026-09-11T20:41:24.396760Z",
+   "kind": "Notification",
+   "ground_truth": "unknown",
+   "pending": null
+  }
+ ],
+ "note": "Blocked on the user. There is NO turn-end record in the window at all, so the done-ness question answers unknown while the blocked-ness question answers positively: the two must not be collapsed. Carries the one synthetic registry snapshot in this corpus, flagged on the event itself.",
+ "evidence_availability": {
+  "registry": "absent for every past instant; see the module docstring",
+  "pane_tail": "never captured; null everywhere",
+  "tmux": "derived from the raise path, not snapshotted"
+ }
+}

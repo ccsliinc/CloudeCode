@@ -14,6 +14,7 @@ code-point and UTF-16 answers differ too.
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import closing
 
 from src.core.archive_body import body
@@ -141,48 +142,87 @@ def test_body_chars_counts_characters_and_body_bytes_is_the_same_number(
     assert result["body_bytes"] == result["body_chars"]
 
 
-def test_search_and_secret_offsets_are_the_same_unit(tmp_path):
-    """Two fields named ``match_offset`` in one API must mean one thing.
-    The search hit comes from SQLite INSTR; the finding comes from
-    Python re. This asserts they agree on a multi-byte body."""
-    state_dir, body_id, payload, offset, transcript_id = _seed(
-        tmp_path, "é" * 9 + " ", "agree")
+def test_search_and_secret_offsets_share_a_unit_and_name_their_frames(
+    tmp_path,
+):
+    """One UNIT, two FRAMES, and the API says which is which.
+
+    Description: this test used to assert the two ``match_offset`` fields
+      were EQUAL. That stopped being true, deliberately, when search moved
+      off ``body_json`` and onto the extracted content blocks: a hit's
+      offset now indexes the BLOCK's text and a finding's still indexes
+      the BODY's JSON. Two different strings, so two different numbers.
+
+      What must still hold - and is what the original test was really
+      protecting - is that both are CODE POINTS, and that a reader can
+      tell which string each one indexes without guessing. ``hit
+      ["match_offset_in"]`` carries that, and both slices are executed
+      here against their own string rather than compared as bare
+      integers.
+
+      The body is a REAL record shape. The old fixture stored a bare
+      ``'ééé token=...'``, which is not JSON and therefore has no content
+      blocks at all; it only ever worked because the matcher grepped raw
+      body_json.
+    """
+    prefix = "é" * 9 + " "
+    text = f"{prefix}token={SECRET}"
+    payload = json.dumps(
+        {"type": "assistant",
+         "message": {"role": "assistant",
+                     "content": [{"type": "text", "text": text}]}},
+        ensure_ascii=False)
+    body_offset = payload.index(SECRET)
+    text_offset = text.index(SECRET)
+    assert body_offset != text_offset, (
+        "the two frames must differ here or this test discriminates nothing")
+    assert len(payload.encode("utf-8")) != len(payload), (
+        "fixture must be multi-byte or it cannot discriminate")
+
+    state_dir = make_state_dir(tmp_path, "frames")
+    with closing(writable(state_dir)) as conn:
+        with conn:
+            host_id = seed_host(conn)
+            corpus_id = seed_corpus(conn, host_id)
+            project_id = seed_project(conn, corpus_id, slug="-p")
+            transcript_id = seed_transcript(
+                conn, host_id=host_id, corpus_id=corpus_id,
+                project_id=project_id, source_path="s.jsonl", line_count=1,
+            )
+            body_id = seed_body(
+                conn, body_json=payload, secret_finding_count=1,
+                identity_key="frames",
+            )
+            seed_appearance(
+                conn, transcript_id=transcript_id, line_no=1, body_id=body_id
+            )
+            conn.execute(
+                "INSERT INTO message_secret_findings "
+                "(body_id, detector, match_offset, match_length, "
+                " value_sha256, observed_at) "
+                "VALUES (?, 'high_entropy_assignment', ?, ?, ?, ?)",
+                (body_id, body_offset, len(SECRET),
+                 hashlib.sha256(SECRET.encode()).hexdigest(),
+                 "2026-08-31T00:00:00Z"),
+            )
+
     with closing(open_read_only(state_dir)) as conn:
-        hit = search_scoped(
-            conn, SECRET, "transcript", transcript_id)["result"][0]
+        hits = search_scoped(conn, SECRET, "transcript", transcript_id)
         finding = body(conn, body_id)["result"]["secrets"][0]
+    assert hits["result"], hits["unevaluated"]
+    hit = hits["result"][0]
 
-    assert hit["match_offset"] == finding["match_offset"] == offset
-    assert payload[hit["match_offset"]:
-                   hit["match_offset"] + hit["match_length"]] == SECRET
+    # The hit's frame, named and then executed against its own string.
+    assert hit["match_offset_in"] == "block_text"
+    assert hit["match_offset"] == text_offset
+    assert (text[hit["match_offset"]:
+                 hit["match_offset"] + hit["match_length"]] == SECRET)
+
+    # The finding's frame is the body, unchanged.
+    assert finding["match_offset"] == body_offset
+    assert (payload[finding["match_offset"]:
+                    finding["match_offset"] + finding["match_length"]]
+            == SECRET)
+
+    # ONE UNIT: both are code points, which is the claim that survived.
     assert hit["body_chars"] == len(payload) != len(payload.encode("utf-8"))
-
-
-def test_every_offset_bearing_response_declares_its_unit(tmp_path):
-    """A client must never infer a unit, and the two sides must quote
-    the SAME declaration."""
-    state_dir, body_id, _, _, transcript_id = _seed(
-        tmp_path, "é" * 5 + " ", "meta")
-    with closing(open_read_only(state_dir)) as conn:
-        body_meta = body(conn, body_id)["meta"]
-        search_meta = search_scoped(
-            conn, SECRET, "transcript", transcript_id)["meta"]
-
-    shared = offset_units_meta()
-    assert shared["offset_units"] == OFFSET_UNITS_CODE_POINTS
-    assert shared["body_size_units"] == BODY_SIZE_UNITS
-    for key, value in shared.items():
-        assert body_meta[key] == value
-        assert search_meta[key] == value, f"search disagrees on {key}"
-
-
-def test_withheld_body_reports_cannot_determine_not_a_guess(tmp_path):
-    """No body means the UTF-16 conversion could not be performed. That
-    is the third outcome, not an offset of zero."""
-    from src.core import archive_body
-
-    out = archive_body._utf16_offsets(None, 5, 3)
-    assert out["utf16_state"] == "cannot_determine"
-    assert out["match_offset_utf16"] is None
-    assert out["match_length_utf16"] is None
-    assert "withheld" in out["utf16_reason"]

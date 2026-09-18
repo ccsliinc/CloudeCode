@@ -120,8 +120,37 @@ def _home_dir_aliases(home: Optional[Path] = None) -> List[tuple]:
     return out
 
 
+def home_dir_aliases(home: Optional[Path] = None) -> List[tuple]:
+    """The ``$HOME`` symlink table, so a bulk caller can scan once.
+
+    Description: :func:`path_spellings` rebuilds this on every call,
+      which is right for the adopt and hook paths that ask about ONE
+      directory and must never serve a stale table. A caller resolving
+      MANY directories in one pass pays it per directory instead, and it
+      dominates: measured 2026-09-18, the owner's ``$HOME`` holds 474
+      entries and the scan costs 0.84 ms, so naming 79 projects spent
+      131 ms of a 139 ms index build re-listing the same directory 158
+      times. Hoisting it out and passing the result to
+      ``path_spellings(aliases=...)`` took that build to 7.4 ms.
+
+      SCAN IT ONCE PER PASS, NOT ONCE PER PROCESS. The table is a
+      filesystem reading and a user may add or remove a symlink at any
+      time; caching it for the life of the server would make a new alias
+      invisible until a restart. There is deliberately no memo here.
+    Inputs: home (Path | None) - override for tests; defaults to
+      ``Path.home()``.
+    Output: list[tuple[str, str]] - (link path, resolved target) pairs;
+      empty when ``$HOME`` cannot be listed, which costs recall only.
+    Example: home_dir_aliases()  # [('/Users/x/Development', '/Users/x/Library/.../Development')]
+    """
+    return _home_dir_aliases(home=home)
+
+
 def path_spellings(
-    working_dir: Optional[str], *, home: Optional[Path] = None
+    working_dir: Optional[str],
+    *,
+    home: Optional[Path] = None,
+    aliases: Optional[Sequence[tuple]] = None,
 ) -> List[str]:
     """Every literal path string that denotes this one directory.
 
@@ -138,7 +167,13 @@ def path_spellings(
       rather than an empty one; "one spelling" and "no spellings" are
       different facts and only the second means the input was unusable.
     Inputs: working_dir (str | None) - an absolute path, or None. home
-      (Path | None) - override for tests.
+      (Path | None) - override for tests. aliases (Sequence[tuple] |
+      None) - a table from :func:`home_dir_aliases`, supplied by a bulk
+      caller that has already scanned; when given, ``$HOME`` is NOT
+      listed again and ``home`` is unused. Passing an EMPTY list means
+      "no aliases", which is a real answer and is honoured; only None
+      triggers a scan, so a caller cannot accidentally get a rescan by
+      handing over a table that happened to be empty.
     Output: list[str] - one or more path strings; empty only when
       ``working_dir`` is falsy.
     Example: path_spellings('/Users/x/Library/Mobile Documents/.../Sync/Development/P')
@@ -151,7 +186,8 @@ def path_spellings(
     if resolved and resolved not in seen:
         seen.append(resolved)
     anchor = resolved or working_dir
-    for link, target in _home_dir_aliases(home=home):
+    table = _home_dir_aliases(home=home) if aliases is None else aliases
+    for link, target in table:
         if anchor == target:
             alias = link
         elif anchor.startswith(target.rstrip("/") + "/"):

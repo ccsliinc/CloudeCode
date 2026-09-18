@@ -1,25 +1,35 @@
 """
 Claude-config + project file tree / editor - server-side business logic.
 
-Three roots:
+Two roots:
 
     - "user"    ``~/.claude``               (CLAUDE_HOME, reused from
                                               ``slash_command_discovery`` -
                                               single source of truth for that
                                               path rather than a second
                                               hardcoded ``Path.home()``)
-    - "project" ``<working_dir>/.claude``    (the active session's config,
-                                              same allow-list model as "user")
     - "workdir" ``<working_dir>``            (the active session's WORKING
                                               DIRECTORY itself - general
                                               project file browsing, added
                                               2026-08. No allow-list: any
-                                              non-hidden entry is browsable.)
+                                              non-hidden entry is browsable.
+                                              The project's own
+                                              ``<working_dir>/.claude`` is
+                                              reachable as an ordinary
+                                              subdirectory of this root -
+                                              it is not hidden and carries
+                                              no allow-list of its own -
+                                              rather than as a separate
+                                              root; a dedicated "project"
+                                              root existed until
+                                              2026-09-13 and was removed
+                                              because it duplicated exactly
+                                              that subdirectory.)
 
-``project`` and ``workdir`` are both derived from the same client-supplied
-``project_path`` (the session's working directory) - there is no server-side
-"current project" state; the caller must have gotten this path from a real
-session, never trust it as arbitrary free text.
+``workdir`` is derived from the client-supplied ``project_path`` (the
+session's working directory) - there is no server-side "current project"
+state; the caller must have gotten this path from a real session, never
+trust it as arbitrary free text.
 
 ALLOWED_TOP_LEVEL_FILES / ALLOWED_TOP_LEVEL_DIRS / HIDE_NAMES /
 HIDE_PREFIXES / SENSITIVE_NAMES / SENSITIVE_PREFIXES / SENSITIVE_SUFFIXES
@@ -31,10 +41,10 @@ Security posture (the client is assumed hostile, per the API layer):
     - every relative path is resolved with ``Path.resolve()`` and checked
       for containment inside the resolved root before any filesystem call
       touches it (blocks ``../`` traversal AND symlink escapes, since
-      resolve() follows symlinks). This applies identically to all three
+      resolve() follows symlinks). This applies identically to both
       roots, including "workdir" - dropping the allow-list for general
       project browsing does NOT relax the containment check.
-    - "user" and "project" additionally enforce an allow-list of top-level
+    - "user" additionally enforces an allow-list of top-level
       names (this app's own config surface, not a general browser).
       "workdir" has no allow-list - it is a real project directory - but
       the hide-list (HIDE_NAMES / HIDE_PREFIXES) still applies, and applies
@@ -174,23 +184,18 @@ def _is_hidden(name: str) -> bool:
 
 def resolve_roots(project_path: Optional[str]) -> dict:
     """
-    Description: resolve the "user" root always, and the "project" /
-      "workdir" roots only when a working project_path is given.
-      "project" additionally requires that ``.claude`` exist under it;
-      "workdir" only requires the working directory itself to exist (a
-      session always has one).
+    Description: resolve the "user" root always, and the "workdir" root
+      only when a working project_path is given and that directory
+      itself exists (a session always has one).
     Inputs: project_path (str|None) - absolute path to a project's
       working directory, as tracked by the session (not client-supplied
       free text used directly - callers must have gotten this from a
       real session, never trust it as arbitrary).
-    Output: dict[str, Path] - keyed "user" (always present), "project"
-      and/or "workdir" (present only when applicable).
+    Output: dict[str, Path] - keyed "user" (always present) and
+      "workdir" (present only when applicable).
     """
     roots = {"user": CLAUDE_HOME.resolve()}
     if project_path:
-        claude_candidate = Path(project_path) / ".claude"
-        if claude_candidate.is_dir():
-            roots["project"] = claude_candidate.resolve()
         workdir_candidate = Path(project_path)
         if workdir_candidate.is_dir():
             roots["workdir"] = workdir_candidate.resolve()
@@ -207,7 +212,7 @@ def resolve_safe_path(root_id: str, rel_path: str, project_path: Optional[str]) 
       for BLOCKLIST_ONLY_ROOTS ("workdir"); containment + hide-list are
       NOT skipped for any root.
     Inputs:
-      root_id (str) - "user", "project", or "workdir".
+      root_id (str) - "user" or "workdir".
       rel_path (str) - forward-slash relative path from the tree listing;
         may be "" for the root itself.
       project_path (str|None) - required when root_id != "user".
@@ -227,7 +232,7 @@ def resolve_safe_path(root_id: str, rel_path: str, project_path: Optional[str]) 
 
     raw = (rel_path or "").strip()
     # Reject an absolute path outright rather than silently normalizing it
-    # to relative - for an allow-listed root ("user"/"project") the
+    # to relative - for the allow-listed "user" root the
     # allow-list check below would catch most of these anyway, but
     # "workdir" has no allow-list, so this is the ONLY thing standing
     # between a client-sent "/etc/passwd" and it quietly being treated as
@@ -311,7 +316,7 @@ def _build_node(root: Path, path: Path, depth: int, max_depth: int, root_id: str
       surprise symlink loop) can't hang a request.
     Inputs: root (Path); path (Path); depth (int) - current recursion
       depth; max_depth (int) - hard cap; root_id (str) - "user",
-      "project", or "workdir"; controls whether the allow-list gate
+      or "workdir"; controls whether the allow-list gate
       applies at depth 0.
     Output: TreeNode|None - None if this path should not be shown at all.
     """
@@ -376,10 +381,10 @@ def list_subtree(
       cannot drift in ordering, filtering, flags or shape - there is only
       one code path producing any of them.
     Inputs:
-      root_id (str) - "user", "project", or "workdir".
+      root_id (str) - "user" or "workdir".
       rel_path (str) - directory to list, relative to the root, forward
         slash separated. "" (or ".") means the root itself.
-      project_path (str|None) - required for "project"/"workdir".
+      project_path (str|None) - required for "workdir".
       levels (int) - how many LEVELS of nodes to return. 1 returns the
         directory's own entries with no children; the default returns the
         same full depth ``list_tree`` always has.
@@ -484,13 +489,13 @@ def list_subtree(
 def list_tree(root_id: str, project_path: Optional[str], max_depth: int = TREE_MAX_DEPTH) -> list:
     """
     Description: build the full hide-list-filtered file tree for one
-      root ("user"/"project" are additionally allow-listed; "workdir" is
+      root ("user" is additionally allow-listed; "workdir" is
       not). A thin alias for ``list_subtree`` on the root itself, kept
       because it is the name every existing caller and test uses and
       because "the whole tree for this root" is worth saying directly.
     Inputs:
-      root_id (str) - "user", "project", or "workdir".
-      project_path (str|None) - required for "project"/"workdir".
+      root_id (str) - "user" or "workdir".
+      project_path (str|None) - required for "workdir".
       max_depth (int) - recursion cap as a DEPTH (a root's direct children
         are depth 0), so it permits ``max_depth + 1`` levels of nodes.
         Defaults to TREE_MAX_DEPTH.

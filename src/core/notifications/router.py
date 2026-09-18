@@ -2,8 +2,7 @@
 
 Design contract:
 - ``emit()`` is SYNCHRONOUS and non-blocking. It is called from the
-  WebSocket / PTY chunk handler (Item 7's IdleWatcher) and MUST NOT
-  await or stall - that would back up the terminal stream.
+  toast recorder on the request path and MUST NOT await or stall.
 - The worker task drains the queue async and hands each event to
   ``channel_dispatch.dispatch_channels``, which contacts ntfy, slack
   and pushover CONCURRENTLY under a per-channel bound. Send failures
@@ -51,7 +50,7 @@ logger = structlog.get_logger()
 
 # Queue cap - 100 is plenty for human-paced terminal events. Burst
 # pathology (a runaway stream of pattern matches) would drop oldest and
-# log; the next IdleWatcher refactor (Item 8) adds rate-limiting on top.
+# log; the rate limiter in ``rate_limit.py`` sits on top of that.
 _QUEUE_MAXSIZE = 100
 
 

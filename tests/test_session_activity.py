@@ -1,707 +1,246 @@
-"""Tests for src.core.session_activity — the hook-driven state machine.
+"""What survived ``src.core.session_activity`` when the hooks were deleted.
 
-Pure unit tests, no tmux / no SessionManager — mirrors the style of
-tests/test_session_status.py. Covers every state transition, the heartbeat
-timeout, out-of-order events, duplicate events, a missing Stop, and the
-hooks-absent tmux fallback. SessionManager-level wiring (persistence,
-mark_session_viewed, the hook endpoint) lives in
-tests/test_hook_driven_status.py.
+THIS FILE USED TO BE 57 TESTS OF A HOOK-DRIVEN STATE MACHINE: a sub-agent
+depth counter, a tool-use heartbeat, a turn-open boolean, a suppression
+latch, and the priority ladder that resolved them into a display state.
+All of it went on 2026-09-13. ``CLOUDECODE_SESSION_ID`` is a PANE-WIDE
+environment variable, so the parent agent and every background agent it
+spawned posted their hooks under one session id; measured over 50.8 hours
+of the live server log the counter reported 410 of 459 attributable
+turn-ends as finished while the transcript's own record said background
+agents were still pending. The INPUT was mislabeled at the source, so no
+ordering fix inside the machine could have moved the number.
 
-Run with:
-    python3 -m pytest tests/test_session_activity.py -v
+The same question is answered now by ``src.core.attention``, which reads
+what the harness already writes to disk. Its ladder is tested in
+``tests/test_attention_resolve.py`` and replayed against the real
+production window in ``tests/test_attention_replay.py``.
+
+THREE THINGS SURVIVED AND THESE ARE THEIR TESTS.
+
+  * ``map_tmux_fallback``, the graceful-degradation path for a session
+    with no evidence beyond what tmux can see. Its load-bearing case is
+    the one that looks wrong: a RUNNING pane answers ``unknown``, not
+    ``working``.
+  * ``WORKING_HEARTBEAT_TIMEOUT_SECONDS``, which three other modules
+    import so the durable row, the transcript read and the alert contract
+    all judge staleness by one window.
+  * The permission and notice CLAIM STORE, whose readers are the view
+    seam and the pane re-verify. It has no writer today - see the
+    module's own docstring - so these assert the clears against state
+    installed directly, which is what the readers will see once a passive
+    writer supplies one.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# ---- minimal env bootstrap so `src.config` import succeeds --------------
-os.environ.setdefault("DEFAULT_WORKING_DIR", tempfile.mkdtemp(prefix="cc_act_wd_"))
-os.environ.setdefault("LOG_DIRECTORY", tempfile.mkdtemp(prefix="cc_act_logs_"))
-os.environ.setdefault("TOTP_SECRET", "testsecretnotreal")
-os.environ.setdefault("JWT_SECRET", "testjwtnotreal")
+import pytest
 
-# ruff: noqa: E402
+from src.core.session_activity import (
+    WORKING_HEARTBEAT_TIMEOUT_SECONDS,
+    SessionActivitySignal,
+    SessionActivityTracker,
+    map_tmux_fallback,
+)
 from src.core.session_status import (
     ALL_ACTIVITY_STATUSES,
     STATUS_DEAD,
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
-    STATUS_NOTICE,
-    STATUS_QUESTION,
     STATUS_RUNNING,
     STATUS_UNKNOWN,
-    STATUS_WORKING,
-    STATUS_WORKING_SUBAGENT,
-)
-from src.core.session_activity import (
-    EVENT_NOTIFICATION,
-    EVENT_PERMISSION_REQUEST,
-    EVENT_POST_TOOL_USE,
-    EVENT_PRE_TOOL_USE,
-    EVENT_STOP,
-    EVENT_SUBAGENT_START,
-    EVENT_SUBAGENT_STOP,
-    EVENT_USER_PROMPT_SUBMIT,
-    WORKING_HEARTBEAT_TIMEOUT_SECONDS,
-    SessionActivityTracker,
-    map_tmux_fallback,
 )
 
-
-def _t() -> SessionActivityTracker:
-    return SessionActivityTracker()
+T0 = datetime(2026, 9, 8, 12, 0, 0)
 
 
-T0 = datetime(2026, 1, 1, 12, 0, 0)
+# ---- the tmux fallback ------------------------------------------------
 
 
-# ---- dead always wins ------------------------------------------------------
+def test_a_running_pane_is_unknown_and_never_working():
+    """THE LOAD-BEARING CASE, and it looks like a bug until you read why.
 
-
-def test_dead_beats_every_hook_signal():
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    assert t.resolve("s1", STATUS_DEAD, now=T0) == STATUS_DEAD
-
-
-# ---- hooks-absent fallback --------------------------------------------------
-
-
-def test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working():
-    """A non-shell foreground process is NOT evidence the agent is working.
-
-    This test used to assert STATUS_WORKING and that assertion was wrong.
-    tmux `running` means only "the pane's foreground command is not a bare
-    shell", which is equally true of an agent mid-tool-call and one parked
-    at an empty prompt - the exact distinction this module exists because
-    tmux cannot make. With no hook signal there is no measurement of
-    activity, and the third outcome is what that gets reported as.
+    This used to answer ``working`` and that was a claim tmux cannot
+    support. ``running`` means only "the pane's foreground command is not
+    a bare shell", which is equally true of an agent mid-tool-call and
+    one parked at an empty prompt - the exact distinction tmux cannot
+    make.
 
     Measured 2026-09-08: 15 of 19 live sessions report a claude VERSION
-    STRING as pane_current_command (the binary renames its process), so
-    this branch is the common one, not the exotic one it was assumed to
-    be, and every one of those sessions was reading a permanent, never-
-    expiring `working`.
+    STRING as ``pane_current_command`` (the binary renames its own
+    process), so this branch is the common one, not the exotic one it was
+    assumed to be, and every one of those sessions was reading a
+    permanent, never-expiring ``working``. The fallback carries no
+    timestamp, so nothing could ever expire the claim.
     """
-    t = _t()
-    assert t.hooks_seen("never_seen") is False
-    assert t.resolve("never_seen", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
+    assert map_tmux_fallback(STATUS_RUNNING) == STATUS_UNKNOWN
+    assert map_tmux_fallback(STATUS_RUNNING, unread=True) == STATUS_UNKNOWN
 
 
-def test_no_hook_ever_seen_falls_back_to_tmux_idle():
-    t = _t()
-    assert t.resolve("never_seen", STATUS_IDLE, now=T0) == STATUS_IDLE
+def test_a_dead_pane_reads_dead():
+    """tmux is the only thing that can report a death, so it is believed."""
+    assert map_tmux_fallback(STATUS_DEAD) == STATUS_DEAD
+    assert map_tmux_fallback(STATUS_DEAD, unread=True) == STATUS_DEAD
 
 
-def test_no_hook_ever_seen_but_unread_still_surfaces_finished_unread():
-    """A restarted server forgets ephemeral hook state but not the
-    persisted unread flag (owned by SessionManager, passed in here) - an
-    idle+unread session must still show finished_unread even with zero
-    hook signal."""
-    t = _t()
-    assert t.resolve("never_seen", STATUS_IDLE, unread=True, now=T0) == STATUS_FINISHED_UNREAD
+def test_an_idle_pane_splits_on_the_unread_flag():
+    """ONE DERIVATION, shared with every other source.
+
+    The read/unread half of this vocabulary is a projection of the flag,
+    never a value a source decides for itself.
+    """
+    assert map_tmux_fallback(STATUS_IDLE) == STATUS_IDLE
+    assert map_tmux_fallback(STATUS_IDLE, unread=True) == STATUS_FINISHED_UNREAD
 
 
-def test_no_hook_ever_seen_falls_back_to_unknown():
-    t = _t()
-    assert t.resolve("never_seen", STATUS_UNKNOWN, now=T0) == STATUS_UNKNOWN
+def test_an_unknown_pane_stays_unknown_even_when_unread():
+    """Not having measured a session is not a claim that it is resting."""
+    assert map_tmux_fallback(STATUS_UNKNOWN) == STATUS_UNKNOWN
+    assert map_tmux_fallback(STATUS_UNKNOWN, unread=True) == STATUS_UNKNOWN
 
 
-def test_map_tmux_fallback_never_returns_outside_declared_set():
+def test_the_fallback_never_answers_outside_the_declared_vocabulary():
+    """A state the vocabulary does not contain fails validation at the
+    API boundary, which is exactly where nobody is looking."""
     for raw in (STATUS_RUNNING, STATUS_IDLE, STATUS_DEAD, STATUS_UNKNOWN, "garbage"):
         for unread in (True, False):
             assert map_tmux_fallback(raw, unread=unread) in ALL_ACTIVITY_STATUSES
 
 
-# ---- question vs notice: the split, set + cleared ---------------------------
-#
-# Split 2026-09-08. `question` is a PermissionRequest and nothing else -
-# the agent is STOPPED until a human answers. `notice` is a Notification -
-# claude wants attention and is not blocked. The pair has to survive
-# duplicate, out-of-order and half-missing delivery, so every case below
-# is asserted against `resolve()` (the observable answer) rather than
-# against the private flags.
-
-
-def test_notification_opens_notice_not_question():
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
-
-
-def test_permission_request_opens_question():
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
-
-
-def test_notice_is_in_the_activity_vocabulary():
-    """A state the vocabulary does not contain would fail validation at
-    the API boundary, which is exactly where nobody is looking."""
-    assert STATUS_NOTICE in ALL_ACTIVITY_STATUSES
-    assert STATUS_NOTICE != STATUS_QUESTION
-
-
-def test_permission_outranks_a_notification_in_the_same_window():
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
-
-
-def test_permission_outranks_a_notification_arriving_after_it():
-    """OUT OF ORDER. Hooks carry no sequence number, so the Notification
-    that accompanies a permission prompt can land on either side of it.
-    Both orders must answer the same way, or the light would flip on
-    delivery jitter alone."""
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
-
-
-def test_duplicate_notification_is_idempotent():
-    t = _t()
-    for _ in range(3):
-        t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
-
-
-def test_duplicate_permission_request_is_idempotent():
-    t = _t()
-    for _ in range(3):
-        t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
-
-
-def test_a_notification_does_not_survive_the_permission_it_accompanied():
-    """MISSING HALF. PreToolUse clears BOTH flags, so answering the
-    permission does not leave the notification behind as a phantom
-    `notice` nobody can clear."""
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_user_prompt_submit_clears_a_notice():
-    """UserPromptSubmit resolves the open notification but carries no tool
-    heartbeat of its own - the state falls through to idle until the
-    agent's first PreToolUse actually starts a heartbeat."""
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-
-
-def test_user_prompt_submit_clears_an_open_permission_request():
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-
-
-def test_pre_tool_use_clears_question():
-    """THE USER ANSWERED YES. Claude Code doesn't always emit a distinct
-    'permission answered' event - tool activity resuming is treated as
-    implicit resolution."""
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_pre_tool_use_clears_a_notice():
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_a_duplicate_permission_request_after_pre_tool_use_reopens_it():
-    """DUPLICATE, LATE. A second PermissionRequest is a second decision,
-    not an echo to be ignored: re-blocking is the correct answer, and it
-    is what a genuinely re-prompting agent looks like. The point of the
-    idempotence rules is that the state converges, not that late events
-    are dropped."""
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_QUESTION
-
-
-def test_notice_outranks_a_live_heartbeat():
-    """A notification landing mid-tool-work is still about the user, and
-    the user outranks work that proceeds without them."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
-
-
-# ---- working vs working_subagent -------------------------------------------
-
-
-def test_pre_tool_use_alone_is_working():
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_subagent_start_is_working_subagent():
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING_SUBAGENT
-
-
-def test_subagent_stop_returns_to_plain_working():
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    # Depth back to 0. Still "working" rather than idle, and note WHICH
-    # event pays for that: the heartbeat the SubagentSTART stamped, which
-    # is still inside its window. The SubagentStop contributed nothing.
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_nested_subagents_depth_two():
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING_SUBAGENT
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    # one still open
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING_SUBAGENT
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-# ---- Stop: clears everything, feeds finished/idle --------------------------
-
-
-def test_stop_with_unread_true_is_finished_unread():
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
-
-
-def test_stop_with_unread_false_is_idle():
-    t = _t()
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-
-
-def test_stop_clears_an_open_notice():
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_IDLE
-
-
-def test_stop_clears_an_open_permission_request():
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_IDLE
-
-
-def test_stop_clears_both_flags_at_once():
-    """BOTH HALVES. A Stop after a session held both must not leave the
-    weaker one standing - that would paint a finished turn as `notice`
-    forever, since nothing else would ever clear it."""
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-
-
-def test_a_duplicate_stop_after_both_flags_is_a_no_op():
-    t = _t()
-    t.record_event("s1", EVENT_PERMISSION_REQUEST, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-
-
-def test_stop_clears_subagent_depth():
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
-    # not working_subagent - Stop reset depth to 0.
-
-
-# ---- heartbeat timeout -------------------------------------------------
-
-
-def test_heartbeat_fresh_within_window_is_working():
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    just_inside = T0 + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS)
-    assert t.resolve("s1", STATUS_RUNNING, now=just_inside) == STATUS_WORKING
-
-
-def test_heartbeat_stale_past_window_falls_through():
-    """A dropped Stop (process died mid-tool-call, no clean shutdown hook)
-    must not wedge the session in 'working' forever - past the timeout it
-    falls through to finished_unread/idle same as an explicit Stop would."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    just_outside = T0 + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 1)
-    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=just_outside) == STATUS_FINISHED_UNREAD
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=just_outside) == STATUS_IDLE
-
-
-def test_post_tool_use_refreshes_heartbeat():
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    later = T0 + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS - 5)
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=later)
-    # Would have expired relative to T0, but PostToolUse refreshed it.
-    check = later + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS - 5)
-    assert t.resolve("s1", STATUS_RUNNING, now=check) == STATUS_WORKING
-
-
-# ---- duplicate / out-of-order tolerance -------------------------------------
-
-
-def test_duplicate_stop_is_a_safe_noop():
-    t = _t()
-    t.record_event("s1", EVENT_STOP, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)  # duplicate delivery
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-
-
-def test_duplicate_notification_is_a_safe_noop():
-    t = _t()
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)  # duplicate
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
-
-
-def test_subagent_stop_before_any_start_floors_at_zero():
-    """Out-of-order delivery: a SubagentStop arrives before its Start (or
-    a duplicate Stop after a legitimate pair) must not go negative.
-
-    It also must not CLAIM anything. There is no unmatched SubagentStart,
-    so these two events closed nothing and are not evidence of work -
-    hence idle rather than working. Punchlist item 4."""
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_IDLE
-    # A legitimate Start after the stray Stops still registers correctly,
-    # which is what proves the depth never went negative.
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING_SUBAGENT
-
-
-def test_out_of_order_user_prompt_submit_then_notification():
-    """UserPromptSubmit landing BEFORE the Notification it's meant to
-    follow (network reordering) still converges to the correct final
-    state once both have been applied - last write wins."""
-    t = _t()
-    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-    t.record_event("s1", EVENT_NOTIFICATION, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_NOTICE
-
-
-# ---- punchlist 4: a closing event is not a heartbeat on its own ------------
-#
-# MEASURED on claude 2.1.265 by tests/test_led_real_hooks.py, twice: a
-# SubagentStop lands about 1.5s after Stop on a turn with no subagent in
-# it. Stamping it re-armed the working heartbeat for the full 120s on a
-# finished session, so finished_unread flashed for a second and a half
-# and idle was unreachable. These pin the fix from every direction the
-# hook stream can deliver it: duplicated, reversed, and interleaved.
-
-
-def test_a_trailing_subagent_stop_leaves_a_finished_turn_finished():
-    """THE DEFECT ITSELF. Stop, then the SubagentStop claude sends after
-    it, on a turn that never had a subagent. The session must stay
-    finished_unread rather than painting working for two minutes."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    trailing = T0 + timedelta(seconds=1.5)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=trailing)
-    assert (
-        t.resolve("s1", STATUS_RUNNING, unread=True, now=trailing)
-        == STATUS_FINISHED_UNREAD
+def test_an_unrecognised_tmux_status_is_unknown_and_does_not_raise():
+    """Forward-compat: a status this app has never heard of is a refusal."""
+    assert map_tmux_fallback("something_new") == STATUS_UNKNOWN
+
+
+# ---- the one window three modules share -------------------------------
+
+
+def test_the_heartbeat_window_is_the_one_every_importer_reads():
+    """ONE NUMBER, THREE IMPORTERS.
+
+    ``activity_persist`` judges the durable row by it,
+    ``session_transcript_status`` judges a transcript's own mtime by it,
+    and ``alert_state_contract`` documents it. A second copy anywhere
+    would let the live answer and the restored answer disagree about the
+    same session at the same instant.
+    """
+    from src.core.activity_persist import (
+        WORKING_HEARTBEAT_TIMEOUT_SECONDS as PERSIST,
+    )
+    from src.core.alert_state_contract import (
+        WORKING_HEARTBEAT_TIMEOUT_SECONDS as CONTRACT,
+    )
+    from src.core.session_transcript_status import (
+        WORKING_HEARTBEAT_TIMEOUT_SECONDS as TRANSCRIPT,
     )
 
-
-def test_a_trailing_subagent_stop_leaves_idle_reachable():
-    """The other half of the same defect: once the user has looked, the
-    session must be able to reach idle. It could not before - the re-armed
-    heartbeat outranks the idle branch for the whole 120s window."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    trailing = T0 + timedelta(seconds=1.5)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=trailing)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=trailing) == STATUS_IDLE
+    assert PERSIST is WORKING_HEARTBEAT_TIMEOUT_SECONDS
+    assert TRANSCRIPT is WORKING_HEARTBEAT_TIMEOUT_SECONDS
+    assert CONTRACT is WORKING_HEARTBEAT_TIMEOUT_SECONDS
 
 
-def test_a_subagent_stop_that_closes_a_real_subagent_still_decrements():
-    """THE NEGATIVE CONTROL, and it is the load-bearing one. A guard that
-    refused every SubagentStop OUTRIGHT - the decrement along with the
-    stamp - would pass every refusal test above and wedge the session in
-    working_subagent forever, with no event left that could ever lower
-    the depth. So the decrement is asserted on its own."""
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    later = T0 + timedelta(seconds=30)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=later)
-    # Depth 1 -> 0: the session leaves working_subagent for plain working,
-    # on the heartbeat the START stamped and which is still inside its
-    # window at ``later``.
-    assert t.resolve("s1", STATUS_RUNNING, now=later) == STATUS_WORKING
+def test_the_heartbeat_window_is_a_positive_number_of_seconds():
+    """A zero or negative window would expire every claim instantly."""
+    assert isinstance(WORKING_HEARTBEAT_TIMEOUT_SECONDS, int)
+    assert WORKING_HEARTBEAT_TIMEOUT_SECONDS > 0
 
 
-def test_a_subagent_stop_that_closes_a_real_subagent_does_not_stamp():
-    """THE TIGHTENING ITSELF, stated as a measurement rather than a
-    preference. A SubagentStop reports that work ENDED, so it never moves
-    ``last_tool_event_ts`` - not even the legitimate one that closes a
-    real subagent. The heartbeat therefore expires 120s after the
-    SubagentSTART, and the version that gated the stamp on
-    ``subagent_depth > 0`` fails this: it would still read working here."""
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    later = T0 + timedelta(seconds=30)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=later)
-    # A moment past the START's window but well inside a window the STOP
-    # would have opened, had it been allowed to stamp one.
-    check = T0 + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 1)
-    assert check < later + timedelta(seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=check) == STATUS_IDLE
+# ---- the claim store --------------------------------------------------
 
 
-def test_a_duplicated_subagent_pair_after_stop_cannot_ratchet_the_heartbeat():
-    """THE HOLE THE DEPTH GATE LEFT, and the reason the rule is now a flat
-    refusal rather than ``subagent_depth > 0``.
+def _with_claims(*, notice=False, permission=False, at=T0):
+    """A tracker holding one session's claims in the given state.
 
-    Hooks are duplicated. A duplicated SubagentSTART delivered after Stop
-    raises the depth off the floor all by itself, so the duplicated
-    SubagentSTOP behind it satisfied a ``depth > 0`` gate and stamped -
-    through the very guard meant to refuse it. Worse, it stamped at ITS
-    OWN arrival time, so every further duplicated pair pushed the expiry
-    out again: a ratchet with no ceiling, driven entirely by strays.
-
-    Under the flat refusal the ceiling is fixed by the START, and this is
-    what pins it. NOTE WHAT IS NOT CLAIMED: an OPENING event still stamps
-    unconditionally (there is nothing it could be late for), so the stray
-    START does buy one heartbeat window. That window is bounded and it is
-    keyed on the START; the point of this test is that no SubagentStop can
-    extend it."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    stray_start = T0 + timedelta(seconds=1.5)
-    stray_stop = T0 + timedelta(seconds=3.0)
-    t.record_event("s1", EVENT_SUBAGENT_START, now=stray_start)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray_stop)
-    # A second duplicated pair, later still - the ratchet's second click.
-    t.record_event("s1", EVENT_SUBAGENT_START, now=stray_start)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray_stop)
-    expiry = stray_start + timedelta(
-        seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS + 1
+    Description: the claims used to be opened by feeding the tracker a
+      hook event. That writer is deleted and the store is waiting on a
+      passive replacement, so the state is installed directly. What is
+      under test is unchanged: which claim each clear retires, and which
+      it must leave alone.
+    Inputs: notice / permission (bool); at (datetime).
+    Output: SessionActivityTracker holding session "s1".
+    """
+    tracker = SessionActivityTracker()
+    tracker._signals["s1"] = SessionActivitySignal(
+        permission_open=permission,
+        permission_opened_at=at if permission else None,
+        notice_open=notice,
     )
-    # Still inside the window a stamping SubagentStop would have opened.
-    assert expiry < stray_stop + timedelta(
-        seconds=WORKING_HEARTBEAT_TIMEOUT_SECONDS
+    return tracker
+
+
+def test_a_fresh_tracker_claims_nothing_for_anyone():
+    """An unknown session is "no claim", never a claim it cannot see."""
+    tracker = SessionActivityTracker()
+    assert tracker.permission_open_since("never-seen") is None
+    assert tracker.clear_notice("never-seen") is False
+    assert tracker.clear_permission("never-seen") is False
+
+
+def test_clear_notice_retires_a_notice_and_says_it_did():
+    """The return value is how a caller logs the difference."""
+    tracker = _with_claims(notice=True)
+    assert tracker.clear_notice("s1") is True
+    assert tracker._signals["s1"].notice_open is False
+    assert tracker.clear_notice("s1") is False
+
+
+def test_clear_permission_retires_the_flag_and_its_stamp_together():
+    """They are ONE FACT IN TWO FIELDS.
+
+    A stamp left behind after the flag cleared would date a claim that no
+    longer exists, and the pane re-verify keys its throttle on that stamp.
+    """
+    tracker = _with_claims(permission=True)
+    assert tracker.permission_open_since("s1") == T0
+
+    assert tracker.clear_permission("s1") is True
+
+    assert tracker._signals["s1"].permission_open is False
+    assert tracker._signals["s1"].permission_opened_at is None
+    assert tracker.permission_open_since("s1") is None
+
+
+@pytest.mark.parametrize(
+    "clear,survivor",
+    [("clear_notice", "permission_open"), ("clear_permission", "notice_open")],
+)
+def test_each_clear_moves_exactly_one_claim(clear, survivor):
+    """ONE METHOD, ONE FIELD. The negative control for both.
+
+    That a VIEW clears both is a fact about ``session_view_clears``,
+    which calls the two methods. It is not a reason for either method to
+    reach into the other's field: a caller that wants only one of them
+    must not have to want both.
+    """
+    tracker = _with_claims(notice=True, permission=True)
+
+    getattr(tracker, clear)("s1")
+
+    assert getattr(tracker._signals["s1"], survivor) is True
+
+
+def test_a_permission_open_with_no_stamp_reports_no_stamp():
+    """A CLAIM WITH NO STAMP IS NOT A DATED CLAIM.
+
+    ``session_permission_verify_ledger`` keys on the stamp, so answering
+    a fabricated one would give the throttle a key that moves.
+    """
+    tracker = SessionActivityTracker()
+    tracker._signals["s1"] = SessionActivitySignal(
+        permission_open=True, permission_opened_at=None
     )
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=expiry) == STATUS_IDLE
-    assert (
-        t.resolve("s1", STATUS_RUNNING, unread=True, now=expiry)
-        == STATUS_FINISHED_UNREAD
-    )
+    assert tracker.permission_open_since("s1") is None
 
 
-def test_the_measured_real_timeline_finishes_and_then_reaches_idle():
-    """THE SEQUENCE A REAL claude 2.1.265 ACTUALLY FIRED, in the order the
-    server received it (tests/test_led_real_hooks.py, 2026-09-08):
-    UserPromptSubmit, PreToolUse, PostToolUse, Stop, and then a
-    SubagentStop about 1.5s later on a turn with no subagent anywhere in
-    it. It must read finished_unread across that stray, and idle once the
-    user has looked - the state punchlist 4 made unreachable."""
-    t = _t()
-    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    stray = T0 + timedelta(seconds=1.5)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray)
-    assert (
-        t.resolve("s1", STATUS_RUNNING, unread=True, now=stray)
-        == STATUS_FINISHED_UNREAD
-    )
-    # The user opens the tab: unread clears, and the light must settle.
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=stray) == STATUS_IDLE
+def test_forget_drops_one_session_and_never_a_neighbour():
+    """Session ids are not reused, so what is forgotten is unreachable."""
+    tracker = _with_claims(notice=True)
+    tracker._signals["s2"] = SessionActivitySignal(notice_open=True)
 
+    tracker.forget("s1")
 
-def test_the_measured_real_timeline_duplicated_and_reordered_converges():
-    """The same timeline delivered the way the transport actually behaves:
-    every event twice, and the stray SubagentStop arriving BEFORE the Stop
-    it really followed. Idempotent last-write-wins means all three
-    orderings land on the same answer."""
-    t = _t()
-    stray = T0 + timedelta(seconds=1.5)
-    for _ in range(2):
-        t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-        t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-        t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)  # early stray
-        t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
-        t.record_event("s1", EVENT_STOP, now=T0)
-        t.record_event("s1", EVENT_SUBAGENT_STOP, now=stray)  # late stray
-    assert (
-        t.resolve("s1", STATUS_RUNNING, unread=True, now=stray)
-        == STATUS_FINISHED_UNREAD
-    )
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=stray) == STATUS_IDLE
-
-
-def test_subagent_start_then_stop_then_subagent_stop_does_not_re_arm():
-    """A real subagent, then the turn ends, then the trailing stray. Stop
-    has already floored the depth, so the stray closes nothing and the
-    floored decrement is a no-op that claims no work."""
-    t = _t()
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    trailing = T0 + timedelta(seconds=1.5)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=trailing)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=trailing) == STATUS_IDLE
-    # And a later legitimate Start still registers - the depth is 0, not -1.
-    t.record_event("s1", EVENT_SUBAGENT_START, now=trailing)
-    assert (
-        t.resolve("s1", STATUS_RUNNING, now=trailing) == STATUS_WORKING_SUBAGENT
-    )
-
-
-def test_duplicate_trailing_subagent_stops_are_a_safe_noop():
-    """Hooks are duplicated. Applying the refusal twice is the same
-    refusal - nothing to converge, because nothing moved."""
-    t = _t()
-    t.record_event("s1", EVENT_STOP, now=T0)
-    for _ in range(3):
-        t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
-
-
-def test_reversed_order_subagent_stop_then_stop_still_converges():
-    """Hooks are unordered. The stray arriving BEFORE the Stop it followed
-    converges on the same finished state: the SubagentStop closes nothing,
-    and the Stop clears everything regardless."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
-
-
-def test_a_new_turn_after_the_trailing_stray_paints_working_again():
-    """The refusal must not wedge the session. The next turn's opening
-    events re-open it and the light works normally."""
-    t = _t()
-    t.record_event("s1", EVENT_STOP, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=T0) == STATUS_IDLE
-    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-    t.record_event("s1", EVENT_SUBAGENT_START, now=T0)
-    t.record_event("s1", EVENT_SUBAGENT_STOP, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-# ---- punchlist 4, the same trap for a late tool result ---------------------
-
-
-def test_a_post_tool_use_after_a_stop_does_not_re_arm():
-    """Same shape as the SubagentStop stray: a tool result from a turn
-    that already ended is not evidence of work happening now."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    late = T0 + timedelta(seconds=2)
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=late)
-    assert t.resolve("s1", STATUS_RUNNING, unread=False, now=late) == STATUS_IDLE
-
-
-def test_a_post_tool_use_with_no_stop_ever_seen_still_stamps():
-    """THE NEGATIVE CONTROL. Never having seen a Stop is not evidence the
-    turn is over - a fresh session, or a server restarted mid-turn, has
-    no Stop on record and must still be allowed to paint working."""
-    t = _t()
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_a_post_tool_use_in_the_turn_after_a_stop_still_stamps():
-    """A Stop on record only refuses while the turn stays closed. The next
-    UserPromptSubmit re-opens it, and a tool result then counts again even
-    if its PreToolUse was dropped."""
-    t = _t()
-    t.record_event("s1", EVENT_STOP, now=T0)
-    t.record_event("s1", EVENT_USER_PROMPT_SUBMIT, now=T0)
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_WORKING
-
-
-def test_duplicate_late_post_tool_use_is_a_safe_noop():
-    """Applying the refused event twice changes nothing, twice."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_STOP, now=T0)
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
-    t.record_event("s1", EVENT_POST_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_RUNNING, unread=True, now=T0) == STATUS_FINISHED_UNREAD
-
-
-def test_missing_stop_does_not_wedge_forever_dead_still_overrides():
-    """Even with a live (unexpired) heartbeat, a tmux-observed death still
-    wins - hooks can never contradict the one signal that can see a
-    process actually die."""
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.resolve("s1", STATUS_DEAD, now=T0) == STATUS_DEAD
-
-
-# ---- forget() -----------------------------------------------------------
-
-
-def test_forget_resets_to_no_hook_seen():
-    t = _t()
-    t.record_event("s1", EVENT_PRE_TOOL_USE, now=T0)
-    assert t.hooks_seen("s1") is True
-    t.forget("s1")
-    assert t.hooks_seen("s1") is False
-    # Fallback path. `unknown`, not `working` - see
-    # test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working.
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
-
-
-def test_forget_unknown_session_is_a_safe_noop():
-    t = _t()
-    t.forget("never_existed")  # must not raise
-
-
-# ---- unknown/forward-compat event kinds -------------------------------
-
-
-def test_unrecognized_event_kind_is_ignored():
-    t = _t()
-    t.record_event("s1", "SomeFutureHookKind", now=T0)
-    assert t.hooks_seen("s1") is False
-    # Fallback, not crashed. `unknown` for the reason recorded in
-    # test_no_hook_ever_seen_and_a_running_pane_is_unknown_not_working.
-    assert t.resolve("s1", STATUS_RUNNING, now=T0) == STATUS_UNKNOWN
+    assert "s1" not in tracker._signals
+    assert tracker._signals["s2"].notice_open is True
+    tracker.forget("s1")  # idempotent

@@ -1,25 +1,39 @@
-"""Tests for ``src/core/archive_search.py`` - the budgeted scan loop.
+"""Tests for ``src/core/archive_search.py`` - outcomes, paging and literals.
 
-THE POINT OF THIS FILE is the pair of zero-hit answers. "I searched the
-whole scope and found nothing" and "I ran out of budget before I
-finished" are the same empty list to a client that reads only
-``result``, and they mean opposite things. Every assertion here is on the
-DISCRIMINATING field, never on the emptiness of the list, because an
-assertion that only checks ``result == []`` passes for both cases and
-therefore cannot detect the defect it exists to catch.
+THE POINT OF THIS FILE is still the pair of zero-hit answers, and the
+PAIR CHANGED when the matcher moved onto the FTS5 index over content
+blocks. It used to be "I searched the whole scope" against "I ran out of
+budget"; one index query covers every transcript in scope, so a budget
+can no longer bind and the second half is now "I could not search at
+all" - a missing or never-built index, which REFUSES rather than
+answering zero and deliberately does not fall back to the old scan.
+Both halves are still the same empty ``result`` to a client that reads
+only that field, and they still mean opposite things, so every assertion
+here is on a DISCRIMINATING field.
 
-The other three properties asserted:
+The file keeps its name because it still tests this module's outcomes,
+and one of those outcomes is that the budgets are now UNREACHABLE -
+``test_the_byte_and_transcript_budgets_can_no_longer_bind`` pins that as
+a regression guard, so a scan reintroduced here would be caught.
 
-  * a resume cursor reaches a hit the first request PROVABLY could not
-    see. The fixture puts that hit in a transcript the first request's
-    budget stopped short of, so the test would fail if resume silently
-    restarted at the beginning.
+The other properties asserted:
+
+  * a cursor reaches a hit the first page PROVABLY could not see, and
+    resumes rather than restarting. Driven by the page LIMIT now, which
+    is the live paging mechanism and always was.
   * ``%``, ``_`` and ``\\`` are literal. Each case includes a decoy row
-    that a naive ``LIKE '%' || q || '%'`` implementation WOULD return, so
-    the test fails on the wrong implementation rather than passing on
-    both.
+    a wildcard implementation WOULD return. The matcher is now an FTS5
+    phrase NARROWED by the same ``INSTR`` as before, so the literal
+    contract is unchanged and these still discriminate.
+  * a query with no alphanumeric character is a NAMED refusal, because
+    the tokenizer produces no term from it. The substring scan could
+    find such a string; that capability is gone and says so.
   * a secret-bearing hit is REPORTED with a withheld snippet, and the
     credential text appears nowhere in the serialized response.
+
+THE FIXTURE BODIES ARE REAL RECORDS. They used to be a bare
+``{"text": ...}`` object, which no real record looks like and which works
+only if the matcher greps raw ``body_json``. See ``_record``.
 
 Fixtures are temp databases built through the real migration, never the
 live corpus.
@@ -63,7 +77,9 @@ from src.core.archive_search import (
     SNIPPET_WITHHELD_SECRET,
     search_scoped,
 )
+from src.core.db import connect as db_connect
 from src.core.db_migration import ensure_db_migrated
+from src.core.message_block_store import store_blocks_for_body
 
 #: A fake credential. It is not a real secret and never was, but the test
 #: treats it as one so the "never appears in the response" assertion is
@@ -78,6 +94,25 @@ TRANSCRIPT_BYTES = 4096
 #: One literal backslash, named so the escaping in this file's own source
 #: cannot be mistaken for the escaping under test.
 BACKSLASH = chr(92)
+
+
+def _record(text: str) -> str:
+    """Wrap one line of message text in a REAL assistant record.
+
+    Description: these bodies used to be a bare ``{"text": ...}`` object,
+      which is not a shape any real record has. That worked only while
+      the matcher grepped the whole of ``body_json``. Search now matches
+      the extracted content BLOCKS, and a body with no ``message`` key
+      produces none - correctly - so the old fixture would make every
+      assertion here a test of an empty index rather than of the matcher.
+    Inputs: text (str) - the message text.
+    Output: str - the body JSON.
+    Example: _record("hi")
+    """
+    return json.dumps(
+        {"type": "assistant",
+         "message": {"role": "assistant",
+                     "content": [{"type": "text", "text": text}]}})
 
 
 def _insert(conn: sqlite3.Connection, project_id: int, transcripts) -> None:
@@ -115,19 +150,24 @@ def _insert(conn: sqlite3.Connection, project_id: int, transcripts) -> None:
         )
         for line_no, text, secrets in lines:
             body_id += 1
+            record = _record(text)
             conn.execute(
                 "INSERT INTO message_bodies (id, identity_key, message_uuid, "
                 "body_sha256, body_bytes_sha256, body_json, "
                 "secret_finding_count, first_seen_at) VALUES "
                 "(?, ?, ?, 'a', 'b', ?, ?, '2026-01-01T00:00:00.000000Z')",
-                (body_id, f"k{body_id}", f"u{body_id}", text, secrets),
+                (body_id, f"k{body_id}", f"u{body_id}", record, secrets),
             )
+            # The REAL extractor, so the blocks these tests search are the
+            # blocks a real install holds and the FTS triggers fire.
+            store_blocks_for_body(conn, body_id, record,
+                                  "2026-01-01T00:00:00.000000Z")
             conn.execute(
                 "INSERT INTO message_appearances (id, transcript_id, line_no, "
                 "line_status, body_id, line_sha256, line_byte_length, "
                 "fidelity_outcome) VALUES (?, ?, ?, 'ok', ?, 's', ?, "
                 "'fidelity_verified')",
-                (body_id, tid, line_no, body_id, len(text)),
+                (body_id, tid, line_no, body_id, len(record)),
             )
     conn.commit()
 
@@ -144,22 +184,22 @@ def corpus(tmp_path) -> Iterator[sqlite3.Connection]:
     """
     state = tmp_path / "state"
     ensure_db_migrated(state, 4, "0.8.2")
-    with closing(sqlite3.connect(state / "cloude.db")) as write_conn:
+    with closing(db_connect(state / "cloude.db")) as write_conn:
         _insert(write_conn, 1, [
             (30, "2026-08-30T00:00:00.000000Z", [
-                (0, '{"text":"nothing of interest here"}', 0),
-                (1, '{"text":"1000 items and a decoy"}', 0),
-                (2, '{"text":"axb decoy for underscore"}', 0),
+                (0, "nothing of interest here", 0),
+                (1, "1000 items and a decoy", 0),
+                (2, "axb decoy for underscore", 0),
             ]),
             (20, "2026-08-20T00:00:00.000000Z", [
-                (0, '{"text":"the restic beacon lives here"}', 0),
-                (1, '{"text":"discount 100% off today"}', 0),
-                (2, '{"text":"literal a_b token"}', 0),
-                (3, '{"text":"path C:' + BACKSLASH + 'pdata written"}', 0),
-                (4, '{"text":"restic near ' + FAKE_SECRET + ' end"}', 2),
+                (0, "the restic beacon lives here", 0),
+                (1, "discount 100% off today", 0),
+                (2, "literal a_b token", 0),
+                (3, "path C:" + BACKSLASH + "pdata written", 0),
+                (4, "restic near " + FAKE_SECRET + " end", 2),
             ]),
             (10, "2026-08-10T00:00:00.000000Z", [
-                (0, '{"text":"oldest transcript, quiet"}', 0),
+                (0, "oldest transcript, quiet", 0),
             ]),
         ])
         # Project 2 exists and holds nothing. An empty scope is an ``ok``
@@ -181,43 +221,98 @@ def _hit_lines(payload) -> List[Tuple[int, int]]:
 # --- the two zero-hit answers ----------------------------------------------
 
 
-def test_zero_hits_complete_and_zero_hits_budget_exhausted_differ(corpus):
-    """The whole reason this file exists: five independent discriminators.
 
-    Both requests return an empty ``result``. A client that branches on
-    the list alone cannot tell them apart, so every assertion below is on
-    a field that DIFFERS.
+def test_zero_hits_searched_and_zero_hits_unsearchable_differ(corpus,
+                                                              tmp_path):
+    """The whole reason this file exists, re-pointed at what replaced it.
+
+    Description: "I searched the whole scope and found nothing" and "I
+    could not search at all" are the same empty ``result`` to a client
+    that reads only that field, and they mean opposite things. THE PAIR
+    CHANGED with the matcher. It used to be complete-versus-budget
+    exhausted; the index covers every transcript in scope in one query,
+    so a budget can no longer bind (see the test below, which pins that)
+    and the second half of the pair is now a REFUSAL: an index that is
+    missing or has never been built answers cannot_determine and does NOT
+    fall back to the old scan, which would silently restore the
+    false-positive defect the index exists to remove.
+
+    Every assertion is on a field that DIFFERS, never on the emptiness of
+    the list.
     """
-    complete = search_scoped(corpus, "zzzznotpresent", "project", 1)
-    exhausted = search_scoped(
-        corpus, "zzzznotpresent", "project", 1, scan_budget=1
-    )
+    from src.core.db import connect as _connect
+    from src.core.message_block_search_index import reset_index
 
-    assert complete["result"] == [] and exhausted["result"] == []
+    searched = search_scoped(corpus, "zzzznotpresent", "project", 1)
 
-    assert complete["result_status"] == RESULT_OK
-    assert exhausted["result_status"] == RESULT_PARTIAL
+    # A second, identical archive whose index has been emptied. Same
+    # rows, same query, and the only difference is whether the index can
+    # answer - which is what makes this a controlled comparison rather
+    # than two unrelated payloads.
+    state = tmp_path / "unindexed"
+    ensure_db_migrated(state, 4, "0.8.2")
+    with closing(db_connect(state / "cloude.db")) as write_conn:
+        _insert(write_conn, 1, [
+            (30, "2026-08-30T00:00:00.000000Z", [(0, "quiet", 0)]),
+        ])
+        with write_conn:
+            reset_index(write_conn)
+    with closing(open_read_only(state)) as unindexed_conn:
+        refused = search_scoped(unindexed_conn, "zzzznotpresent", "project", 1)
 
-    assert complete["meta"]["scan"]["status"] == SCAN_COMPLETE
-    assert exhausted["meta"]["scan"]["status"] == SCAN_BUDGET_EXHAUSTED
+    assert searched["result"] == [] and refused["result"] is None
 
-    assert complete["meta"]["scan"]["transcripts_not_scanned"] == 0
-    assert exhausted["meta"]["scan"]["transcripts_not_scanned"] == 2
+    assert searched["result_status"] == RESULT_OK
+    assert refused["result_status"] == RESULT_CANNOT_DETERMINE
 
-    assert complete["unevaluated"] == []
-    assert len(exhausted["unevaluated"]) == 1
-    assert exhausted["unevaluated"][0]["subject"] == "project:1"
-    assert "were not scanned" in exhausted["unevaluated"][0]["reason"]
+    assert searched["meta"]["index"]["state"] == "present"
+    assert refused["meta"]["index"]["state"] == "never_built"
 
-    assert complete["meta"]["scan"]["resume_cursor"] is None
-    assert exhausted["meta"]["scan"]["resume_cursor"]
+    assert searched["meta"]["scan"]["status"] == SCAN_COMPLETE
+    assert refused["meta"]["scan"]["status"] == "not_run"
+
+    assert searched["meta"]["scan"]["transcripts_scanned"] == 3
+    assert refused["meta"]["scan"]["transcripts_scanned"] is None
+
+    assert any(item["subject"] == "index" for item in refused["unevaluated"])
+    assert not any(item["subject"] == "index"
+                   for item in searched["unevaluated"])
 
     # has_more is False only when a list was actually read to its end.
-    assert complete["meta"]["paging"]["has_more"] is False
-    assert exhausted["meta"]["paging"]["has_more"] is None
+    assert searched["meta"]["paging"]["has_more"] is False
+    assert refused["meta"]["paging"]["has_more"] is None
 
-    # And the two payloads are not merely different in one place.
-    assert complete != exhausted
+
+def test_the_byte_and_transcript_budgets_can_no_longer_bind(corpus):
+    """budget_exhausted is UNREACHABLE on the index path, and that is pinned.
+
+    Description: the vocabulary word stays - a caller's branch on it is
+      still correct - but one index query covers the whole scope, so
+      nothing can stop short. This is a REGRESSION GUARD rather than a
+      description: if a future change puts a scan back on this path, the
+      smallest possible budgets will start producing partial answers
+      again and this fails.
+
+      ``bytes_scanned`` is 0 because no body_json was read, and
+      ``scan.method`` says ``fts_index`` so a reader knows why a real
+      number is zero rather than assuming a broken counter.
+    """
+    out = search_scoped(
+        corpus, "restic", "project", 1, scan_budget=1, scan_bytes=1)
+    assert out["result_status"] == RESULT_OK
+    assert out["meta"]["scan"]["status"] == SCAN_COMPLETE
+    assert out["meta"]["scan"]["status"] != SCAN_BUDGET_EXHAUSTED
+    assert out["result_status"] != RESULT_PARTIAL
+    assert out["meta"]["scan"]["resume_cursor"] is None
+    assert out["meta"]["scan"]["method"] == "fts_index"
+    assert out["meta"]["scan"]["bytes_scanned"] == 0
+    # The budgets are still ACCEPTED and still REPORTED, because removing
+    # a parameter is a shape change. They simply never bind.
+    assert out["meta"]["scan"]["budget_transcripts"] == 1
+    assert out["meta"]["scan"]["budget_bytes"] == 1
+    # And the hits are all there, which is what makes the above a
+    # statement about budgets rather than about a broken search.
+    assert len(out["result"]) == 2
 
 
 def test_scanned_plus_not_scanned_always_equals_the_scope(corpus):
@@ -243,33 +338,31 @@ def test_empty_project_is_ok_not_not_found(corpus):
 # --- resume ----------------------------------------------------------------
 
 
-def test_resume_cursor_reaches_a_hit_the_first_request_could_not(corpus):
-    """The hit is beyond the first budget by construction, not by luck."""
-    first = search_scoped(corpus, "restic", "project", 1, scan_budget=1)
-    # Positive control: prove the first request genuinely could not see
-    # it. Without this the test would pass against an implementation that
-    # simply re-ran the whole scan from the beginning.
-    assert first["result"] == []
-    assert first["meta"]["scan"]["status"] == SCAN_BUDGET_EXHAUSTED
-    assert first["meta"]["scan"]["transcripts_scanned"] == 1
 
-    cursor = first["meta"]["scan"]["resume_cursor"]
+def test_paging_reaches_a_hit_the_first_page_could_not(corpus):
+    """Resume by PAGE, which is the mechanism that survived.
+
+    Description: this test used to drive the resume cursor with a
+      one-transcript BUDGET. Budgets no longer bind, so the same property
+      - a cursor reaches a hit the first request provably could not see,
+      and resumes rather than restarting - is asserted through the page
+      limit, which is the live paging mechanism and always was.
+    """
+    first = search_scoped(corpus, "restic", "project", 1, limit=1)
+    assert len(first["result"]) == 1
+    assert first["meta"]["paging"]["has_more"] is True
+    seen = _hit_lines(first)
+
+    cursor = first["meta"]["paging"]["next_cursor"]
+    assert cursor
     second = search_scoped(
-        corpus, "restic", "project", 1, scan_budget=1, cursor=cursor
-    )
-    assert second["result_status"] == RESULT_PARTIAL
-    assert (20, 0) in _hit_lines(second)
-    # It resumed, it did not restart: transcript 30 is never revisited.
-    assert all(tid != 30 for tid, _ in _hit_lines(second))
-    assert second["meta"]["scan"]["transcripts_scanned"] == 2
-
-    third = search_scoped(
-        corpus, "restic", "project", 1, scan_budget=1,
-        cursor=second["meta"]["scan"]["resume_cursor"],
-    )
-    assert third["meta"]["scan"]["status"] == SCAN_COMPLETE
-    assert third["result_status"] == RESULT_OK
-    assert third["meta"]["scan"]["transcripts_not_scanned"] == 0
+        corpus, "restic", "project", 1, limit=1, cursor=cursor)
+    assert second["result_status"] == RESULT_OK
+    # It resumed, it did not restart.
+    assert _hit_lines(second) != seen
+    assert set(_hit_lines(second)).isdisjoint(seen)
+    assert second["meta"]["paging"]["has_more"] is False
+    assert second["meta"]["paging"]["next_cursor"] is None
 
 
 def test_paging_a_full_scan_visits_every_hit_exactly_once(corpus):
@@ -317,12 +410,22 @@ def test_like_metacharacters_match_literally(corpus, query, expect_line,
     assert len(hits) == 1
 
 
-def test_a_bare_percent_does_not_match_everything(corpus):
-    """The performance half of the same defect, asserted as a count."""
+
+def test_a_query_with_no_token_is_refused_not_answered_with_zero(corpus):
+    """``%%`` was a wildcard hazard; it is now an unanswerable query.
+
+    Description: the performance half of the metacharacter defect is gone
+      by construction - there is no LIKE any more - but a string with no
+      alphanumeric character produces no token, so the index genuinely
+      cannot be asked about it. The substring scan COULD find such a
+      string, so this is a real loss of capability and it is a NAMED
+      refusal rather than a result of zero hits.
+    """
     out = search_scoped(corpus, "%%", "project", 1)
-    assert out["result_status"] == RESULT_OK
-    assert out["result"] == []
-    assert out["meta"]["scan"]["status"] == SCAN_COMPLETE
+    assert out["result_status"] == RESULT_CANNOT_DETERMINE
+    assert out["result"] is None
+    assert out["unevaluated"][0]["subject"] == "q"
+    assert "no alphanumeric character" in out["unevaluated"][0]["reason"]
 
 
 # --- secrets ---------------------------------------------------------------
@@ -340,8 +443,10 @@ def test_secret_bearing_hit_is_reported_with_the_snippet_withheld(corpus):
     # The finding itself is intact: an operator can still locate it.
     assert hit["transcript_id"] == 20
     assert hit["line_no"] == 4
-    # 9 = len('{"text":"'), the literal prefix before the match.
-    assert hit["match_offset"] == 9
+    # The offset indexes the content BLOCK's text now, not body_json,
+    # and the hit says so. "restic near ..." starts with the match.
+    assert hit["match_offset_in"] == "block_text"
+    assert hit["match_offset"] == 0
     assert hit["match_length"] == len("restic")
     assert hit["body_href"].endswith(str(hit["body_id"]))
 
@@ -445,13 +550,26 @@ def test_bad_bounds_are_refused_rather_than_clamped(corpus):
     assert short["unevaluated"][0]["subject"] == "q"
 
 
-def test_the_first_transcript_is_always_scanned(corpus):
-    """A byte budget below one transcript must still make progress.
+def test_the_whole_scope_is_reported_as_scanned(corpus):
+    """One index query covers the scope, so scanned == in_scope.
 
-    Charging the budget BEFORE the scan would mint a resume cursor that
-    never advances - a loop that looks exactly like paging.
+    Description: this test used to assert that a byte budget below one
+      transcript still made progress - charging the budget BEFORE the
+      scan would have minted a resume cursor that never advanced, a loop
+      that looks exactly like paging. There is no per-transcript scan
+      left to charge, so the property it protected is now trivially true
+      and the measurement that replaced it is the invariant: every
+      transcript in scope WAS searched, by the index, in one query.
+
+      ``bytes_scanned`` is 0 and that is a measurement: no ``body_json``
+      was read at all.
     """
     out = search_scoped(corpus, "restic", "project", 1, scan_bytes=1)
-    assert out["meta"]["scan"]["transcripts_scanned"] == 1
-    assert out["meta"]["scan"]["bytes_scanned"] == TRANSCRIPT_BYTES
-    assert out["meta"]["scan"]["resume_cursor"]
+    scan = out["meta"]["scan"]
+    assert scan["transcripts_scanned"] == 3
+    assert scan["transcripts_scanned"] == out["meta"]["scope"][
+        "transcripts_in_scope"]
+    assert scan["transcripts_not_scanned"] == 0
+    assert scan["bytes_scanned"] == 0
+    assert scan["method"] == "fts_index"
+    assert scan["resume_cursor"] is None

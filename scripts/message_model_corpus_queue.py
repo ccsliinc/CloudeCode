@@ -38,6 +38,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.core.message_body_codec import (  # noqa: E402
+    register_body_functions,
+)
 from src.core.message_body_equivalence import (  # noqa: E402
     EQUIVALENCE_RULES,
     canonical_identity,
@@ -79,7 +82,8 @@ def conflict_split(conn: sqlite3.Connection) -> Dict[str, object]:
     conflict = 0
     for uuid in uuids:
         bodies = [json.loads(row[0]) for row in cursor.execute(
-            "SELECT body_json FROM message_bodies WHERE message_uuid = ?",
+            "SELECT cloude_body_text(body_json) FROM message_bodies "
+            "WHERE message_uuid = ?",
             (uuid,))]
         for path in difference_paths(bodies):
             keys[path.split("[")[0]] += 1
@@ -145,6 +149,13 @@ def report(db_path: str) -> int:
     Example: report(":memory:") -> 0
     """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # message_bodies.body_json may hold this module's compressed frame
+    # rather than TEXT. These scripts open sqlite3 directly instead of
+    # going through src.core.db.connect, so they have to register the
+    # codec functions themselves; without them a repointed query fails
+    # LOUDLY with "no such function", which is the intended failure
+    # mode - LENGTH over a blob would answer a compressed byte count.
+    register_body_functions(conn)
     conn.execute("PRAGMA cache_size=-2000000")
 
     print("=" * 68)

@@ -67,9 +67,10 @@ USAGE_FLAT_KEYS: tuple = (
 #: the guarded form returns the same 1.5 ms for a 501-body page.
 _USAGE_SQL = """
     SELECT id,
-           json_valid(body_json) AS parseable,
-           CASE WHEN json_valid(body_json)
-                THEN json_extract(body_json, '$.message.usage')
+           json_valid(cloude_body_text(body_json)) AS parseable,
+           CASE WHEN json_valid(cloude_body_text(body_json))
+                THEN json_extract(cloude_body_text(body_json),
+                                  '$.message.usage')
                 ELSE NULL END AS usage_json
       FROM message_bodies
      WHERE id IN ({placeholders})

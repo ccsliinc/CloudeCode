@@ -40,6 +40,9 @@ from typing import List, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.core.message_body_codec import (  # noqa: E402
+    register_body_functions,
+)
 from src.core.message_block_store import (  # noqa: E402
     BlockTypeInterner,
     could_not_evaluate_count,
@@ -59,7 +62,7 @@ COMMIT_EVERY_BODIES: int = 20_000
 REPORT_EVERY_BODIES: int = 100_000
 
 _REMAINING_SQL = (
-    "SELECT b.id, b.body_json FROM message_bodies b "
+    "SELECT b.id, cloude_body_text(b.body_json) FROM message_bodies b "
     "LEFT JOIN message_body_block_status s ON s.body_id = b.id "
     "WHERE s.body_id IS NULL ORDER BY b.id LIMIT ?"
 )
@@ -153,6 +156,13 @@ def main(argv: List[str]) -> int:
         return 2
 
     conn = sqlite3.connect(args.db)
+    # message_bodies.body_json may hold this module's compressed frame
+    # rather than TEXT. These scripts open sqlite3 directly instead of
+    # going through src.core.db.connect, so they have to register the
+    # codec functions themselves; without them a repointed query fails
+    # LOUDLY with "no such function", which is the intended failure
+    # mode - LENGTH over a blob would answer a compressed byte count.
+    register_body_functions(conn)
     conn.execute("PRAGMA foreign_keys=ON")
     ensure_block_tables(conn)
     conn.commit()

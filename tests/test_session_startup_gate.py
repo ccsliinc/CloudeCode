@@ -404,7 +404,7 @@ def test_a_hook_makes_the_gate_ready_through_the_ledger():
 def test_a_live_respawn_resets_the_instance():
     """A new pane pid under the same name and epoch is a new process.
 
-    This is the case SessionActivityTracker.hooks_seen cannot see:
+    This is the case a per-session "has it shown life" flag cannot see:
     respawn-pane -k keeps the session_id AND the tmux epoch and only
     moves the pane pid. Without the reset, a session restarted onto a
     wrapper that hits the trust dialog would read ready forever.
@@ -589,13 +589,20 @@ def test_manager_reports_awaiting_and_toasts_exactly_once(
     assert mgr._toast_inbox.get("ses1")[0].title == "needs a keypress"
 
 
-def test_manager_reports_ready_once_a_hook_lands(monkeypatch, tmp_path):
-    """A hook through the real endpoint path flips the gate."""
+def test_manager_reports_ready_once_a_sign_of_life_lands(monkeypatch, tmp_path):
+    """Rung 1: a recorded sign of life flips the gate, no capture needed.
+
+    The ledger used to be written by ``record_hook_event`` on every hook
+    kind. That writer went on 2026-09-13 and the ledger is now written by
+    ``AttentionSideEffects.on_observation`` when the registry shows a
+    record for this pane; the LEDGER and the rung are unchanged, so this
+    drives the same call the side-effect path makes.
+    """
     mgr = _manager(monkeypatch, tmp_path)
     _register(mgr, "ses1", "cloude_proj", tmp_path)
     _stub_tail(monkeypatch, TRUST_PROMPT_TAIL)
 
-    mgr.record_hook_event("ses1", "SessionStart", {})
+    mgr._startup_gate_ledger.record_hook("cloude_proj", epoch=None)
 
     row = {
         "created_at_epoch": int(time.time()) - 600,
@@ -640,7 +647,7 @@ def test_manager_refuses_to_guess_when_liveness_is_unknown(
     assert mgr._toast_inbox.get("ses1") == []
 
 
-def test_manager_never_captures_a_tail_for_a_session_with_a_hook(
+def test_manager_never_captures_a_tail_for_a_session_with_a_sign_of_life(
     monkeypatch, tmp_path
 ):
     """Steady state must not pay one capture-pane per row per poll."""
@@ -656,7 +663,7 @@ def test_manager_never_captures_a_tail_for_a_session_with_a_hook(
     monkeypatch.setattr(
         "src.core.session_manager.capture_pane_tail", _explode
     )
-    mgr.record_hook_event("ses1", "PreToolUse", {})
+    mgr._startup_gate_ledger.record_hook("cloude_proj", epoch=None)
 
     row = {
         "created_at_epoch": int(time.time()) - 600,
@@ -687,7 +694,7 @@ def test_manager_forgets_the_gate_when_the_session_is_wiped(
     """The ledger is keyed by tmux name and must not outlive the process."""
     mgr = _manager(monkeypatch, tmp_path)
     _register(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", "SessionStart", {})
+    mgr._startup_gate_ledger.record_hook("cloude_proj", epoch=None)
     assert mgr._startup_gate_ledger.first_hook_at("cloude_proj") is not None
 
     mgr._wipe_session_state("ses1")

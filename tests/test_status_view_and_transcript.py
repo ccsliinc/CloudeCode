@@ -37,14 +37,20 @@ from pathlib import Path
 
 import pytest
 
+from src.core.session_manager import SessionManager
+from src.models import Session, SessionStatus
 from src.core.session_activity import (
-    EVENT_NOTIFICATION,
-    EVENT_PERMISSION_REQUEST,
-    EVENT_STOP,
     WORKING_HEARTBEAT_TIMEOUT_SECONDS,
+    SessionActivitySignal,
     SessionActivityTracker,
 )
+from src.core.attention.registry_read import (
+    REG_BUSY,
+    REG_OK,
+    RegistryRecord,
+)
 from src.core.session_status import (
+    STATUS_DEAD,
     STATUS_FINISHED_UNREAD,
     STATUS_IDLE,
     STATUS_NOTICE,
@@ -64,8 +70,9 @@ from src.core.session_status_seed_records import (
 )
 from src.core.session_status_source import (
     ALL_STATUS_SOURCES,
-    STATUS_SOURCE_HOOK,
     STATUS_SOURCE_NONE,
+    STATUS_SOURCE_PANE,
+    STATUS_SOURCE_REGISTRY,
     STATUS_SOURCE_SEED_ROW,
     STATUS_SOURCE_TMUX,
     STATUS_SOURCE_TRANSCRIPT,
@@ -88,12 +95,110 @@ from src.core.session_transcript_status_read import (
     transcript_status_for,
 )
 
-# The hook-driven-status suite already owns a bare SessionManager harness
-# with a fake tmux backend. Reused rather than rebuilt so the two files
-# cannot drift on what a registered session looks like.
-from tests.test_hook_driven_status import _bare_manager, _register_session
+# The bare SessionManager harness. It used to be imported from the
+# hook-driven-status suite; that file went with the hooks on 2026-09-13,
+# so the two helpers it owned live here now, unchanged.
+
+
+class _StubSettings:
+    """Just enough of ``Settings`` for ``SessionManager.__init__``."""
+
+    def __init__(self, pin_path: Path, log_dir: Path, port: int = 5001):
+        self._pin_path = pin_path
+        self._log_dir = log_dir
+        self.port = port
+
+    def get_pinned_themes_path(self) -> Path:
+        return self._pin_path
+
+    def get_unread_state_path(self) -> Path:
+        return self._pin_path.parent / "unread_state.json"
+
+    @property
+    def log_directory(self) -> str:
+        return str(self._log_dir)
+
+    def get_session_metadata_path(self) -> Path:
+        return self._log_dir / "session_metadata.json"
+
+
+class _FakeBackend:
+    """Bare enough of a SessionBackend for tmux_session lookups."""
+
+    def __init__(self, tmux_session: str):
+        self.tmux_session = tmux_session
+
+    def is_alive(self) -> bool:
+        return True
+
+
+def _bare_manager(monkeypatch, tmp_path: Path, port: int = 5001) -> SessionManager:
+    """A SessionManager with stubbed settings and no real state paths.
+
+    Inputs: monkeypatch; tmp_path (Path); port (int).
+    Output: SessionManager.
+    """
+    stub = _StubSettings(
+        pin_path=tmp_path / "pinned_themes.json",
+        log_dir=tmp_path / "logs",
+        port=port,
+    )
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    monkeypatch.setattr("src.core.session_manager.settings", stub)
+    return SessionManager()
+
+
+def _register_session(
+    mgr: SessionManager, sid: str, tmux_name: str, working_dir: Path
+) -> Session:
+    """Put one live-looking session into the registry.
+
+    Inputs: mgr (SessionManager); sid (str); tmux_name (str);
+      working_dir (Path).
+    Output: Session.
+    """
+    sess = Session(
+        id=sid,
+        pty_pid=None,
+        working_dir=str(working_dir),
+        status=SessionStatus.RUNNING,
+        tmux_session=tmux_name,
+    )
+    mgr._registry.sessions[sid] = sess
+    mgr._registry.backends[sid] = _FakeBackend(tmux_name)
+    mgr._registry.subscribers.setdefault(sid, [])
+    return sess
+
 
 NOW = datetime(2026, 9, 9, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def _open_claims(
+    tracker: SessionActivityTracker,
+    session_id: str,
+    *,
+    notice: bool = False,
+    permission: bool = False,
+    at: datetime = NOW,
+) -> None:
+    """Put one session's attention claims into the open state.
+
+    Description: the claims used to be opened by feeding the tracker a
+      ``Notification`` or ``PermissionRequest`` hook event. That writer
+      was deleted with the hook subsystem on 2026-09-13 and the store is
+      waiting on a passive replacement, so these tests install the state
+      directly. WHAT IS UNDER TEST IS UNCHANGED: which claim each clear
+      retires, and which it must leave alone.
+    Inputs: tracker; session_id (str); notice / permission (bool);
+      at (datetime) - the stamp dating an opened permission.
+    Output: None.
+    Example: _open_claims(tracker, "s1", notice=True)
+    """
+    tracker._signals[session_id] = SessionActivitySignal(
+        permission_open=permission,
+        permission_opened_at=at if permission else None,
+        notice_open=notice,
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -104,24 +209,19 @@ NOW = datetime(2026, 9, 9, 14, 0, 0, tzinfo=timezone.utc)
 def test_clear_notice_drops_an_open_notification():
     """The defect itself: a notice survived being looked at."""
     tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_NOTIFICATION, now=NOW)
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) == STATUS_NOTICE
+    _open_claims(tracker, "s1", notice=True)
 
     assert tracker.clear_notice("s1") is True
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) != STATUS_NOTICE
+    assert tracker._signals["s1"].notice_open is False
 
 
 def test_clear_notice_is_idempotent():
     """Applied twice it reaches the same state, and says so the second time."""
     tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_NOTIFICATION, now=NOW)
+    _open_claims(tracker, "s1", notice=True)
     assert tracker.clear_notice("s1") is True
     assert tracker.clear_notice("s1") is False
     assert tracker.clear_notice("never-seen") is False
-    # With the notice gone and no heartbeat, a hook-fed session at a live
-    # pane reads ``idle``: the tracker has signal, and nothing in it is
-    # claiming anything.
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) == STATUS_IDLE
 
 
 def test_clear_notice_never_clears_a_permission():
@@ -136,12 +236,13 @@ def test_clear_notice_never_clears_a_permission():
     contract and the 2026-09-09 measurement that changed it.
     """
     tracker = SessionActivityTracker()
-    tracker.record_event("s1", EVENT_PERMISSION_REQUEST, now=NOW)
-    tracker.record_event("s1", EVENT_NOTIFICATION, now=NOW)
+    _open_claims(tracker, "s1", notice=True, permission=True)
 
     tracker.clear_notice("s1")
 
-    assert tracker.resolve("s1", STATUS_RUNNING, now=NOW) == STATUS_QUESTION
+    assert tracker._signals["s1"].notice_open is False
+    assert tracker._signals["s1"].permission_open is True
+    assert tracker.permission_open_since("s1") == NOW
 
 
 def test_a_websocket_bind_clears_the_notice_and_the_unread_flag(
@@ -150,14 +251,14 @@ def test_a_websocket_bind_clears_the_notice_and_the_unread_flag(
     """End to end through the manager: what a view actually clears."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_NOTIFICATION, {})
-    mgr.record_hook_event("ses1", EVENT_STOP, {})
+    _open_claims(mgr._activity_tracker, "ses1", notice=True)
+    mgr.set_manual_unread("cloude_proj", True)
     assert mgr._is_unread("cloude_proj") is True
 
     mgr.mark_session_viewed("ses1")
 
     assert mgr._is_unread("cloude_proj") is False
-    assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) != STATUS_NOTICE
+    assert mgr._activity_tracker._signals["ses1"].notice_open is False
 
 
 def test_a_websocket_bind_clears_a_permission_prompt(monkeypatch, tmp_path):
@@ -178,16 +279,13 @@ def test_a_websocket_bind_clears_a_permission_prompt(monkeypatch, tmp_path):
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_PERMISSION_REQUEST, {})
-    assert mgr._activity_tracker.resolve(
-        "ses1", STATUS_RUNNING
-    ) == STATUS_QUESTION
+    _open_claims(mgr._activity_tracker, "ses1", permission=True)
+    assert mgr._activity_tracker.permission_open_since("ses1") == NOW
 
     mgr.mark_session_viewed("ses1")
 
-    assert mgr._activity_tracker.resolve(
-        "ses1", STATUS_RUNNING
-    ) != STATUS_QUESTION
+    assert mgr._activity_tracker._signals["ses1"].permission_open is False
+    assert mgr._activity_tracker.permission_open_since("ses1") is None
 
 
 def test_the_manual_mark_read_control_clears_the_notice_too(
@@ -196,13 +294,13 @@ def test_the_manual_mark_read_control_clears_the_notice_too(
     """"mark read" is a view. The two paths route through one seam."""
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_NOTIFICATION, {})
+    _open_claims(mgr._activity_tracker, "ses1", notice=True)
     mgr.set_manual_unread("cloude_proj", True)
 
     mgr.set_manual_unread("cloude_proj", False)
 
     assert mgr._is_unread("cloude_proj") is False
-    assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) != STATUS_NOTICE
+    assert mgr._activity_tracker._signals["ses1"].notice_open is False
 
 
 def test_marking_a_session_unread_does_not_clear_its_notice(
@@ -215,11 +313,11 @@ def test_marking_a_session_unread_does_not_clear_its_notice(
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", EVENT_NOTIFICATION, {})
+    _open_claims(mgr._activity_tracker, "ses1", notice=True)
 
     mgr.set_manual_unread("cloude_proj", True)
 
-    assert mgr._activity_tracker.resolve("ses1", STATUS_RUNNING) == STATUS_NOTICE
+    assert mgr._activity_tracker._signals["ses1"].notice_open is True
 
 
 # --------------------------------------------------------------------- #
@@ -572,72 +670,156 @@ def test_no_uuid_is_a_named_refusal_not_a_crash():
 
 
 # --------------------------------------------------------------------- #
-# B4. The negative control that matters most: hooks still win.
+# B4. THE LISTING TAKES ITS STATUS FROM THE PASSIVE RESOLVER.
+#
+# The old pair of tests here asserted the opposite rule - that a hook,
+# once fired, owned a session's status and kept the transcript ladder
+# off it. That rule is gone with its evidence: ``CLOUDECODE_SESSION_ID``
+# is a PANE-WIDE environment variable, so the parent agent and every
+# background agent it launched posted hooks under one session id, and
+# the counter fed by them was mislabeled at source. ``/sessions/list``
+# now assembles the same four tiers the watcher does, hands them to the
+# same pure resolver, and paints what it answers.
+#
+# THE FOUR CASES BELOW ARE THE CONTRACT: a live record decides, no
+# record refuses, a measured death outranks both, and the token beside
+# the status names the tier that actually answered.
 # --------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
-async def test_a_hooked_session_is_never_touched_by_the_transcript_ladder(
-    monkeypatch, tmp_path
-):
-    """NEGATIVE CONTROL. Hooks are a hooked session's truth, full stop.
+REGISTRY_NOW = datetime(2026, 9, 13, 12, 0, 0, tzinfo=timezone.utc)
 
-    The seam is reached only while ``hooks_seen`` is False. A session
-    whose hooks have spoken must not have its status re-derived from a
-    file, and must not have an unread flag set by one either - the Stop
-    hook already owns that.
+
+def _registry_index(monkeypatch, records: dict) -> None:
+    """Point the listing's ONE registry scan at a fixture mapping.
+
+    Description: the scan is bound into ``ListingReaders`` at call time,
+      so replacing the module attribute replaces what a listing pass
+      reads without touching ``~/.claude/sessions``.
+    Inputs: monkeypatch. records (dict[str, RegistryRecord]).
+    Output: None.
+    Example: _registry_index(monkeypatch, {'cloude_proj': rec})
+    """
+    monkeypatch.setattr(
+        "src.core.attention.registry_read.read_registry_index",
+        lambda *a, **k: records,
+    )
+
+
+def _busy_record(tmux_name: str) -> "RegistryRecord":
+    """A registry record claude wrote about a session that is working."""
+    return RegistryRecord(
+        verdict=REG_OK,
+        status=REG_BUSY,
+        waiting_for=None,
+        pid=4321,
+        session_uuid=None,
+        tmux_name=tmux_name,
+        cwd=None,
+        status_updated_at=REGISTRY_NOW,
+        started_at=REGISTRY_NOW,
+        version=(2, 1, 266),
+        detail="fixture",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_live_registry_record_decides_the_row(monkeypatch, tmp_path):
+    """THE POSITIVE CASE. claude's own file says busy, so the row is busy.
+
+    And the provenance says ``registry``, not ``tmux``: the tmux tier
+    reported the same pane as a plain ``running`` shell, which is the
+    constant every pane under this app shows and is why it can never be
+    the thing that decides.
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-    mgr.record_hook_event("ses1", "PreToolUse", {})
-
-    calls: list = []
-
-    def _boom(*args, **kwargs):
-        calls.append(args)
-        raise AssertionError("the transcript ladder ran for a hooked session")
-
-    monkeypatch.setattr(
-        "src.core.session_status_seed_read.seeded_display", _boom
-    )
+    _registry_index(monkeypatch, {"cloude_proj": _busy_record("cloude_proj")})
     monkeypatch.setattr(mgr, "_build_tmux_status_map", lambda: {
-        "cloude_proj": {"status": "running"}
+        "cloude_proj": {"status": STATUS_RUNNING}
     })
 
     infos = await mgr.list_session_infos()
 
-    assert calls == []
     assert infos[0].activity_status == STATUS_WORKING
-    assert infos[0].status_source == STATUS_SOURCE_HOOK
+    assert infos[0].status_source == STATUS_SOURCE_REGISTRY
 
 
 @pytest.mark.asyncio
-async def test_a_bare_shell_stays_idle_and_is_never_re_derived(
+async def test_a_row_with_no_registry_record_paints_unknown_never_idle(
     monkeypatch, tmp_path
 ):
-    """NEGATIVE CONTROL. tmux answered ``idle``; nothing else is consulted.
+    """THE REFUSAL, AND IT IS THE WHOLE POINT OF THE FEATURE.
 
-    ``resolve_pane_status`` maps a known shell command straight to
-    ``idle``, and the seed seam fires only while the answer is still
-    ``unknown``, so a bare shell never reaches the transcript ladder.
+    Nothing readable said what this session is doing: no record, no
+    transcript. ``unknown`` is a real answer and it is NEVER spelled
+    ``idle`` - letting the tmux tier's answer through here is exactly
+    how a session nobody measured came to render a confident green.
     """
     mgr = _bare_manager(monkeypatch, tmp_path)
     _register_session(mgr, "ses1", "cloude_proj", tmp_path)
-
-    def _boom(*args, **kwargs):
-        raise AssertionError("the transcript ladder ran for a bare shell")
-
-    monkeypatch.setattr(
-        "src.core.session_status_seed_read.seeded_display", _boom
-    )
+    _registry_index(monkeypatch, {})
     monkeypatch.setattr(mgr, "_build_tmux_status_map", lambda: {
-        "cloude_proj": {"status": "idle"}
+        "cloude_proj": {"status": STATUS_IDLE}
     })
 
     infos = await mgr.list_session_infos()
 
-    assert infos[0].activity_status == STATUS_IDLE
-    assert infos[0].status_source == STATUS_SOURCE_TMUX
+    assert infos[0].activity_status == STATUS_UNKNOWN
+    assert infos[0].activity_status != STATUS_IDLE
+    assert infos[0].status_source == STATUS_SOURCE_REGISTRY
+
+
+@pytest.mark.asyncio
+async def test_a_measured_pane_death_outranks_a_live_registry_record(
+    monkeypatch, tmp_path
+):
+    """RUNG 0 STILL WINS. A record left behind by a crashed claude is not
+    evidence that its pane is alive, and tmux is the only tier that can
+    observe a death at all."""
+    mgr = _bare_manager(monkeypatch, tmp_path)
+    _register_session(mgr, "ses1", "cloude_proj", tmp_path)
+    _registry_index(monkeypatch, {"cloude_proj": _busy_record("cloude_proj")})
+    monkeypatch.setattr(mgr, "_build_tmux_status_map", lambda: {
+        "cloude_proj": {"status": STATUS_DEAD}
+    })
+
+    infos = await mgr.list_session_infos()
+
+    # A dead pane drops off the LIVE list, exactly as it did before: the
+    # row is retired rather than painted. What must not happen is a
+    # ``busy`` row surviving on the strength of a stale record.
+    assert [i.activity_status for i in infos] != [STATUS_WORKING]
+    assert all(i.activity_status != STATUS_WORKING for i in infos)
+
+
+def test_the_dead_pane_verdict_paints_dead_and_never_borrows_an_idle():
+    """THE SAME RULE AT THE PROJECTION, where a row that DOES survive to
+    be painted is decided. ``to_display`` lets exactly one tmux answer
+    through an ``unknown`` verdict, and it is ``dead``."""
+    from src.core.attention.display import to_display
+    from src.core.attention.evidence import (
+        REASON_PANE_DEAD,
+        REASON_REGISTRY_ABSENT,
+        STATE_UNKNOWN,
+        TIER_REGISTRY,
+        TIER_TMUX,
+        AttentionVerdict,
+    )
+    from src.core.session_status import STATUS_DEAD as DEAD
+
+    dead = AttentionVerdict(
+        state=STATE_UNKNOWN, reason=REASON_PANE_DEAD, tier=TIER_TMUX
+    )
+    assert to_display(dead, unread=False, tmux_status=STATUS_RUNNING) == DEAD
+
+    nothing = AttentionVerdict(
+        state=STATE_UNKNOWN, reason=REASON_REGISTRY_ABSENT, tier=TIER_REGISTRY
+    )
+    assert (
+        to_display(nothing, unread=False, tmux_status=STATUS_IDLE)
+        == STATUS_UNKNOWN
+    ), "an unmeasured session must never borrow tmux's idle"
 
 
 # --------------------------------------------------------------------- #
@@ -674,14 +856,62 @@ def test_a_resting_seed_carries_no_expiry_and_never_rots():
 # --------------------------------------------------------------------- #
 
 
-def test_every_source_is_one_of_the_five_named_values():
+def test_every_source_is_one_of_the_six_named_values():
+    """``hook`` IS GONE AND THE TWO PASSIVE TIERS ARE IN.
+
+    The listing no longer takes its status from a counter of hook
+    events, so nothing can write ``hook`` any more, and a token no writer
+    can emit is a value a reader will one day branch on and never reach.
+    ``registry`` and ``pane`` are the two tiers that replaced it.
+    """
     assert ALL_STATUS_SOURCES == {
-        STATUS_SOURCE_HOOK,
+        STATUS_SOURCE_REGISTRY,
+        STATUS_SOURCE_PANE,
         STATUS_SOURCE_TRANSCRIPT,
         STATUS_SOURCE_SEED_ROW,
         STATUS_SOURCE_TMUX,
         STATUS_SOURCE_NONE,
     }
+    assert "hook" not in ALL_STATUS_SOURCES
+
+
+def test_every_tier_names_a_source_and_an_unknown_tier_names_none():
+    """THE TOKEN IS THE TIER THAT DECIDED, and nothing else.
+
+    ``status_source`` is what a support question is answered from, so a
+    tier this mapping does not recognise reports ``none`` rather than
+    guessing: "we do not know where this came from" is a fact, and
+    naming the wrong source is not.
+    """
+    from src.core.attention.display import status_source_for
+    from src.core.attention.evidence import (
+        REASON_TURN_ENDED,
+        STATE_DONE_IDLE,
+        TIER_NONE,
+        TIER_PANE,
+        TIER_REGISTRY,
+        TIER_TMUX,
+        TIER_TRANSCRIPT,
+        AttentionVerdict,
+    )
+
+    def _source(tier: str) -> str:
+        return status_source_for(
+            AttentionVerdict(
+                state=STATE_DONE_IDLE, reason=REASON_TURN_ENDED, tier=tier
+            )
+        )
+
+    assert _source(TIER_REGISTRY) == STATUS_SOURCE_REGISTRY
+    assert _source(TIER_TRANSCRIPT) == STATUS_SOURCE_TRANSCRIPT
+    assert _source(TIER_PANE) == STATUS_SOURCE_PANE
+    assert _source(TIER_TMUX) == STATUS_SOURCE_TMUX
+    assert _source(TIER_NONE) == STATUS_SOURCE_NONE
+    assert _source("a tier nobody defined") == STATUS_SOURCE_NONE
+    # And every token it can produce is in the shared vocabulary, or the
+    # wrapper would report a value no reader has a phrase for.
+    for tier in (TIER_REGISTRY, TIER_TRANSCRIPT, TIER_PANE, TIER_TMUX, TIER_NONE):
+        assert _source(tier) in ALL_STATUS_SOURCES
 
 
 def test_a_seed_rung_maps_to_exactly_one_source():

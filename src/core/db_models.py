@@ -50,7 +50,7 @@ from typing import Tuple
 # src/core/db_migration.py's STEPS table in the same commit. The two are
 # cross-checked by a test, because a bumped constant with no step is a
 # database that can never reach the version the code demands.
-CURRENT_SCHEMA_VERSION: int = 26
+CURRENT_SCHEMA_VERSION: int = 29
 
 # meta keys this schema version defines. Listed so a reader does not have
 # to grep for string literals to learn what can be in the table.
@@ -297,11 +297,25 @@ SESSION_FAMILY_SOURCE_UNKNOWN = "unknown"
 # available - is the weakest of the three: an inference, strong enough to
 # act on only when the candidate set was decisive (see that module), but
 # never as strong as a direct read of either kind above.
+#
+# A FOURTH STRENGTH, AND IT SITS BESIDE THE HOOK RATHER THAN BELOW IT.
+# 'registry' is a uuid read out of Claude Code's own session registry
+# (~/.claude/sessions/<pid>.json, see
+# src/core/attention/registry_read.py), joined to a row by the tmux
+# session name the record itself carries. Like the hook it is Claude Code
+# reporting its own session id on a structured, versioned file rather
+# than anything this app inferred, so it is a FACT and not a correlation.
+# It is spelled apart from 'hook' only because the CHANNEL differs, and
+# the channel is the thing that matters when a row is being diagnosed:
+# the hook was a one-shot POST that could be lost forever, and this is a
+# file re-read on every watcher tick until it agrees.
 SESSION_CLAUDE_UUID_SOURCE_HOOK = "hook"
+SESSION_CLAUDE_UUID_SOURCE_REGISTRY = "registry"
 SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV = "correlated_argv"
 SESSION_CLAUDE_UUID_SOURCE_CORRELATED = "correlated"
 SESSION_CLAUDE_UUID_SOURCES: Tuple[str, ...] = (
     SESSION_CLAUDE_UUID_SOURCE_HOOK,
+    SESSION_CLAUDE_UUID_SOURCE_REGISTRY,
     SESSION_CLAUDE_UUID_SOURCE_CORRELATED_ARGV,
     SESSION_CLAUDE_UUID_SOURCE_CORRELATED,
 )
@@ -437,12 +451,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 
   claude_session_uuid   TEXT,
   -- HOW claude_session_uuid WAS LEARNED. 'hook' (Claude Code told us,
-  -- via SessionStart), 'correlated_argv' (read from the pane's own
-  -- process argv - --resume <uuid> - at adopt time, a direct read) or
-  -- 'correlated' (inferred from filesystem transcript timing at adopt
-  -- time when no argv was available - the weakest of the three). NULL
-  -- alongside a NULL uuid means none of the three has ever run for this
-  -- row. See db_models.py's SESSION_CLAUDE_UUID_SOURCE_* block.
+  -- via SessionStart), 'registry' (read out of Claude Code's own session
+  -- registry file and joined by tmux session name - also Claude Code
+  -- reporting its own id, over a channel that repeats instead of firing
+  -- once), 'correlated_argv' (read from the pane's own process argv -
+  -- --resume <uuid> - at adopt time, a direct read) or 'correlated'
+  -- (inferred from filesystem transcript timing at adopt time when no
+  -- argv was available - the weakest of the four). NULL alongside a NULL
+  -- uuid means none of the four has ever run for this row. See
+  -- db_models.py's SESSION_CLAUDE_UUID_SOURCE_* block.
   claude_session_uuid_source TEXT,
   parent_session_id     INTEGER REFERENCES sessions(id),
   fork_kind             TEXT,

@@ -16,10 +16,21 @@ background scheduler uses (``run_ingest_once``), so a manual run and a
 scheduled run can never diverge in behaviour. It exists because "run it
 now and tell me what happened" is the first thing anybody wants when a
 status reads stale, and the alternative is a second implementation.
+
+AND "ONE BEHAVIOUR" NOW COVERS THE JOIN TOO. The scheduler runs a
+budgeted projection slice after every ingest
+(:mod:`src.core.message_projection`), because the archive and the
+history browser are two stores and until that pass existed nothing
+joined them. A manual ingest that archived a file and left it invisible
+to the browser would be the same gap wearing a button, so this route
+runs the same slice, under the same budget, on the same thread offload,
+and reports it as its own block rather than folding it into the ingest's
+numbers.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -30,6 +41,12 @@ from src.api.auth import require_auth
 from src.config import settings
 from src.core import corpus_status
 from src.core.corpus_ingest_service import run_ingest_once
+from src.core.message_projection import run_projection_once
+from src.core.message_projection_report import (
+    projection_enabled,
+    resolve_max_archives,
+    resolve_max_seconds,
+)
 
 logger = structlog.get_logger()
 
@@ -72,8 +89,18 @@ async def get_corpus_status(request: Request) -> Dict[str, Any]:
         ``current``, ``stale``, ``never_ran`` or ``cannot_determine`` -
         never a bare boolean.
     """
-    snapshot = corpus_status.build_status(
-        Path(settings.get_state_dir()), scheduler=_scheduler(request),
+    # OFF THE EVENT LOOP, because the body is entirely synchronous
+    # sqlite: three connections and, since the projection block joined
+    # it, a COUNT over the current-archive set. That count is 10.32 ms
+    # on the owner's 22,828 rows WITH its covering index and 529.76 ms
+    # WITHOUT one (see message_projection_ledger.LEDGER_SCAN_INDEX_DDL),
+    # and an index is a thing a database can be missing. A status
+    # endpoint that stalls every terminal in the app while it reports on
+    # the archive is this project's oldest defect wearing a new hat.
+    snapshot = await asyncio.to_thread(
+        corpus_status.build_status,
+        Path(settings.get_state_dir()),
+        scheduler=_scheduler(request),
     )
     logger.info(
         "corpus_status_collected",
@@ -112,10 +139,11 @@ async def post_corpus_ingest(
         byte_verify_sample: newest-archive sample to byte-verify.
 
     Returns:
-        ``{"report": <run record>, "status": <run status>}``.
+        ``{"status": <ingest status>, "report": <ingest run record>,
+        "projection": <projection run record or None>}``. ``projection``
+        is None ONLY when the projection is switched off, which is a
+        different fact from a pass that ran and did nothing.
     """
-    import asyncio
-
     report = await asyncio.to_thread(
         run_ingest_once,
         Path(settings.get_state_dir()),
@@ -124,8 +152,31 @@ async def post_corpus_ingest(
     scheduler = _scheduler(request)
     if scheduler is not None:
         scheduler.last_report = report
+    # ONE BEHAVIOUR, NOT TWO, and that sentence now has to cover the join
+    # as well as the ingest. The scheduler runs a budgeted projection
+    # slice after every pass; a manual run that skipped it would archive
+    # a file and leave it invisible to the history browser, which is the
+    # exact gap this endpoint's caller is usually trying to close. Same
+    # thread offload, same budget, and its failures stay its own - a
+    # projection that could not run never costs the ingest its report.
+    projection = None
+    if projection_enabled():
+        slice_report = await asyncio.to_thread(
+            run_projection_once,
+            Path(settings.get_state_dir()),
+            max_archives=resolve_max_archives(),
+            max_seconds=resolve_max_seconds(),
+        )
+        projection = slice_report.to_record()
+        if scheduler is not None:
+            scheduler.last_projection = slice_report
     logger.info(
         "corpus_ingest_manual_run", status=report.status,
         ingested=report.ingested, discovered=report.discovered,
+        projection_status=None if projection is None else projection["status"],
     )
-    return {"status": report.status, "report": report.to_record()}
+    return {
+        "status": report.status,
+        "report": report.to_record(),
+        "projection": projection,
+    }

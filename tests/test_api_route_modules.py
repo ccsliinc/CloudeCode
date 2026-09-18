@@ -77,11 +77,16 @@ ARCHIVE_GATED: frozenset[str] = frozenset({
     "archive_search_routes.py",
 })
 
-#: How many routes the aggregated ``src.api.routes`` router carried when
-#: the split shipped, measured against the flat module it replaced. It is
+#: How many routes the aggregated ``src.api.routes`` router carries. It is
 #: a FLOOR rather than an equality so that adding a route does not fail
 #: this file, while losing the whole of one sibling's include does.
-AGGREGATED_ROUTE_FLOOR = 51
+#:
+#: The floor dropped from 51 to 50 on 2026-09-13 when the hook event
+#: route was deleted. The app no longer installs hooks into the claude
+#: settings file and no longer accepts hook posts; session state is now
+#: read from what the harness writes to disk. That route was the only one
+#: removed, so the floor moves by exactly one.
+AGGREGATED_ROUTE_FLOOR = 50
 
 
 def _api_modules() -> list[Path]:

@@ -52,6 +52,13 @@ from src.core.message_model_serialize import (
 )
 from tests.jsonl_shape_fixture_data import FIXTURES, split_line
 
+#: The app's OWN connection factory, not sqlite3.connect. It applies
+#: the pragmas every real connection carries AND registers the body
+#: codec's SQL functions, without which a repointed query fails with
+#: "no such function" - the intended LOUD failure mode, and one a
+#: test hand-rolling a connection would otherwise hit.
+from src.core.db import connect as db_connect  # noqa: E402
+
 GOLDEN_PATH: Path = (
     Path(__file__).resolve().parent / "fixtures" / "jsonl_export_golden.json"
 )
@@ -198,7 +205,7 @@ def test_end_to_end_ingest_and_export_reproduces_the_source_bytes():
       so nothing about the expectation comes from the code under test.
     """
     source = "\n".join(END_TO_END_LINES) + "\n"
-    connection = sqlite3.connect(":memory:")
+    connection = db_connect(":memory:")
     with connection:
         run_chain(connection, 0, CURRENT_SCHEMA_VERSION)
     with connection:

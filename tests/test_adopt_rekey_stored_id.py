@@ -12,13 +12,19 @@ stored id was ``ses_fb8dd410``.
 
 WHY THAT IS NOT COSMETIC. ``get_env_for_spawn`` injects
 ``CLOUDECODE_SESSION_ID`` into a pane's environment at ``new-session``
-time, so the agent inside presents its CREATE-TIME id on every hook POST
-for the rest of its life, carrying a token bound to that id. Registering
-the same live pane under an invented id leaves ``validate_hook_token``
-answering False for every event it sends: **94 hook POSTs answered 403 in
-four minutes**, none retryable from the agent's side. Note the status -
-403, not 410. Grepping for the stale-session code finds nothing and
-suggests the hook path is healthy.
+time, so the agent inside presents its CREATE-TIME id for the rest of its
+life, carrying a token bound to that id. Registering the same live pane
+under an invented id left every event it sent unauthenticated: **94 hook
+POSTs answered 403 in four minutes**, none retryable from the agent's
+side.
+
+THE HOOK POSTS ARE GONE AND THE RULE IS NOT. The endpoint that answered
+those 403s was deleted on 2026-09-13, and so was the token check. The
+identity half is untouched and still load bearing: the pane's id is
+fixed in at spawn, the adopt path must RESOLVE it rather than invent one,
+and ``hook_tokens`` remains the session-id to tmux-name map that
+``AttentionSideEffects`` resolves a pane through. So these assertions now
+read the store directly rather than through a route.
 
 THE HALF THAT WOULD HAVE SHIPPED LOOKING RIGHT. Re-keying alone is not
 enough. ``_mint_hook_token`` REPLACES any token held for an id, and the
@@ -155,11 +161,6 @@ async def _drop_backends(manager: SessionManager) -> None:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
-    for watcher in list(manager._sidecars.idle_watchers.values()):
-        try:
-            await watcher.stop()
-        except Exception:
-            pass
 
 
 # --------------------------------------------------------------------- #
@@ -206,41 +207,6 @@ def _seed_row(state_dir: Path, manager: SessionManager, *, name: str,
             working_dir=working_dir,
         )
         conn.commit()
-
-
-def _hook_app(manager: SessionManager) -> FastAPI:
-    """Mount the real hook route over a given manager.
-
-    Description: the assertion that matters is the ACTUAL status code
-      ``hook_event_routes.claude_event_hook`` returns, not a direct call to
-      ``validate_hook_token``. The 403 this file exists to prevent is
-      produced by the route, so the route is what gets exercised.
-    Inputs: manager (SessionManager).
-    Output: FastAPI app with the v1 router mounted.
-    """
-    app = FastAPI()
-    app.state.session_manager = manager
-    app.include_router(routes_mod.router, prefix="/api/v1")
-    app.dependency_overrides[require_auth] = lambda: True
-    return app
-
-
-def _post_hook(app: FastAPI, session_id: str, token: str):
-    """POST one activity-only hook event as the loopback client.
-
-    Inputs: app (FastAPI). session_id (str). token (str).
-    Output: httpx.Response.
-    """
-    client = TestClient(app, client=("127.0.0.1", 12345))
-    return client.post(
-        "/api/v1/hooks/claude-event",
-        headers={
-            "X-Cloudecode-Session": session_id,
-            "X-Cloudecode-Token": token,
-            "X-Cloudecode-Event": "PreToolUse",
-        },
-        json={},
-    )
 
 
 # --------------------------------------------------------------------- #
@@ -321,16 +287,10 @@ async def test_a_rekeyed_adoption_does_not_rotate_the_hook_token(live_state,
             "handed a replacement for"
         )
 
-        app = _hook_app(mgr)
-        accepted = _post_hook(app, STORED_ID, original_token)
-        assert accepted.status_code == 200, accepted.text
-        assert accepted.json()["ok"] is True
-
-        # NEGATIVE CONTROL. A route that answered 200 to anything would
-        # make the assertion above meaningless, so a wrong token on the
-        # same id must still be refused.
-        refused = _post_hook(app, STORED_ID, "tok_wrong")
-        assert refused.status_code == 403
+        # NEGATIVE CONTROL. A store that answered the same value for
+        # anything would make the assertion above meaningless.
+        assert mgr.hook_tokens.get("ses_not_a_session") is None
+        assert mgr.hook_tokens.name_for(STORED_ID) == name
     finally:
         await _drop_backends(mgr)
 

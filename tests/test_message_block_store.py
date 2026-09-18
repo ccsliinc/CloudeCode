@@ -30,6 +30,14 @@ from src.core.message_block_store import (
     unprocessed_body_count,
 )
 
+#: The app's OWN connection factory, not sqlite3.connect. It applies the
+#: pragmas every real connection carries AND registers the body codec's
+#: SQL functions, without which a repointed query fails with "no such
+#: function" - which is the intended LOUD failure mode, and which a test
+#: hand-rolling a connection would otherwise hit. It accepts ":memory:"
+#: because Path(":memory:") round-trips to the same string.
+from src.core.db import connect as db_connect  # noqa: E402
+
 #: A miniature corpus covering every branch of the extractor: an
 #: assistant message with two blocks, a plain-string user prompt, a
 #: progress record with no message key, and a body whose JSON is corrupt.
@@ -58,7 +66,15 @@ def conn() -> sqlite3.Connection:
       tables created but EMPTY.
     Example: conn.execute("SELECT COUNT(*) FROM message_bodies")
     """
-    connection = sqlite3.connect(":memory:")
+    connection = db_connect(":memory:")
+    # db_connect sets row_factory = sqlite3.Row, which is the app's
+    # own shape. The assertions in this file compare rows to plain
+    # TUPLES, which is what they were written against, so the factory
+    # is put back. What this fixture needs from db_connect is the
+    # PRAGMAS and the registered body-codec functions, not the row
+    # type; rewriting every assertion would be churn unrelated to
+    # this change.
+    connection.row_factory = None
     connection.execute(
         "CREATE TABLE message_bodies ("
         " id INTEGER PRIMARY KEY, body_json TEXT NOT NULL,"

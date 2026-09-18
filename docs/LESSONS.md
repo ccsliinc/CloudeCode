@@ -37,6 +37,16 @@ and found nothing" from "I could not look".
 - The `unknown` status itself: a real answer, never `idle`.
 - The uuid matcher: "a matcher that always finds something is worse than
   useless", with a mandatory negative control.
+- **A DDL rewriter that could not parse a statement guessed instead**
+  (2026-09-14, live `cloude.db`). Qualifying archive DDL onto an attached
+  schema matched `TABLE <bare name>`; sqlite stores fts5 shadow DDL
+  single-quoted, so it missed, and the fallback rewrote the first bare
+  occurrence of the name ANYWHERE in the statement. That produced
+  `CREATE TABLE 'archive.message_block_search_data'`, which sqlite accepted,
+  UNQUALIFIED, into main: four junk tables with literal dots in their names,
+  in the owner's live database. The new twist on this shape is that the
+  guess did not merely answer wrongly, it WROTE to the wrong file. A parser
+  that cannot parse must return None and let the caller refuse.
 - **GitHub's linkage index.** Measured by ccsliinc on an idle repo with zero
   contention: `gh issue view N --json closedByPullRequestsReferences` returns
   `[]` on the FIRST read every time, and the link appears about twelve
@@ -168,6 +178,70 @@ file and check `$?`, or capture the output into a variable and inspect it
 afterwards. There is no correct way to read a status through a pipe, only
 less-wrong ones.
 
+## A counter fed by a mislabeled key cannot be fixed by ordering
+
+**Five occurrences, all of them on the same counter.**
+
+The app counted how many sub-agents a session had open, so it could keep quiet
+while a session was waiting on its own work rather than on the user. The count
+was fed by Claude Code's lifecycle hooks, keyed on `CLOUDECODE_SESSION_ID`.
+**That variable is set on the tmux PANE, so every process in the pane posts
+under it: the parent agent and every background agent it launches.** The counter
+was therefore not counting what its name said. A sub-agent's own `PreToolUse`
+cleared the parent's latch and re-opened the parent's turn in one event.
+
+Five passes tried to repair it without touching the key: `e794aef` and
+`cafb50c` gated on the heartbeat, `0d1a12c` added the suppression gate,
+`75356eb` added a 180 second latch, and the idle-nag pass added a turn-closed
+flag. Measured over 50.8 hours after all five: **410 of 459 attributable toasts,
+89.3 percent, still fired while the session's own turn-end record said
+background agents were pending.** The latch suppressed 1 toast in 184 chances;
+153 of 167 armed latches died inside their own time to live at a median of 60.1
+seconds. The number did not move, because no consumer can undo a label applied
+before the event was emitted.
+
+**Do:** when a signal is wrong, ask what identifies each event before you ask
+what order they arrive in. If two producers cannot be told apart at the source,
+every downstream repair is a guess about which one you are holding, and the
+symptom will survive each one. The replacement reads the count out of the
+record claude writes at the end of its own turn
+(`system`/`turn_duration`.`pendingBackgroundAgentCount`), where the number is
+stated once by the only process that knows it.
+
+**And the corollary, because it is the half that keeps getting skipped:** an
+absent field is not a zero. That key is OMITTED when the count is zero, so
+`count or 0` and a missing key are the same expression and different facts.
+`src/core/attention/resolve.py` has no `or 0` in it for this reason, and an
+unreadable count answers `unknown`, which raises nothing.
+
+## A signal read before its source has settled is not a reading
+
+**Two occurrences, one of them for 50.8 measured hours.**
+
+The `Stop` hook is SYNCHRONOUS: claude blocks inside our handler until it
+returns. Measured on Claude Code 2.1.266 by timestamping both sides, the order
+at the end of a turn is: the hook fires, then **25 ms later** claude writes the
+turn-end record carrying the background-agent count, then **7 ms after that**
+claude updates its own status file to `idle`. So at the instant the hook ran,
+every piece of evidence about the turn that just ended was still unwritten. The
+"done" toast was raised from the one moment in the turn when nothing could be
+checked.
+
+The same shape, one layer down and in the other direction: at a BLOCKED moment
+the evidence LEADS rather than lags. An `AskUserQuestion` tool call was written
+at .284, claude's status went to `waiting` at .335, and the toast followed at
+.403. Reading either boundary once, at the wrong end of it, gives a confident
+answer about a state that has not happened yet or has already moved.
+
+**Do:** do not read a source at the instant it is being written. Either read on
+a cadence that is decoupled from the event (a tick, or a watch on the file), or
+require the reading to hold still before you act on it. Both are in the
+replacement: `SETTLE_SECONDS = 1.5` makes a pane-decided or end-of-file-decided
+verdict prove itself twice, and `DONE_QUIET_SECONDS = 3` makes a finished turn
+stay finished for three seconds of transcript silence before anything is raised
+on it. Neither number is a conservatism knob; each one is longer than the gap
+that was measured.
+
 ## Global tool state is shared state
 
 **One occurrence, both parties, and it was written INTO a protocol.**
@@ -209,3 +283,428 @@ Neither dominates. A mechanical check answers about paths and is silent on a
 design contradiction that shares no file; a human read catches the
 contradiction and misses the glob. Keep both, and know which question each
 one answers.
+
+## A correct check nobody can afford to leave on
+
+**One occurrence, and it was mine, so it is here before it becomes two.**
+
+`assert_no_shadowing` detects the one state where the archive split is
+silently wrong: a table present in BOTH databases, where sqlite resolves the
+unqualified name to main and every archive read comes from the stale copy. It
+found exactly that on live within 70 seconds of the migration, which is the
+whole argument for having it.
+
+It also ran on EVERY connection the app opens, and logged the full table list
+every time. Measured on live: **448 identical lines in 20 seconds, 73.6 MB per
+hour, 1.73 GB per day.** Memoised on the shadow set it measured 1.03 MB/hour.
+
+The check was right. Its cost was the defect, and the failure mode is social
+rather than technical: an alarm that fills a disk gets switched off, and then
+the condition it was built to catch ships unobserved. A check is not finished
+when it is correct; it is finished when someone can afford to leave it on.
+
+**Do:** memoise on the SIGNATURE of what was found, not on "have I logged".
+A change in the finding must report again. Never memoise the RETURN VALUE:
+callers that act on the condition still need the true current answer.
+
+## Green while measuring the wrong build
+
+**One occurrence, six rounds of wasted investigation, 2026-09-14.**
+
+A variant of "a test that cannot fail", and worth its own name because the
+check here was not weak, it was reading a DIFFERENT ARTEFACT than the one on
+disk.
+
+`_apply_v16_ddl` kept writing to the wrong database while its source plainly
+called the new code path. `inspect.getsource` showed the new call. Six rounds
+of tracing later, `__code__.co_names` gave it away: `('DDL_V16', 'execute')`,
+the OLD loop. Python had loaded a stale `.pyc`. An edit, a revert during a
+negative control, and a restore had left the cached bytecode with the SAME
+mtime AND the SAME size as the source, and mtime plus size is the whole cache
+key, so the cache looked valid. 404 stale `.pyc` files were sitting under
+`src/`.
+
+**The generalisable form: introspecting a module tells you what Python
+LOADED, not what the file says.** `inspect.getsource` reads the FILE and so
+agrees with your editor; the bytecode is what actually ran. When those two
+disagree there is no warning anywhere.
+
+**Detect it.** When a change cannot be observed where the source says it must
+be, compare the two directly before suspecting your logic:
+
+    python3 -c "import mod; print(mod.fn.__code__.co_names)"   # what RAN
+    sed -n '/def fn/,/^def /p' mod.py                          # what is WRITTEN
+
+`co_names` lists the globals a function actually references, so a call you
+added appears there or it did not compile. `co_firstlineno` against the real
+line number catches the same thing.
+
+**Clear it.** Delete the caches and re-run, do not reason about it:
+
+    python3 -c "import pathlib; [q.unlink() for q in pathlib.Path('src').rglob('__pycache__/*.pyc')]"
+
+or run the suite once with `PYTHONDONTWRITEBYTECODE=1`.
+
+**Most at risk: an edit-revert-restore cycle**, which is exactly what watching
+a negative control go red and then restoring the fix does. That is now a
+routine step here, so this will recur.
+
+**The deployed server was NOT affected, and that was checked rather than
+assumed:** its `.pyc` mtime (1789394626) is newer than its source
+(1789330671), which is the normal healthy case. Live was never running stale
+bytecode. Only the development worktree was.
+
+## A check that can only say "I do not know"
+
+**Three for three on the same run, which is not a sampling edge case.**
+
+`deploy-mini.sh`'s post-restart up-check proves process identity by resolving
+the new PID's working directory. On this machine it cannot: the server is
+spawned by the Electron supervisor and the cwd is not sampleable. Every one of
+three live deploys on 2026-09-14 returned `exit 3 CANNOT DETERMINE`, and each
+time the restart had in fact succeeded, verified by hand in seconds.
+
+A gate that never reaches a verdict is worse than no gate. It trains its
+reader to treat the refusal as noise, which is exactly the habit that makes a
+REAL `CANNOT DETERMINE` invisible. The discipline this project applies to
+measurement (a reading that did not happen is not a reading of nothing) cuts
+both ways: a check that can never take its reading should not be the check.
+
+**Done, 2026-09-14, in `scripts/deploy-restart-check.sh`:** leg D removed. The two legs that DID answer are sufficient and were
+what I verified by hand each time. The PID changed, and the new PID owns the
+listener on the port. The script already re-hashes the whole server dir after
+the restart, which proves the running tree is the deployed tree far more
+directly than a cwd ever could, so the identity leg is redundant with a check
+already present three lines below it.
+
+The removal is recorded in a comment at the deleted leg's own site, not just
+in the diff, so the next reader who wonders why identity is not checked there
+finds the answer in the file. Legs A, B, C, E and F are untouched. Verified on
+the next live deploy, which printed `== DEPLOYED ==` with health 200
+attributable to the new pid, instead of the refusal it had given three times
+running.
+
+## When a mechanism resolves names for you, test the things that opt out
+
+**Splitting the archive into `cloude-archive.db` and attaching it made every
+table reachable by its bare name, and that is precisely what hid the defect.**
+SQLite resolves an unqualified table name across attached databases, so after
+the split `SELECT ... FROM message_transcripts` kept working with no change at
+any of 68 call sites. The seam looked complete because every read of DATA went
+on answering.
+
+`sqlite_master` does not take part in that resolution. It is one table PER
+SCHEMA, so a bare `SELECT name FROM sqlite_master WHERE name = 'x'` means
+`main.sqlite_master` and can only ever describe `cloude.db`. Six presence
+checks were written that way, and after the split all six reported the entire
+message model ABSENT on a datastore that holds every row of it. The drain
+refused to start with `model_absent`, which is a truthful sentence about a
+reading that was taken from the wrong file.
+
+**The reason the tests missed it generalises, and it is the real lesson.**
+Every ATTACH test exercised table reads, which FOLLOW the resolution rule, and
+never a `sqlite_master` read, which does not. A test suite built around the
+mechanism's normal case cannot see the cases that opt out of the mechanism,
+because from inside the mechanism they do not look like a different thing.
+
+**The rule: when something resolves names on your behalf, go looking for what
+opts out of that resolution, and test those specifically.** The candidates are
+metadata surfaces, PRAGMAs, and anything that names a schema explicitly or
+silently defaults to one. Do not reason about which is which. Build a two
+database fixture where a table exists in the ATTACHED file ONLY, then run every
+mechanism you use against it and write down which ones answer.
+
+**Measured that way, on SQLite 3.53.4, the split is clean and not obvious:**
+
+Follow cross-schema resolution, so they answer about the attached file:
+bare table names in a query, `PRAGMA table_info`, `PRAGMA table_xinfo`,
+`PRAGMA foreign_key_list`, `PRAGMA index_list`, and the `pragma_table_info()`
+table-valued function.
+
+Opt OUT, so they answer about `main` alone and say nothing about the attached
+file: `sqlite_master` and `sqlite_schema`.
+
+Go FURTHER than either, folding every attached database into ONE unattributed
+answer: `PRAGMA integrity_check` and `PRAGMA foreign_key_check`. These are the
+ones to be careful with, and see the correction below for why.
+
+The `table_info` family landing on the safe side is the part worth having
+measured. Assuming it behaved like `sqlite_master` would have meant rewriting a
+dozen `PRAGMA table_info` guards in `db_steps.py` that were never broken.
+
+### The correction, which is the better half of this lesson
+
+**I reported `PRAGMA integrity_check` as main-only, and it is not. I built the
+fixture, ran it, and read a false negative as a measurement.**
+
+The fixture attached a second database and asked each mechanism about a table
+that lived only there. For `sqlite_master` that is a complete experiment. For
+`integrity_check` it is not, because the attached file was UNDAMAGED: a pragma
+that walks every attachment and a pragma that walks only `main` BOTH answer
+`ok` on a sound pair. The experiment could not distinguish the two hypotheses
+it was run to distinguish, and I reported the one I already believed.
+
+Re-measured with a sound `main` and a deliberately corrupted attachment,
+SQLite 3.53.4:
+
+* `PRAGMA integrity_check` (bare) answered `row 408 missing from index ix`
+* `PRAGMA main.integrity_check` answered `ok`
+* `PRAGMA side.integrity_check` answered `row 408 missing from index ix`
+
+So a bare `integrity_check` walks EVERY attached database and folds the result
+into one string. The prefix is what scopes it, and it is the bare form that is
+surprising.
+
+**A negative result only measures something if the positive case was reachable
+in the same fixture.** Before trusting an experiment that came back negative,
+ask what the fixture would have shown had the answer been the other way. If
+both hypotheses produce the same output, nothing was measured.
+
+**What this meant for the real system, which is not what I first reported.**
+The boot gate was NOT leaving the archive unexamined; `connect()` attaches the
+archive, so its bare pragma had been walking all 4.8 GB of it. The defect was
+different and still ours:
+
+* an archive fault was recorded as `state: failed`, naming the wrong file;
+* the boot path published an EMPTY `databases` list, so every later fold read
+  `cannot_determine` and no cached verdict could ever vouch for a split
+  install; and
+* the archive was walked TWICE per check, once by the bare pragma and again by
+  `check_every_database` attributing it.
+
+Fixed by scoping `db.integrity_check` to `PRAGMA main.integrity_check`, so the
+helper is the state database's own verdict and `check_every_database` is the
+one place that covers the pair and names each file. One file, one walk, one
+attribution. The boot ladder gained one refusal rung, `RUN_PAIR_NOT_COVERED`,
+which refuses to skip on a cached record that does not vouch for every database
+the install actually has.
+
+**The negative control was watched RED before it was trusted:** with the pre-fix
+ladder and the bare pragma restored, all four new tests fail; restored, all four
+pass. The positive control matters as much - a rung that refused every split
+install would satisfy the corrupt-archive test perfectly.
+
+**How to find the siblings: grep for the opt-out names, then judge each site by
+which file its subject now lives in.** `sqlite_master`, `sqlite_schema`,
+`integrity_check`, `foreign_key_check`, plus any string with an explicit
+`main.` prefix. A site is fine if its subject is an app-side table and wrong if
+its subject moved. That audit found the `integrity_check` mis-attribution
+above, which is fixed, and one more, which is recorded and deliberately not
+fixed:
+
+* `message_scheme_repair.stored_table_sql` reads `main.sqlite_master` for
+  `message_transcripts`, which is now archive-side, so it returns `''` and
+  `relax_scheme_check` takes its "the archive is switched off, nothing to do"
+  branch on an install where the table plainly exists. It fails CLOSED, writing
+  nothing, and it cannot bite this install because the step is already applied
+  at v26 - but a v25 install split before migrating would skip the CHECK
+  relaxation and report success.
+
+## An import edit that appears to apply, and leaves a name unbound
+
+**The edit reported success, the file parsed, the module imported, and the
+function raised `NameError` the first time anything called it.**
+
+Re-pointing the projection at a new connection helper meant adding two names
+to `message_projection.py`'s imports. The edit was applied by matching an
+anchor string, the anchor did not match the line actually in the file, and the
+replacement silently became a no-op while the code that USED those names landed
+perfectly. `python -c "import src.core.message_projection"` printed `import ok`,
+because a module-level import does not execute a function body.
+
+**A silent no-op edit is worse than a failed one.** A failed edit stops you. A
+no-op edit hands back a file that looks edited, compiles, imports, and passes
+every test that does not execute the one path it broke. `py_compile` cannot see
+it. A syntax check cannot see it. Only running that specific line can.
+
+`tests/test_no_unresolved_names.py` saw it immediately, by walking each module's
+AST for names that are USED but bound nowhere in the file, and it named the file
+and both line numbers. That file exists for exactly this and earned its place.
+
+**Two habits follow.** Any scripted edit must ASSERT its anchor matched rather
+than trusting `str.replace`, which returns the original string unchanged when it
+finds nothing - the failure mode is indistinguishable from success at the call
+site. And after an import change, run something that executes the path, not
+something that merely imports the module.
+
+**The general shape: a verification step that cannot fail is not a verification
+step.** "It imports" proves the module's top level is sound and nothing more,
+and reaching for it after editing a function body is measuring the wrong thing
+on purpose because it is the cheap thing to measure.
+
+## A budget checked between units is not a budget
+
+**`_project_pass` takes `max_seconds=30`. Measured, one call held the archive's
+write lock for 7.5 minutes.**
+
+The budget is honest about what it does - `if index and time.monotonic() >=
+deadline: break` - and it is checked BETWEEN files, never inside one. So the
+bound it actually provides is "thirty seconds, plus however long the next file
+takes", and the next file is unbounded. `project_one` opens `BEGIN IMMEDIATE`,
+reads the whole transcript, ingests every line, secret-scans every line, and
+commits. On a large transcript that is minutes, and for all of it the archive's
+write lock is held and nothing can interrupt it.
+
+**On this corpus that is the common case, not the tail.** The queue is ordered
+`ingested_at DESC` and the newest transcripts are much the largest: measured at
+784 archives drained, the head of the queue averaged 2.218 MB against 0.502 MB
+for the rest. So the file most likely to blow the budget is the one the pass
+reaches first.
+
+**How it presented.** A corpus drain, running in its own process, sat on
+`BEGIN IMMEDIATE` at `message_projection.py:216` with 0.0% CPU for seven and a
+half minutes while the server's own budgeted slice worked through one transcript
+inside `ingest_lines -> store_secret_findings -> scan_text`. The drain's liveness
+artifact went 435 seconds without an update, which from the outside is
+indistinguishable from a dead drain - and is exactly why that artifact has a
+staleness window at all.
+
+**The general shape: a time budget only bounds anything if the work can be
+interrupted at the granularity the budget is checked at.** Where the unit of
+work is unbounded, the budget bounds nothing and the number in it is
+decoration. Either make the unit small enough that the check is meaningful, or
+bound the unit itself, or say plainly that the pass runs to the end of the
+current item and size the item accordingly.
+
+**And do not hold a write lock across CPU-bound work.** The transaction here
+spans the parse, the fidelity round trip and the secret scan, none of which
+touch the database. Narrowing it to the writes would cap the lock-hold at the
+writes' own duration regardless of how long the scan takes.
+
+## Two writers on one queue is waste, and saying which kind matters
+
+**Both the corpus drain and the server's own 15-minute projection slice select
+from the same `select_pending` head and project the same archives.** Measured:
+server passes reporting `replaced` counts of 12, 32 and 18 while a drain was
+running, which are transcripts one projector redoing what the other had just
+finished, plus the 7.5 minute lock starvation above.
+
+**It is WASTE, NOT CORRUPTION, and the schema is why.**
+`message_transcripts.source_ref` is UNIQUE and `message_appearances.transcript_id`
+is `REFERENCES message_transcripts(id) ON DELETE CASCADE`, so `project_one`'s
+`DELETE FROM message_transcripts WHERE source_ref = ?` inside its own
+transaction removes the loser's rows before re-inserting. Two projectors
+serialise on the write lock, and the second one to commit leaves exactly one
+transcript with exactly one set of appearances. No row is double-counted.
+
+Say that explicitly when this is reported, because "two writers raced over the
+same rows" reads like a data-integrity incident and costs the next reader an
+hour of fear before they reach the schema.
+
+**The fix is sequencing, not locking.** `CLOUDE_MESSAGE_PROJECTION=0` switches
+the server's slice off and `projection_enabled` reads it per pass, describing
+itself as "the knob an operator wants when a backfill is running from a script".
+It has to be set BEFORE the backfill, because changing a running process's
+environment means restarting it, which is the one thing nobody wants to do to a
+drain already in flight. That sequencing now lives in
+`scripts/drain_preflight.py` as a gate that refuses to start, rather than in a
+runbook nobody reads at 3am.
+
+## `asyncio.to_thread` does not protect the event loop from CPU-bound Python
+
+**The GIL is what is contended, and a worker thread running Python holds it.**
+Moving work into a thread protects the loop from anything that RELEASES the GIL
+while it waits - sqlite executing a statement, a file read, a socket, a
+subprocess, zlib and hashlib on a decent-sized buffer. It protects the loop from
+nothing at all when the work is a Python loop or a regex over a large string,
+because the loop thread cannot run until the worker gives the GIL back.
+
+**Caught, with the stack saying so.** py-spy on the live server during a corpus
+drain showed the event-loop thread IDLE at `asyncio/runners.py:128` while a
+second thread was marked `active+gil`:
+
+```
+scan_text (message_model_secrets.py:465)
+store_secret_findings (message_model_store.py:140)
+ingest_lines (message_model_ingest.py:204)
+project_one (message_projection.py:226)
+run_projection_once (message_projection.py:299)
+run (concurrent/futures/thread.py:73)      <- asyncio.to_thread
+```
+
+Requests timed out at 4 seconds with the loop having nothing to do but no chance
+to do it. THAT `active+gil` MARKER IS THE WHOLE DIAGNOSIS: a loop thread blocked
+in a lock looks completely different (it is `active` and sitting in the blocking
+call), and the two need different fixes.
+
+**Measured cost of the offender:** `scan_text` runs at **3.51 MB/s** over 400
+real content blocks, 1,782,997 chars in 508.5 ms. A 29 MB transcript therefore
+holds the GIL for about **8.3 seconds**, and the projection path scans every
+line of every transcript.
+
+**The audit, and the answer is the boring one, which is why it had to be
+measured.** Every `asyncio.to_thread` / `run_in_executor` in `src/` was
+classified by what the work actually does:
+
+* MATERIAL, one site: the projection slice
+  (`corpus_ingest_task._project_slice` -> `run_projection_once`), for the reason
+  above.
+* NOT MATERIAL: `archive_snippet_gate` also calls `scan_text`, but on a
+  `SNIPPET_CONTEXT_CHARS = 60` window, roughly 120 characters, about 34
+  microseconds - and it is already inside `to_thread` on the search route.
+* NOT MATERIAL: everything else on the list is sqlite (`archive_routes`,
+  `archive_search_routes`, `db_integrity_task`, `archive_messages_routes`),
+  subprocess (`listing_gather`, `session_manager`), sockets (`local_servers`),
+  file I/O (`upload_sweeper`, `config_files_routes`) or compression
+  (`static_serving`). All of those release the GIL while they work - a
+  documented property of those C extensions, not something measured here.
+
+**So: one real instance, not a pattern.** That is a fine answer, and it is only
+worth anything because the alternative - "probably fine" - was available for
+free and would have read identically.
+
+**The rule to carry: before moving work to a thread and calling the loop safe,
+ask what the work DOES, not where it runs.** If it is Python computing, the
+thread bought concurrency with I/O and nothing else. The fixes that do work are
+a process pool, chunking with explicit yields, or pushing the hot loop into a C
+extension - and all three are real work, which is exactly why "just use
+to_thread" is so tempting.
+
+### What the budget defect actually costs, and why the obvious fix is not a small one
+
+**Measured on the largest real transcript in the corpus (244 MB, 17,486 lines):
+ONE call to `project_one` holds the archive's write lock for 516.4 SECONDS.**
+The slice budget is `max_seconds=30`. Nothing can interrupt it. The harness is
+`scripts/measure_projection_lock_hold.py`, which builds a throwaway database
+from the live archive's own bytes and times `BEGIN IMMEDIATE` to `COMMIT`.
+
+**Where that time goes, profiled inside the lock on a 116 MB transcript
+(47.0 s hold):**
+
+```
+tottime  cumtime   ncalls  function
+  40.33    40.35    13732  message_model_secrets.py:411 scan_text
+   2.54     2.54   124697  json encoder.iterencode
+   0.90     0.90    11842  zlib.compress
+   0.62     0.77   126795  sqlite3.Connection.execute
+```
+
+**`scan_text` is 86% of the lock-hold. SQLite is 1.6%.** The database is barely
+involved: the transaction is held open almost entirely so that a regex pass can
+finish. Hoisting the scan out would cut 516 s to roughly 72 s.
+
+**So the fix direction is right and the payoff is large - and it is still not a
+narrow change, for a reason worth writing down.** `store_secret_findings` needs
+two things the transaction produces: the `body_id` from the INSERT that created
+the body, and the canonical `body_json` read back through
+`cloude_body_text()`. Two ways out, and both cost more than they look:
+
+* PRE-COMPUTE the scan before the transaction, keyed by body content. Requires
+  the in-memory canonical text to be byte-identical to the database round trip
+  - which is precisely the fidelity property this project guards hardest, and
+  proving it is its own piece of work.
+* WRITE THE FINDINGS AFTER the commit, in a second short transaction. This
+  leaves a window where bodies exist with NO secret findings, and
+  `archive_snippet_gate` consults those findings to decide
+  `withheld_secret_bearing`. A reader in that window could be served a snippet
+  the gate would otherwise have withheld. The gate does run its own
+  `scan_text` over the 60-character window as a second layer, so the exposure
+  is bounded rather than total - but "bounded" is a claim that needs measuring,
+  not asserting, before anyone ships it.
+
+**Recorded rather than fixed, deliberately.** The scoping rule that produced
+this was: if the change turns out to need a schema change, a new table or a
+rework of the ingest path, stop and hand over a clean unfixed defect with its
+measurement rather than a half-done fix. This needs the third one plus a
+security argument, so it stops here with the RED number, the profile, and the
+harness to prove a future fix green.

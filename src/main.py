@@ -10,6 +10,7 @@ import asyncio
 from contextlib import asynccontextmanager, closing, suppress
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -28,6 +29,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from src.config import settings, StateDirUnavailableError
 from src.security_headers import SECURITY_HEADERS
+from src.api.request_log import RequestLogMiddleware
 from src.core.composition import build_services
 from src.core.session_manager import SessionManager
 from src.core.log_monitor import LogMonitor
@@ -43,6 +45,7 @@ from src.core.notifications import ntfy as ntfy_backend
 from src.core.notifications import pushover as pushover_backend
 from src.core.notifications import slack as slack_backend
 from src.core import claude_hooks
+from src.core.attention_wiring import build_attention_watcher
 from src.core.corpus_ingest_task import CorpusIngestScheduler
 from src.core.db_integrity_task import DatabaseIntegrityScheduler
 from src.core.message_archive_flag import (
@@ -55,6 +58,7 @@ from src.core.static_serving import (
     warm_static_gzip_cache,
     render_compressible_html_response,
 )
+from src.core import static_asset_keys
 from src.core.update_check import UpdateChecker
 from src.core.setup_state import (
     current_bind_report,
@@ -175,8 +179,8 @@ To fix:
 #
 # wrapper_class is a FILTERING bound logger gated on settings.log_level
 # (default "INFO"). Before this, BoundLogger applied no level filter at
-# all - every logger.debug() call (e.g. idle_watcher.poll_suppressed,
-# emitted roughly once per second per open session) was printed
+# all - every logger.debug() call (a per-session poll could emit one
+# roughly once a second) was printed
 # unconditionally, and under launchd that sink is launchd.log with no
 # rotation, so debug-level polling noise was the dominant contributor to
 # its growth. Filtering here keeps debug output available for local dev
@@ -271,7 +275,7 @@ async def lifespan(app: FastAPI):
     # (hardcoded cld/cldor -> user-editable wrappers). MUST run before the
     # first load_auth_config() call below so a freshly-seeded wrapper list
     # is visible immediately. Best-effort / fail-soft, same posture as
-    # claude_hooks.ensure_hook_settings() further down: any failure is
+    # claude_hooks.strip_managed_hooks() further down: any failure is
     # logged, never raised, and NEVER blocks server boot or touches
     # config.json beyond the migration's own backup + atomic write.
     from src.core.config_migration import ensure_config_migrated
@@ -323,8 +327,8 @@ async def lifespan(app: FastAPI):
     await session_manager.lifespan_startup()
     log_monitor = LogMonitor(session_manager)
 
-    # Item 6: notification router. Wired AFTER log_monitor (which is the
-    # signal source for IdleWatcher in Item 7).
+    # Item 6: notification router - the external push queue (ntfy,
+    # Slack, Pushover) that ``record_toast`` fans a raised toast out to.
     auth_cfg = settings.load_auth_config()
 
     # feat/sessions-table (S4) - the ONE first-run import: config
@@ -535,29 +539,33 @@ async def lifespan(app: FastAPI):
     notification_router.attach_policy_store(notification_policy_store)
     await notification_router.start()
 
-    # Item 7: inject the live router into SessionManager so IdleWatcher
-    # instances created via create_session have a valid emit target.
+    # Inject the live router into SessionManager so a recorded toast has
+    # a valid external-push target.
     session_manager.attach_notification_router(notification_router)
     # And the policy the toast path consults before raising anything.
     session_manager.attach_notification_policy_store(notification_policy_store)
 
-    # v0.7.0 Part 3 - idempotent-merge cloudecode's Claude Code lifecycle
-    # hooks into ~/.claude/settings.json. Best effort: a parse error /
-    # write error / disabled-by-config all return without raising, and a
-    # try/except guards against any genuinely unexpected throw so server
-    # boot is NEVER blocked by hook-settings glitches. The hook block
-    # only matters for sessions that spawn ``claude`` AFTER this point
-    # (env vars travel through tmux at spawn time), but the merge itself
-    # is idempotent and re-running is cheap.
+    # THIS USED TO INSTALL A HOOK BLOCK. IT NOW REMOVES ONE. CloudeCode
+    # learned a session's state by making Claude Code POST every lifecycle
+    # event to a loopback endpoint, and that was measured wrong nine times
+    # in ten because ``CLOUDECODE_SESSION_ID`` is pane-wide: every
+    # background agent posted under the parent's id. The endpoint is gone
+    # and the state now comes from what the harness writes to disk
+    # (src/core/attention/), so an install upgraded from any earlier build
+    # still has our block in ~/.claude/settings.json, aimed at nothing,
+    # costing a curl on every event. This takes it back out, ONCE, at
+    # boot. Best effort: a parse error or a write error returns without
+    # raising, and a try/except guards any genuinely unexpected throw so
+    # server boot is NEVER blocked by a settings-file glitch.
     try:
         # The destination is passed EXPLICITLY. It used to be an implicit
-        # fallback inside ensure_hook_settings(), which meant this line
-        # silently merged into the developer's real ~/.claude/settings.json
+        # fallback inside the old installer, which meant this line
+        # silently rewrote the developer's real ~/.claude/settings.json
         # during a plain pytest run. Naming the resolver here makes the
         # destination a decision this call site owns.
-        claude_hooks.ensure_hook_settings(claude_hooks.default_settings_path())
+        claude_hooks.strip_managed_hooks(claude_hooks.default_settings_path())
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("claude_hooks_ensure_failed", error=str(exc))
+        logger.warning("claude_hooks_strip_failed", error=str(exc))
 
     # Plan v3.2 - LocalServersTracker replaces the demolished tunnel
     # subsystem. Hooks into log_monitor pattern callbacks for detection
@@ -656,6 +664,33 @@ async def lifespan(app: FastAPI):
             ttl_seconds=cfg.ttl_seconds,
         )
 
+    # THE ONE TASK THAT RAISES NOTIFICATIONS, AND THE ONLY THING THAT
+    # DOES. The hook endpoint that used to announce a session's state is
+    # gone; the state now comes from what Claude Code writes to disk,
+    # read on a two second tick with an early wake on the sessions
+    # directory (src/core/attention/watcher.py). It is not an
+    # optimisation and it has no second path: without this task nothing
+    # raises a toast, sessions.last_work_at (the session and project sort
+    # key) is never written, the startup gate never reaches ready, and a
+    # /rename typed inside claude is never noticed.
+    #
+    # BUILT HERE, RUN AS A TASK, CANCELLED BELOW. Building it is the
+    # composition (src/core/attention_wiring.py) and creates nothing;
+    # create_task is what starts it. It is unconditional: there is no
+    # configuration that turns notifications off, only the per-session
+    # mute the watcher's own gate reads.
+    attention_watcher = build_attention_watcher(
+        session_manager,
+        app_state=app.state,
+        broadcast=connection_manager.broadcast_to_session,
+    )
+    app.state.attention_watcher = attention_watcher
+    attention_watcher_task = asyncio.create_task(attention_watcher.run())
+    logger.info(
+        "attention_watcher_scheduled",
+        tick_seconds=attention_watcher.tick_seconds,
+    )
+
     # Release self check. Runs on its own daemon thread, first check 30s
     # after boot, so nothing on the startup path or any page load ever waits
     # on a network call. It NEVER upgrades anything; it reports, and the
@@ -681,7 +716,7 @@ async def lifespan(app: FastAPI):
     # and returns; boot never waits on a pass, and a pass that fails
     # resolves to a named status on a report rather than to an
     # exception - the same fail-soft posture as ensure_db_migrated and
-    # claude_hooks.ensure_hook_settings above. Set CLOUDE_CORPUS_INGEST=0
+    # claude_hooks.strip_managed_hooks above. Set CLOUDE_CORPUS_INGEST=0
     # to switch it off; the status route then reports it as disabled
     # rather than implying the archive is current.
     #
@@ -805,6 +840,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("db_integrity_scheduler_stop_failed", error=str(exc))
 
+    # Stop the attention watcher. It reads sessions, the datastore and
+    # the unread store, so it goes down before any of them do. Cancelled
+    # AND AWAITED: the loop re-raises CancelledError out of its own
+    # finally, which is where it releases the kqueue and the directory
+    # descriptor the early wake holds, and a cancel that is not awaited
+    # can return before that runs.
+    attention_watcher_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await attention_watcher_task
+    logger.info("attention_watcher_stopped")
+
     # Stop the upload sweeper first - it touches no other components, so
     # cancelling it early gives its CancelledError handler a clean window
     # to log shutdown intent before the rest of teardown noise hits.
@@ -918,6 +964,14 @@ app.state.limiter = auth_limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+# Request timing, added LAST so it is the outermost user middleware (per the
+# Starlette LIFO note above CSP: the last `add_middleware` call wraps every
+# earlier one). Outermost here means it measures the whole stack - CORS,
+# CSP, rate limiting and the route itself - rather than a rebuilt inner
+# view of it. See src/api/request_log.py for why this is a pure ASGI
+# middleware rather than BaseHTTPMiddleware.
+app.add_middleware(RequestLogMiddleware)
+
 # Include routers
 app.include_router(auth_router, prefix="/api/v1")  # Auth routes (no auth required)
 app.include_router(api_router, prefix="/api/v1")   # API routes (auth required)
@@ -998,14 +1052,56 @@ class NoCacheStaticFiles(StaticFiles):
     compression changes the bytes on the wire, never how long they may be
     kept, which is the whole point of not touching this class's original
     job.
+
+    A CONTENT-KEYED REQUEST IS THE ONE EXCEPTION, AND IT IS NOT A
+    WEAKENING. The shell served from "/" stamps ``?v=<key>`` onto every
+    ``/static/`` URL it references, where the key is a short sha256 of
+    that file's own bytes (src/core/static_asset_keys.py). A request
+    carrying a key that STILL MATCHES what the file hashes to is answered
+    ``public, max-age=31536000, immutable``, because for that exact URL
+    the promise is true by construction: the bytes cannot change without
+    the URL changing. Everything else is unchanged - no key at all (a
+    runtime fetch, a lazily injected module-family script, a theme's CSS)
+    or a key that no longer matches (a bookmarked URL from an older
+    build) keeps ``no-cache, must-revalidate``. That asymmetry is the
+    whole safety argument: an immutable answer is given only where the
+    URL itself names the content, and a stale key REVALIDATES rather than
+    being told a year-long lie nobody can retract from the field. It also
+    means the ghost-bundle failure in the paragraph above cannot return -
+    a phone holding an old key asks, and is given the new bytes.
     """
 
     _NO_CACHE_SUFFIXES = (".js", ".html", ".json", ".css")
 
+    def _cache_control_for(self, path: str, scope: dict) -> str:
+        """Decide the Cache-Control for one static hit.
+
+        Args:
+            path: the request path relative to this mount.
+            scope: the ASGI scope, read for the query string.
+
+        Returns:
+            str: the rule lives in src/core/static_asset_keys.py so the
+            serving side and the URL-writing side cannot drift; this only
+            supplies the two inputs it needs.
+        """
+        query = scope.get("query_string", b"")
+        if b"v=" not in query:
+            return static_asset_keys.REVALIDATE
+        requested = parse_qs(query.decode("latin-1")).get("v", [""])[0]
+        candidate = static_asset_keys.url_to_path(
+            static_asset_keys.STATIC_PREFIX + path, Path(self.directory)
+        )
+        return static_asset_keys.cache_control_for(candidate, requested)
+
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
         if path.lower().endswith(self._NO_CACHE_SUFFIXES):
-            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            # Stamped on a 304 as well as a 200: a conditional request
+            # for a keyed URL must still be told the resource is
+            # immutable, or the browser keeps asking on every load and
+            # the whole point is lost.
+            response.headers["Cache-Control"] = self._cache_control_for(path, scope)
             response = await maybe_gzip_file_response(response, scope)
         return response
 
@@ -1037,6 +1133,15 @@ app.mount("/static", NoCacheStaticFiles(directory=str(client_dir)), name="static
 _warmed_count = warm_static_gzip_cache(client_dir, NoCacheStaticFiles._NO_CACHE_SUFFIXES)
 logger.info("static_gzip_cache_warmed", files=_warmed_count)
 
+# Same "pay it at import, never on a request" bargain as the line above,
+# for the same reason. Content-keying every asset the shell references
+# means hashing each one once; without this the FIRST page load after
+# every restart would pay that on the event loop. It is a pure read of
+# the client tree, so a failure here can only cost the optimisation and
+# never the boot - the same fail-soft posture as the gzip warm.
+_keyed_assets = static_asset_keys.warm(client_dir, client_dir / "index.html")
+logger.info("static_asset_keys_warmed", assets=_keyed_assets)
+
 
 # ---------------------------------------------------------------------------
 # App version injection (header chip)
@@ -1066,16 +1171,23 @@ def _render_index_html() -> str:
     place. The chip renders as `v<version>` (e.g. `v0.7.3`); if the version
     is unknown the placeholder is replaced with an empty string so no raw
     `{{VERSION}}` token ever reaches the browser.
+
+    IT ALSO CONTENT-KEYS EVERY STATIC URL IT REFERENCES, via
+    src/core/static_asset_keys.py, which owns the hashing, the memo and
+    the rewrite so this stays the one place the shell is produced and
+    gains no second responsibility. The file on disk is NOT modified;
+    this is a serve-time rewrite, which is why every node harness under
+    tests/ still loads the files exactly as before.
     """
     html = (client_dir / "index.html").read_text(encoding="utf-8")
     chip = f"v{APP_VERSION}" if APP_VERSION else ""
-    return html.replace(_VERSION_PLACEHOLDER, chip)
+    return static_asset_keys.render(html.replace(_VERSION_PLACEHOLDER, chip), client_dir)
 
 
 #: Cache key for the rendered shell's compression (issue #49). A fixed
-#: literal, not a file path: the compressed bytes are addressed by the
-#: TEMPLATE file's fingerprint (see render_compressible_html_response),
-#: not by their own content, because nothing else shares this cache key.
+#: literal, not a file path: the compressed bytes are addressed by a
+#: fingerprint of the RENDERED bytes (see below), not by their own
+#: content, because nothing else shares this cache key.
 _INDEX_HTML_GZIP_CACHE_KEY = "index.html:rendered"
 
 
@@ -1084,13 +1196,23 @@ def _render_index_html_response(request: Request) -> Response:
     accepts gzip - shared by root(), session_deep_link(), archive_root()
     and archive_deep_link() so the four routes cannot drift apart on
     either the version chip or the compression decision. See
-    src/core/static_serving.py::render_compressible_html_response for why
-    the index.html template's own mtime/size stand in for the rendered
-    output's freshness.
+    src/core/static_serving.py::render_compressible_html_response for the
+    compression rules.
+
+    THE FRESHNESS PAIR COMES FROM THE RENDERED BYTES, NOT FROM
+    index.html's stat, and that changed when the shell started embedding
+    a content key per asset. The render is no longer a function of the
+    template alone: edit any one of the ~200 files it references and the
+    rendered shell differs while the template's mtime and size do not
+    move at all. Keying the compression on the template would then serve
+    a gzip of the PREVIOUS shell, pointing every browser at keys that no
+    longer exist - a 404 storm produced by a cache that was measuring the
+    wrong thing.
     """
     return render_compressible_html_response(
         request, _render_index_html, client_dir / "index.html",
         _INDEX_HTML_GZIP_CACHE_KEY,
+        fingerprint=static_asset_keys.shell_fingerprint,
     )
 
 

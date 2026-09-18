@@ -15,7 +15,7 @@ re-binds a name without touching a secret and a copied name map would look
 correct on every token assertion.
 
 **THE SEPARATION OF POWERS IS THE SECURITY PROPERTY.** ``mint`` is the
-only writer of a secret, ``keep`` cannot reach one, ``recover`` accepts a
+only writer of a secret, ``keep`` cannot reach one, and the store
 superseded value once and never mints. The negative controls are the
 load-bearing half: a recovery that accepted broadly would pass every
 positive test perfectly and BE a credential bypass, and that is not a
@@ -44,11 +44,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # ruff: noqa: E402
-from src.core.hook_token_recovery import (
-    RECOVERY_ACCEPTED,
-    RECOVERY_NO_MATCH,
-    RECOVERY_UNAVAILABLE,
-)
 from src.core.session_manager import SessionManager
 from src.core.sessions.hook_token_authority import HookTokenAuthority
 
@@ -135,7 +130,7 @@ def test_a_mint_through_the_authority_is_visible_through_the_manager(manager):
     token = manager.hook_tokens.mint(SESSION, tmux_name=PANE)
     assert manager.hook_tokens.tokens[SESSION] == token
     assert manager.hook_tokens.get(SESSION) == token
-    assert manager.hook_tokens.validate(SESSION, token) is True
+    assert manager.hook_tokens.get(SESSION) == token
 
 
 def test_a_deletion_through_one_reference_is_visible_through_the_other(manager):
@@ -151,7 +146,7 @@ def test_a_deletion_through_one_reference_is_visible_through_the_other(manager):
 
     table.pop(SESSION)
     assert manager.hook_tokens.get(SESSION) is None
-    assert manager.hook_tokens.validate(SESSION, "anything") is False
+    assert manager.hook_tokens.get(SESSION) is None
 
 
 def test_the_tmux_name_map_is_one_object_too(manager):
@@ -186,7 +181,7 @@ def test_keep_does_not_rotate_the_secret(authority):
     kept = authority.keep(SESSION, tmux_name="cloude_other")
     assert kept == original
     assert authority.get(SESSION) == original
-    assert authority.validate(SESSION, original) is True
+    assert authority.get(SESSION) == original
 
 
 def test_keep_refuses_an_id_that_holds_no_token(authority):
@@ -207,75 +202,32 @@ def test_a_mint_replaces_and_remembers_what_it_replaced(authority):
 # --- the negative controls. THESE ARE THE LOAD-BEARING HALF. -----------
 
 
-def test_a_bogus_token_of_the_right_length_is_refused(authority):
-    """A forgery that gets the SHAPE right must still fail.
+def test_the_store_answers_the_minted_value_and_no_other(authority):
+    """NEGATIVE CONTROL. A token of the right SHAPE is not the token.
 
-    A 43-character value is what a real token looks like, so a check that
-    only rejected obviously-wrong lengths would pass this suite and refuse
-    nothing that matters.
+    The constant-time comparison this used to exercise lived in
+    ``validate``, which went with the hook endpoint on 2026-09-13. What
+    is left to guarantee is that the store is an exact lookup: a value
+    that merely looks like a token is not one, and an id that was never
+    minted holds nothing.
     """
-    authority.mint(SESSION, tmux_name=PANE)
-    forged = secrets.token_urlsafe(32)
-    assert len(forged) == len(authority.get(SESSION))
-    assert authority.validate(SESSION, forged) is False
+    token = authority.mint(SESSION)
+    forged = "x" * len(token)
+
+    assert authority.get(SESSION) == token
+    assert authority.get(SESSION) != forged
+    assert authority.get("ses_never_minted") is None
 
 
-def test_recover_refuses_a_token_this_process_never_minted(authority):
-    """THE credential bypass this control exists to prevent.
-
-    A recovery that accepted broadly would pass every positive test
-    perfectly. The value below was never minted here, so the answer is a
-    refusal that says it SEARCHED and found nothing.
-    """
-    authority.mint(SESSION, tmux_name=PANE)
-    authority.mint(SESSION, tmux_name=PANE)  # supersede one, so the ring is not empty
-    outcome = authority.recover(SESSION, "tok_nobody_ever_minted_this_value")
-    assert outcome != RECOVERY_ACCEPTED
-    assert outcome == RECOVERY_NO_MATCH
-
-
-def test_recover_refuses_a_superseded_token_against_a_DIFFERENT_pane(authority):
-    """One pane, one credential. A token is not portable between panes."""
-    first = authority.mint(SESSION, tmux_name=PANE)
-    authority.mint(SESSION, tmux_name=PANE)
-    # The id moves to another pane. The old token is still in the ring,
-    # but it was bound to the pane it was superseded on.
-    authority.tmux_names[SESSION] = "cloude_somewhere_else"
-    assert authority.recover(SESSION, first) != RECOVERY_ACCEPTED
-
-
-def test_recover_refuses_when_there_is_nothing_to_search(authority):
-    """``unavailable`` is not ``no_match``, and the difference is reported.
-
-    A check that could not run must never read as one that ran and
-    cleared, so the two refusals keep different names even though both
-    refuse.
-    """
-    authority.mint("ses_brand_new", tmux_name=PANE)
-    assert authority.recover("ses_brand_new", "anything") == RECOVERY_UNAVAILABLE
-
-
-def test_recover_accepts_once_and_NEVER_MINTS(authority):
-    """The whole point: it re-binds to what the agent holds, and stops.
-
-    A recovery that minted would revoke the running agent's credential a
-    second time while logging that it had fixed something.
-    """
-    carried = authority.mint(SESSION, tmux_name=PANE)
-    replacement = authority.mint(SESSION, tmux_name=PANE)
-    assert authority.get(SESSION) == replacement
-
-    assert authority.recover(SESSION, carried) == RECOVERY_ACCEPTED
-    assert authority.get(SESSION) == carried, (
-        "recover must re-bind the store to the token the running process "
-        "holds; anything else and it minted"
-    )
-    assert authority.validate(SESSION, carried) is True
-    # ONCE. The ring entry is consumed, so a later replay finds nothing.
-    assert authority.superseded.size(SESSION) == 0
-
-
-# --- durability and the garbage collector ------------------------------
+# THE FOUR RECOVERY CASES WENT WITH THE METHOD, 2026-09-13.
+# ``HookTokenAuthority.recover`` existed for one caller: the hook
+# endpoint, which let an agent whose token had been superseded present
+# the old one and get re-bound. That endpoint is deleted - the events it
+# authenticated reported under a pane-wide session id every background
+# agent also posted under - so ``recover`` and ``validate`` orphaned and
+# were removed with it. ``SupersededHookTokens`` is still constructed and
+# still recorded into by ``mint``; ``src/core/hook_token_recovery.py``
+# holds the decision rules, unchanged and unimported by anything else.
 
 
 def test_an_unreadable_owned_list_keeps_every_token(authority, tmp_path):
@@ -325,4 +277,4 @@ def test_a_token_survives_a_restart(tmp_path):
     second = HookTokenAuthority(lambda: tmp_path)
     assert second.get(SESSION) == token
     assert second.name_for(SESSION) == PANE
-    assert second.validate(SESSION, token) is True
+    assert second.get(SESSION) == token

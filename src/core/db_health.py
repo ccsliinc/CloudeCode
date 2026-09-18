@@ -115,7 +115,7 @@ def live_state(startup_state: Optional[DatastoreState], state_dir: Path,
 
     db_path = db_path_for(state_dir)
     try:
-        with closing(connect(db_path, create=False)) as conn:
+        with closing(connect(db_path, create=False, attach_archive=False)) as conn:
             found = get_schema_version(conn)
     except DatastoreUnreadableError as exc:
         return _unreachable(

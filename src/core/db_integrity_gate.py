@@ -34,6 +34,27 @@ too. A boot gate with its own window could skip the check while the
 status block a user is looking at says ``cannot_determine``, and neither
 surface could explain the disagreement.
 
+WHAT A CHECK NOW COSTS, AND WHY THAT COST IS THE POINT. Since the
+archive split there are TWO files, and a complete check walks both:
+cloude.db is 704 KiB and cloude-archive.db is several gigabytes and
+growing. Measured 2026-09-14, the first boot after this gate learned to
+demand pair coverage: 19.935 s, published as
+``{"duration_seconds": 19.935, "source": "boot"}``, and the port took 22 s
+to bind instead of the usual 7.
+
+THAT WAS A ONE-TIME COST AND IT WAS MEASURED SETTLING. The artifact it
+wrote carries archive coverage, so the next boot skipped the pragma and
+bound in 7 s, back to baseline. What remains is the DAILY check walking
+the archive, roughly 20 s of disk once a day.
+
+DO NOT "OPTIMISE" THAT WALK BACK OUT. A bare ``PRAGMA integrity_check``
+is cheap on a 704 KiB file precisely because it is not looking at the
+4.8 GB one, and it answers ``ok`` either way - which is the exact shape of
+the defect this project keeps paying for. Twenty seconds a day is the
+price of the check being true. If it ever needs to be cheaper, make it
+LESS FREQUENT, never less thorough: a check that does not walk the file is
+not a faster check, it is the absence of one wearing its name.
+
 WHICH DATABASE THE VERDICT DESCRIBES. The artifact used to record only
 ``db_path``, which is derived from the state directory on both sides and
 therefore always matches and proves nearly nothing: a restored file lands
@@ -101,6 +122,12 @@ from src.core.db_integrity import (
     publish_run,
     read_verdict,
 )
+from src.core.db_integrity_pair import (
+    VERDICT_OK as PAIR_OK,
+    check_every_database,
+    expected_databases,
+    fold_pair,
+)
 from src.core.db_integrity_status import (
     VERDICT_FAILED,
     VERDICT_OK,
@@ -129,6 +156,7 @@ RUN_DB_PATH_MISMATCH = "db_path_mismatch"
 RUN_INSTALL_ID_UNRECORDED = "install_id_unrecorded"
 RUN_INSTALL_ID_MISMATCH = "install_id_mismatch"
 RUN_DB_SHRANK = "db_smaller_than_verified"
+RUN_PAIR_NOT_COVERED = "pair_not_covered"
 
 #: The ONE rung that skips.
 SKIP_CACHED_OK = "cached_ok_current"
@@ -146,6 +174,7 @@ RUN_RUNGS = (
     RUN_INSTALL_ID_UNRECORDED,
     RUN_INSTALL_ID_MISMATCH,
     RUN_DB_SHRANK,
+    RUN_PAIR_NOT_COVERED,
 )
 
 
@@ -184,6 +213,8 @@ def resolve_boot_integrity(
     enabled: bool,
     record: Optional[Dict[str, Any]],
     reading: VerdictReading,
+    pair_verdict: str,
+    pair_reason: str,
     db_path: Path,
     live_install_id: Optional[str],
     live_size_bytes: Optional[int],
@@ -201,14 +232,25 @@ def resolve_boot_integrity(
       artifact as read, or None when it is absent, unreadable, malformed
       or truncated), reading (VerdictReading - the shared reduction of
       that same record, which must be the SAME record object or the two
-      can describe different runs), db_path (Path - the database being
+      can describe different runs), pair_verdict (str - the SAME record
+      folded through :func:`db_integrity_pair.fold_pair` against the
+      databases this install is expected to have, which is the only
+      thing that can speak for the archive file), pair_reason (str - that
+      fold's sentence, carried so the refusal says WHICH database went
+      unchecked), db_path (Path - the database being
       opened), live_install_id (str | None - meta.install_id read from
       the open connection, None when it could not be read),
       live_size_bytes (int | None - the file's size now, None when the
       stat failed).
+
+      ``pair_verdict`` IS REQUIRED AND HAS NO DEFAULT, deliberately. A
+      default of "ok" is the fail-open shape this ladder exists to
+      refuse: it would let a caller that forgot the archive skip the
+      pragma while every log line read correctly.
     Output: BootIntegrityDecision.
     Example: resolve_boot_integrity(enabled=False, record=None,
-      reading=classify_record(None), db_path=Path("/s/cloude.db"),
+      reading=classify_record(None), pair_verdict="cannot_determine",
+      pair_reason="", db_path=Path("/s/cloude.db"),
       live_install_id=None, live_size_bytes=None).skip_pragma -> False
     """
     if not enabled:
@@ -247,6 +289,13 @@ def resolve_boot_integrity(
             False, RUN_VERDICT_CANNOT_DETERMINE,
             f"the cached record is not a verdict on the database: "
             f"{reading.reason}",
+        )
+
+    if pair_verdict != PAIR_OK:
+        return BootIntegrityDecision(
+            False, RUN_PAIR_NOT_COVERED,
+            f"the cached record does not vouch for every database this "
+            f"install has: {pair_reason}",
         )
 
     recorded_path = record.get("db_path")
@@ -342,11 +391,18 @@ def boot_integrity_verdict(
     db_path = db_path_for(state_dir)
     record = read_verdict(state_dir)
     reading = classify_record(record, now=now)
+    # THE SAME record, folded against every database this install is
+    # expected to have. The scalar status above describes the STATE
+    # database alone by construction, so on a split install it is silent
+    # about the archive; folding is the only thing that can speak for it.
+    pair = fold_pair(record, expected_databases(state_dir))
     install = live_install_id(conn)
     decision = resolve_boot_integrity(
         enabled=integrity_check_enabled(),
         record=record,
         reading=reading,
+        pair_verdict=pair["verdict"],
+        pair_reason=pair["reason"],
         db_path=db_path,
         live_install_id=install,
         live_size_bytes=db_size_bytes(db_path),
@@ -372,6 +428,11 @@ def boot_integrity_verdict(
 
     started = time.monotonic()
     verdict = integrity_check(conn)
+    # EVERY DATABASE, EACH NAMED. integrity_check above is scoped to
+    # main, so this is what walks the archive and says which file each
+    # verdict is about. Before this, the boot path published an EMPTY
+    # databases list, which made every later fold read cannot_determine.
+    parts = check_every_database(conn, state_dir, verdict)
     elapsed = round(time.monotonic() - started, 3)
     publish_run(
         state_dir,
@@ -381,16 +442,40 @@ def boot_integrity_verdict(
         None if verdict == PRAGMA_OK else verdict,
         install_id=install,
         source=SOURCE_BOOT,
+        parts=parts,
     )
+    # The verdict handed back is the PAIR's, worst-of, folded by the same
+    # function the cached path uses so the two can never disagree about
+    # what counts as a pass. An archive that failed, or one whose pragma
+    # could not run, must not be reported as "ok" to a caller that is
+    # about to let the app write.
+    fresh = fold_pair(
+        {"status": RUN_OK if verdict == PRAGMA_OK else RUN_FAILED,
+         "detail": None if verdict == PRAGMA_OK else verdict,
+         "db_path": str(db_path), "databases": parts},
+        expected_databases(state_dir),
+    )
+    if fresh["verdict"] == PAIR_OK:
+        answer = PRAGMA_OK
+    elif verdict != PRAGMA_OK:
+        # The state database's own complaint, verbatim, exactly as this
+        # function answered before the archive existed.
+        answer = verdict
+    else:
+        # main is sound and something else is not, so the sentence has to
+        # name it rather than repeat a pragma that passed.
+        answer = fresh["reason"]
     logger.info(
         "db_boot_integrity_ran",
         rung=decision.rung,
-        verdict_ok=verdict == PRAGMA_OK,
+        verdict_ok=fresh["verdict"] == PAIR_OK,
+        pair_verdict=fresh["verdict"],
+        databases=len(parts),
         duration_seconds=elapsed,
         reason=decision.reason,
     )
     return BootIntegrityResult(
-        verdict=verdict,
+        verdict=answer,
         skipped=False,
         rung=decision.rung,
         reason=decision.reason,

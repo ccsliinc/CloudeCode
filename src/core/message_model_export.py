@@ -155,7 +155,8 @@ def _render_row(row: Dict[str, object]) -> Tuple[Optional[str], str]:
 #: invisibly - both look correct in isolation.
 _EXPORT_ROWS_SQL: str = (
     "SELECT a.line_no, a.raw_line, a.serializer_style, a.envelope_json, "
-    "       a.key_order_json, a.line_sha256, b.body_json "
+    "       a.key_order_json, a.line_sha256, "
+    "       cloude_body_text(b.body_json) AS body_json "
     "FROM message_appearances a "
     "LEFT JOIN message_bodies b ON b.id = a.body_id "
     "WHERE a.transcript_id = ? ORDER BY a.line_no"

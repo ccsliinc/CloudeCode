@@ -39,18 +39,24 @@
 'use strict';
 
 /**
- * Single source of truth for the three roots the panel browses: API root
- * id, display label, and default expand/collapse state. "user" and
- * "project" default OPEN (small, config-focused, the reason this feature
- * exists); "workdir" defaults CLOSED (a real project directory can be
- * arbitrarily large - same reasoning as plugins/ being force-collapsed,
- * just a per-user-choice default rather than a forced one, since a small
+ * Single source of truth for the two roots the panel browses: API root
+ * id, display label, and default expand/collapse state. "user" defaults
+ * OPEN (small, config-focused, the reason this feature exists);
+ * "workdir" defaults CLOSED (a real project directory can be arbitrarily
+ * large - same reasoning as plugins/ being force-collapsed, just a
+ * per-user-choice default rather than a forced one, since a small
  * project's workdir is perfectly reasonable to browse open).
+ *
+ * A THIRD ROOT, "project" (the project's own `.claude/`, labeled
+ * "project .claude"), existed here until 2026-09-13. It was removed
+ * because it duplicated a directory already visible one level inside
+ * "workdir" - the same `.claude/` folder rendered twice in one tree. The
+ * project's config is still fully reachable, just as an ordinary
+ * subdirectory of "project files" rather than as its own root.
  * @type {Array<{id: string, label: string, defaultExpanded: boolean}>}
  */
 const CONFIG_EDITOR_ROOTS = [
     { id: 'user', label: '~/.claude', defaultExpanded: true },
-    { id: 'project', label: 'project .claude', defaultExpanded: true },
     { id: 'workdir', label: 'project files', defaultExpanded: false },
 ];
 
@@ -122,7 +128,7 @@ function resolveProjectContext(terminalController) {
 function projectRootsNotice(reason) {
     if (reason === 'no-working-dir') {
         return 'the attached session reports no working directory, so '
-            + 'project .claude and project files cannot be listed.';
+            + 'project files cannot be listed.';
     }
     return null;
 }
@@ -136,9 +142,7 @@ function projectRootsNotice(reason) {
  * absence now means the directory was deleted, unmounted, or renamed out
  * from under a still-attached session. THE THREE-OUTCOME RULE: that is
  * "could not evaluate", not a measured absence, so it must be named
- * rather than silently dropped the way an absent "project .claude" is
- * (see planRoots/_buildRootEl - a missing .claude/ needs no announcement
- * at all, this does).
+ * rather than silently dropped.
  * @param {string} label  The root's display label ("project files").
  * @param {string} projectPath  Absolute working directory the session
  *   reported.

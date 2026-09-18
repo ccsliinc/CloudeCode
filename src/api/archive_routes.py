@@ -44,11 +44,16 @@ from fastapi.responses import JSONResponse
 
 from src.api.archive_export_routes import router as export_router
 from src.api.archive_messages_routes import router as messages_router
+from src.api.archive_search_index_routes import (
+    router as search_index_router,
+)
 from src.api.archive_search_routes import router as search_router
 from src.api.archive_support import respond, state_dir
 from src.api.auth import require_auth
 from src.core import archive_body, archive_hierarchy, archive_lines
 from src.core import archive_merged_tree
+from src.core import archive_name_decorate
+from src.core.app_name_index import load_app_name_index
 from src.core import archive_subagents
 from src.core.archive_read import (
     DEFAULT_LINE_LIMIT,
@@ -142,6 +147,11 @@ async def get_merged_projects() -> JSONResponse:
         run_read, state_dir(), archive_merged_tree.merged_projects,
         subject="archive:projects", unreadable_result=None,
     )
+    # AFTER the archive read has closed its connection, never during it:
+    # the two databases are separate files and a decoration that shared
+    # one connection would put both under one write lock. See
+    # src.core.archive_name_decorate.
+    result = await asyncio.to_thread(_name_projects, result)
     return respond(result, route="merged-projects")
 
 
@@ -247,9 +257,36 @@ async def get_transcripts_for_project(
         project_id, subject=f"project:{project_id}", unreadable_result=None,
         limit=limit, cursor=cursor, session_ref_scheme=session_ref_scheme,
     )
+    result = await asyncio.to_thread(_name_transcripts, result)
     return respond(
         result, route="transcripts", project_id=project_id,
         session_ref_scheme=session_ref_scheme,
+    )
+
+
+def _name_projects(envelope: dict) -> dict:
+    """Decorate a merged-projects envelope with app-database names.
+
+    Description: one helper per surface so the ``to_thread`` call at each
+      route reads as one thing. Opens ``cloude.db`` ONCE, matches in
+      memory, returns the same envelope. A failure to read leaves the
+      rows untouched and marks them ``cannot_determine``.
+    Inputs: envelope (dict) - what ``merged_projects`` returned.
+    Output: dict - the same envelope, decorated.
+    """
+    return archive_name_decorate.decorate_project_nodes(
+        envelope, load_app_name_index(state_dir())
+    )
+
+
+def _name_transcripts(envelope: dict) -> dict:
+    """Decorate a transcript page with the app's own session titles.
+
+    Inputs: envelope (dict) - a transcript page envelope.
+    Output: dict - the same envelope, decorated.
+    """
+    return archive_name_decorate.decorate_transcript_rows(
+        envelope, load_app_name_index(state_dir())
     )
 
 
@@ -446,5 +483,6 @@ async def get_subagents(
 # this whole API is written against. Both modules already carry the
 # full path, so there is no prefix to apply.
 router.routes.extend(search_router.routes)
+router.routes.extend(search_index_router.routes)
 router.routes.extend(export_router.routes)
 router.routes.extend(messages_router.routes)

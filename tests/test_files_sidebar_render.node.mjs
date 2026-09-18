@@ -42,6 +42,13 @@
 // exercised here; only the initial static render is inspected, exactly
 // what a user sees the instant the picker opens.
 //
+// A THIRD ROOT, "project" (<working_dir>/.claude, labeled "project
+// .claude"), was removed 2026-09-13: it rendered the exact same directory
+// already reachable one level inside "workdir", as a duplicate top-level
+// entry. Every fixture below now speaks only of "user" and "workdir";
+// the project's own .claude/ is exercised as an ordinary child of
+// "workdir" where a scenario needs one.
+//
 // Run with: node tests/test_files_sidebar_render.node.mjs
 
 import fs from 'node:fs';
@@ -223,13 +230,12 @@ await test('a project with files renders the roots and file names, no bookkeepin
     const tc = { sessionActive: true, _currentSession: { session: { id: 's1', working_dir: PROJECT_PATH } } };
     const getTree = async (root) => {
         if (root === 'user') return { tree: [{ name: 'CLAUDE.md', rel_path: 'CLAUDE.md', is_dir: false, children: [] }] };
-        if (root === 'project') return { tree: [{ name: 'settings.json', rel_path: 'settings.json', is_dir: false, children: [] }] };
         if (root === 'workdir') return { tree: [{ name: 'index.html', rel_path: 'index.html', is_dir: false, children: [] }] };
         throw new Error('unexpected root ' + root);
     };
     const { panel, treeEl, window: win } = setup(tc, getTree);
-    // "workdir" (like any non-"user"/non-"project" node) starts COLLAPSED
-    // by default (CONFIG_EDITOR_ROOTS' own declared default - see
+    // "workdir" (unlike "user") starts COLLAPSED by default
+    // (CONFIG_EDITOR_ROOTS' own declared default - see
     // config-editor-roots.js), so its file is not built into the DOM
     // until expanded. Simulate a returning user who already had it open,
     // through the real persistence module's public API - exactly what
@@ -239,36 +245,30 @@ await test('a project with files renders the roots and file names, no bookkeepin
     await panel._loadTree();
     const whole = treeEl.textContent;
     assert.match(whole, /index\.html/, 'the workdir file must be visible');
-    assert.match(whole, /settings\.json/, 'the project .claude file must be visible');
     assert.match(whole, /CLAUDE\.md/, 'the user file must be visible');
     assert.doesNotMatch(whole, /not present in/, 'no removed bookkeeping string');
     assert.doesNotMatch(whole, /nothing to list in/, 'no removed bookkeeping string');
-    assert.equal(topLevelTexts(treeEl).length, 3, 'exactly the three roots, no extra notice rows');
+    assert.equal(topLevelTexts(treeEl).length, 2, 'exactly the two roots, no extra notice rows');
 });
 
-// ---- 2. a project with no .claude/: measured absence, nothing announced
+// ---- 2. a project whose workdir has no .claude/ subdirectory: an ordinary
+//         child among many, nothing to announce
 
-await test('a project with no .claude/ announces nothing about it', async () => {
+await test('a project with no .claude/ subdirectory under workdir renders normally', async () => {
     const tc = { sessionActive: true, _currentSession: { session: { id: 's1', working_dir: PROJECT_PATH } } };
     const getTree = async (root) => {
         if (root === 'user') return { tree: [] };
-        if (root === 'project') {
-            const err = new Error('unknown or unavailable root: project');
-            err.status = 400;
-            throw err;
-        }
         if (root === 'workdir') return { tree: [{ name: 'index.html', rel_path: 'index.html', is_dir: false, children: [] }] };
         throw new Error('unexpected root ' + root);
     };
     const { panel, treeEl } = setup(tc, getTree);
     await panel._loadTree();
     const whole = treeEl.textContent;
-    // "~/.claude" (the user root's own label) legitimately contains
-    // ".claude" - what must be absent is any mention of the PROJECT
-    // .claude root, which is the one that does not exist here.
-    assert.doesNotMatch(whole, /project \.claude/, 'the absent project .claude root must not be named at all');
+    // The removed "project" root (labeled "project .claude") must never
+    // be named - there is no such root any more, dedicated or otherwise.
+    assert.doesNotMatch(whole, /project \.claude/, 'the removed "project" root must never be named');
     assert.doesNotMatch(whole, /not present/, 'no removed bookkeeping string');
-    assert.equal(topLevelTexts(treeEl).length, 2, 'only user + workdir roots render - no notice row for the absent one');
+    assert.equal(topLevelTexts(treeEl).length, 2, 'only user + workdir roots render - no extra notice row');
 });
 
 // ---- 3. the launcher, no project attached: no project-scoped text at all,
@@ -313,15 +313,14 @@ await test('the true launcher (no session ever attached) also renders no project
 //         distinct from an empty directory
 
 await test('REGRESSION: an unreadable workdir root renders a distinct notice, not an empty tree', async () => {
-    // "workdir" going 400 is NOT the ordinary "no .claude/" case - a
-    // session's own working directory exists by construction when the
-    // session starts, so 400 here means it was deleted/unmounted/renamed
-    // out from under a still-attached session. Could-not-evaluate, must be
-    // named (THE THREE-OUTCOME RULE), unlike the "project" root's 400.
+    // "workdir" going 400 is NOT an ordinary absence - a session's own
+    // working directory exists by construction when the session starts,
+    // so 400 here means it was deleted/unmounted/renamed out from under a
+    // still-attached session. Could-not-evaluate, must be named (THE
+    // THREE-OUTCOME RULE).
     const tc = { sessionActive: true, _currentSession: { session: { id: 's1', working_dir: PROJECT_PATH } } };
     const getTree = async (root) => {
         if (root === 'user') return { tree: [] };
-        if (root === 'project') return { tree: [] };
         if (root === 'workdir') {
             const err = new Error('unknown or unavailable root: workdir');
             err.status = 400;
@@ -334,23 +333,24 @@ await test('REGRESSION: an unreadable workdir root renders a distinct notice, no
     const whole = treeEl.textContent;
     assert.match(whole, /could not reach/, 'the vanished workdir must be named as could-not-evaluate');
     assert.match(whole, /scrolltest/, 'it must say WHERE it looked');
-    assert.equal(topLevelTexts(treeEl).length, 3,
-        'user root + project root (both render normally, empty and unannounced) + the workdir error row');
+    assert.equal(topLevelTexts(treeEl).length, 2,
+        'user root (renders normally, empty and unannounced) + the workdir error row');
 });
 
 await test('REGRESSION: an unreadable subdirectory (list_error) renders distinctly from an empty one', async () => {
     // Children are only built into the DOM once a directory node is
     // EXPANDED (the lazy-render contract config-editor-panel.js documents
-    // at length). "project" is the one root that starts EXPANDED by
-    // default (CONFIG_EDITOR_ROOTS), so its children build synchronously
-    // during _loadTree() with no click simulation needed - this suite
-    // deliberately does not implement querySelector/click (see header),
-    // so the fixture is placed under the one root where that is not
-    // required to see the real, live rendering.
+    // at length). "workdir" starts COLLAPSED by default
+    // (CONFIG_EDITOR_ROOTS), so both the root itself and the "locked"
+    // child must be simulated as already expanded through the real
+    // persistence module's own public API (exactly what a returning
+    // user's localStorage would hold) - this suite deliberately does not
+    // implement querySelector/click (see header), so expansion state is
+    // seeded rather than clicked.
     const tc = { sessionActive: true, _currentSession: { session: { id: 's1', working_dir: PROJECT_PATH } } };
     const getTree = async (root) => {
         if (root === 'user') return { tree: [] };
-        if (root === 'project') {
+        if (root === 'workdir') {
             return {
                 tree: [
                     { name: 'locked', rel_path: 'locked', is_dir: true, list_error: 'Permission denied', children: [] },
@@ -358,27 +358,20 @@ await test('REGRESSION: an unreadable subdirectory (list_error) renders distinct
                 ],
             };
         }
-        if (root === 'workdir') return { tree: [] };
         throw new Error('unexpected root ' + root);
     };
     const { panel, treeEl, window: win } = setup(tc, getTree);
-    // "locked" is a non-root directory, which starts COLLAPSED by
-    // default (config-editor-tree-state.js's startsCollapsed) - its
-    // list_error notice only builds once it is expanded. Simulate a
-    // returning user who already expanded it, through the real
-    // persistence module's own public API (exactly what their
-    // localStorage would hold), rather than skipping the lazy-render
-    // contract this suite is not otherwise exercising.
-    win.ConfigEditorTreeState.setNodeCollapsed('project:locked', false);
+    win.ConfigEditorTreeState.setNodeCollapsed('workdir:__root__', false);
+    win.ConfigEditorTreeState.setNodeCollapsed('workdir:locked', false);
     await panel._loadTree();
-    const projectRootLi = treeEl.children[0].children.find((li) => li.textContent.includes('project .claude'));
-    assert.ok(projectRootLi, 'the project root must have rendered');
-    // projectRootLi is [toggle, childList] - descend into the childList to
+    const workdirRootLi = treeEl.children[0].children.find((li) => li.textContent.includes('project files'));
+    assert.ok(workdirRootLi, 'the workdir root must have rendered');
+    // workdirRootLi is [toggle, childList] - descend into the childList to
     // reach the two directory entries themselves.
-    const projectChildList = projectRootLi.children[1];
-    assert.ok(projectChildList, 'the project root must carry a children list');
-    const lockedLi = projectChildList.children.find((li) => li.textContent.includes('locked'));
-    const emptyDirLi = projectChildList.children.find((li) => li.textContent.includes('empty-dir'));
+    const workdirChildList = workdirRootLi.children[1];
+    assert.ok(workdirChildList, 'the workdir root must carry a children list');
+    const lockedLi = workdirChildList.children.find((li) => li.textContent.includes('locked'));
+    const emptyDirLi = workdirChildList.children.find((li) => li.textContent.includes('empty-dir'));
     assert.ok(lockedLi, 'the unreadable directory must still render as a node');
     assert.ok(emptyDirLi, 'the empty directory must still render as a normal node');
     assert.match(lockedLi.textContent, /could not list contents: Permission denied/,

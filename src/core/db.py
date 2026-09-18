@@ -50,7 +50,21 @@ from typing import Iterator, Optional
 
 import structlog
 
+from src.core.archive_db_attach import (
+    assert_no_shadowing,
+    archive_sibling_for,
+    attach_archive as _attach_archive,
+    attached_schemas,
+    which_database,
+)
+from src.core.archive_db_partition import (
+    ARCHIVE_SCHEMA,
+    archive_db_path_for,
+    SIDE_ARCHIVE,
+    side_for_table,
+)
 from src.core.db_models import META_INSTALL_ID, META_SCHEMA_VERSION
+from src.core.message_body_codec import register_body_functions
 
 logger = structlog.get_logger()
 
@@ -71,6 +85,21 @@ class DatastoreError(RuntimeError):
     Description: a small named hierarchy so callers can distinguish "the
       database is unreadable" from "you may not write in this mode"
       without matching on message text or catching bare Exception.
+    Inputs: standard RuntimeError arguments.
+    Output: an exception instance.
+    """
+
+
+class ArchiveNotAttachedError(DatastoreError):
+    """A question was asked that this connection cannot answer.
+
+    Description: raised when an archive-side table's presence is asked
+      of a connection opened with ``attach_archive=False``. It is a
+      CALLER BUG, never a fact about the data, and it is loud on
+      purpose: the alternative is answering False, which is
+      indistinguishable from "the archive holds nothing" and is exactly
+      how the corpus drain came to refuse with ``model_absent`` on a
+      datastore that held every row of the model.
     Inputs: standard RuntimeError arguments.
     Output: an exception instance.
     """
@@ -103,7 +132,9 @@ def db_path_for(state_dir: Path) -> Path:
     return Path(state_dir) / DB_FILENAME
 
 
-def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
+def connect(
+    path: Path, *, create: bool = True, attach_archive: bool = True,
+) -> sqlite3.Connection:
     """Open a connection to cloude.db with this module's pragmas applied.
 
     Description: uses ``isolation_level=None`` so transactions are
@@ -114,6 +145,36 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
       a missing file raises rather than being created; use False for any
       read path so a typo'd directory cannot silently manufacture an
       empty database that renders as a healthy install with no data.
+      attach_archive (bool) - attach cloude-archive.db when one exists.
+      DEFAULT TRUE so nothing changes by accident, but pass False on any
+      connection that will not touch an archive table.
+
+      WHY THIS FLAG EXISTS, AND IT IS NOT THE REASON FIRST GIVEN.
+      ``BEGIN IMMEDIATE`` ACQUIRES THE WRITE LOCK ON EVERY ATTACHED
+      DATABASE, not only on the one the statements touch. So a
+      connection that writes a single row to ``sessions`` in cloude.db,
+      while holding the archive attached, must wait for whatever is
+      writing the archive. Isolated measurement, identical write both
+      ways, with another writer holding the attached file: 1.1 ms
+      unattached against 3,772.1 ms attached, the difference being
+      exactly how long the other writer held its transaction.
+
+      THAT IS NOT ACADEMIC. ``claude_event_hook`` handles Claude Code
+      lifecycle hooks SYNCHRONOUSLY ON THE EVENT LOOP and its
+      ``_persist_activity_state`` opens one of these connections and
+      calls :func:`transaction`. With 19 live panes firing hooks and a
+      corpus drain writing the archive, py-spy caught the loop parked in
+      ``transaction (db.py) -> _persist_activity_state ->
+      record_hook_event -> claude_event_hook``, and the ``/health``
+      probe beside it timed out at 30.04 s - which is
+      ``busy_timeout=30000`` expiring exactly. The whole UI goes dead
+      for that long: no keystrokes, no pane output.
+
+      The FIRST justification offered for this flag was per-connection
+      attach cost. That was measured and is real but trivial: 78 opens,
+      the number one listing pass makes, cost 24.9 ms attached against
+      9.1 ms unattached. It could never have produced a 30 second stall,
+      and the flag was nearly abandoned on the strength of it.
     Output: sqlite3.Connection with row_factory set to sqlite3.Row.
     Raises: DatastoreUnreadableError - the file is missing (create=False)
       or sqlite3 refused to open it.
@@ -139,27 +200,159 @@ def connect(path: Path, *, create: bool = True) -> sqlite3.Connection:
         raise DatastoreUnreadableError(
             f"could not apply pragmas to {path.name}: {exc}", path
         ) from exc
+    # ``message_bodies.body_json`` holds EITHER the JSON text or this
+    # module's compressed frame, per row, and SQLite has no inflate. So
+    # every reader spells LENGTH(cloude_body_chars(...)) rather than
+    # LENGTH(body_json), and those functions have to exist on every
+    # connection this app hands out. Registering here - the ONE place
+    # cloude.db is opened - is what makes that true without each call
+    # site remembering. A connection that somehow missed them fails a
+    # repointed query with "no such function", which is LOUD. Measured on
+    # sqlite 3.53.4, what the UNREPOINTED spellings do to a compressed
+    # row: LENGTH answers its COMPRESSED byte count, SUBSTR cuts the zlib
+    # stream, and INSTR answers 0 - all three silently wrong. Only
+    # json_extract is loud, raising "malformed JSON", and json_valid
+    # honestly answers 0.
+    try:
+        register_body_functions(conn)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise DatastoreUnreadableError(
+            f"could not register the body codec functions on {path.name}: "
+            f"{exc}",
+            path,
+        ) from exc
+    # THE ENTIRE ARCHIVE WIRING IS THIS ONE CALL, and it is here for the
+    # same reason register_body_functions is: this is the ONE place
+    # cloude.db is opened, so attaching here is what makes the archive
+    # reachable without each of the 68 archive modules remembering to.
+    #
+    # No call site needs a schema prefix. MEASURED on sqlite 3.53.4: a
+    # table that exists ONLY in an attached database is reached by an
+    # unqualified name, for reads AND writes. After the migration drops
+    # the archive tables from main, every existing query keeps working
+    # and silently reaches the right file.
+    #
+    # A table present in BOTH is the one dangerous state, because main
+    # wins with no error. assert_no_shadowing raises the alarm rather
+    # than refusing the connection: the sessions live in this file, and
+    # taking a running server down over a condition that only affects
+    # archive queries would be the worse failure. The migration refuses
+    # hard; this warns loudly. See src/core/archive_db_attach.py.
+    if attach_archive and _attach_archive(conn, path):
+        assert_no_shadowing(conn)
     return conn
 
 
 def integrity_check(conn: sqlite3.Connection) -> str:
-    """Run PRAGMA integrity_check and return its verdict verbatim.
+    """Run PRAGMA main.integrity_check and return its verdict verbatim.
 
     Description: SQLite returns the single string "ok" when the file is
       sound, and one row per problem otherwise. The rows are joined
       rather than reduced to a boolean so the caller can put the actual
       complaint in front of the user; "integrity check failed" with no
       detail is not actionable.
+
+      THE SCHEMA PREFIX IS LOAD-BEARING, and it is the opposite of what
+      this project assumed. A BARE ``PRAGMA integrity_check`` walks
+      EVERY ATTACHED DATABASE and folds the result into one answer.
+      Since ``connect()`` attaches the archive, a bare pragma here
+      therefore walked the 4.8 GB archive as well as the state database
+      and reported an archive fault as though the state database were
+      damaged - and then :func:`db_integrity_pair.check_every_database`
+      walked the archive a SECOND time to attribute it properly.
+      Measured 2026-09-14 on SQLite 3.53.4 with a sound main and a
+      corrupt attachment: bare answered "row 408 missing from index ix",
+      ``main.`` answered "ok", ``side.`` answered the fault.
+
+      So this function is the STATE DATABASE'S OWN verdict and nothing
+      else. Coverage of the pair belongs to ``check_every_database``,
+      which names the file each verdict is about. One file, one walk, one
+      attribution.
     Inputs: conn (sqlite3.Connection).
     Output: str - "ok", or a newline-joined list of problems. Returns a
       "could not run integrity_check: ..." string when the pragma itself
       raises, which is itself a failure verdict, never an "ok".
     """
     try:
-        rows = conn.execute("PRAGMA integrity_check").fetchall()
+        rows = conn.execute("PRAGMA main.integrity_check").fetchall()
     except sqlite3.Error as exc:
         return f"could not run integrity_check: {exc}"
     return "\n".join(str(row[0]) for row in rows) if rows else "no result"
+
+
+
+def connect_archive_only(state_dir: Path) -> sqlite3.Connection:
+    """Open cloude-archive.db AS MAIN, with cloude.db not attached at all.
+
+    Description: the connection for a long archive WRITE, and the reason
+      it exists is lock scope, not convenience.
+
+      ``BEGIN IMMEDIATE`` acquires the write lock on EVERY ATTACHED
+      DATABASE. :func:`connect` opens cloude.db as main and attaches the
+      archive, so a projection pass running through it holds
+      **cloude.db's** write lock for the length of every transcript it
+      ingests - and cloude.db is where the hook path writes
+      ``sessions.activity_state``, synchronously on the event loop.
+      Measured on live with the corpus drain running through
+      :func:`connect`: a main-only ``BEGIN IMMEDIATE`` on cloude.db,
+      archive deliberately NOT attached, blocked for **63,927 ms**. The
+      app's own corpus ingest pass died outright at 18:57:00Z with
+      ``OperationalError: database is locked``.
+
+      THIS IS THE SECOND HALF OF ONE DEFECT. The ``attach_archive=False``
+      flag on :func:`connect` stopped main-only READERS taking the
+      archive's lock. This stops the archive WRITER taking main's. Either
+      half alone leaves one direction open.
+
+      SAFE ONLY BECAUSE THE PROJECTION NEEDS NOTHING FROM cloude.db, and
+      that was audited rather than assumed: every table the projection
+      path names is archive-side. The one ``sessions`` read in
+      :mod:`src.core.transcript_archive` is inside
+      ``list_unrooted_archives``, which ``export_archive`` never reaches.
+      THE ROOTING PASS IS DIFFERENT AND IS NOT ON THIS CONNECTION: it
+      joins ``transcript_archives`` to ``sessions`` and ``projects`` by
+      design, it runs only inside ``corpus_ingest_service.run_ingest_once``
+      on the connection opened there, and that connection is deliberately
+      left alone. A rooting pass re-pointed here would stop finding the
+      rows it exists to join and, because a skipped rooting pass reports
+      a NAMED status rather than zeros, would be visible - but it would
+      still be wrong, so it is not moved.
+    Inputs: state_dir (Path) - the install's state directory.
+    Output: sqlite3.Connection with row_factory set to sqlite3.Row, the
+      same pragmas as :func:`connect`, and the body codec registered.
+    Raises: DatastoreUnreadableError - the archive is missing or sqlite3
+      refused it. A MISSING ARCHIVE RAISES rather than creating one: on
+      an unsplit install the archive tables live in cloude.db and the
+      caller must use :func:`connect`, so manufacturing an empty file
+      here would produce a pass that projected nothing and said ok.
+    Example: with closing(connect_archive_only(state_dir)) as conn: ...
+    """
+    archive = archive_db_path_for(state_dir)
+    if not archive.exists():
+        raise DatastoreUnreadableError(
+            f"{archive.name} does not exist at {archive}; this install has "
+            f"not been split, so the archive tables are in cloude.db and "
+            f"connect() is the right entry point",
+            archive,
+        )
+    try:
+        conn = sqlite3.connect(str(archive), isolation_level=None, timeout=30.0)
+    except sqlite3.Error as exc:
+        raise DatastoreUnreadableError(
+            f"could not open {archive.name}: {exc}", archive
+        ) from exc
+    conn.row_factory = sqlite3.Row
+    try:
+        for pragma in CONNECTION_PRAGMAS:
+            conn.execute(pragma)
+        register_body_functions(conn)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise DatastoreUnreadableError(
+            f"could not prepare {archive.name}: {exc}", archive
+        ) from exc
+    return conn
 
 
 @contextmanager
@@ -198,13 +391,81 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     Description: every migration step inspects sqlite_master before it
       acts, so re-running a step after an interrupted attempt finishes
       the remaining work or no-ops rather than erroring.
+
+      IT LOOKS IN THE ATTACHED ARCHIVE TOO, and that is not a nicety.
+      ``sqlite_master`` is PER SCHEMA: unlike a table NAME in a query,
+      which resolves across attached databases, a bare
+      ``SELECT ... FROM sqlite_master`` means ``main.sqlite_master`` and
+      nothing else. After the archive split, six presence checks written
+      that way reported the whole message model absent while every query
+      against it would have worked, and the corpus drain refused with
+      ``model_absent`` on a datastore that had the model.
+
+      For an app-side table the answer is unchanged, because the archive
+      never holds one. For an archive-side table this is the difference
+      between seeing it and denying it exists.
+
+      AND IT REFUSES RATHER THAN ANSWERING "NO" WHEN IT COULD NOT LOOK.
+      A connection opened with ``attach_archive=False`` cannot see the
+      archive, so asked about an archive-side table it would answer
+      False - the exact ``model_absent`` lie described above,
+      reintroduced by the very flag that fixes the lock contention. That
+      is a caller bug, not a fact about the data, so it raises.
+
+      THE TWO CASES ARE NOT THE SAME AND CONFLATING THEM BREAKS EVERY
+      FRESH INSTALL. "This install has no archive file" is a real
+      measurement and the honest answer to it is False: an unsplit
+      datastore genuinely does not have ``message_transcripts``, and
+      ``apply_message_model_schema`` asks precisely that before creating
+      it. "An archive file exists and this connection was told not to
+      attach it" is the caller bug. So the refusal is conditioned on the
+      FILE being present, not on the schema being absent. Getting that
+      backwards turned a fresh migration into 615 failures.
     Inputs: conn (sqlite3.Connection), name (str) - table name.
     Output: bool.
+    Raises: ArchiveNotAttachedError - ``name`` is archive-side, an
+      archive file exists beside this database, and it is not attached.
     """
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone()
-    return row is not None
+    found = which_database(conn, name)
+    if found is not None:
+        # It is right here. How the connection was opened is irrelevant:
+        # an archive-only connection holds these tables in `main`.
+        return True
+    if (
+        side_for_table(name) == SIDE_ARCHIVE
+        and ARCHIVE_SCHEMA not in attached_schemas(conn)
+        and _archive_file_exists_for(conn)
+    ):
+        raise ArchiveNotAttachedError(
+            f"{name!r} lives in the archive database, an archive file "
+            f"exists beside this datastore, and this connection was opened "
+            f"with attach_archive=False - so its presence cannot be decided "
+            f"here. Open the connection with the archive attached, or ask "
+            f"about a table this connection can see."
+        )
+    return False
+
+
+def _archive_file_exists_for(conn: sqlite3.Connection) -> bool:
+    """Is there an archive file beside the database this connection holds?
+
+    Description: private. Reads ``PRAGMA database_list``, which is the
+      only authority on what a connection actually has open, and asks
+      the filesystem about the sibling. An in-memory or unnamed database
+      has no sibling and answers False, which is correct: there is no
+      archive for it to be hiding.
+    Inputs: conn (sqlite3.Connection).
+    Output: bool - False whenever it cannot be established, because a
+      refusal built on a guess would break installs that have no archive.
+    Example: _archive_file_exists_for(conn) -> True
+    """
+    try:
+        for row in conn.execute("PRAGMA database_list"):
+            if row[1] == "main" and row[2]:
+                return archive_sibling_for(Path(row[2])).exists()
+    except sqlite3.Error:
+        return False
+    return False
 
 
 def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:

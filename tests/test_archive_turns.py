@@ -165,7 +165,11 @@ def archive(tmp_path):
             facts["progress_body"] = progress
 
             # line 3: NEVER PROCESSED - deliberately no status row.
-            unseen = seed_body(conn, body_json="{}", identity_key="unseen")
+            # seed_body runs the REAL extractor by default, because a real
+            # body always has its blocks and search now reads them; this
+            # is the one shape that has to opt out of that, and it says so.
+            unseen = seed_body(conn, body_json="{}", identity_key="unseen",
+                               extract_blocks=False)
             _line(conn, main, 3, unseen)
             facts["unseen_body"] = unseen
 

@@ -1501,9 +1501,10 @@ beside it.
 
 ## Region: the tree
 
-**Root nodes.** Three expandable roots. The user's configuration folder and the
-project's configuration folder start expanded; the project's own files start
-collapsed. A directory named "plugins" always starts collapsed however it was left.
+**Root nodes.** Two expandable roots. The user's configuration folder starts
+expanded; the project's own files start collapsed. The project's own configuration
+folder is reachable inside the project files root rather than as its own top-level
+entry. A directory named "plugins" always starts collapsed however it was left.
 id: `.config-editor-toggle--root`
 
 **Directory nodes.** Expand to fetch their contents on first opening. Three visible
@@ -1528,10 +1529,11 @@ under a read only root, "runs automatically" for a file the agent executes on it
 own, and a lock for a file the server flagged as holding credentials.
 id: `.config-editor-file`
 
-**Missing root notice.** Three way rule. A measured absence (no session attached, or
-a project with no configuration folder) draws nothing at all. An absence that could
-not be evaluated draws a named notice. A root that resolves always renders even
-with zero entries. id: `.config-editor-node--notice`
+**Missing root notice.** Three way rule. A measured absence (no session attached)
+draws nothing at all. An absence that could not be evaluated (an attached session
+reporting no working directory, or its working directory vanishing) draws a named
+notice. A root that resolves always renders even with zero entries.
+id: `.config-editor-node--notice`
 
 **Indentation guides.** Decorative vertical lines connecting nested rows, instead of
 raw left padding. id: `.config-editor-guide`
@@ -1591,7 +1593,7 @@ id: `#config-editor-cancel`
 Screenshot: `drawer-new-file` - the new file dialog with its root selector and path
 field.
 
-**Where.** Chooses which of the three roots the file goes under, offering only the
+**Where.** Chooses which of the two roots the file goes under, offering only the
 roots the drawer is actually showing.  id: `#config-editor-new-root`
 
 **Path.** A path relative to that root, for example `notes.md`. Creating directories

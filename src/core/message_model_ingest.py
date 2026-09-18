@@ -54,6 +54,7 @@ from src.core.message_model_serialize import (
     stored_body_json,
 )
 from src.core.message_block_store import store_blocks_for_body
+from src.core.message_secret_prescan import PrescanIndex
 from src.core.message_model_store import (
     line_payload,
     record_finding,
@@ -115,6 +116,7 @@ def ingest_lines(
     conn: sqlite3.Connection, *, source_ref: str, session_ref: str,
     lines: Sequence[SourceLine], has_trailing_newline: bool = True,
     line_ending: str = "LF", now: Optional[str] = None,
+    prescan: Optional[PrescanIndex] = None,
 ) -> IngestResult:
     """Store one transcript's lines into the message model.
 
@@ -127,7 +129,11 @@ def ingest_lines(
       session_ref (str - a session uuid or an 'agent-...' id), lines
       (sequence of SourceLine, in file order), has_trailing_newline
       (bool), line_ending (str), now (ISO-8601 str, defaults to the
-      current UTC time).
+      current UTC time), prescan (PrescanIndex or None - credential
+      scans already run over these same bodies OUTSIDE the caller's
+      transaction; a MISS falls back to scanning here, so an absent or
+      incomplete index costs only the lock hold it exists to shorten and
+      can never record a body as clean that nothing measured).
     Output: IngestResult.
     Raises: ValueError - source_ref has already been ingested.
     Example: ingest_lines(conn, source_ref="a.jsonl", session_ref="s",
@@ -180,7 +186,8 @@ def ingest_lines(
             if created:
                 result.bodies_created += 1
                 body_json = conn.execute(
-                    "SELECT body_json FROM message_bodies WHERE id = ?",
+                    "SELECT cloude_body_text(body_json) "
+                    "FROM message_bodies WHERE id = ?",
                     (body_id,)
                 ).fetchone()[0]
                 # The derived content-block index is built in the SAME
@@ -200,7 +207,22 @@ def ingest_lines(
                         f"body {body_id}: {block_result.status}"
                         f" ({block_result.detail})",
                     ))
-                count = store_secret_findings(conn, body_id, body_json, stamp)
+                # THE PRESCAN IS CONTENT ADDRESSED, so a hit can only
+                # be a scan of THIS body's own bytes: the key is
+                # body_bytes_sha256, defined as the sha256 of
+                # stored_body_json(body), which is the very string being
+                # scanned. A miss is None and scans live here - an
+                # absence of a measurement is never written as a clean
+                # body. See src/core/message_secret_prescan.py.
+                matches = (
+                    None if prescan is None
+                    else prescan.matches_for(
+                        payload["split"].body_bytes_sha256
+                    )
+                )
+                count = store_secret_findings(
+                    conn, body_id, body_json, stamp, matches=matches,
+                )
                 if count:
                     result.secret_findings += count
                     record_finding(

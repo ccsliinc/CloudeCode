@@ -20,14 +20,14 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 from src.core.message_body_equivalence import (
     DuplicateVerdict,
     duplicate_verdict,
 )
 from src.core.message_gate_contract import BY_CODE, classify_fidelity
-from src.core.message_model_secrets import scan_text
+from src.core.message_model_secrets import SecretFinding, scan_text
 from src.core.message_model_serialize import (
     detect_style,
     identity_key,
@@ -38,6 +38,7 @@ from src.core.message_model_serialize import (
     split_record,
     stored_body_json,
 )
+from src.core.message_body_compress import stored_value_for
 
 #: Which lookup table each normalized scalar interns into. One mapping,
 #: so a new lookup column is one row here rather than a fifth branch in
@@ -123,6 +124,7 @@ def record_finding(
 
 def store_secret_findings(
     conn: sqlite3.Connection, body_id: int, body_json: str, now: str,
+    *, matches: Optional[Sequence[SecretFinding]] = None,
 ) -> int:
     """Scan one body for credential material and record what was found.
 
@@ -131,12 +133,25 @@ def store_secret_findings(
       detector name, the offset, the length and a sha256. The record
       itself is stored byte-exactly and is NOT altered; redaction would
       break the fidelity this whole model exists to provide.
+
+      ``matches`` accepts a scan ALREADY RUN over this same body text, so
+      the regex pass can happen outside the caller's write transaction -
+      see :mod:`src.core.message_secret_prescan`, where the measured cost
+      is 85.9 percent of a 47.2 s lock hold. It is a scan RESULT, never a
+      permission to skip scanning: ``None`` means no measurement was
+      offered and this function takes one itself, which is why an absent
+      or unusable prescan degrades to the original behaviour rather than
+      to a body recorded as clean. There remains exactly ONE writer of
+      message_secret_findings, which is the point of threading the
+      result through here instead of giving the prescan its own INSERT.
     Inputs: conn, body_id (int), body_json (str - the identity body's
-      rendered JSON, which is what gets searched), now (ISO-8601 str).
+      rendered JSON, which is what gets searched), now (ISO-8601 str),
+      matches (sequence of SecretFinding over THIS body's text, or None
+      to scan now).
     Output: int - how many findings were recorded.
     Example: store_secret_findings(conn, 1, '{"a":1}', "t") -> 0
     """
-    found = scan_text(body_json)
+    found = list(matches) if matches is not None else scan_text(body_json)
     for item in found:
         conn.execute(
             "INSERT INTO message_secret_findings "
@@ -187,13 +202,23 @@ def upsert_body(
     if uuid is not None:
         stored = [
             json.loads(row[0]) for row in conn.execute(
-                "SELECT body_json FROM message_bodies WHERE message_uuid = ?",
+                "SELECT cloude_body_text(body_json) FROM message_bodies "
+                "WHERE message_uuid = ?",
                 (uuid,))
         ]
         if stored:
             verdict = duplicate_verdict(split.body, stored, uuid)
 
     body_json = stored_body_json(split.body)
+    # WHAT GOES IN THE COLUMN IS NOT ALWAYS WHAT body_json HOLDS. A body
+    # over the threshold that actually shrinks is stored as this codec's
+    # compressed frame, and the row declares which it is through
+    # typeof(body_json). Every reader goes through cloude_body_text /
+    # cloude_body_chars, which are the identity on a TEXT value, so this
+    # is a storage decision and not a format the rest of the code sees.
+    # The hashes above are taken over the TEXT, always, so identity is
+    # unaffected by whether a row happens to be compressed.
+    stored_body = stored_value_for(body_json)
     cur = conn.execute(
         "INSERT INTO message_bodies "
         "(identity_key, message_uuid, body_sha256, body_bytes_sha256, "
@@ -203,7 +228,8 @@ def upsert_body(
         " secret_finding_count, first_seen_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
         (
-            key, uuid, split.body_sha256, split.body_bytes_sha256, body_json,
+            key, uuid, split.body_sha256, split.body_bytes_sha256,
+            stored_body,
             intern_value(conn, "message_record_types", scalars["record_type"]),
             intern_value(conn, "message_roles", scalars["role"]),
             intern_value(conn, "message_models", scalars["model"]),

@@ -91,6 +91,10 @@ ALL_ROUTES: List[str] = [
     "/api/v1/archive/transcripts/1/messages",
     "/api/v1/archive/bodies/1",
     "/api/v1/archive/search?q=hello&project_id=1",
+    # The exact index measurement a search deliberately does not
+    # take: current versus stale means counting both sides, which
+    # measured 37 ms against a 0.07 ms query.
+    "/api/v1/archive/search/index",
     "/api/v1/archive/transcripts/1/export",
     "/api/v1/archive/transcripts/1/export/verified",
 ]

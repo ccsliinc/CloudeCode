@@ -49,10 +49,10 @@ class _InstanceRecord:
 class StartupGateLedger:
     """First-hook time and toast-once state, per tmux instance.
 
-    WHY NOT REUSE ``SessionActivityTracker.hooks_seen``. That tracker is
-    keyed by cloudecode ``session_id`` and answers "has this session ever
-    fired a hook this server run". Neither half survives what this gate
-    needs to survive. ``POST /sessions/respawn`` with
+    WHY THIS IS KEYED BY TMUX INSTANCE AND NOT BY SESSION ID. The obvious
+    alternative was a per-``session_id`` flag answering "has this session
+    shown any sign of life this server run". Neither half of that
+    survives what this gate needs to survive. ``POST /sessions/respawn`` with
     ``live_restart_confirmed`` kills the pane's PROCESS and respawns it in
     the SAME pane, so the session_id does not change and, measured on tmux
     3.7c (CLAUDE.md, 2026-09-07), neither does ``#{session_created}``. A

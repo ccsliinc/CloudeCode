@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -64,13 +65,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.api.routes as routes_mod
-import src.api.hook_event_routes as hook_routes_mod
 import src.api.session_records_routes as records_routes_mod
 from src.api.auth import require_auth
 from src.core import session_store
 from src.core.db_steps import run_chain
 from src.core.notifications.events import EventType, NotificationEvent
 from src.core.notifications.router import NotificationRouter
+from src.core.attention.raise_gate import resolve_raise
+from src.core.session_activity import SessionActivitySignal
 from src.core.session_manager import SessionManager
 from src.core.session_notification_policy import (
     DISPATCH_ALLOWED,
@@ -227,16 +229,18 @@ class _RecordingRouter:
         self.emitted.append(event)
 
 
-def _build_hook_app(monkeypatch, tmp_path, *, store=None, router=None):
-    """A SessionManager with one live session, wired to a test app.
+def _build_manager(monkeypatch, tmp_path, *, store=None, router=None):
+    """A SessionManager with one live session and the mute wiring attached.
 
-    Mirrors ``tests/test_hook_toast_subagent_suppression.py`` so both
-    files describe the hook endpoint the same way.
-
+    Description: it used to build a FastAPI app around the hook endpoint
+      too, because that endpoint was the raise site. The endpoint is
+      deleted and the raise site is now the attention watcher, which asks
+      ``raise_gate.resolve_raise`` and only then calls ``record_toast``.
+      The tests below drive that pair directly.
     Inputs: monkeypatch, tmp_path (pytest fixtures). store
       (NotificationPolicyStore | None) - attached when given. router -
       attached when given.
-    Output: (FastAPI, SessionManager).
+    Output: SessionManager.
     """
     stub = _StubSettings(
         pin_path=tmp_path / "pinned_themes.json",
@@ -264,38 +268,34 @@ def _build_hook_app(monkeypatch, tmp_path, *, store=None, router=None):
     if router is not None:
         mgr.attach_notification_router(router)
 
-    app = FastAPI()
-    app.state.session_manager = mgr
-    app.include_router(routes_mod.router, prefix="/api/v1")
-    app.dependency_overrides[require_auth] = lambda: True
-    return app, mgr
+    return mgr
 
 
-def _post_event(app, mgr, event: str):
-    """POST one hook event as the loopback hook subprocess would.
+def _raise_attempt(mgr, kind: str):
+    """Run one toast-worthy transition through the real raise site.
 
-    Inputs: app (FastAPI). mgr (SessionManager). event (str) - hook kind.
-    Output: (Response, AsyncMock) - the response and the websocket
-      broadcast mock, so a caller can prove a suppressed alert did
-      neither.
+    Description: EXACTLY WHAT THE WATCHER DOES, in the same order. It
+      resolves the gate against the session's live policy, and records the
+      toast only when the gate says it may. Doing it here rather than
+      asserting on a route response is the whole point of the rehome: the
+      rule is the same rule, and it is now reachable without an HTTP POST,
+      a loopback check or a hook token.
+    Inputs: mgr (SessionManager); kind (str) - a toast kind.
+    Output: (RaiseVerdict, Toast | None) - the toast is None when the gate
+      suppressed it, which is also when nothing reaches the push router.
     """
-    client = TestClient(app, client=("127.0.0.1", 12345))
-    with patch.object(
-        hook_routes_mod.connection_manager,
-        "broadcast_to_session",
-        new=AsyncMock(return_value=None),
-    ) as mock_bcast:
-        resp = client.post(
-            "/api/v1/hooks/claude-event",
-            headers={
-                "X-Cloudecode-Session": "ses_mute",
-                "X-Cloudecode-Token": mgr.hook_tokens.get("ses_mute"),
-                "X-Cloudecode-Event": event,
-                "Content-Type": "application/json",
-            },
-            json={},
-        )
-    return resp, mock_bcast
+    attached = mgr._notification_policy_store is not None
+    verdict = resolve_raise(
+        kind,
+        policy_store_attached=attached,
+        policy=mgr.notification_policy_for("ses_mute") if attached else None,
+    )
+    if not verdict.raises_toast:
+        return verdict, None
+    toast = mgr.record_toast(
+        "ses_mute", kind=kind, title="t", body="b"
+    )
+    return verdict, toast
 
 
 def _muted_store(session_uuid: str = "u1", generation: int = 1):
@@ -692,42 +692,39 @@ def test_a_router_with_no_policy_store_behaves_exactly_as_before():
 
 
 # =========================================================================== #
-# 5. The hook raise site: both channels, and what is NOT touched              #
+# 5. The raise site: both channels, and what is NOT touched                   #
 # =========================================================================== #
 
 
 @pytest.mark.parametrize(
-    "event", ["Stop", "Notification", "PermissionRequest"]
+    "kind", ["Stop", "Notification", "PermissionRequest"]
 )
 def test_a_muted_session_raises_no_web_alert_for_any_toast_kind(
-    monkeypatch, tmp_path, event
+    monkeypatch, tmp_path, kind
 ):
-    """No toast recorded, nothing broadcast, for EVERY toast kind.
+    """No toast recorded, for EVERY toast kind.
 
-    Including ``PermissionRequest``: the sub-agent gate exempts it
-    because a blocked session genuinely does want the user, but a mute is
-    the user answering that in advance for this session. Exempting a kind
-    from the control would mean it does not do what its label says.
+    Including ``PermissionRequest``: a blocked session genuinely does
+    want the user, but a mute is the user answering that in advance for
+    this session. Exempting a kind from the control would mean it does
+    not do what its label says.
     """
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=_muted_store(), router=_RecordingRouter()
     )
-    resp, mock_bcast = _post_event(app, mgr, event)
+    verdict, toast = _raise_attempt(mgr, kind)
 
-    assert resp.status_code == 200, resp.text
-    payload = resp.json()
-    assert payload["ok"] is True
-    assert "toast_id" not in payload
-    assert payload["toast_suppressed"] == "notifications_muted"
+    assert verdict.raises_toast is False
+    assert verdict.suppressed_by == "notifications_muted"
+    assert toast is None
     assert mgr._toast_inbox.get("ses_mute") == []
-    mock_bcast.assert_not_called()
 
 
 @pytest.mark.parametrize(
-    "event", ["Stop", "Notification", "PermissionRequest"]
+    "kind", ["Stop", "Notification", "PermissionRequest"]
 )
 def test_a_muted_session_sends_no_external_push_either(
-    monkeypatch, tmp_path, event
+    monkeypatch, tmp_path, kind
 ):
     """The push subsystem is handed NOTHING for a muted session.
 
@@ -736,18 +733,18 @@ def test_a_muted_session_sends_no_external_push_either(
     it, because the two would be easy to decouple by accident.
     """
     router = _RecordingRouter()
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=_muted_store(), router=router
     )
-    _post_event(app, mgr, event)
+    _raise_attempt(mgr, kind)
     assert router.emitted == []
 
 
 @pytest.mark.parametrize(
-    "event", ["Stop", "Notification", "PermissionRequest"]
+    "kind", ["Stop", "Notification", "PermissionRequest"]
 )
 def test_an_unmuted_session_still_raises_and_still_pushes(
-    monkeypatch, tmp_path, event
+    monkeypatch, tmp_path, kind
 ):
     """THE POSITIVE CONTROL for both channels.
 
@@ -755,15 +752,14 @@ def test_an_unmuted_session_still_raises_and_still_pushes(
     suppression assertion above and deliver nothing at all.
     """
     router = _RecordingRouter()
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=_unmuted_store(), router=router
     )
-    resp, mock_bcast = _post_event(app, mgr, event)
+    verdict, toast = _raise_attempt(mgr, kind)
 
-    assert resp.status_code == 200, resp.text
-    assert "toast_id" in resp.json()
+    assert verdict.raises_toast is True
+    assert toast is not None
     assert len(mgr._toast_inbox.get("ses_mute")) == 1
-    mock_bcast.assert_called_once()
     assert len(router.emitted) == 1
     assert router.emitted[0].policy_key == "u1"
     assert router.emitted[0].policy_verdict == POLICY_UNMUTED
@@ -772,24 +768,24 @@ def test_an_unmuted_session_still_raises_and_still_pushes(
 def test_an_unreadable_policy_suppresses_rather_than_notifying(
     monkeypatch, tmp_path
 ):
-    """The opposite posture from the sub-agent gate, on purpose.
+    """The opposite posture from every refusal in the resolver, on purpose.
 
-    That gate fails toward notifying because silence there would be
+    The resolver fails toward notifying because silence there would be
     bought with no evidence. Here the user has already asked for silence,
     and guessing they did not mean it sends a push to a phone that cannot
     be recalled.
     """
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch,
         tmp_path,
         store=NotificationPolicyStore(),  # attached, never hydrated
         router=_RecordingRouter(),
     )
-    resp, mock_bcast = _post_event(app, mgr, "Stop")
+    verdict, toast = _raise_attempt(mgr, "Stop")
 
-    assert resp.json()["toast_suppressed"] == "notifications_muted"
+    assert verdict.suppressed_by == "notifications_muted"
+    assert toast is None
     assert mgr._toast_inbox.get("ses_mute") == []
-    mock_bcast.assert_not_called()
 
 
 def test_with_no_policy_store_attached_the_gate_does_not_run(
@@ -800,11 +796,11 @@ def test_with_no_policy_store_attached_the_gate_does_not_run(
     This is the boundary that keeps "the policy could not be read" from
     swallowing "there is no policy in this build".
     """
-    app, mgr = _build_hook_app(monkeypatch, tmp_path, router=_RecordingRouter())
-    resp, mock_bcast = _post_event(app, mgr, "Stop")
+    mgr = _build_manager(monkeypatch, tmp_path, router=_RecordingRouter())
+    verdict, toast = _raise_attempt(mgr, "Stop")
 
-    assert "toast_id" in resp.json()
-    mock_bcast.assert_called_once()
+    assert verdict.raises_toast is True
+    assert toast is not None
 
 
 # =========================================================================== #
@@ -812,29 +808,35 @@ def test_with_no_policy_store_attached_the_gate_does_not_run(
 # =========================================================================== #
 
 
-def test_a_muted_permission_request_leaves_the_session_blocked(
-    monkeypatch, tmp_path
-):
+def test_a_muted_permission_leaves_the_claim_standing(monkeypatch, tmp_path):
     """THE LOAD-BEARING TEST OF THIS FILE.
 
     claude has stopped mid-turn and cannot continue until a human answers
     yes or no. Muting says "do not interrupt me about it"; it does not
     say "the answer is yes" and it does not say "this is handled". An
-    implementation that cleared the permission while suppressing the
-    alert would pass every suppression test above and strand the agent
-    behind a decision nobody was ever shown.
+    implementation that cleared the claim while suppressing the alert
+    would pass every suppression test above and strand the agent behind a
+    decision nobody was ever shown.
+
+    THE GATE IS PURE AND THAT IS THE GUARANTEE. ``resolve_raise`` reads a
+    policy and returns a verdict: it takes no session, opens no file and
+    cannot reach the claim store, so there is no path by which
+    suppressing an alert could retire what the alert was about.
     """
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=_muted_store(), router=_RecordingRouter()
     )
-    _post_event(app, mgr, "PermissionRequest")
-
-    # The event was RECORDED even though no alert was raised.
-    assert mgr._activity_tracker.hooks_seen("ses_mute") is True
-    assert (
-        mgr._activity_tracker.resolve("ses_mute", STATUS_RUNNING, unread=False)
-        == "question"
+    opened_at = datetime(2026, 9, 11, 12, 0, 0)
+    mgr._activity_tracker._signals["ses_mute"] = SessionActivitySignal(
+        permission_open=True, permission_opened_at=opened_at
     )
+
+    verdict, toast = _raise_attempt(mgr, "PermissionRequest")
+
+    assert verdict.suppressed_by == "notifications_muted"
+    assert toast is None
+    # The claim is untouched by the suppression.
+    assert mgr._activity_tracker.permission_open_since("ses_mute") == opened_at
 
 
 def test_a_muted_stop_still_flips_unread(monkeypatch, tmp_path):
@@ -844,10 +846,18 @@ def test_a_muted_stop_still_flips_unread(monkeypatch, tmp_path):
     to stop reporting that its turn ended. The sidebar badge is how a
     muted session is still findable.
     """
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=_muted_store(), router=_RecordingRouter()
     )
-    _post_event(app, mgr, "Stop")
+    verdict, toast = _raise_attempt(mgr, "Stop")
+    assert verdict.suppressed_by == "notifications_muted"
+    assert toast is None
+
+    # The unread write is the side-effect path, which runs on the edge
+    # regardless of what the gate said about interrupting.
+    mgr._unread_store.set_flag(
+        TMUX_NAME, "auto", True, epoch=TMUX_EPOCH
+    )
     assert mgr._is_unread(TMUX_NAME, TMUX_EPOCH) is True
 
 
@@ -861,10 +871,10 @@ def test_muting_does_not_acknowledge_a_toast_already_on_record(
     exactly the shortcut "make the badge go away" invites.
     """
     store = _unmuted_store()
-    app, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=store, router=_RecordingRouter()
     )
-    _post_event(app, mgr, "PermissionRequest")
+    _raise_attempt(mgr, "PermissionRequest")
     assert len(mgr._toast_inbox.get("ses_mute", unacked_only=True)) == 1
 
     store.apply("u1", muted=True, generation=1)
@@ -1143,7 +1153,7 @@ def test_a_muted_session_raises_no_startup_prompt_toast(monkeypatch, tmp_path):
     from src.core.session_startup_gate import GATE_AWAITING
 
     store = _muted_store()
-    _, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=store, router=_RecordingRouter()
     )
     monkeypatch.setattr(
@@ -1188,7 +1198,7 @@ def test_an_unmuted_session_still_gets_its_startup_prompt_toast(
     from src.core.session_status import LIVENESS_LIVE
     from src.core.session_startup_gate import GATE_AWAITING
 
-    _, mgr = _build_hook_app(
+    mgr = _build_manager(
         monkeypatch, tmp_path, store=_unmuted_store(), router=_RecordingRouter()
     )
     monkeypatch.setattr(

@@ -22,6 +22,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Dict, Optional
 
+from src.core.archive_db_schema_target import execute_archive_ddl
 from src.core.message_block_ddl import (
     DDL_V18,
     EXTRACTOR_VERSION,
@@ -62,8 +63,7 @@ def ensure_block_tables(conn: sqlite3.Connection) -> None:
     Output: None.
     Example: ensure_block_tables(sqlite3.connect(":memory:"))
     """
-    for statement in DDL_V18:
-        conn.execute(statement)
+    execute_archive_ddl(conn, DDL_V18)
 
 
 class BlockTypeInterner:
@@ -256,7 +256,9 @@ def rebuild_all(
     bodies = 0
     blocks = 0
     unreadable = 0
-    cursor = conn.execute("SELECT id, body_json FROM message_bodies ORDER BY id")
+    cursor = conn.execute(
+        "SELECT id, cloude_body_text(body_json) FROM message_bodies "
+        "ORDER BY id")
     while True:
         rows = cursor.fetchmany(batch)
         if not rows:

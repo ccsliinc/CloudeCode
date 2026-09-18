@@ -15,6 +15,7 @@ so the ``parents[2]`` walk is unchanged; moving it deeper would silently
 point the scan at the wrong directory.
 """
 
+import asyncio
 import json
 import os
 import structlog
@@ -24,7 +25,7 @@ from fastapi import APIRouter, Depends
 from pathlib import Path
 from src.api.auth import require_auth
 from src.models import ThemeManifest
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -175,6 +176,44 @@ def _scan_themes_root(root: Optional[Path], source: str) -> List[ThemeManifest]:
     return out
 
 
+def _scan_both_roots(
+    bundled_root: Path, user_root: Optional[Path]
+) -> Tuple[List[ThemeManifest], List[ThemeManifest]]:
+    """Walk both theme roots and digest every script. RUNS IN A THREAD.
+
+    Description: THE WHOLE FILESYSTEM HALF OF ``GET /themes`` IN ONE
+      CALLABLE, so ``asyncio.to_thread`` has one thing to hand off. The
+      cost here is not one stat: it is a directory listing per root, a
+      ``theme.json`` read and parse per theme, and a sha256 over every
+      ``effects.js`` a theme declares, which is a whole-file read. On the
+      26 bundled themes plus whatever the user has authored, that ran on
+      the event loop, and the launchpad awaits this route before it
+      paints - so every terminal in the app stalled for the length of the
+      scan. Same defect and same fix as the file drawer's tree walk in
+      ``GET /config-files/tree``.
+
+      THE ROOTS ARE RESOLVED BY THE CALLER, ON THE LOOP, and passed in.
+      That is the snapshot step: ``_user_themes_root`` reads an
+      environment variable and ``$HOME``, which is process state rather
+      than filesystem work, and resolving it here would also move the two
+      module-level names the tests monkeypatch out of the request's own
+      stack. What crosses into the thread is two plain paths.
+
+      It answers a PAIR rather than a merged list, because the sort, the
+      cross-root dedup and the shadowing log are pure in-memory work on
+      objects that already exist. Those stay on the loop where the caller
+      can read them, and only the reads move.
+    Inputs: bundled_root - ``client/css/themes``. user_root - the
+      user themes directory, or None when there is not one.
+    Output: (bundled manifests, user manifests), each unsorted.
+    Example: bundled, user = _scan_both_roots(root, None)
+    """
+    return (
+        _scan_themes_root(bundled_root, "builtin"),
+        _scan_themes_root(user_root, "user"),
+    )
+
+
 @router.get(
     "/themes",
     response_model=List[ThemeManifest],
@@ -193,9 +232,19 @@ async def list_themes() -> List[ThemeManifest]:
     Rationale: lets us ship breaking-change updates to bundled themes
     without a stale user-cloned copy shadowing them, and avoids ambiguity
     in the selector UI.
+
+    THE SCAN RUNS IN A THREAD AND THE RESPONSE IS UNCHANGED BYTE FOR
+    BYTE. Three stages, in the order ``GET /config-files/tree`` and the
+    listing pass both use: SNAPSHOT the two roots here on the loop, where
+    the environment override and the monkeypatchable module names live;
+    GATHER the manifests and their script digests in
+    ``asyncio.to_thread``; APPLY the sort, the cross-root dedup and the
+    shadowing warning back on the loop. Nothing about which themes are
+    returned, or in what order, depends on where the work happened.
     """
-    bundled = _scan_themes_root(_bundled_themes_root(), "builtin")
-    user = _scan_themes_root(_user_themes_root(), "user")
+    bundled_root = _bundled_themes_root()
+    user_root = _user_themes_root()
+    bundled, user = await asyncio.to_thread(_scan_both_roots, bundled_root, user_root)
     bundled.sort(key=lambda m: m.name.lower())
     user.sort(key=lambda m: m.id.lower())
 

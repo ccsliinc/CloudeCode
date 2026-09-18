@@ -31,6 +31,9 @@ from typing import Optional, Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.core.message_body_codec import (  # noqa: E402
+    register_body_functions,
+)
 from src.core.message_host_dimension import (  # noqa: E402
     attribution_summary,
     cross_host_sessions,
@@ -56,7 +59,8 @@ def backfill_cwds(conn: sqlite3.Connection) -> int:
             "SELECT id FROM message_projects WHERE observed_cwd IS NULL"
     ).fetchall():
         row = conn.execute(
-            "SELECT b.body_json FROM message_transcripts t "
+            "SELECT cloude_body_text(b.body_json) "
+            "FROM message_transcripts t "
             "  JOIN message_appearances a ON a.transcript_id = t.id "
             "  JOIN message_bodies b ON b.id = a.body_id "
             " WHERE t.project_id = ? AND b.body_json LIKE '%\"cwd\"%' "
@@ -143,6 +147,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--db", required=True)
     args = parser.parse_args(argv)
     conn = sqlite3.connect(args.db)
+    # message_bodies.body_json may hold this module's compressed frame
+    # rather than TEXT. These scripts open sqlite3 directly instead of
+    # going through src.core.db.connect, so they have to register the
+    # codec functions themselves; without them a repointed query fails
+    # LOUDLY with "no such function", which is the intended failure
+    # mode - LENGTH over a blob would answer a compressed byte count.
+    register_body_functions(conn)
     try:
         return finalize(conn)
     finally:

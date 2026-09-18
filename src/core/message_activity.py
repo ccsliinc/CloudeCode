@@ -65,6 +65,7 @@ with ``counted=False`` is the absence of one.
 from __future__ import annotations
 
 import sqlite3
+from src.core.db import table_exists
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 #: The project has a real newest-activity timestamp.
@@ -118,10 +119,7 @@ _ID_CHUNK = 500
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     """Description: is this table present? Inputs: conn, table (str).
     Output: bool. Example: _table_exists(conn, 'message_transcripts')"""
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table,),
-    ).fetchone()
+    row = (table_exists(conn, table) or None)
     return row is not None
 
 
