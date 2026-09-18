@@ -32,6 +32,7 @@ Output: human or JSON status on stdout. Exit 0 when both the backup is
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -176,6 +177,72 @@ def repository_state() -> Dict[str, object]:
             "newest_snapshot_time": (newest or {}).get("time")}
 
 
+def offbox_state(backup: Dict[str, object],
+                 repo: Dict[str, object]) -> Dict[str, object]:
+    """Did the dump that exists locally actually REACH the repository?
+
+    THIS EXISTS BECAUSE ITS ABSENCE PRODUCED A FALSE GREEN, MEASURED IN
+      PRODUCTION. On 2026-09-18 the nightly job wrote a perfect 16.7 GB dump
+      at 03:36:41 and then its ``restic backup`` hung: the TCP socket to the
+      REST server stayed ESTABLISHED while the server had long since moved
+      on, so the client sat at 0.0% CPU for over twelve hours holding a
+      repository lock. The dump's mtime was fresh, so this command reported
+      "freshness: current" and exited 0 while the day's history had not left
+      the machine. Both facts were already on the screen - a local artifact
+      from today and a newest repository snapshot from YESTERDAY - and
+      nothing compared them. A status command whose two halves can disagree
+      in silence is a proxy, not a measurement.
+
+    The rule: the repository's newest snapshot covering the dump directory
+      must be NEWER than the dump file itself. The job writes the dump and
+      only then uploads it, so on any healthy day the snapshot is minutes
+      newer. A snapshot older than the artifact means the artifact never
+      shipped, whatever else looks fine.
+    Inputs: backup (dict from backup_state), repo (dict from
+      repository_state).
+    Output: dict with ``status`` and, when decidable, ``shipped`` (bool).
+    """
+    if repo.get("status") != "ran":
+        return {"status": CANNOT_DETERMINE,
+                "detail": "the repository could not be queried"}
+    if "taken_at" not in backup:
+        return {"status": CANNOT_DETERMINE,
+                "detail": "there is no local artifact to compare against"}
+    raw = repo.get("newest_snapshot_time")
+    if not raw:
+        return {"status": "ran", "shipped": False,
+                "detail": "the repository holds no snapshot of the dump "
+                          "directory at all"}
+    try:
+        # restic emits RFC3339 with an offset. fromisoformat handles that
+        # directly; anything it refuses is reported rather than guessed at.
+        # A naive result is forced to UTC so the comparison below can never
+        # raise "offset-naive and offset-aware" - which it did on the first
+        # attempt, from a hand-rolled fraction trim that ate the offset.
+        snap_at = _dt.datetime.fromisoformat(str(raw))
+        if snap_at.tzinfo is None:
+            snap_at = snap_at.replace(tzinfo=_dt.timezone.utc)
+        taken_at = _dt.datetime.strptime(
+            str(backup["taken_at"]), "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=_dt.timezone.utc)
+    except (ValueError, TypeError) as exc:
+        return {"status": CANNOT_DETERMINE,
+                "detail": f"could not compare the two instants: {exc}"}
+
+    shipped = snap_at >= taken_at
+    lag = (taken_at - snap_at).total_seconds()
+    return {
+        "status": "ran",
+        "shipped": shipped,
+        "local_artifact_at": str(backup["taken_at"]),
+        "repository_newest_at": str(raw),
+        "detail": ("the local dump is in the repository"
+                   if shipped else
+                   f"the local dump is {int(lag) // 3600}h NEWER than "
+                   f"anything in the repository, so it has not shipped"),
+    }
+
+
 def main() -> int:
     """Command line entry point.
 
@@ -192,6 +259,7 @@ def main() -> int:
     report: Dict[str, object] = {"backup": backup, "restore_proof": proof}
     if args.remote:
         report["repository"] = repository_state()
+        report["offbox"] = offbox_state(backup, report["repository"])
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -226,12 +294,25 @@ def main() -> int:
         if proof.get("detail"):
             print(f"    detail       : {proof['detail']}")
         if args.remote:
+            off = report["offbox"]
+            print("")
+            print("  SHIPPED OFF-BOX")
+            print(f"    local dump   : {off.get('local_artifact_at', '?')}")
+            print(f"    repo newest  : {off.get('repository_newest_at', '?')}")
+            print(f"    shipped      : {off.get('shipped')}")
+            print(f"    detail       : {off.get('detail')}")
             print("")
             print(f"  REPOSITORY   : "
                   f"{json.dumps(report['repository'], sort_keys=True)}")
 
+    off = report.get("offbox") or {}
+    if off.get("status") == CANNOT_DETERMINE:
+        return 2
     if CANNOT_DETERMINE in (backup.get("freshness"), proof.get("freshness")):
         return 2
+    # A local artifact that never reached the repository is NOT a backup.
+    if args.remote and off.get("shipped") is False:
+        return 1
     if backup.get("freshness") != CURRENT or not backup.get("opens"):
         return 1
     if proof.get("freshness") != CURRENT or proof.get("outcome") != "verified":
