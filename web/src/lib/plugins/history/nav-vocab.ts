@@ -151,6 +151,55 @@ export const UNSTYLED_PRE_EXISTING: readonly string[] = [
 ];
 
 /**
+ * The shape of the class Svelte's compiler adds to an element a
+ * COMPONENT-SCOPED `<style>` rule matches, e.g. `svelte-1fqyr9v`.
+ *
+ * IT IS THE ONE CLASS IN THE RAIL THAT THE VOCABULARY ABOVE DOES NOT
+ * NAME, and it is admitted deliberately rather than tolerated quietly.
+ *
+ * The owner asked for the rail to be compacted (2026-09-18: "the top
+ * spacing on left bar above the cards is wrong ... we will need to
+ * compact the bar more ... demote the sizes of the session count and
+ * last activity"). Density has to be declared somewhere, and there are
+ * only two places it can go:
+ *
+ *   1. `client/css/archive-nav*.css`, which the VANILLA app still
+ *      loads. A rule there compacts the shipping rail as well as this
+ *      port, on a screen this work has not replaced yet.
+ *   2. A component-scoped `<style>`, which by construction matches only
+ *      elements this component wrote and can never reach the vanilla
+ *      tree.
+ *
+ * The second is the only one that keeps the change inside the port, so
+ * it is what `NavProjectCard.svelte` and `NavRail.svelte` use, and this
+ * generated class is the price. It is a COMPILER ARTIFACT, not a
+ * styling hook: it carries a content hash, it changes whenever the
+ * component's styles change, and nothing outside the compiler may
+ * target it. So it costs Adam's re-skin nothing, which is what
+ * commitment 1 was made to protect - every BEM class the rail emits is
+ * still exactly the set above.
+ *
+ * MATCHED BY PATTERN RATHER THAN LISTED, because the hash is not stable
+ * across an edit to the styles, so a literal would have to be rewritten
+ * every time a padding changed and would be updated without being
+ * thought about.
+ */
+export const SCOPE_CLASS_PATTERN = /^svelte-[a-z0-9]+$/;
+
+/**
+ * Is this class name Svelte's own scoping artifact rather than one of
+ * ours?
+ *
+ * Inputs: name - one class name, with no leading dot.
+ * Output: true for a compiler scope class, false for anything else.
+ * Example: isScopeClass('svelte-1fqyr9v')       // -> true
+ *          isScopeClass('archive-nav__card')    // -> false
+ */
+export function isScopeClass(name: string): boolean {
+    return SCOPE_CLASS_PATTERN.test(name);
+}
+
+/**
  * The unattributed node's name. It says WHAT THESE TRANSCRIPTS ARE, not
  * merely what they lack: their source path has no `.claude/projects`
  * layer, so the slug deriver returned "none declared" rather than

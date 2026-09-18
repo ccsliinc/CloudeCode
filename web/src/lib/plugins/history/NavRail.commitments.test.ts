@@ -178,7 +178,9 @@ describe('NavRail: the three public commitments', () => {
         flushSync();
     }
 
-    it('COMMITMENT 1: emits only class names the vocabulary declares', async () => {
+    it('COMMITMENT 1: emits only class names the vocabulary declares, '
+        + 'plus the compiler scope class it names as the one exception',
+    async () => {
         await paintEverything();
         const vocab = await import('./nav-vocab');
         const allowed = new Set<string>([
@@ -190,7 +192,32 @@ describe('NavRail: the three public commitments', () => {
         expect(seen.size).toBeGreaterThan(15);
         // NAMES THE OFFENDER. A bare `expect(false).toBe(true)` says a
         // class escaped and leaves the reader grepping for which one.
-        expect([...seen].filter((c) => !allowed.has(c))).toEqual([]);
+        expect([...seen]
+            .filter((c) => !allowed.has(c) && !vocab.isScopeClass(c)))
+            .toEqual([]);
+    });
+
+    it('COMMITMENT 1, the exception measured: the density rules really '
+        + 'are component-scoped, which is what keeps them off the vanilla '
+        + 'rail', async () => {
+        // THE EXEMPTION ABOVE IS ONLY HONEST IF IT IS COVERING
+        // SOMETHING. `isScopeClass` would let an unbounded family of
+        // names through, so this asserts the family is actually
+        // present and is actually the compiler's - a scope class
+        // appears if and only if a component declared scoped styles,
+        // and those styles are the whole reason the 12 shared
+        // stylesheets did not have to be edited. If this ever measures
+        // zero, the rules moved somewhere global and the next test's
+        // line count is no longer proof of anything.
+        await paintEverything();
+        const vocab = await import('./nav-vocab');
+        const scoped = [...emittedClasses()].filter((c) => vocab.isScopeClass(c));
+        expect(scoped.length).toBeGreaterThan(0);
+        // And it is on the CARD, which is where the density pass lives.
+        const card = document.querySelector('.archive-nav__node--project');
+        expect(card).not.toBeNull();
+        expect([...(card as HTMLElement).classList].some(vocab.isScopeClass))
+            .toBe(true);
     });
 
     it('COMMITMENT 2: every class it emits already has a rule in the '
@@ -212,7 +239,17 @@ describe('NavRail: the three public commitments', () => {
         expect(css.length).toBeGreaterThan(1000);
 
         await paintEverything();
-        const unstyled = [...emittedClasses()].filter((c) => !css.includes(`.${c}`));
+        const vocab = await import('./nav-vocab');
+        // The compiler scope class is excluded because it is not OURS
+        // and is not a hook: it is the artifact of the component-scoped
+        // density rules, whose whole purpose is to be declared outside
+        // these 12 files. Looking for a rule for it in `client/css`
+        // would be looking for the thing the change deliberately did
+        // not add. `nav-vocab.ts` carries the reasoning; the test above
+        // proves the family is real rather than an empty allowance.
+        const unstyled = [...emittedClasses()]
+            .filter((c) => !vocab.isScopeClass(c))
+            .filter((c) => !css.includes(`.${c}`));
         // The four are emitted by the VANILLA rail today and match
         // nothing in any of the 12 stylesheets. Named in `nav-vocab.ts`
         // rather than quietly filtered here, so a fifth cannot join them

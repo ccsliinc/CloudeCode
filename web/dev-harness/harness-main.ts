@@ -37,18 +37,41 @@ import './harness-legacy';
 // IMPORTING IS NOT EDITING. Commitment 2 is that none of these twelve files
 // changes; this adds a reference to them from harness scaffolding, and they
 // are read byte-for-byte as they sit on disk.
-import '../../client/css/archive-align.css';
-import '../../client/css/archive-chat.css';
-import '../../client/css/archive-export.css';
+// THE ORDER IS client/index.html's, NOT ALPHABETICAL, AND THAT IS THE
+// WHOLE POINT. Four of these twelve override another by LOAD ORDER
+// alone, at equal specificity, and index.html says so in as many words
+// beside each link: archive-nav-card.css overrides the rail's generic
+// project row and so must follow archive-nav.css (and archive-outcomes
+// .css), archive-nav-info.css follows the card it belongs to,
+// archive-align.css follows archive-reader.css, and archive-panes.css
+// follows archive-tlist.css.
+//
+// Imported alphabetically - which is how this list was first written -
+// archive-nav-card.css lands BEFORE archive-nav.css and loses every
+// tie. Measured: `.archive-nav__count--sessions { color: accent;
+// font-weight: 600 }` was outranked by `.archive-nav__count { color:
+// var(--color-fg-muted) }`, so the sessions figure rendered MUTED and
+// at weight 400 - it looked like a deliberately quiet number, and the
+// four signals the card's header says tell the two counts apart were
+// silently down to three. Nothing errored, and both columns of the
+// parity page were wrong in exactly the same way, so the comparison
+// between them still read as perfect agreement.
+//
+// A HARNESS THAT LOADS THE RIGHT FILES IN THE WRONG ORDER IS NOT
+// SHOWING THE APP. Keep this list in index.html's order, and when a
+// stylesheet is added there, add it HERE in the same position.
+import '../../client/css/archive-outcomes.css';
+import '../../client/css/archive-screen.css';
+import '../../client/css/archive-nav.css';
 import '../../client/css/archive-nav-card.css';
 import '../../client/css/archive-nav-info.css';
-import '../../client/css/archive-nav.css';
-import '../../client/css/archive-outcomes.css';
-import '../../client/css/archive-panes.css';
 import '../../client/css/archive-reader.css';
-import '../../client/css/archive-screen.css';
+import '../../client/css/archive-chat.css';
 import '../../client/css/archive-search.css';
+import '../../client/css/archive-export.css';
 import '../../client/css/archive-tlist.css';
+import '../../client/css/archive-align.css';
+import '../../client/css/archive-panes.css';
 import { installHarnessApiGlobal } from './harness-api';
 import HarnessRoot from './HarnessRoot.svelte';
 

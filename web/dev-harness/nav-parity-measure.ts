@@ -192,15 +192,36 @@ export function reportInto(
             + 'would read as perfect agreement.');
     } else if (diffs.length === 0) {
         lines.push('VERDICT: the two rails lay out identically on every '
-            + 'compared field. A spacing complaint here is a RESTYLE '
-            + 'REQUEST, not a port defect.');
+            + 'compared field.');
     } else {
-        lines.push(`VERDICT: ${diffs.length} disagreements. `
-            + 'A spacing complaint here is a PORT DEFECT.');
+        // GROUPED, BECAUSE A UNIFORM DIFFERENCE IS ONE FINDING AND NOT
+        // 98 OF THEM. Before the density pass this page printed one line
+        // per disagreeing row, which was right when a disagreement was a
+        // bug and would have been a handful of lines. The rail is now
+        // DELIBERATELY denser than the vanilla one (the owner asked for
+        // it on 2026-09-18), so every row disagrees about four fields
+        // and the ungrouped report was 392 lines of the same four
+        // sentences - which hides the one thing worth reading, a field
+        // that differs on SOME rows but not all.
+        const groups = new Map<string, { count: number; example: Difference }>();
         for (const d of diffs) {
-            lines.push(`  row ${d.index} ${d.field}: `
-                + `${left.which}=${d.left} ${right.which}=${d.right}`
-                + (d.label ? `  (${d.label})` : ''));
+            const key = `${d.field} ${d.left} ${d.right}`;
+            const hit = groups.get(key);
+            if (hit) hit.count += 1;
+            else groups.set(key, { count: 1, example: d });
+        }
+        lines.push(`VERDICT: ${diffs.length} disagreements over `
+            + `${groups.size} distinct differences. The density pass is `
+            + 'deliberate, so a difference here is a CHANGE TO READ, not '
+            + 'automatically a defect. A difference that does NOT cover '
+            + 'every row is the one to look at.');
+        for (const { count, example: d } of groups.values()) {
+            const scope = count === left.rows.length
+                ? 'every row'
+                : `${count} of ${left.rows.length} rows`;
+            lines.push(`  ${d.field}: ${left.which}=${d.left} `
+                + `${right.which}=${d.right}  [${scope}]`
+                + (count === left.rows.length || !d.label ? '' : `  e.g. ${d.label}`));
         }
     }
     lines.push('');

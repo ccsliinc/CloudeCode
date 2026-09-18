@@ -473,3 +473,25 @@
         />
     {/if}
 </nav>
+
+<style>
+    /* THE CHROME ABOVE THE CARDS. Scoped, so it cannot reach the
+     * vanilla rail that is still shipping; `NavProjectCard.svelte`
+     * carries the full argument for leaving the 12 shared stylesheets
+     * alone. Measured on the parity page's whole-rail column: the
+     * order control's bottom edge and the first card's top edge were
+     * BOTH at 82px, so the list touched the control with no
+     * separation, while the rail's padding and the order control each
+     * had 8px. The rhythm read 8 / 8 / 0 and now reads 8 / 6 / 8 - and
+     * the chrome is 12px shorter, so the first card starts HIGHER than
+     * before despite gaining a real gap. The select drops to its own
+     * label's 0.8rem, so the pair reads as one control. */
+    .archive-nav__filter { padding: 6px 10px; }
+
+    .archive-nav__order { margin-top: 6px; }
+
+    .archive-nav__order-select { padding: 4px 8px; font-size: 0.8rem; }
+
+    /* The separation the list never had. */
+    .archive-nav__level { margin-top: 8px; }
+</style>

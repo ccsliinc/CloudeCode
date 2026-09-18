@@ -30,18 +30,41 @@ import { mount } from 'svelte';
 // The same list `harness-main.ts` imports, and for the same reason: a
 // component measured in Chrome's user-agent defaults is not the
 // component that ships.
-import '../../client/css/archive-align.css';
-import '../../client/css/archive-chat.css';
-import '../../client/css/archive-export.css';
+// THE ORDER IS client/index.html's, NOT ALPHABETICAL, AND THAT IS THE
+// WHOLE POINT. Four of these twelve override another by LOAD ORDER
+// alone, at equal specificity, and index.html says so in as many words
+// beside each link: archive-nav-card.css overrides the rail's generic
+// project row and so must follow archive-nav.css (and archive-outcomes
+// .css), archive-nav-info.css follows the card it belongs to,
+// archive-align.css follows archive-reader.css, and archive-panes.css
+// follows archive-tlist.css.
+//
+// Imported alphabetically - which is how this list was first written -
+// archive-nav-card.css lands BEFORE archive-nav.css and loses every
+// tie. Measured: `.archive-nav__count--sessions { color: accent;
+// font-weight: 600 }` was outranked by `.archive-nav__count { color:
+// var(--color-fg-muted) }`, so the sessions figure rendered MUTED and
+// at weight 400 - it looked like a deliberately quiet number, and the
+// four signals the card's header says tell the two counts apart were
+// silently down to three. Nothing errored, and both columns of the
+// parity page were wrong in exactly the same way, so the comparison
+// between them still read as perfect agreement.
+//
+// A HARNESS THAT LOADS THE RIGHT FILES IN THE WRONG ORDER IS NOT
+// SHOWING THE APP. Keep this list in index.html's order, and when a
+// stylesheet is added there, add it HERE in the same position.
+import '../../client/css/archive-outcomes.css';
+import '../../client/css/archive-screen.css';
+import '../../client/css/archive-nav.css';
 import '../../client/css/archive-nav-card.css';
 import '../../client/css/archive-nav-info.css';
-import '../../client/css/archive-nav.css';
-import '../../client/css/archive-outcomes.css';
-import '../../client/css/archive-panes.css';
 import '../../client/css/archive-reader.css';
-import '../../client/css/archive-screen.css';
+import '../../client/css/archive-chat.css';
 import '../../client/css/archive-search.css';
+import '../../client/css/archive-export.css';
 import '../../client/css/archive-tlist.css';
+import '../../client/css/archive-align.css';
+import '../../client/css/archive-panes.css';
 // The app's own tokens. Without them every `var(--color-*)` falls back
 // to nothing and both columns would be measured in a palette the app
 // never uses. Layout does not depend on colour, but `--radius-*` and the
@@ -63,6 +86,8 @@ import { NavProjectCard } from '../src/lib/plugins/history/index';
 import type { NavRowData } from '../src/lib/plugins/history/index';
 import real from '../src/lib/plugins/history/nav-real-nodes.fixture.json' with { type: 'json' };
 import { measureLevel, reportInto } from './nav-parity-measure';
+import { measureChrome, reportChrome } from './nav-parity-chrome';
+import { mountOfflineRail } from './nav-parity-rail';
 
 /** The mount point in `nav-parity.html`. It carries no class, on purpose. */
 const ROOT_ID = 'nav-parity-root';
@@ -164,6 +189,34 @@ function fillSvelte(level: HTMLElement, rows: readonly NavRowData[]): void {
     }
 }
 
+/**
+ * Wait for one painted frame, but never longer than a timer.
+ *
+ * Description: A BARE `requestAnimationFrame` NEVER RESOLVES IN A
+ *   BACKGROUNDED TAB - a browser does not paint one, so it never runs
+ *   that tab's frame callbacks. This page was written with a bare one
+ *   and, opened in a tab that was not in front, sat on "measuring..."
+ *   forever with every column correctly rendered behind it. That is
+ *   gotcha 9 in the project's own CLAUDE.md, and the answer there is the
+ *   answer here: a frame wait may DELAY the work, never CANCEL it. The
+ *   timer is a backstop and not the normal path - in a visible tab the
+ *   frame wins every time.
+ * Inputs: none.
+ * Output: a promise that settles once laid out, or after the backstop.
+ * Example: await paintedFrame();
+ */
+function paintedFrame(): Promise<void> {
+    return new Promise<void>((resolve) => {
+        let done = false;
+        const finish = (): void => { if (!done) { done = true; resolve(); } };
+        requestAnimationFrame(() => finish());
+        setTimeout(finish, FRAME_BACKSTOP_MS);
+    });
+}
+
+/** How long to wait for a frame before measuring anyway. */
+const FRAME_BACKSTOP_MS = 300;
+
 /** A heading over one column, so a screenshot says which is which. */
 function heading(doc: Document, text: string): HTMLElement {
     const h = doc.createElement('p');
@@ -217,8 +270,22 @@ function start(): void {
     leftBox.appendChild(left.nav);
     rightBox.appendChild(heading(document, 'vanilla (client/js)'));
     rightBox.appendChild(right.nav);
+
+    // THE THIRD COLUMN IS THE WHOLE RAIL, not a third set of cards. It
+    // is the only one of the three that has the chrome above the cards,
+    // which is the thing the top-spacing complaint is about. It is
+    // given the same 320px box so its cards stay comparable with the
+    // other two rather than becoming a fourth measurement.
+    const railBox = document.createElement('div');
+    railBox.appendChild(heading(document, 'svelte, the whole rail (chrome + cards)'));
+    const railHost = document.createElement('div');
+    railHost.style.width = `${RAIL_WIDTH_PX}px`;
+    railHost.style.height = '560px';
+    railBox.appendChild(railHost);
+
     columns.appendChild(leftBox);
     columns.appendChild(rightBox);
+    columns.appendChild(railBox);
 
     document.body.style.margin = '0';
     document.body.style.background = '#1a1a1a';
@@ -233,16 +300,33 @@ function start(): void {
         return;
     }
 
-    // One frame, so the browser has laid both columns out before any box
-    // is read. Reading in the same task returns the pre-layout geometry
-    // for whichever column the engine had not reached yet, which is a
-    // difference this page would then report as a real one.
-    requestAnimationFrame(() => {
+    // The whole rail is mounted and its rows loaded before anything is
+    // measured. An awaited load that is not awaited leaves the chrome
+    // laid out against an EMPTY level, where the filter-empty message
+    // sits where the first card goes - so the gap measured would be a
+    // gap above a different thing.
+    mountOfflineRail(railHost, rows).then(async () => {
+        // One painted frame, so the browser has laid every column out
+        // before any box is read. Reading in the same task returns the
+        // pre-layout geometry for whichever column the engine had not
+        // reached yet, which is a difference this page would then report
+        // as a real one.
+        await paintedFrame();
         reportInto(
             report,
             measureLevel('svelte', left.level),
             measureLevel('vanilla', right.level),
         );
+        const nav = railHost.querySelector<HTMLElement>('.archive-nav');
+        const lines = nav
+            ? reportChrome(measureChrome('svelte rail', nav))
+            : ['the whole-rail column did not mount, so the chrome above '
+                + 'the cards was NOT measured.'];
+        report.textContent = `${report.textContent}\n\nthe chrome above the `
+            + `first card:\n${lines.join('\n')}`;
+    }).catch((err: unknown) => {
+        report.textContent = `${report.textContent}\n\nthe whole-rail column `
+            + `REFUSED: ${err instanceof Error ? err.message : String(err)}`;
     });
 }
 
