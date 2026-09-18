@@ -27,7 +27,10 @@
   "app_display_name": "CloudeCode",
   "app_description": "The CloudeCode app itself - FastAPI server plus browser client, branch v1.1. Split out of the Infrastructure project 2026-09-07; Infrastructure keeps the fleet, this keeps the app.",
   "app_name_source": "as_written",
-  "app_project_id": 18
+  "app_project_id": 18,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 2,
@@ -57,7 +60,10 @@
   "app_display_name": "daily-briefing",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 8
+  "app_project_id": 8,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 3,
@@ -87,7 +93,10 @@
   "app_display_name": "Media",
   "app_description": "Media pipeline (migrated from workstation 2026-08-25)",
   "app_name_source": "as_written",
-  "app_project_id": 1
+  "app_project_id": 1,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 4,
@@ -117,7 +126,10 @@
   "app_display_name": "Fantasy Football 2026",
   "app_description": "Fantasy Football 2026",
   "app_name_source": "as_written",
-  "app_project_id": 17
+  "app_project_id": 17,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 5,
@@ -147,7 +159,10 @@
   "app_display_name": "Personal Assistant",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 7
+  "app_project_id": 7,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 6,
@@ -177,7 +192,10 @@
   "app_display_name": "BHPP",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 10
+  "app_project_id": 10,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 7,
@@ -207,7 +225,10 @@
   "app_display_name": "Mac",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 5
+  "app_project_id": 5,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 8,
@@ -237,7 +258,10 @@
   "app_display_name": "Hirschfeld",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 6
+  "app_project_id": 6,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 9,
@@ -267,7 +291,10 @@
   "app_display_name": "Amerifund",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 9
+  "app_project_id": 9,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 10,
@@ -296,8 +323,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/permprobe",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 11,
@@ -326,8 +356,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_ko0irget",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 12,
@@ -356,8 +389,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_5ukrvlul",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 13,
@@ -386,8 +422,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work__yrasc2z",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 14,
@@ -416,8 +455,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_qrqd1nku",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 15,
@@ -446,8 +488,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_t4kdpt79",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 16,
@@ -476,8 +521,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_zn4izl16",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 17,
@@ -506,8 +554,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_yyfp9eml",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 18,
@@ -536,8 +587,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/cc_rht_work_dj8de2mj",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 19,
@@ -566,8 +620,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/p5_work_79ul7oaz",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 20,
@@ -596,8 +653,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/var/folders/p6/2fx4wn854s19lksf30bgv6rh0000gn/T/p4_work_9e94pz2r",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 21,
@@ -627,7 +687,10 @@
   "app_display_name": "Punchlist Test",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 19
+  "app_project_id": 19,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 22,
@@ -657,7 +720,10 @@
   "app_display_name": "Punchlist Two",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 79
+  "app_project_id": 79,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 23,
@@ -686,8 +752,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/resizeprobe",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 24,
@@ -716,8 +785,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-CloudeCode/2629dba5-234e-44d2-be54-ddaf69c8db4b/scratchpad/renametest",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 25,
@@ -747,7 +819,10 @@
   "app_display_name": "ses_ec5bf2a3",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 28
+  "app_project_id": 28,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 26,
@@ -777,7 +852,10 @@
   "app_display_name": "ses_c3737fbe",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 27
+  "app_project_id": 27,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 27,
@@ -807,7 +885,10 @@
   "app_display_name": "scrolltest",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 26
+  "app_project_id": 26,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 28,
@@ -837,7 +918,10 @@
   "app_display_name": "fstest",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 25
+  "app_project_id": 25,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 29,
@@ -867,7 +951,10 @@
   "app_display_name": "claude-config-sync",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 24
+  "app_project_id": 24,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 30,
@@ -897,7 +984,10 @@
   "app_display_name": "jsugamele",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 20
+  "app_project_id": 20,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 31,
@@ -927,7 +1017,10 @@
   "app_display_name": "Fantasy Hockey 2026",
   "app_description": "Fantasy hockey for the 2026 season",
   "app_name_source": "as_written",
-  "app_project_id": 2
+  "app_project_id": 2,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 32,
@@ -957,7 +1050,10 @@
   "app_display_name": "Infrastructure",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 13
+  "app_project_id": 13,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 33,
@@ -987,7 +1083,10 @@
   "app_display_name": "Infrastructure",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 13
+  "app_project_id": 13,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 34,
@@ -1017,7 +1116,10 @@
   "app_display_name": "Mindustry3",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 16
+  "app_project_id": 16,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 35,
@@ -1047,7 +1149,10 @@
   "app_display_name": "Developer",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 15
+  "app_project_id": 15,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 36,
@@ -1077,7 +1182,10 @@
   "app_display_name": "N8N",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 14
+  "app_project_id": 14,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 37,
@@ -1107,7 +1215,10 @@
   "app_display_name": "New Work",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 12
+  "app_project_id": 12,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 38,
@@ -1137,7 +1248,10 @@
   "app_display_name": "PT-IMC",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 11
+  "app_project_id": 11,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 39,
@@ -1166,8 +1280,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp/claude-501/-Users-jsugamele-Library-Mobile-Documents-com-apple-CloudDocs-Sync-Development-Assistants-Infrastructure/6e4a3f8b-4751-44b5-a100-fcdad830f741/scratchpad/hookprobe",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 40,
@@ -1196,8 +1313,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp/permtest-45244",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 41,
@@ -1227,7 +1347,10 @@
   "app_display_name": "Hirschfeld",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 6
+  "app_project_id": 6,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 42,
@@ -1256,8 +1379,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp/claude-501/-Users-jsugamele-Development-Assistants-Infrastructure/6e4a3f8b-4751-44b5-a100-fcdad830f741/scratchpad/forktest",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 43,
@@ -1286,8 +1412,11 @@
   ],
   "app_display_name": null,
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "scratch_path",
+  "app_project_id": null,
+  "app_name_evidence": null,
+  "app_name_cwd": "/private/tmp",
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 44,
@@ -1317,7 +1446,10 @@
   "app_display_name": "jsugamele/scripts",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 78
+  "app_project_id": 78,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 45,
@@ -1347,7 +1479,10 @@
   "app_display_name": "wt-tui-scrollback-v2",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 77
+  "app_project_id": 77,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 46,
@@ -1377,7 +1512,10 @@
   "app_display_name": "fs",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 76
+  "app_project_id": 76,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 47,
@@ -1407,7 +1545,10 @@
   "app_display_name": "classic",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 75
+  "app_project_id": 75,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 48,
@@ -1437,7 +1578,10 @@
   "app_display_name": "hlv3-proj",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 74
+  "app_project_id": 74,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 49,
@@ -1467,7 +1611,10 @@
   "app_display_name": "altscreen-lab",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 73
+  "app_project_id": 73,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 50,
@@ -1497,7 +1644,10 @@
   "app_display_name": "Scratch/.claude",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 72
+  "app_project_id": 72,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 51,
@@ -1527,7 +1677,10 @@
   "app_display_name": "Scratch",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 71
+  "app_project_id": 71,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 52,
@@ -1557,7 +1710,10 @@
   "app_display_name": "csj.dbexport",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 70
+  "app_project_id": 70,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 53,
@@ -1587,7 +1743,10 @@
   "app_display_name": "BHPP Sql",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 69
+  "app_project_id": 69,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 54,
@@ -1614,10 +1773,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": "Production / tools/unifi_tunnel_reset",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_leaf_match",
+  "app_name_cwd": "/Users/jsugamele/Development/Production/tools/unifi_tunnel_reset",
+  "app_name_anchor_project_id": 32
  },
  {
   "project_id": 55,
@@ -1647,7 +1809,10 @@
   "app_display_name": "scratch-rpisurv-office",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 67
+  "app_project_id": 67,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 56,
@@ -1677,7 +1842,10 @@
   "app_display_name": "n8n/document_catalog",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 66
+  "app_project_id": 66,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 57,
@@ -1704,10 +1872,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": "Production / web/msp-dashboard",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_leaf_match",
+  "app_name_cwd": "/Users/jsugamele/Development/Production/web/msp-dashboard",
+  "app_name_anchor_project_id": 32
  },
  {
   "project_id": 58,
@@ -1737,7 +1908,10 @@
   "app_display_name": "media-cleanup-qnap",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 62
+  "app_project_id": 62,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 59,
@@ -1767,7 +1941,10 @@
   "app_display_name": "jsugamele-slack",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 61
+  "app_project_id": 61,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 60,
@@ -1797,7 +1974,10 @@
   "app_display_name": "components",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 60
+  "app_project_id": 60,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 61,
@@ -1827,7 +2007,10 @@
   "app_display_name": "jsugamele_podio_migration",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 59
+  "app_project_id": 59,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 62,
@@ -1857,7 +2040,10 @@
   "app_display_name": "jsugamele-personal_assistant",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 58
+  "app_project_id": 58,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 63,
@@ -1887,7 +2073,10 @@
   "app_display_name": "jsugamele-paperless",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 57
+  "app_project_id": 57,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 64,
@@ -1917,7 +2106,10 @@
   "app_display_name": "jsugamele-maestro",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 56
+  "app_project_id": 56,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 65,
@@ -1947,7 +2139,10 @@
   "app_display_name": "jsugamele-long-term-backup",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 55
+  "app_project_id": 55,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 66,
@@ -1977,7 +2172,10 @@
   "app_display_name": "jsugamele-immich",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 54
+  "app_project_id": 54,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 67,
@@ -2007,7 +2205,10 @@
   "app_display_name": "jsugamele-dgx",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 49
+  "app_project_id": 49,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 68,
@@ -2037,7 +2238,10 @@
   "app_display_name": "homeassistant",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 53
+  "app_project_id": 53,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 69,
@@ -2067,7 +2271,10 @@
   "app_display_name": "hirschfeld-it-policy",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 52
+  "app_project_id": 52,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 70,
@@ -2097,7 +2304,10 @@
   "app_display_name": "ha-smart-sprinkler-control",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 51
+  "app_project_id": 51,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 71,
@@ -2127,7 +2337,10 @@
   "app_display_name": "ha-smart-lock-manager",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 50
+  "app_project_id": 50,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 72,
@@ -2157,7 +2370,10 @@
   "app_display_name": "docker-management-and-backup",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 46
+  "app_project_id": 46,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 73,
@@ -2184,10 +2400,13 @@
     "session_count": 0
    }
   ],
-  "app_display_name": null,
+  "app_display_name": "Production / tools/dev_tools/scripts",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_leaf_match",
+  "app_name_cwd": "/Users/jsugamele/Development/Production/tools/dev_tools/scripts",
+  "app_name_anchor_project_id": 32
  },
  {
   "project_id": 74,
@@ -2217,7 +2436,10 @@
   "app_display_name": "server",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 45
+  "app_project_id": 45,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 75,
@@ -2247,7 +2469,10 @@
   "app_display_name": "scripts",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 44
+  "app_project_id": 44,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 76,
@@ -2277,7 +2502,10 @@
   "app_display_name": "frontend",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 43
+  "app_project_id": 43,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 77,
@@ -2307,7 +2535,10 @@
   "app_display_name": "claude_4",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 42
+  "app_project_id": 42,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 78,
@@ -2337,7 +2568,10 @@
   "app_display_name": "claude_3",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 41
+  "app_project_id": 41,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 79,
@@ -2367,7 +2601,10 @@
   "app_display_name": "camera-viewer",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 40
+  "app_project_id": 40,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 80,
@@ -2397,7 +2634,10 @@
   "app_display_name": "fds-viewer",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 39
+  "app_project_id": 39,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 81,
@@ -2427,7 +2667,10 @@
   "app_display_name": "EDP - Greatland",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 38
+  "app_project_id": 38,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 82,
@@ -2457,7 +2700,10 @@
   "app_display_name": "bhpp-web",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 37
+  "app_project_id": 37,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 83,
@@ -2487,7 +2733,10 @@
   "app_display_name": "bhpp-qande-v3",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 36
+  "app_project_id": 36,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 84,
@@ -2517,7 +2766,10 @@
   "app_display_name": ".claude",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 35
+  "app_project_id": 35,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 85,
@@ -2547,7 +2799,10 @@
   "app_display_name": "bhpp_new_server",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 34
+  "app_project_id": 34,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 86,
@@ -2577,7 +2832,10 @@
   "app_display_name": "ai-setup",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 33
+  "app_project_id": 33,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 87,
@@ -2607,7 +2865,10 @@
   "app_display_name": "Production",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 32
+  "app_project_id": 32,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 88,
@@ -2637,7 +2898,10 @@
   "app_display_name": "led_matrix",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 31
+  "app_project_id": 31,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 89,
@@ -2664,10 +2928,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": "Personal Assistant / projects/vault-cleanup",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_path_match",
+  "app_name_cwd": "/Users/jsugamele/Development/Assistants/Personal_Assistant/projects/vault-cleanup",
+  "app_name_anchor_project_id": 7
  },
  {
   "project_id": 90,
@@ -2694,10 +2961,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": "Media / .claude/worktrees/vibrant-leakey-ea30bb",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_path_match",
+  "app_name_cwd": "/Users/jsugamele/Development/Assistants/Media/.claude/worktrees/vibrant-leakey-ea30bb",
+  "app_name_anchor_project_id": 1
  },
  {
   "project_id": 91,
@@ -2724,10 +2994,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": "Infrastructure / projects/docker-management/source",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_path_match",
+  "app_name_cwd": "/Users/jsugamele/Development/Assistants/Infrastructure/projects/docker-management/source",
+  "app_name_anchor_project_id": 13
  },
  {
   "project_id": 92,
@@ -2757,7 +3030,10 @@
   "app_display_name": "3D Work",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 30
+  "app_project_id": 30,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 93,
@@ -2787,7 +3063,10 @@
   "app_display_name": "qande",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 29
+  "app_project_id": 29,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 94,
@@ -2814,10 +3093,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": ".dotfiles / setup",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_path_match",
+  "app_name_cwd": "/Users/jsugamele/.dotfiles/setup",
+  "app_name_anchor_project_id": 23
  },
  {
   "project_id": 95,
@@ -2844,10 +3126,13 @@
     "session_count": 1
    }
   ],
-  "app_display_name": null,
+  "app_display_name": ".dotfiles / .claude",
   "app_description": null,
-  "app_name_source": "none",
-  "app_project_id": null
+  "app_name_source": "derived_cwd",
+  "app_project_id": null,
+  "app_name_evidence": "cwd_path_match",
+  "app_name_cwd": "/Users/jsugamele/.dotfiles/.claude",
+  "app_name_anchor_project_id": 23
  },
  {
   "project_id": 96,
@@ -2877,7 +3162,10 @@
   "app_display_name": ".dotfiles",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 23
+  "app_project_id": 23,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 97,
@@ -2907,7 +3195,10 @@
   "app_display_name": ".claude2",
   "app_description": null,
   "app_name_source": "as_written",
-  "app_project_id": 22
+  "app_project_id": 22,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  },
  {
   "project_id": 98,
@@ -2937,6 +3228,9 @@
   "app_display_name": "Claude",
   "app_description": null,
   "app_name_source": "canonical_spelling",
-  "app_project_id": 21
+  "app_project_id": 21,
+  "app_name_evidence": null,
+  "app_name_cwd": null,
+  "app_name_anchor_project_id": null
  }
 ]

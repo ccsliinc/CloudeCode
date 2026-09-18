@@ -89,6 +89,7 @@ import { measureLevel, reportInto } from './nav-parity-measure';
 import { measureChrome, reportChrome } from './nav-parity-chrome';
 import { mountOfflineRail } from './nav-parity-rail';
 import { measureDensity, reportDensity } from './nav-parity-density';
+import { censusNames, reportNames } from './nav-parity-names';
 
 /** The mount point in `nav-parity.html`. It carries no class, on purpose. */
 const ROOT_ID = 'nav-parity-root';
@@ -113,6 +114,18 @@ const RAIL_WIDTH_PX = 320;
  * ellipsised, something other than width is moving.
  */
 const WIDE_RAIL_WIDTH_PX = 480;
+
+/**
+ * The narrowest the pane goes, and the width a truncation claim has to
+ * survive.
+ *
+ * The vanilla app's own archive pane is resizable down to 272px. 320 is
+ * where the owner has it and is what everything else here is measured
+ * at, but a layout that only holds at its comfortable width has not been
+ * measured - and this is the width the derived names arrived at, which
+ * are the longest labels this rail has ever had to draw.
+ */
+const NARROW_RAIL_WIDTH_PX = 272;
 
 /** As much of `window` as this page reads back after the imports above. */
 interface VanillaWindow {
@@ -345,11 +358,31 @@ function start(): void {
                 'svelte, one line (the after)', left.nav, left.level, WIDE_RAIL_WIDTH_PX,
             )),
             ...reportDensity(measureDensity(
+                'svelte, one line (the after)', left.nav, left.level,
+                NARROW_RAIL_WIDTH_PX,
+            )),
+            ...reportDensity(measureDensity(
                 'svelte, one line (the after)', left.nav, left.level, RAIL_WIDTH_PX,
             )),
         ];
         report.textContent = `${report.textContent}\n\ncounts and date on `
             + `one line:\n${density.join('\n')}`;
+
+        // THE NAMING CENSUS RUNS LAST AND READS THE SAME LAID-OUT DOM
+        // the density pass just left at RAIL_WIDTH_PX. It counts what
+        // the FACES show, which is the client's own work, rather than
+        // what the fixture carries, which is the server's.
+        const names: string[] = [
+            ...reportNames(censusNames('svelte', left.level, RAIL_WIDTH_PX)),
+        ];
+        measureDensity('svelte', left.nav, left.level, NARROW_RAIL_WIDTH_PX);
+        names.push(...reportNames(
+            censusNames('svelte', left.level, NARROW_RAIL_WIDTH_PX),
+        ));
+        // Left back where every other measurement on this page assumes.
+        measureDensity('svelte', left.nav, left.level, RAIL_WIDTH_PX);
+        report.textContent = `${report.textContent}\n\nname, scratch or `
+            + `path:\n${names.join('\n')}`;
 
         const nav = railHost.querySelector<HTMLElement>('.archive-nav');
         const lines = nav

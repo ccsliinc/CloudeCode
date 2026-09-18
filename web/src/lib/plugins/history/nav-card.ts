@@ -37,7 +37,7 @@
  * Ported from the pure half of client/js/archive-nav-card.js.
  */
 import { NODE_KINDS } from './nav-vocab';
-import { appNameFor, type AppName } from './nav-app-name';
+import { appNameFor, scratchFaceFor, type AppName } from './nav-app-name';
 import { countFor, labelFor, renderCount, type NavRowData } from './nav-row';
 import { NOT_KNOWN } from './format';
 
@@ -170,6 +170,14 @@ export interface Presentation {
     readonly app: AppName;
     /** True when `name` above IS the app database's name. */
     readonly fromApp: boolean;
+    /**
+     * True when `name` above is the SCRATCH label rather than a name or
+     * a path. Never true at the same time as `fromApp`: a throwaway
+     * directory has no name to have borrowed. Kept as its own flag
+     * because the card styles a scratch row down and a test asserts the
+     * classification rather than reading the string.
+     */
+    readonly scratch: boolean;
 }
 
 /**
@@ -187,16 +195,19 @@ export interface Presentation {
  *   `/archive/projects`, which does not carry one. That is `absent`, not
  *   'none'.
  *
- *   THE NAME LADDER HAS FOUR RUNGS AND THE ORDER IS THE WHOLE DECISION.
+ *   THE NAME LADDER HAS FIVE RUNGS AND THE ORDER IS THE WHOLE DECISION.
  *   An OWNER'S OWN RENAME wins outright - it is the one value here a
  *   person typed, and a database lookup may not overrule it. Under that
- *   sits the APP DATABASE'S name, drawn only on the two approved match
- *   kinds (see `nav-app-name.ts`); under that the ARCHIVE's own derived
- *   name, which is null for 100 of 100 projects on this install because
- *   `observed_cwd` is null for all of them; and under that the slug.
- *   A refused match kind - `none`, `ambiguous`, `cannot_determine` -
- *   falls straight through to the third rung, which is exactly what the
- *   card drew before this field existed.
+ *   sits the APP DATABASE'S name, drawn only on the three approved
+ *   match kinds (see `nav-app-name.ts`, which is where this client opts
+ *   in to the derived rung); under that the SCRATCH label, which is not
+ *   a name and is not a path but a measured throwaway directory said
+ *   plainly; under that the ARCHIVE's own derived name, which is null
+ *   for 100 of 100 projects on this install because `observed_cwd` is
+ *   null for all of them; and under that the slug. A refused match kind
+ *   - `none`, `ambiguous`, `cwd_conflict`, `cannot_determine` - falls
+ *   straight through to the fourth rung, which is exactly what the card
+ *   drew before this field existed.
  * Inputs: row - the project node. overlay - a client-side fallback,
  *   consulted ONLY when the row carries no overlay block.
  * Output: the presentation.
@@ -225,8 +236,11 @@ export function presentationFor(
         // the overlay endpoint. Only when there is no rename may the app
         // database's name take the face.
         const fromApp = !renamed && app.named;
+        const scratchFace = renamed || fromApp ? null : scratchFaceFor(app);
         return {
-            name: fromApp ? (app.name as string) : serverSide,
+            name: fromApp
+                ? (app.name as string)
+                : scratchFace !== null ? scratchFace : serverSide,
             serverName: archiveName,
             group: typeof block.group === 'string' && block.group ? block.group : null,
             hidden: block.hidden === true,
@@ -234,6 +248,7 @@ export function presentationFor(
             overlayStatus: String(block.status || 'cannot_determine'),
             app,
             fromApp,
+            scratch: scratchFace !== null,
         };
     }
 
@@ -249,9 +264,11 @@ export function presentationFor(
         ? p.display_name
         : null;
     const fromApp = override === null && app.named;
+    const scratchFace = override !== null || fromApp ? null : scratchFaceFor(app);
     const name = override !== null
         ? override
-        : fromApp ? (app.name as string) : archiveName;
+        : fromApp ? (app.name as string)
+        : scratchFace !== null ? scratchFace : archiveName;
     return {
         name,
         serverName: archiveName,
@@ -265,6 +282,7 @@ export function presentationFor(
         overlayStatus: 'absent',
         app,
         fromApp,
+        scratch: scratchFace !== null,
     };
 }
 

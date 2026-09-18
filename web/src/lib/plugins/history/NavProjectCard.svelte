@@ -43,6 +43,15 @@
   source` carries the rung verbatim and `data-app-named` says whether
   the face is showing the app's name, so a test asserts the refusal
   rather than reading prose out of a title attribute.
+
+  A THROWAWAY DIRECTORY IS NEITHER NAMED NOR PATHED. 17 of the 98
+  projects on this install are per-run temp directories the server
+  measured and refused to name, and their real paths run to 178
+  characters. They draw `scratch / <leaf>` instead, styled down, and
+  `data-app-scratch` carries the classification. The composition and
+  the reasoning are in `nav-scratch-label.ts`; the full path stays on
+  this card's hover sentence and in the details modal, which is the
+  whole licence for shortening it.
 -->
 <script lang="ts">
     import { CLASS, NODE_KINDS, NODE_MOD, type NodeKind } from './nav-vocab';
@@ -90,6 +99,15 @@
     const title = $derived([
         pres.name,
         tip,
+        /*
+         * THE MEASURED FOLDER, WHICH `titleFor` CANNOT REACH. It reads
+         * `observed_cwd`, and that field is null for 100 of 100
+         * projects on this install. `app_name_cwd` is the directory the
+         * transcripts themselves recorded, and on a scratch row it is
+         * the path the face is deliberately not showing - so hover is
+         * where it has to be.
+         */
+        pres.app.cwd ? `folder: ${pres.app.cwd}` : '',
         pres.app.description ? `about: ${pres.app.description}` : '',
         pres.app.refusal,
     ].filter(Boolean).join('\n'));
@@ -112,6 +130,7 @@
     data-project-renamed={pres.renamed ? 'true' : undefined}
     data-app-name-source={pres.app.source ?? undefined}
     data-app-named={pres.fromApp ? 'true' : undefined}
+    data-app-scratch={pres.scratch ? 'true' : undefined}
     data-unsorted={unsorted ? unsorted.short : undefined}
 >
     <div class={CLASS.card}>
@@ -365,5 +384,48 @@
     .archive-nav__node--project .archive-nav__count-noun {
         color: var(--color-fg-muted);
         font-weight: 400;
+    }
+
+    /* A SCRATCH ROW RECEDES, AND IT COSTS NO HEIGHT TO DO IT.
+     *
+     * Two declarations, and both were picked because they change PAINT
+     * and not GEOMETRY. The card is 49px flat and the whole density
+     * pass is about keeping it there, so a scratch treatment that
+     * added a line, a badge or a second row would undo the work it is
+     * being shipped beside. Weight and colour move no box: the label
+     * keeps its 0.9rem size and its line box, measured identical
+     * before and after.
+     *
+     * 1. THE LABEL DROPS TO THE MUTED TOKEN AND TO WEIGHT 400. A real
+     *    project name is `--color-fg` at 600 and it is the thing a
+     *    reader scans a 98 row rail for. A throwaway directory is not,
+     *    so it sits at the same weight and colour the metadata already
+     *    uses. That is the "sorts visually below real work" part: the
+     *    17 scratch rows stop competing for the scan without moving in
+     *    the list, which is `nav-order`'s job and is untouched.
+     *
+     * 2. THE CARD LOSES ITS ACCENT TINT. `archive-nav-card.css` paints
+     *    every card with `linear-gradient(var(--color-accent-bg-soft),
+     *    ...)` over its background colour, which is the signal that
+     *    says "this is a project". A row the server measured as a temp
+     *    directory is not one, so the tint comes off and the card falls
+     *    back to the plain surface underneath. The border, the hover
+     *    and the focus ring are all untouched - the row is still fully
+     *    selectable and still reads as a control.
+     *
+     * THE LABEL IS ONE STRING, NOT TWO SPANS, on purpose. Splitting
+     * `scratch` from the leaf so the qualifier could be dimmer still
+     * would put a second element inside `NavLabel`, which applies the
+     * fuzzy filter's matched character indices across the whole label
+     * text - a split would silently stop highlighting a match that
+     * straddled it. One string highlights correctly and the two-tone
+     * version was not worth that. */
+    .archive-nav__node--project[data-app-scratch='true'] .archive-nav__label {
+        color: var(--color-fg-muted);
+        font-weight: 400;
+    }
+
+    .archive-nav__node--project[data-app-scratch='true'] .archive-nav__card {
+        background-image: none;
     }
 </style>

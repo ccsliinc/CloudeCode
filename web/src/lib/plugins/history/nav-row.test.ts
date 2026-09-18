@@ -235,8 +235,9 @@ describe('the presentation overlay: three values, and the third is not a '
     /**
      * PARITY IS NOW A SUBSET ASSERTION, AND THE REASON IS RECORDED
      * RATHER THAN THE ASSERTION BEING WEAKENED QUIETLY.
-     * `presentationFor` gained `app` and `fromApp`, which carry the
-     * app-database name the vanilla module predates and knows nothing
+     * `presentationFor` gained `app`, `fromApp` and `scratch`, which
+     * carry the app-database name and the measured-throwaway-directory
+     * outcome that the vanilla module predates and knows nothing
      * about. Exact equality would now fail on every row for a reason
      * that is not a port defect. So: every key the VANILLA module
      * produces must still be produced identically - that is the
@@ -254,7 +255,7 @@ describe('the presentation overlay: three values, and the third is not a '
                 expect({ [key]: ours[key] }).toEqual({ [key]: theirs[key] });
             }
             expect(Object.keys(ours).filter((k) => !(k in theirs)).sort())
-                .toEqual(['app', 'fromApp']);
+                .toEqual(['app', 'fromApp', 'scratch']);
         });
     }
 

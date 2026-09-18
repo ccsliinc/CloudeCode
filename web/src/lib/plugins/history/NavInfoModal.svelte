@@ -109,8 +109,25 @@
     const machines = $derived(machineRows(row));
     const session = $derived(sessionCountFor(row));
 
+    /**
+     * THE FULL PATH, AND WHY IT HAS A SECOND SOURCE NOW. `observed_cwd`
+     * is the ARCHIVE's own record and it is null for 100 of 100
+     * projects on this install, so this field said NOT KNOWN on every
+     * card it was ever opened on. `app_name_cwd` is the working
+     * directory the cwd naming rung read out of the transcripts
+     * themselves, and it is the only place the real spelling survives.
+     * It is a FALLBACK, not a replacement: the archive's own reading
+     * wins whenever there is one, because a corpus collected on another
+     * machine has no cwd rung behind it and its `observed_cwd` is then
+     * the only honest answer there is.
+     *
+     * IT IS ALSO WHERE A SCRATCH ROW'S PATH STAYS REACHABLE. The card
+     * face draws `scratch / <leaf>` for 17 projects precisely so a
+     * 178-character temp path does not sit in the rail; that shortening
+     * is only defensible while the long form is one click away.
+     */
     const pathField = $derived(infoField(
-        'Full path', row.observed_cwd,
+        'Full path', row.observed_cwd ?? presentation.app.cwd,
         'NOT KNOWN - the server observed no working directory for this project',
     ));
     const slugField = $derived(infoField(
