@@ -658,6 +658,25 @@ cite these BY NUMBER, so the numbers do not move.
     CONFLICTS AND ANSWERS FALSY**, and `setattr` on a name an object does not
     carry SUCCEEDS too, so grep for all three on a moved member's OLD name before
     you trust a green suite.
+13. **THE DEPLOYED SERVER TREE IS DERIVED, AND THE APP REWRITES IT ON EVERY
+    LAUNCH.** `macOS/bootstrap.js` runs
+    `rsync -a --delete <bundle>/Contents/Resources/src/` into
+    `~/Library/Application Support/cloude-code-menubar/server/src/` on every
+    launch, dev included. So files copied into the server dir survive right up
+    to the restart meant to pick them up and are wiped BY that restart.
+    Measured 2026-09-18: five files sha-verified in place, `bootout` plus
+    `bootstrap`, and afterwards the two modified ones held their pre-deploy
+    shas and the three new ones were gone - with the server listening, health
+    200, auth refusing and the log perfect. **Deploy to
+    `/Applications/Cloude Code.app/Contents/Resources/src/`.** The bundle is
+    adhoc-signed and its seal covers `Resources/src`, but `codesign --verify`
+    already reported "a sealed resource is missing or invalid" BEFORE anything
+    was touched and the app has launched in that state for weeks; measure that
+    rather than assuming either way. What caught the revert was asking which
+    FILE the process imported: move the relevant `.pyc` to `~/.Trash` before
+    the restart, and CPython writes one back only when it imports the `.py`
+    beside it, so a fresh timestamp under the deployed tree is provenance and
+    an absent one is proof the module was never reached.
 
 ## Where the 1.4.0 integration moved things
 

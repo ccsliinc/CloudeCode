@@ -29,6 +29,20 @@
   project; the `i` stops the event on its way to opening the modal, or
   the transcript list reloads behind a dialog nobody asked it to load
   behind.
+
+  THE NAME MAY COME FROM THE APP DATABASE, AND ONLY ON TWO RUNGS. The
+  archive's own `display_name` is null for 100 of 100 projects on this
+  install, so the face has been drawing the SLUG. The server now sends
+  `app_display_name` beside it with an `app_name_source` saying how it
+  was matched; `nav-app-name.ts` holds the refusal and this file only
+  draws what `presentationFor` resolved. 27 of 100 legitimately do not
+  resolve and those cards still draw the path, which is the correct
+  answer and not a gap.
+
+  THE SOURCE IS ON THE ELEMENT, NOT ONLY IN THE TOOLTIP. `data-app-name-
+  source` carries the rung verbatim and `data-app-named` says whether
+  the face is showing the app's name, so a test asserts the refusal
+  rather than reading prose out of a title attribute.
 -->
 <script lang="ts">
     import { CLASS, NODE_KINDS, NODE_MOD, type NodeKind } from './nav-vocab';
@@ -64,7 +78,21 @@
     const counts = $derived(countsLine(row));
     const when = $derived(activityCell(row));
     const tip = $derived(titleFor(kind, row));
-    const title = $derived(tip ? `${pres.name}\n${tip}` : pres.name);
+    /**
+     * The hover sentence. THE DESCRIPTION AND THE REFUSAL BOTH LIVE
+     * HERE BECAUSE HERE COSTS NO PIXELS. `app_description` exists on 4
+     * of 100 projects and one of them is the only thing that tells two
+     * confusingly similar entries apart, so it has to be reachable; a
+     * line on the face would cost every card height, on a card this
+     * change is shortening. The refusal is the same bargain in reverse:
+     * a card drawing a path can say WHY on hover, and 27 of them do.
+     */
+    const title = $derived([
+        pres.name,
+        tip,
+        pres.app.description ? `about: ${pres.app.description}` : '',
+        pres.app.refusal,
+    ].filter(Boolean).join('\n'));
     /**
      * The fuzzy positions index the field the MATCHER read. The name on
      * the face may be an overlay override it never saw, so the marks are
@@ -82,6 +110,8 @@
     data-project-group={pres.group}
     data-project-hidden={pres.hidden ? 'true' : undefined}
     data-project-renamed={pres.renamed ? 'true' : undefined}
+    data-app-name-source={pres.app.source ?? undefined}
+    data-app-named={pres.fromApp ? 'true' : undefined}
     data-unsorted={unsorted ? unsorted.short : undefined}
 >
     <div class={CLASS.card}>
@@ -227,12 +257,37 @@
   right is the info button's divider; neither is density and both would
   cost the card its shape.
 
-  NOT DONE, AND NAMED: folding the counts and the date onto ONE line
-  would take the card to about 48px rather than 64px. It is refused
-  because both runs are `nowrap` and the counts run already ellipsises
-  at the end on four-digit totals at this width, so merging them would
-  truncate the date - the value the default order is built on - on
-  ordinary cards.
+  5. THE COUNTS AND THE DATE SHARE ONE LINE, AND THE TRUNCATION WAS
+     SOLVED RATHER THAN ACCEPTED. This was refused once, on the correct
+     measurement that both runs are `nowrap` and the counts run already
+     ellipsises on four-digit totals - so a naive merge would truncate
+     the DATE, which is the value the rail's default order is built on.
+     The owner has since asked for it in as many words, so it is built,
+     and the refusal's own reasoning is what picks the mechanism.
+
+     `card-main` is a GRID, not a flex row, and that is the whole fix.
+     Two tracks, `minmax(0, 1fr) auto`: the `auto` track is sized by the
+     date's own content and therefore CANNOT be compressed, and the
+     `minmax(0, ...)` track lets the counts shrink below their intrinsic
+     width, which is the one thing a default `1fr` refuses to do. So the
+     date always renders in full and the counts spend the shortfall on
+     their existing ellipsis. THE ELLIPSIS ALREADY WORKS on that run and
+     was not re-invented: `.archive-nav__counts` is a block of inline
+     text precisely so `text-overflow` applies to it, which the shared
+     stylesheet's own header explains at length.
+
+     WHAT GETS CUT FIRST IS THE LEAST LOAD-BEARING THING ON THE CARD.
+     The run reads "4 sessions of 262 total" and the ellipsis eats it
+     from the right, so the order of loss is `total`, then the total
+     FIGURE, then `of` - the session count, which is the number a person
+     is actually scanning for, is the last thing to go, and the full
+     sentence plus both figures stay on the block's `title`.
+
+     A FLEX ROW WAS TRIED FIRST AND IS WRONG HERE. Flex would put the
+     ellipsis on a flex ITEM whose own children overflow, which does not
+     ellipsise at all - the shared stylesheet records that exact failure
+     happening once already, with `scrollWidth === clientWidth` on a
+     visibly chopped row, so every programmatic check called it clean.
 -->
 <style>
     /* The gap between cards. Part of the card metaphor at zero radius,
@@ -246,7 +301,38 @@
          * rail's and the info divider's, not density. */
         padding-top: 7px;
         padding-bottom: 7px;
-        gap: 2px;
+        /* TWO TRACKS, AND THE DATE'S IS `auto` ON PURPOSE. The shared
+         * sheet declares one `minmax(0, 1fr)` column and stacks all
+         * three children. The second track here is sized by the date's
+         * own content, so it can never be compressed; the first keeps
+         * the `minmax(0, ...)` floor the shared rule already had, which
+         * is what lets the counts shrink past their intrinsic width and
+         * reach their own ellipsis. A bare `1fr` would refuse to, and
+         * the row would push the date out of the card instead. */
+        grid-template-columns: minmax(0, 1fr) auto;
+        row-gap: 2px;
+        /* Wide enough that a truncated counts run cannot be misread as
+         * running into the date. */
+        column-gap: 10px;
+        align-items: baseline;
+    }
+
+    /* The name keeps its own line: it is the scan target and is already
+     * truncating on a rail this narrow. */
+    .archive-nav__node--project .archive-nav__label {
+        grid-column: 1 / -1;
+    }
+
+    .archive-nav__node--project .archive-nav__counts {
+        grid-column: 1;
+    }
+
+    /* Right-aligned against the info divider, so the dates form a
+     * column a reader can scan down rather than sitting ragged behind
+     * counts runs of four different lengths. */
+    .archive-nav__node--project .archive-nav__when {
+        grid-column: 2;
+        justify-self: end;
     }
 
     /* THE LINE-HEIGHT IS A LENGTH, NOT A FACTOR. See the note above:

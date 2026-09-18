@@ -209,6 +209,17 @@ describe('the session count: three outcomes, never a substitute', () => {
     });
 });
 
+/**
+ * Read a presentation as a plain bag, so the two modules' key sets can
+ * be compared without either being widened in its own declaration.
+ *
+ * Inputs: value - a presentation from either module.
+ * Output: the same object, typed as a record.
+ */
+function asRecord(value: unknown): Record<string, unknown> {
+    return value as Record<string, unknown>;
+}
+
 describe('the presentation overlay: three values, and the third is not a '
     + 'flavour of the first', () => {
     const cases: Record<string, unknown>[] = [
@@ -221,9 +232,29 @@ describe('the presentation overlay: three values, and the third is not a '
         { project_id: 4, display_name: 'p', overlay: { status: 'cannot_determine' } },
         { project_id: 5, display_name: 'p', full_path: '-p' },
     ];
+    /**
+     * PARITY IS NOW A SUBSET ASSERTION, AND THE REASON IS RECORDED
+     * RATHER THAN THE ASSERTION BEING WEAKENED QUIETLY.
+     * `presentationFor` gained `app` and `fromApp`, which carry the
+     * app-database name the vanilla module predates and knows nothing
+     * about. Exact equality would now fail on every row for a reason
+     * that is not a port defect. So: every key the VANILLA module
+     * produces must still be produced identically - that is the
+     * commitment, unchanged - and the added keys are asserted to be
+     * additions rather than replacements, by checking vanilla has
+     * neither. A test that only compared the shared keys would pass
+     * just as well if our port had silently DROPPED one of them, which
+     * is why the key sets are compared too.
+     */
     for (const row of cases) {
         it(`agrees for project ${String(row.project_id)}`, () => {
-            expect(presentationFor(row, null)).toEqual(Card.presentationFor(row, null));
+            const ours = asRecord(presentationFor(row, null));
+            const theirs = Card.presentationFor(row, null);
+            for (const key of Object.keys(theirs)) {
+                expect({ [key]: ours[key] }).toEqual({ [key]: theirs[key] });
+            }
+            expect(Object.keys(ours).filter((k) => !(k in theirs)).sort())
+                .toEqual(['app', 'fromApp']);
         });
     }
 
@@ -244,8 +275,11 @@ describe('the presentation overlay: three values, and the third is not a '
         const fallback = { 5: { display_name: 'from-fallback' }, 1: { display_name: 'ignored' } };
         expect(presentationFor(cases[4] as never, fallback).name).toBe('from-fallback');
         expect(presentationFor(cases[0] as never, fallback).name).toBe('shown');
-        expect(presentationFor(cases[4] as never, fallback))
-            .toEqual(Card.presentationFor(cases[4], fallback));
+        const ours = asRecord(presentationFor(cases[4] as never, fallback));
+        const theirs = Card.presentationFor(cases[4], fallback);
+        for (const key of Object.keys(theirs)) {
+            expect({ [key]: ours[key] }).toEqual({ [key]: theirs[key] });
+        }
     });
 });
 

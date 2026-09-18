@@ -37,6 +37,7 @@
  * Ported from the pure half of client/js/archive-nav-card.js.
  */
 import { NODE_KINDS } from './nav-vocab';
+import { appNameFor, type AppName } from './nav-app-name';
 import { countFor, labelFor, renderCount, type NavRowData } from './nav-row';
 import { NOT_KNOWN } from './format';
 
@@ -156,9 +157,19 @@ export interface Presentation {
     readonly serverName: string;
     readonly group: string | null;
     readonly hidden: boolean;
+    /**
+     * The OWNER renamed this project. It is NOT set by the app-database
+     * name landing on the face: that is a lookup, not a label somebody
+     * wrote, and conflating the two would make the info modal's "Your
+     * labels" section claim 73 renames nobody performed.
+     */
     readonly renamed: boolean;
     /** 'none' | 'applied' | 'cannot_determine' | 'absent'. */
     readonly overlayStatus: string;
+    /** The app database's answer, refusal and all. Never null. */
+    readonly app: AppName;
+    /** True when `name` above IS the app database's name. */
+    readonly fromApp: boolean;
 }
 
 /**
@@ -175,6 +186,17 @@ export interface Presentation {
  *   the third case one level up: this build is talking to
  *   `/archive/projects`, which does not carry one. That is `absent`, not
  *   'none'.
+ *
+ *   THE NAME LADDER HAS FOUR RUNGS AND THE ORDER IS THE WHOLE DECISION.
+ *   An OWNER'S OWN RENAME wins outright - it is the one value here a
+ *   person typed, and a database lookup may not overrule it. Under that
+ *   sits the APP DATABASE'S name, drawn only on the two approved match
+ *   kinds (see `nav-app-name.ts`); under that the ARCHIVE's own derived
+ *   name, which is null for 100 of 100 projects on this install because
+ *   `observed_cwd` is null for all of them; and under that the slug.
+ *   A refused match kind - `none`, `ambiguous`, `cannot_determine` -
+ *   falls straight through to the third rung, which is exactly what the
+ *   card drew before this field existed.
  * Inputs: row - the project node. overlay - a client-side fallback,
  *   consulted ONLY when the row carries no overlay block.
  * Output: the presentation.
@@ -193,15 +215,25 @@ export function presentationFor(
         ? r.archive_display_name
         : labelFor(NODE_KINDS.PROJECT, r);
 
+    const app = appNameFor(r);
+
     if (block) {
         const applied = Array.isArray(block.applied) ? block.applied : [];
+        const renamed = applied.indexOf('display_name') !== -1;
+        const serverSide = labelFor(NODE_KINDS.PROJECT, r);
+        // An owner's rename is already ON `display_name` here, applied by
+        // the overlay endpoint. Only when there is no rename may the app
+        // database's name take the face.
+        const fromApp = !renamed && app.named;
         return {
-            name: labelFor(NODE_KINDS.PROJECT, r),
+            name: fromApp ? (app.name as string) : serverSide,
             serverName: archiveName,
             group: typeof block.group === 'string' && block.group ? block.group : null,
             hidden: block.hidden === true,
-            renamed: applied.indexOf('display_name') !== -1,
+            renamed,
             overlayStatus: String(block.status || 'cannot_determine'),
+            app,
+            fromApp,
         };
     }
 
@@ -213,16 +245,26 @@ export function presentationFor(
         patch = hit && typeof hit === 'object' ? hit as Record<string, unknown> : null;
     }
     const p = patch || {};
-    const name = typeof p.display_name === 'string' && p.display_name
+    const override = typeof p.display_name === 'string' && p.display_name
         ? p.display_name
-        : archiveName;
+        : null;
+    const fromApp = override === null && app.named;
+    const name = override !== null
+        ? override
+        : fromApp ? (app.name as string) : archiveName;
     return {
         name,
         serverName: archiveName,
         group: typeof p.group === 'string' && p.group ? p.group : null,
         hidden: p.hidden === true,
-        renamed: name !== archiveName,
+        // READ OFF THE OVERRIDE, NOT OFF A STRING COMPARISON. It used to
+        // be `name !== archiveName`, which the app-database name now
+        // satisfies for 73 of 100 projects without anybody having
+        // renamed anything.
+        renamed: override !== null && override !== archiveName,
         overlayStatus: 'absent',
+        app,
+        fromApp,
     };
 }
 

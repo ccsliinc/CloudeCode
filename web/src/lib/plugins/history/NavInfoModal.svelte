@@ -71,6 +71,7 @@
     import {
         infoField, machineRows, machinesHeading, machinesUnevaluated,
     } from './nav-info';
+    import { appNameSentence } from './nav-app-name';
     import type { ModalStackLike } from './keys-help';
     import { SESSION_REASONS, SESSION_STATES, sessionCountFor, type Presentation } from './nav-card';
     import NavOutcome from './NavOutcome.svelte';
@@ -115,6 +116,29 @@
     const slugField = $derived(infoField(
         'Slug', row.full_path ?? row.slug, 'NOT KNOWN - no slug was reported',
     ));
+    /**
+     * WHERE THE NAME CAME FROM, AND WHY IT IS A FIELD RATHER THAN A
+     * SILENCE. The face shows one string; on 27 of 100 projects that
+     * string is a path, and the person looking at it has no way to tell
+     * "the app has no project here" from "the app database could not be
+     * read". This says which, in a sentence, for both outcomes.
+     */
+    const nameSourceField = $derived(infoField(
+        'Name from', appNameSentence(presentation.app),
+        'NOT KNOWN - this server reported no naming provenance',
+    ));
+    /**
+     * THE APP'S OWN DESCRIPTION, WHICH EXISTS ON 4 OF 100 PROJECTS AND
+     * EARNS ITS PLACE ON ONE OF THEM: it is the only thing that tells a
+     * confusing near-duplicate apart from its twin. It is drawn only
+     * when there is one, because an empty "About" row on 96 cards is
+     * furniture, and it rides the same approval as the name itself - a
+     * description is a claim about a project row we would otherwise
+     * have declined to name.
+     */
+    const descriptionField = $derived(presentation.app.description
+        ? infoField('About', presentation.app.description, '')
+        : null);
     const sessionField = $derived(infoField(
         'Your sessions',
         session.state === SESSION_STATES.KNOWN ? renderCount(session.value) : null,
@@ -204,7 +228,7 @@
         <div class={INFO_CLASS.body}>
             <section class={INFO_CLASS.section} data-section="path">
                 <h3 class={INFO_CLASS.sectionTitle}>Where it is</h3>
-                {#each [pathField, slugField] as f (f.term)}
+                {#each [pathField, slugField, nameSourceField] as f (f.term)}
                     <div class={INFO_CLASS.field}>
                         <span class={INFO_CLASS.term}>{f.term}</span>
                         <span
@@ -213,6 +237,13 @@
                         >{f.value}</span>
                     </div>
                 {/each}
+                {#if descriptionField}
+                    <div class={INFO_CLASS.field} data-field="app-description">
+                        <span class={INFO_CLASS.term}>{descriptionField.term}</span>
+                        <span class={INFO_CLASS.value} data-known="true"
+                        >{descriptionField.value}</span>
+                    </div>
+                {/if}
             </section>
 
             <section class={INFO_CLASS.section} data-section="counts">

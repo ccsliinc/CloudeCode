@@ -88,6 +88,7 @@ import real from '../src/lib/plugins/history/nav-real-nodes.fixture.json' with {
 import { measureLevel, reportInto } from './nav-parity-measure';
 import { measureChrome, reportChrome } from './nav-parity-chrome';
 import { mountOfflineRail } from './nav-parity-rail';
+import { measureDensity, reportDensity } from './nav-parity-density';
 
 /** The mount point in `nav-parity.html`. It carries no class, on purpose. */
 const ROOT_ID = 'nav-parity-root';
@@ -100,6 +101,18 @@ const ROOT_ID = 'nav-parity-root';
  * is actually looking at, so it is what is measured.
  */
 const RAIL_WIDTH_PX = 320;
+
+/**
+ * The second width the density pass measures at.
+ *
+ * A LAYOUT MEASURED ONLY WHERE IT IS COMFORTABLE HAS NOT BEEN MEASURED.
+ * The counts and the date now share a line, so the interesting number is
+ * what gives way when there is not room for both; 320 is where that
+ * happens and 480 is the control that shows the same rail with slack.
+ * If the two disagree about anything except how many counts runs
+ * ellipsised, something other than width is moving.
+ */
+const WIDE_RAIL_WIDTH_PX = 480;
 
 /** As much of `window` as this page reads back after the imports above. */
 interface VanillaWindow {
@@ -317,6 +330,27 @@ function start(): void {
             measureLevel('svelte', left.level),
             measureLevel('vanilla', right.level),
         );
+        // THE DENSITY PASS. The vanilla column is the BEFORE: it is the
+        // same rows under the same twelve stylesheets with the counts
+        // and the date still stacked, so it is a control this page
+        // already had rather than a number quoted from a previous run.
+        // Widths are set here and the svelte column is left back at
+        // RAIL_WIDTH_PX, which is what every other measurement on this
+        // page assumes.
+        const density: string[] = [
+            ...reportDensity(measureDensity(
+                'vanilla, two lines (the before)', right.nav, right.level, RAIL_WIDTH_PX,
+            )),
+            ...reportDensity(measureDensity(
+                'svelte, one line (the after)', left.nav, left.level, WIDE_RAIL_WIDTH_PX,
+            )),
+            ...reportDensity(measureDensity(
+                'svelte, one line (the after)', left.nav, left.level, RAIL_WIDTH_PX,
+            )),
+        ];
+        report.textContent = `${report.textContent}\n\ncounts and date on `
+            + `one line:\n${density.join('\n')}`;
+
         const nav = railHost.querySelector<HTMLElement>('.archive-nav');
         const lines = nav
             ? reportChrome(measureChrome('svelte rail', nav))
