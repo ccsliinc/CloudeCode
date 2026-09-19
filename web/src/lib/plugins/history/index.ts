@@ -255,6 +255,11 @@ export {
     appNameSentence, isNamedSource, isScratchSource, scratchFaceFor,
 } from './nav-app-name';
 export type { AppName, AppNameSource } from './nav-app-name';
+export {
+    APP_NAME_FIELDS, APP_NAME_JOIN_KEY, applyAppNames, buildAppNameIndex,
+    emptyAppNameIndex, joinAppNames,
+} from './nav-app-name-join';
+export type { AppNameIndex, AppNamePatch } from './nav-app-name-join';
 export { SCRATCH_QUALIFIER, scratchLabel, scratchLeaf } from './nav-scratch-label';
 export { infoField, machineRows, machinesHeading, machinesUnevaluated } from './nav-info';
 // `ModalStackLike` is published above, from `keys-help.ts`. The rail

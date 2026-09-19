@@ -217,3 +217,7 @@ web/node_modules.nosync/
 # Cross-party coordination skill: both teams run the same workflow, so it has
 # to travel with the repo rather than living in one person's global config.
 !.claude/skills/
+
+# The dev harness capture: the owner's real project paths, regenerated
+# by web/dev-harness/capture_live_envelopes.py. Never committed.
+web/dev-harness/live-envelopes.json

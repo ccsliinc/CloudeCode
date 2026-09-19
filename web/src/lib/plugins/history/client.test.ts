@@ -80,18 +80,44 @@ function rejecting(err: unknown) {
     return createArchiveClient(api);
 }
 
-/** Call one method and return the single path it requested. */
+/**
+ * The two project listings each make a SECOND request, deliberately.
+ *
+ * Neither `/archive/overlay/projects` nor `/archive/corpora/{id}/
+ * projects` carries the app database's name for a project - measured
+ * against the live databases 2026-09-19, 0 of 100 rows on each - while
+ * `/archive/projects` carries it on 100 of 100 and is read by no view.
+ * So those two methods read the decorated route as well and join on
+ * `project_id`. See `nav-app-name-join.ts`.
+ *
+ * Named here rather than allowed by a loosened count, so the extra call
+ * is a recorded decision and any OTHER method growing one still fails.
+ */
+/**
+ * Call one method and return the path it requested for its OWN data.
+ *
+ * Description: exactly one call, except for the two methods that join
+ *   the app-name route, which make exactly two - and the extra one is
+ *   asserted to be that route and no other.
+ */
 async function pathFor(
     fn: (c: ReturnType<typeof createArchiveClient>) => Promise<unknown>,
 ): Promise<string> {
     const { client, calls } = granted();
     await fn(client);
-    expect(calls.length, `expected exactly one call, saw ${calls.length}`).toBe(1);
-    return calls[0]!.path;
+    const own = calls.filter((c) => c.path !== JOINS_APP_NAMES);
+    expect(own.length,
+           `expected exactly one call for the method's own data, saw `
+           + `${calls.length}: ${calls.map((c) => c.path).join(', ')}`).toBe(1);
+    expect(calls.length - own.length,
+           'a method may make at most ONE app-name join call').toBeLessThanOrEqual(1);
+    return own[0]!.path;
 }
 
 /** Every path the grant resolves to is absolute under this base. */
 const BASE = '/api/v1';
+
+const JOINS_APP_NAMES = `${BASE}/archive/projects`;
 
 describe('the path each method builds', () => {
     test('every archive method builds the documented path', async () => {
@@ -129,6 +155,42 @@ describe('the path each method builds', () => {
             .toBe(`${BASE}/archive/overlay/projects`);
         expect(await pathFor((a) => a.listArchiveMergedProjects()))
             .not.toBe(`${BASE}/archive/projects`);
+    });
+
+    test('the two project listings ALSO read the decorated route, and '
+        + 'the index is fetched once per client rather than once per '
+        + 'call', async () => {
+        // The overlay route and the per-corpus route carry no
+        // `app_name_source` at all, so without this second read every
+        // card in every view draws its slug. That is the defect this
+        // join exists for, and it is pinned as two named paths rather
+        // than as a call count, because a count says nothing about
+        // WHICH route grew.
+        const { client, calls } = granted();
+        await client.listArchiveMergedProjects();
+        expect(calls.map((c) => c.path).sort()).toEqual([
+            `${BASE}/archive/overlay/projects`,
+            JOINS_APP_NAMES,
+        ].sort());
+
+        // THE MEMO IS THE WHOLE COST CONTROL. Three more listings, and
+        // the decorated route is not read again: the by-machine tree
+        // expands a level at a time and would otherwise pay for this on
+        // every corpus.
+        await client.listArchiveMergedProjects();
+        await client.listArchiveProjects(2);
+        await client.listArchiveProjects(3);
+        expect(calls.filter((c) => c.path === JOINS_APP_NAMES)).toHaveLength(1);
+    });
+
+    test('NO OTHER method reads the app-name route, so the join stays '
+        + 'where it was put', async () => {
+        const { client, calls } = granted();
+        await client.listArchiveHosts();
+        await client.listArchiveTranscripts(12);
+        await client.getArchiveTranscript(5767);
+        await client.listArchiveUnattributed(2);
+        expect(calls.filter((c) => c.path === JOINS_APP_NAMES)).toHaveLength(0);
     });
 
     test('the RAW project route stays addressable', () => {

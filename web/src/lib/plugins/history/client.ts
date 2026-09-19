@@ -40,6 +40,7 @@
  */
 import type { EnvelopeResult, ScreenApi } from '../types';
 import { ARCHIVE_TIMEOUTS, archiveQuery, type ArchiveTimeouts } from './client-query';
+import { buildAppNameIndex, joinAppNames, type AppNameIndex } from './nav-app-name-join';
 
 /**
  * The route the rail's merged-project list comes from.
@@ -52,6 +53,25 @@ import { ARCHIVE_TIMEOUTS, archiveQuery, type ArchiveTimeouts } from './client-q
  * site cannot see that a choice was made there.
  */
 const MERGED_PROJECTS_ENDPOINT = '/archive/overlay/projects';
+
+/**
+ * The route that carries the APP DATABASE'S name for a project.
+ *
+ * MEASURED 2026-09-19 against the live databases, 100 nodes each: this
+ * route decorates 100 of 100 rows with `app_name_source` and 81 with a
+ * real `app_display_name`, while BOTH routes the rail actually lists
+ * from - `/archive/overlay/projects` and
+ * `/archive/corpora/{id}/projects` - carry ZERO. `_name_projects` is
+ * called on this one and on neither of those. So every card in every
+ * view drew its slug, and `nav-app-name.ts` was right to refuse,
+ * because the field it reads never arrived.
+ *
+ * It is read ONLY for those name fields. The rows the rail renders
+ * still come from the routes above, so the owner's presentation overlay
+ * and the by-machine paging are unaffected. `nav-app-name-join.ts`
+ * carries the seven fields across and holds the rules.
+ */
+const NAMED_PROJECTS_ENDPOINT = '/archive/projects';
 
 /** Options a caller may pass through to one archive call. */
 export interface ArchiveCallOptions {
@@ -198,6 +218,43 @@ export function createArchiveClient(api: ScreenApi): ArchiveClient {
     const t = ARCHIVE_TIMEOUTS;
     const enc = encodeURIComponent;
 
+    /**
+     * The in-flight or settled app-name index, memoised for the life of
+     * this client.
+     *
+     * THE PROMISE IS MEMOISED, NOT THE VALUE, so the merged view and the
+     * by-machine view opening at the same moment share ONE request
+     * rather than racing two. The cost of the whole feature is therefore
+     * one extra GET per page load - not per view, and not per drill
+     * level.
+     *
+     * WHAT THAT CACHING BUYS AND WHAT IT COSTS, said out loud: a project
+     * renamed in `cloude.db` mid-session keeps its old name here until
+     * the page is reloaded. The OWNER'S OWN renames are unaffected -
+     * those ride the overlay route, which is never cached and outranks
+     * this anyway (see the name ladder in `nav-card.ts`).
+     */
+    let appNames: Promise<AppNameIndex> | null = null;
+
+    /**
+     * The app-name index, fetched at most once per client.
+     *
+     * Description: a failure is NOT retried and NOT thrown. An
+     *   incomplete index makes `joinAppNames` a no-op, so a refused or
+     *   unreachable decoration costs the rail exactly its pre-existing
+     *   behaviour - the slug - rather than an error the person cannot
+     *   act on. `callEnvelope` never rejects, so there is no path here
+     *   that can reject either.
+     * Inputs: none. Output: Promise<AppNameIndex>.
+     */
+    function appNameIndex(): Promise<AppNameIndex> {
+        if (appNames === null) {
+            appNames = callEnvelope(NAMED_PROJECTS_ENDPOINT, { timeoutMs: t.hierarchy })
+                .then(buildAppNameIndex);
+        }
+        return appNames;
+    }
+
     return {
         ARCHIVE_TIMEOUTS: t,
         callEnvelope,
@@ -214,11 +271,21 @@ export function createArchiveClient(api: ScreenApi): ArchiveClient {
                                 { timeoutMs: t.hierarchy });
         },
 
-        /** Archive: the projects inside one corpus. */
-        listArchiveProjects(corpusId, { limit, cursor } = {}) {
+        /**
+         * Archive: the projects inside one corpus.
+         *
+         * DECORATED WITH THE APP DATABASE'S NAMES on the way out, for
+         * the same reason the merged listing is: this route carries none
+         * of its own. See `NAMED_PROJECTS_ENDPOINT` above.
+         */
+        async listArchiveProjects(corpusId, { limit, cursor } = {}) {
             const q = archiveQuery({ limit, cursor });
-            return callEnvelope(`/archive/corpora/${enc(corpusId)}/projects${q}`,
-                                { timeoutMs: t.hierarchy });
+            const [rows, index] = await Promise.all([
+                callEnvelope(`/archive/corpora/${enc(corpusId)}/projects${q}`,
+                             { timeoutMs: t.hierarchy }),
+                appNameIndex(),
+            ]);
+            return joinAppNames(rows, index);
         },
 
         /**
@@ -241,8 +308,12 @@ export function createArchiveClient(api: ScreenApi): ArchiveClient {
          * deliberately still there for anything that wants the
          * archive's own truth.
          */
-        listArchiveMergedProjects() {
-            return callEnvelope(MERGED_PROJECTS_ENDPOINT, { timeoutMs: t.hierarchy });
+        async listArchiveMergedProjects() {
+            const [rows, index] = await Promise.all([
+                callEnvelope(MERGED_PROJECTS_ENDPOINT, { timeoutMs: t.hierarchy }),
+                appNameIndex(),
+            ]);
+            return joinAppNames(rows, index);
         },
 
         /**

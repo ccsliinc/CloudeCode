@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  WHAT A PROJECT ROW SAYS, IN EVERY VIEW. SCAFFOLDING, NOT THE ARCHIVE
+  SCREEN.
+
+  It answers one question `nav-parity.html` cannot: given the bytes the
+  live server really returns, what LITERAL TEXT does a project row carry
+  in each of the rail's two views. The parity page mounts a single card
+  and stubs the whole archive client, so a defect living in `client.ts`
+  is invisible to it and the by-machine view is never drawn at all.
+
+  It needs no login. `capture_live_envelopes.py` writes the real route
+  bodies to `live-envelopes.json` and this page replays them through the
+  REAL `createArchiveClient`. What that does NOT prove is that the
+  owner's authenticated session receives the same bytes over HTTP; only
+  he can confirm that half.
+
+  Delete it with the rest of `web/dev-harness/` when the real shell
+  lands.
+-->
+<html lang="en" data-theme="dark">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Project names by view (dev harness)</title>
+        <style>
+            body { margin: 0; font: 13px ui-monospace, monospace; }
+            #nav-views-root { display: flex; gap: 16px; align-items: flex-start; padding: 12px; }
+            .nav-views__col { width: 272px; flex: 0 0 272px; }
+            .nav-views__col h2 { font-size: 13px; margin: 0 0 2px; }
+            .nav-views__note { font-size: 11px; opacity: 0.7; margin: 0 0 8px; }
+            /* The rail declares no width of its own, by design, so the
+               column supplies the 272px the real sidebar gives it. */
+            .nav-views__rail { width: 272px; }
+            #nav-views-report { padding: 12px; white-space: pre-wrap; }
+        </style>
+    </head>
+    <body>
+        <div id="nav-views-root"></div>
+        <div id="nav-views-report" data-state="pending">measuring...</div>
+        <script type="module" src="./nav-views.ts"></script>
+    </body>
+</html>
